@@ -56,7 +56,11 @@ export function Frame({
         data-tauri-drag-region
         className={`flex h-12 shrink-0 items-center gap-1.5 border-b-(length:--scoplen-border-width) border-border pr-2 ${platform === "macos" ? "pl-[5.75rem]" : "pl-2"}`}
       >
-        <div role="tablist" aria-label={t("frame.tabs")} className="flex min-w-0 items-center gap-1 overflow-x-auto">
+        <div
+          role="tablist"
+          aria-label={t("frame.tabs")}
+          className="-my-1.5 flex min-w-0 items-center gap-1 overflow-x-auto py-1.5 pr-1.5 pl-0.5"
+        >
           {tabs.map((tab, index) => {
             const selected = tab.id === active && !settingsActive;
             const face = tab.state ? faces[tab.state] : null;
