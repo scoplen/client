@@ -171,7 +171,7 @@ export class ScoplenTerminalElement extends HTMLElementBase {
     xtermStyles.href = new URL("./xterm.css", import.meta.url).href;
     const style = document.createElement("style");
     style.textContent =
-      ":host{display:block;contain:content;background:#111827;color:#f3f4f6;min-height:4rem;position:relative;overflow:hidden}:host(:focus-visible){outline:2px solid #60a5fa;outline-offset:2px}.terminal-host{height:100%;width:100%;min-height:inherit}.terminal-host[hidden]{display:none}.fallback-output{box-sizing:border-box;height:100%;min-height:inherit;margin:0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:.75rem;font:14px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.broadcast-indicator{position:absolute;right:.5rem;top:.5rem;border:1px solid #fbbf24;background:#422006;color:#fde68a;padding:.125rem .375rem;font:600 11px/1.4 ui-sans-serif,system-ui,sans-serif;letter-spacing:.02em}.broadcast-indicator[hidden]{display:none}.xterm{height:100%;width:100%;min-height:inherit}";
+      ":host{display:block;contain:content;background:var(--scoplen-terminal-background,#111827);color:#f3f4f6;min-height:4rem;position:relative;overflow:hidden}:host(:focus-visible){outline:2px solid #60a5fa;outline-offset:2px}.terminal-host{height:100%;width:100%;min-height:inherit}.terminal-host[hidden]{display:none}.fallback-output{box-sizing:border-box;height:100%;min-height:inherit;margin:0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:.75rem;font:14px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.broadcast-indicator{position:absolute;right:.5rem;top:.5rem;border:1px solid #fbbf24;background:#422006;color:#fde68a;padding:.125rem .375rem;font:600 11px/1.4 ui-sans-serif,system-ui,sans-serif;letter-spacing:.02em}.broadcast-indicator[hidden]{display:none}.xterm{height:100%;width:100%;min-height:inherit}.xterm .xterm-viewport{background-color:transparent!important}";
     this.terminalHost = document.createElement("div");
     this.terminalHost.className = "terminal-host";
     this.terminalHost.setAttribute("part", "terminal");
@@ -533,6 +533,9 @@ export class ScoplenTerminalElement extends HTMLElementBase {
   }
 
   private applyProfile(): void {
+    // The rows rarely fill the element exactly; whatever is left below the last
+    // row shows the element's own background, so it takes the theme's.
+    this.style.setProperty("--scoplen-terminal-background", this._profile.theme?.background ?? "#111827");
     if (this.terminal) {
       // xterm's options object also exposes constructor-only dimensions such as
       // `cols` and `rows`; copying it back would make a profile update throw.
