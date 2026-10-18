@@ -1,4 +1,4 @@
-# scoplen-client
+# Scoplen client
 
 > The Scoplen desktop client for macOS and Windows: an SSH client that connects to hosts directly or through a self-hosted Scoplen bastion.
 
@@ -16,7 +16,7 @@ The application shell is in place: a Tauri 2 application for macOS and Windows, 
 
 - It sends nothing to the vendor: no telemetry, update server, or crash-report endpoint in Phase 1.
 - It does not run on Linux, iOS, or Android in Phase 1.
-- It does not contain the server, host agent, or web console; those are in `scoplen-server`.
+- It does not contain the server, host agent, or web console; those are in `server`.
 
 ## Repository shape
 
@@ -33,7 +33,7 @@ The terminal component package `@scoplen/terminal` is added in `web/terminal/` u
 
 ## Development
 
-Requirements: read access to `plystra/scoplen-proto` (Cargo fetches it through the git CLI, so set `CARGO_NET_GIT_FETCH_WITH_CLI=true`), the Rust toolchain pinned in `rust-toolchain.toml` (installed by rustup), Node.js 24.16.0 (`.nvmrc`), pnpm 11, and the Tauri prerequisites for your platform (Xcode Command Line Tools on macOS; Microsoft C++ Build Tools and WebView2 on Windows). Python 3 with Pillow and fontTools is needed only to regenerate the icon or the Chinese heading font.
+Requirements: read access to `scoplen/proto` after the owner publishes it (Cargo fetches it through the git CLI, so set `CARGO_NET_GIT_FETCH_WITH_CLI=true`), the Rust toolchain pinned in `rust-toolchain.toml` (installed by rustup), Node.js 24.16.0 (`.nvmrc`), pnpm 11, and the Tauri prerequisites for your platform (Xcode Command Line Tools on macOS; Microsoft C++ Build Tools and WebView2 on Windows). Python 3 with Pillow and fontTools is needed only to regenerate the icon or the Chinese heading font.
 
 ```bash
 pnpm install

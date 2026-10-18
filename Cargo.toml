@@ -13,16 +13,16 @@ edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.99"
 authors = ["Scoplen maintainers"]
-repository = "https://github.com/plystra/scoplen-client"
+repository = "https://github.com/scoplen/client"
 
 [workspace.dependencies]
 scoplen-client-core = { path = "crates/scoplen-client-core" }
 scoplen-client-platform = { path = "crates/scoplen-client-platform" }
-scoplen-ssh = { git = "https://github.com/plystra/scoplen-proto.git", rev = "97bd3a3" }
+scoplen-ssh = { git = "https://github.com/scoplen/proto.git", rev = "97bd3a3" }
 base64 = "0.22.1"
 rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl"] }
-scoplen-crypto = { git = "https://github.com/plystra/scoplen-proto.git", rev = "97bd3a3" }
-scoplen-model = { git = "https://github.com/plystra/scoplen-proto.git", rev = "97bd3a3" }
+scoplen-crypto = { git = "https://github.com/scoplen/proto.git", rev = "97bd3a3" }
+scoplen-model = { git = "https://github.com/scoplen/proto.git", rev = "97bd3a3" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10.9"
