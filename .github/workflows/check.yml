@@ -9,7 +9,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # scoplen-proto is fetched by Git; the git CLI uses the credentials below.
+  # proto is fetched by Git; the git CLI uses the credentials below.
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   # Read access to scoplen/proto while that repository is private.
   SCOPLEN_PROTO_TOKEN: ${{ secrets.SCOPLEN_PROTO_TOKEN }}
@@ -24,7 +24,7 @@ jobs:
         os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Authorize access to scoplen-proto
+      - name: Authorize access to proto
         if: env.SCOPLEN_PROTO_TOKEN != ''
         shell: bash
         run: git config --global url."https://x-access-token:${SCOPLEN_PROTO_TOKEN}@github.com/scoplen/proto.git".insteadOf "https://github.com/scoplen/proto.git"
@@ -53,7 +53,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Authorize access to scoplen-proto
+      - name: Authorize access to proto
         if: env.SCOPLEN_PROTO_TOKEN != ''
         shell: bash
         run: git config --global url."https://x-access-token:${SCOPLEN_PROTO_TOKEN}@github.com/scoplen/proto.git".insteadOf "https://github.com/scoplen/proto.git"
@@ -97,7 +97,7 @@ jobs:
             binary: target/release/scoplen.exe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Authorize access to scoplen-proto
+      - name: Authorize access to proto
         if: env.SCOPLEN_PROTO_TOKEN != ''
         shell: bash
         run: git config --global url."https://x-access-token:${SCOPLEN_PROTO_TOKEN}@github.com/scoplen/proto.git".insteadOf "https://github.com/scoplen/proto.git"
