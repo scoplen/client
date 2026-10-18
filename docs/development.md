@@ -23,6 +23,19 @@ Set `SPL_DATA_DIR` to run the application against a separate data directory, for
 
 Local work against the `proto` checkout uses a Cargo `[patch]` section in an untracked `.cargo/config.toml` (`scoplen-docs/02-workspace-and-repositories.md` §6). Never commit it.
 
+### After moving or renaming the checkout
+
+Cargo build scripts cache absolute paths. Reusing `target/` after moving the checkout can make Tauri report `failed to read plugin permissions` with the old directory in the missing file path. Other native dependencies can retain old paths too; reinstalling pnpm packages does not clear this Cargo cache.
+
+Stop the running development process, then run this once from the new repository directory:
+
+```bash
+cargo clean
+pnpm dev
+```
+
+The first launch rebuilds the Rust dependencies. A fresh checkout does not need this cleanup.
+
 ## Generated files
 
 | File | Regenerate with | When |
