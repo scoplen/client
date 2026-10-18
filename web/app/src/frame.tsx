@@ -54,7 +54,7 @@ export function Frame({
     <div className="flex h-screen flex-col bg-background">
       <header
         data-tauri-drag-region
-        className={`flex h-12 shrink-0 items-center gap-1.5 border-b-(length:--scoplen-border-width) border-border pr-2 ${platform === "macos" ? "pl-[5.25rem]" : "pl-2"}`}
+        className={`flex h-12 shrink-0 items-center gap-1.5 border-b-(length:--scoplen-border-width) border-border pr-2 ${platform === "macos" ? "pl-[5.75rem]" : "pl-2"}`}
       >
         <div role="tablist" aria-label={t("frame.tabs")} className="flex min-w-0 items-center gap-1 overflow-x-auto">
           {tabs.map((tab, index) => {

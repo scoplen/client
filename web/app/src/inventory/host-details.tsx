@@ -95,7 +95,7 @@ export function HostDetailsPanel({
           </Button>
           <Button
             variant="ghost"
-            className="ml-auto text-attention hover:bg-[color-mix(in_srgb,var(--attention)_10%,transparent)]"
+            className="ml-auto text-attention! hover:bg-[color-mix(in_srgb,var(--attention)_10%,transparent)]"
             onClick={() => onDelete(details.data!)}
           >
             {t("host.delete")}

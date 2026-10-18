@@ -185,8 +185,8 @@ export function HostsHome({
 
       <section aria-labelledby="hosts-title" className="@container flex min-w-0 flex-1 flex-col">
         <header className="flex flex-wrap items-center gap-x-4 gap-y-3 px-6 pt-6 pb-4">
-          <div className="flex min-w-32 flex-1 items-baseline gap-3">
-            <h1 id="hosts-title" className="ui-display truncate text-2xl">
+          <div className="flex min-w-max flex-1 items-baseline gap-3">
+            <h1 id="hosts-title" className="ui-display text-2xl">
               {title}
             </h1>
             {hosts.state === "ready" ? (
