@@ -23,7 +23,7 @@ The terminal has its own colors, chosen in Settings → Terminal (`web/app/src/t
 
 ## Inventory (roadmap C3)
 
-Contract: `web/app/src/inventory/api.ts` (`InventoryApi`). Screens: `inventory/home.tsx` (sidebar, list, details), `inventory/host-details.tsx`, `inventory/add-host.tsx`.
+Contract: `web/app/src/inventory/api.ts` (`InventoryApi`). Screens: `inventory/home.tsx` (sidebar, list, details; the logins, keys, and routes editors open beside the sidebar, which stays), `inventory/host-details.tsx`, `inventory/add-host.tsx`.
 
 | Operation | What the core does |
 | --- | --- |

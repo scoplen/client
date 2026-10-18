@@ -19,7 +19,6 @@ import { createRoot } from "react-dom/client";
 import { Frame } from "../frame";
 import { I18nProvider, useI18n } from "../i18n";
 import { HostsHome } from "../inventory/home";
-import { InventoryObjects } from "../inventory/objects";
 import { InventoryContext } from "../inventory/api";
 import type { Locale, Platform, Status } from "../ipc/bindings";
 import { CreatePassphraseScreen, UnlockScreen, UnreadableScreen } from "../local-data";
@@ -45,7 +44,6 @@ mockIPC((cmd, args) => {
 
 const screens = {
   hosts: "Hosts",
-  objects: "Logins, keys, and routes",
   firstRun: "Hosts: first run",
   failed: "Hosts: failed to load",
   settings: "Settings",
@@ -187,10 +185,8 @@ function Screen({
           status={status.state === "open" ? status : { state: "open", protection: "keystore" }}
           onStatus={onStatus}
         />
-      ) : screen === "objects" ? (
-        <InventoryObjects section="logins" onBack={() => onSettings("hosts")} />
       ) : (
-        <HostsHome onOpenObjects={() => onSettings("objects")} />
+        <HostsHome manage />
       )}
     </Frame>
   );

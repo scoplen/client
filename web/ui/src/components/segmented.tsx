@@ -28,7 +28,7 @@ export function Segmented<T extends string>({ legend, options, value, onChange }
         {options.map((option) => (
           <label
             key={option.value}
-            className="relative flex-1 cursor-pointer rounded-sm px-3 py-1.5 text-center text-sm text-muted-foreground transition-[background-color,color,box-shadow] duration-(--duration-state) ease-(--ease-out) hover:text-foreground has-checked:bg-raised has-checked:font-medium has-checked:text-foreground has-checked:shadow-(--scoplen-shadow-control) has-focus-visible:outline-2 has-focus-visible:outline-ring"
+            className="relative flex-1 cursor-pointer rounded-sm px-3 py-1.5 text-center text-sm whitespace-nowrap text-muted-foreground transition-[background-color,color,box-shadow] duration-(--duration-state) ease-(--ease-out) hover:text-foreground has-checked:bg-raised has-checked:font-medium has-checked:text-foreground has-checked:shadow-(--scoplen-shadow-control) has-focus-visible:outline-2 has-focus-visible:outline-ring"
           >
             <input
               type="radio"

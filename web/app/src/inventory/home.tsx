@@ -14,7 +14,7 @@ import {
   useContextMenu,
 } from "@scoplen/ui";
 import { Copy, Plug, Plus, RotateCcw, Star, Trash2 } from "lucide-react";
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import { AddHostDialog } from "./add-host";
 import {
@@ -29,18 +29,24 @@ import {
   type RecentSession,
 } from "./api";
 import { HostDetailsPanel } from "./host-details";
+import { InventoryObjects } from "./objects";
 import { routeText } from "./labels";
 import type { ObjectSection } from "./objects";
 import { useLoad, type Loaded } from "./use-load";
 
 type Toast = { message: string; undo?: string } | null;
 
-/** The Hosts tab: where the inventory is, and the way into every session. */
+/**
+ * The Hosts tab: where the inventory is, and the way into every session.
+ * The sidebar stays in place; choosing a host list, or logins, keys, or
+ * routes under Manage inventory, changes what is shown beside it.
+ */
 export function HostsHome({
-  onOpenObjects,
+  manage = false,
   onConnect,
 }: {
-  onOpenObjects?: (section: ObjectSection) => void;
+  /** Whether the logins, keys, and routes editors are offered. */
+  manage?: boolean;
   onConnect?: (profileId: Id, label: string) => void;
 } = {}) {
   const { t } = useI18n();
@@ -48,6 +54,7 @@ export function HostsHome({
   const [source, setSource] = useState<HostSource>({ kind: "all" });
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Id | null>(null);
+  const [objects, setObjects] = useState<ObjectSection | null>(null);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<HostSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -183,113 +190,123 @@ export function HostsHome({
         onSource={(next) => {
           setSource(next);
           setSelected(null);
+          setObjects(null);
         }}
+        objects={objects}
         favorites={areas.state === "ready" && areas.data.favorites}
         recent={areas.state === "ready" && areas.data.recent}
         groups={areas.state === "ready" && areas.data.groups ? groupList : []}
         keys={areas.state === "ready" && areas.data.keys}
         routes={areas.state === "ready" && areas.data.routes}
-        onOpenObjects={onOpenObjects}
+        onOpenObjects={manage ? setObjects : undefined}
       />
 
-      <section aria-labelledby="hosts-title" className="@container flex min-w-0 flex-1 flex-col">
-        <header className="flex flex-wrap items-center gap-x-4 gap-y-3 px-6 pt-6 pb-4">
-          <div className="flex min-w-max flex-1 items-baseline gap-3">
-            <h1 id="hosts-title" className="ui-display text-2xl">
-              {title}
-            </h1>
-            {hosts.state === "ready" ? (
-              <span className="shrink-0 rounded-full bg-inset px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
-                {t("hosts.count", { count: hosts.data.length })}
-              </span>
-            ) : null}
-          </div>
-          <SearchField
-            ref={search}
-            label={t("hosts.search")}
-            placeholder={t("hosts.search.placeholder")}
-            clearLabel={t("hosts.search.clear")}
-            value={query}
-            onChange={setQuery}
-            className="min-w-40 flex-1 basis-40 @2xl:max-w-64"
-          />
-          <Button variant="primary" onClick={() => setAdding(true)} className="gap-1.5 pl-3">
-            <Plus aria-hidden="true" className="size-4" />
-            {t("hosts.add")}
-          </Button>
-        </header>
+      {objects ? (
+        <div className="min-w-0 flex-1">
+          <InventoryObjects key={objects} section={objects} embedded onBack={() => setObjects(null)} />
+        </div>
+      ) : (
+        <>
+          <section aria-labelledby="hosts-title" className="@container flex min-w-0 flex-1 flex-col">
+            <header className="flex flex-wrap items-center gap-x-4 gap-y-3 px-6 pt-6 pb-4">
+              <div className="flex min-w-max flex-1 items-baseline gap-3">
+                <h1 id="hosts-title" className="ui-display text-2xl">
+                  {title}
+                </h1>
+                {hosts.state === "ready" ? (
+                  <span className="shrink-0 rounded-full bg-inset px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
+                    {t("hosts.count", { count: hosts.data.length })}
+                  </span>
+                ) : null}
+              </div>
+              <SearchField
+                ref={search}
+                label={t("hosts.search")}
+                placeholder={t("hosts.search.placeholder")}
+                clearLabel={t("hosts.search.clear")}
+                value={query}
+                onChange={setQuery}
+                className="min-w-40 flex-1 basis-40 @2xl:max-w-64"
+              />
+              <Button variant="primary" onClick={() => setAdding(true)} className="gap-1.5 pl-3">
+                <Plus aria-hidden="true" className="size-4" />
+                {t("hosts.add")}
+              </Button>
+            </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
-          {source.kind === "recent" ? (
-            <RecentSessionSection sessions={recentSessions} onSelect={setSelected} onReconnect={reconnect} />
-          ) : null}
-          {hosts.state === "loading" ? (
-            <p className="sr-only" role="status">
-              {t("hosts.loading")}
-            </p>
-          ) : null}
-          {hosts.state === "failed" ? (
-            <Empty mood="low" attention>
-              <p role="alert" className="max-w-sm text-attention">
-                {t("failed.body")} {t("startup.error.reference", { reference: hosts.reference })}
-              </p>
-            </Empty>
-          ) : null}
-          {hosts.state === "ready" ? (
-            <HostList
-              hosts={hosts.data}
-              selected={selected}
-              onSelect={setSelected}
-              onFavorite={(host) => void api.setFavorite(host.id, !host.favorite)}
-              onConnect={onConnect ? (host) => void connectHost(host) : undefined}
-              onDelete={setDeleting}
-              empty={
-                query.trim() !== "" ? (
-                  <Empty mood="awake" look={{ x: -0.8, y: 0.2 }}>
-                    <p>{t("hosts.noMatch", { query: query.trim() })}</p>
-                    <Button variant="ghost" className="mt-3" onClick={() => setQuery("")}>
-                      {t("hosts.noMatch.clear")}
-                    </Button>
-                  </Empty>
-                ) : source.kind === "all" ? (
-                  <Empty mood="awake" look={{ x: 0, y: -0.7 }} large>
-                    <h2 className="ui-display text-xl text-foreground">{t("hosts.empty.title")}</h2>
-                    <p className="mt-2 max-w-sm">{t("hosts.empty.body")}</p>
-                    <div className="mt-5 flex flex-wrap justify-center gap-2">
-                      <Button variant="primary" onClick={() => setAdding(true)}>
-                        {t("hosts.add")}
-                      </Button>
-                      <Button variant="ghost" busy={importBusy} onClick={() => void chooseOpenSshConfig()}>
-                        {t("hosts.importOpenSsh")}
-                      </Button>
-                    </div>
-                  </Empty>
-                ) : (
-                  <Empty>
-                    <p>
-                      {source.kind === "favorites"
-                        ? t("hosts.empty.favorites")
-                        : source.kind === "recent"
-                          ? t("hosts.empty.recent")
-                          : t("hosts.empty.group")}
-                    </p>
-                  </Empty>
-                )
-              }
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
+              {source.kind === "recent" ? (
+                <RecentSessionSection sessions={recentSessions} onSelect={setSelected} onReconnect={reconnect} />
+              ) : null}
+              {hosts.state === "loading" ? (
+                <p className="sr-only" role="status">
+                  {t("hosts.loading")}
+                </p>
+              ) : null}
+              {hosts.state === "failed" ? (
+                <Empty mood="low" attention>
+                  <p role="alert" className="max-w-sm text-attention">
+                    {t("failed.body")} {t("startup.error.reference", { reference: hosts.reference })}
+                  </p>
+                </Empty>
+              ) : null}
+              {hosts.state === "ready" ? (
+                <HostList
+                  hosts={hosts.data}
+                  selected={selected}
+                  onSelect={setSelected}
+                  onFavorite={(host) => void api.setFavorite(host.id, !host.favorite)}
+                  onConnect={onConnect ? (host) => void connectHost(host) : undefined}
+                  onDelete={setDeleting}
+                  empty={
+                    query.trim() !== "" ? (
+                      <Empty mood="awake" look={{ x: -0.8, y: 0.2 }}>
+                        <p>{t("hosts.noMatch", { query: query.trim() })}</p>
+                        <Button variant="ghost" className="mt-3" onClick={() => setQuery("")}>
+                          {t("hosts.noMatch.clear")}
+                        </Button>
+                      </Empty>
+                    ) : source.kind === "all" ? (
+                      <Empty mood="awake" look={{ x: 0, y: -0.7 }} large>
+                        <h2 className="ui-display text-xl text-foreground">{t("hosts.empty.title")}</h2>
+                        <p className="mt-2 max-w-sm">{t("hosts.empty.body")}</p>
+                        <div className="mt-5 flex flex-wrap justify-center gap-2">
+                          <Button variant="primary" onClick={() => setAdding(true)}>
+                            {t("hosts.add")}
+                          </Button>
+                          <Button variant="ghost" busy={importBusy} onClick={() => void chooseOpenSshConfig()}>
+                            {t("hosts.importOpenSsh")}
+                          </Button>
+                        </div>
+                      </Empty>
+                    ) : (
+                      <Empty>
+                        <p>
+                          {source.kind === "favorites"
+                            ? t("hosts.empty.favorites")
+                            : source.kind === "recent"
+                              ? t("hosts.empty.recent")
+                              : t("hosts.empty.group")}
+                        </p>
+                      </Empty>
+                    )
+                  }
+                />
+              ) : null}
+            </div>
+          </section>
+
+          {selected ? (
+            <HostDetailsPanel
+              id={selected}
+              groups={groupList}
+              onClose={() => setSelected(null)}
+              onDelete={(host) => setDeleting(host)}
+              onConnect={onConnect}
             />
           ) : null}
-        </div>
-      </section>
-
-      {selected ? (
-        <HostDetailsPanel
-          id={selected}
-          groups={groupList}
-          onClose={() => setSelected(null)}
-          onDelete={(host) => setDeleting(host)}
-          onConnect={onConnect}
-        />
-      ) : null}
+        </>
+      )}
 
       <AddHostDialog
         open={adding}
@@ -585,6 +602,17 @@ function RecentSessionRow({
   );
 }
 
+function ObjectItem({ current, onClick, children }: { current: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <span className="relative block">
+      {current ? <Pick /> : null}
+      <button type="button" aria-current={current ? "page" : undefined} onClick={onClick} className={sideItem}>
+        {children}
+      </button>
+    </span>
+  );
+}
+
 const sideItem =
   "flex h-8 w-full items-center truncate rounded-md pr-3 pl-3.5 text-left text-sm text-muted-foreground transition-colors duration-(--duration-micro) hover:bg-inset hover:text-foreground aria-[current=page]:bg-raised aria-[current=page]:font-medium aria-[current=page]:text-foreground aria-[current=page]:shadow-(--scoplen-shadow-card)";
 
@@ -596,6 +624,7 @@ function Sidebar({
   groups,
   keys,
   routes,
+  objects,
   onOpenObjects,
 }: {
   source: HostSource;
@@ -605,11 +634,14 @@ function Sidebar({
   groups: GroupSummary[];
   keys: boolean;
   routes: boolean;
+  objects: ObjectSection | null;
   onOpenObjects?: (section: ObjectSection) => void;
 }) {
   const { t } = useI18n();
   const is = (other: HostSource) =>
-    other.kind === source.kind && (other.kind !== "group" || (source.kind === "group" && source.id === other.id));
+    objects === null &&
+    other.kind === source.kind &&
+    (other.kind !== "group" || (source.kind === "group" && source.id === other.id));
   const item = (label: string, target: HostSource, depth = 0, count?: number) => (
     <li key={target.kind === "group" ? target.id : target.kind} className="relative">
       {is(target) ? <Pick /> : null}
@@ -669,22 +701,22 @@ function Sidebar({
           </h2>
           <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
             <li>
-              <button type="button" onClick={() => onOpenObjects("logins")} className={sideItem}>
+              <ObjectItem current={objects === "logins"} onClick={() => onOpenObjects("logins")}>
                 {t("frame.logins")}
-              </button>
+              </ObjectItem>
             </li>
             {keys ? (
               <li>
-                <button type="button" onClick={() => onOpenObjects("keys")} className={sideItem}>
+                <ObjectItem current={objects === "keys"} onClick={() => onOpenObjects("keys")}>
                   {t("frame.keys")}
-                </button>
+                </ObjectItem>
               </li>
             ) : null}
             {routes ? (
               <li>
-                <button type="button" onClick={() => onOpenObjects("routes")} className={sideItem}>
+                <ObjectItem current={objects === "routes"} onClick={() => onOpenObjects("routes")}>
                   {t("frame.routes")}
-                </button>
+                </ObjectItem>
               </li>
             ) : null}
           </ul>

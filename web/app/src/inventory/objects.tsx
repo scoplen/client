@@ -37,7 +37,18 @@ function objectLoad<T>(promise: Promise<Outcome<T, ObjectEditError>>): Promise<O
 }
 
 /** The independent object editors reached from the Hosts inventory. */
-export function InventoryObjects({ section: initialSection, onBack }: { section: ObjectSection; onBack: () => void }) {
+export function InventoryObjects({
+  section: initialSection,
+  onBack,
+  embedded = false,
+}: {
+  section: ObjectSection;
+  onBack: () => void;
+  /** Shown beside the hosts sidebar, which already offers the way back and the other sections. */
+  embedded?: boolean;
+}) {
+  // Beside the sidebar the editor is part of the Hosts page, not a page of its own.
+  const Root = embedded ? "div" : "main";
   const { t } = useI18n();
   const api = useInventory();
   const [section, setSection] = useState<ObjectSection>(initialSection);
@@ -105,12 +116,17 @@ export function InventoryObjects({ section: initialSection, onBack }: { section:
   };
 
   return (
-    <main id="main" tabIndex={-1} className="h-full min-h-0 overflow-y-auto px-6 py-6 focus:outline-none">
+    <Root
+      {...(embedded ? {} : { id: "main", tabIndex: -1 })}
+      className="h-full min-h-0 overflow-y-auto px-6 py-6 focus:outline-none"
+    >
       <div className="mx-auto max-w-4xl">
         <header className="flex flex-wrap items-start gap-4 pb-2">
-          <Button variant="ghost" onClick={onBack} className="-ml-3">
-            {t("objects.back")}
-          </Button>
+          {embedded ? null : (
+            <Button variant="ghost" onClick={onBack} className="-ml-3">
+              {t("objects.back")}
+            </Button>
+          )}
           <div className="min-w-0 flex-1">
             <h1 className="ui-display text-3xl">{title}</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>
@@ -121,36 +137,38 @@ export function InventoryObjects({ section: initialSection, onBack }: { section:
           </Button>
         </header>
 
-        <nav
-          aria-label={
-            section === "logins"
-              ? t("objects.list.logins")
-              : section === "keys"
-                ? t("objects.list.keys")
-                : t("objects.list.routes")
-          }
-          className="mt-5"
-        >
-          <div role="tablist" className="inline-flex gap-1 rounded-full bg-inset p-1" aria-label={t("frame.tabs")}>
-            {(["logins", "keys", "routes"] as ObjectSection[]).map((value) => {
-              const selected = value === section;
-              const label =
-                value === "logins" ? t("frame.logins") : value === "keys" ? t("frame.keys") : t("frame.routes");
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  onClick={() => setSection(value)}
-                  className="relative rounded-full border-(length:--scoplen-border-width) border-transparent px-4 py-1.5 text-sm text-muted-foreground transition-[background-color,color,box-shadow] duration-(--duration-state) hover:text-foreground aria-selected:border-border aria-selected:bg-raised aria-selected:font-medium aria-selected:text-foreground aria-selected:shadow-(--scoplen-shadow-control)"
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        </nav>
+        {embedded ? null : (
+          <nav
+            aria-label={
+              section === "logins"
+                ? t("objects.list.logins")
+                : section === "keys"
+                  ? t("objects.list.keys")
+                  : t("objects.list.routes")
+            }
+            className="mt-5"
+          >
+            <div role="tablist" className="inline-flex gap-1 rounded-full bg-inset p-1" aria-label={t("frame.tabs")}>
+              {(["logins", "keys", "routes"] as ObjectSection[]).map((value) => {
+                const selected = value === section;
+                const label =
+                  value === "logins" ? t("frame.logins") : value === "keys" ? t("frame.keys") : t("frame.routes");
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    onClick={() => setSection(value)}
+                    className="relative rounded-full border-(length:--scoplen-border-width) border-transparent px-4 py-1.5 text-sm text-muted-foreground transition-[background-color,color,box-shadow] duration-(--duration-state) hover:text-foreground aria-selected:border-border aria-selected:bg-raised aria-selected:font-medium aria-selected:text-foreground aria-selected:shadow-(--scoplen-shadow-control)"
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
+        )}
 
         <section aria-labelledby="objects-list-title" className="mt-5">
           <h2 id="objects-list-title" className="sr-only">
@@ -252,7 +270,7 @@ export function InventoryObjects({ section: initialSection, onBack }: { section:
         destructive
       />
       {notice ? <Notice message={notice} onDismiss={() => setNotice(null)} /> : null}
-    </main>
+    </Root>
   );
 }
 

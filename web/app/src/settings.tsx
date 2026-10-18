@@ -94,7 +94,7 @@ function Appearance() {
           ))}
         </div>
       </fieldset>
-      <div className="mt-6 max-w-sm">
+      <div className="mt-6 max-w-lg">
         <Segmented<SchemeChoice>
           legend={t("settings.appearance.scheme")}
           value={appearance.scheme}
@@ -174,7 +174,7 @@ function Language() {
     "zh-Hans": "简体中文",
   };
   return (
-    <div className="mt-6 max-w-sm">
+    <div className="mt-6 max-w-lg">
       <Segmented<LanguageChoice>
         legend={t("settings.language")}
         value={choice}

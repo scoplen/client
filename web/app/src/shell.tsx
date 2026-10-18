@@ -6,11 +6,10 @@ import { Frame } from "./frame";
 import { HostsHome } from "./inventory/home";
 import { InventoryContext } from "./inventory/api";
 import { createInventoryApi } from "./inventory/core-api";
-import { InventoryObjects, type ObjectSection } from "./inventory/objects";
 import { SessionTerminal, type SessionState } from "./session";
 import { SettingsView, type SettingsSection } from "./settings";
 
-type View = "hosts" | "objects" | "settings";
+type View = "hosts" | "settings";
 
 type OpenSession = { id: string; profileId: string; label: string };
 
@@ -26,18 +25,11 @@ export function Shell({
 }) {
   const { t } = useI18n();
   const [view, setView] = useState<View>("hosts");
-  const [objectSection, setObjectSection] = useState<ObjectSection>("logins");
   const [sessions, setSessions] = useState<OpenSession[]>([]);
   const [activeTab, setActiveTab] = useState("hosts");
   const [states, setStates] = useState<Record<string, SessionState>>({});
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const inventory = useMemo(() => createInventoryApi(), []);
-
-  const openObjects = (section: ObjectSection) => {
-    setObjectSection(section);
-    setView("objects");
-    setActiveTab("hosts");
-  };
 
   const openSession = (profileId: string, label: string) => {
     const id = `session-${Date.now()}-${sessions.length}`;
@@ -95,14 +87,10 @@ export function Shell({
     >
       {view === "settings" ? (
         <SettingsView key={settingsSection} status={status} onStatus={onStatus} section={settingsSection} />
-      ) : activeTab !== "hosts" ? null : view === "objects" ? (
-        <InventoryContext.Provider value={inventory}>
-          <InventoryObjects section={objectSection} onBack={() => setView("hosts")} />
-        </InventoryContext.Provider>
-      ) : (
+      ) : activeTab !== "hosts" ? null : (
         <InventoryContext.Provider value={inventory}>
           <main id="main" tabIndex={-1} className="h-full min-h-0 focus:outline-none">
-            <HostsHome onOpenObjects={openObjects} onConnect={openSession} />
+            <HostsHome manage onConnect={openSession} />
           </main>
         </InventoryContext.Provider>
       )}
