@@ -24,6 +24,7 @@ import { InventoryContext } from "../inventory/api";
 import type { Locale, Platform, Status } from "../ipc/bindings";
 import { CreatePassphraseScreen, UnlockScreen, UnreadableScreen } from "../local-data";
 import { SettingsView } from "../settings";
+import { TerminalColorsProvider } from "../terminal-colors";
 import { sampleHosts, sampleInventory } from "./sample-inventory";
 
 // The local-data screens call the core; answer them as a core would.
@@ -197,7 +198,9 @@ applyStoredAppearance();
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <AppearanceProvider>
-      <Gallery />
+      <TerminalColorsProvider>
+        <Gallery />
+      </TerminalColorsProvider>
     </AppearanceProvider>
   </StrictMode>,
 );

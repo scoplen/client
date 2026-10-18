@@ -9,25 +9,57 @@ import {
   type SchemeChoice,
   type ThemeId,
 } from "@scoplen/ui";
+import { useState } from "react";
 import { useI18n } from "./i18n";
 import type { Status } from "./ipc/bindings";
 import { PassphraseSettings } from "./local-data";
+import { TerminalSettings } from "./terminal-settings";
 
-/** Settings: how Scoplen looks, then how this device's data is protected. */
+export type SettingsSection = "appearance" | "terminal" | "data";
+const sections: SettingsSection[] = ["appearance", "terminal", "data"];
+
+/**
+ * Settings, in three places: how the interface looks, how the terminal
+ * looks, and how this device's data is protected.
+ */
 export function SettingsView({
   status,
   onStatus,
+  section: initial = "appearance",
 }: {
   status: Status & { state: "open" };
   onStatus: (status: Status) => void;
+  section?: SettingsSection;
 }) {
   const { t } = useI18n();
+  const [section, setSection] = useState<SettingsSection>(initial);
   return (
     <main id="main" tabIndex={-1} className="h-full overflow-y-auto focus:outline-none">
-      <div className="mx-auto max-w-2xl px-6 py-10">
+      <div className="mx-auto max-w-3xl px-6 py-10">
         <h1 className="ui-display text-3xl">{t("settings.title")}</h1>
-        <Appearance />
-        <PassphraseSettings status={status} onStatus={onStatus} />
+        <div
+          role="tablist"
+          aria-label={t("settings.title")}
+          className="mt-5 inline-flex gap-1 rounded-full bg-inset p-1"
+        >
+          {sections.map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={section === id}
+              onClick={() => setSection(id)}
+              className="rounded-full border-(length:--scoplen-border-width) border-transparent px-4 py-1.5 text-sm text-muted-foreground transition-[background-color,color,box-shadow] duration-(--duration-state) hover:text-foreground aria-selected:border-border aria-selected:bg-raised aria-selected:font-medium aria-selected:text-foreground aria-selected:shadow-(--scoplen-shadow-control)"
+            >
+              {t(`settings.section.${id}`)}
+            </button>
+          ))}
+        </div>
+        <div className="scoplen-rise" key={section}>
+          {section === "appearance" ? <Appearance /> : null}
+          {section === "terminal" ? <TerminalSettings /> : null}
+          {section === "data" ? <PassphraseSettings status={status} onStatus={onStatus} /> : null}
+        </div>
       </div>
     </main>
   );

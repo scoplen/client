@@ -45,8 +45,6 @@ const pairs: [string, string][] = [
   ["primary-foreground", "primary-hover"],
   ["attention", "background"],
   ["attention-foreground", "attention"],
-  ["terminal-foreground", "terminal"],
-  ["terminal-muted", "terminal"],
 ];
 
 it("has every theme in both of its schemes", () => {

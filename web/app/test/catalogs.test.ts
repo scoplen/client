@@ -18,6 +18,7 @@ const sample = {
   label: "laptop",
   path: "/home/mia/.ssh/id_ed25519",
   field: "name",
+  color: "Red",
 };
 
 describe("message catalogs", () => {

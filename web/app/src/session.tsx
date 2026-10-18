@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Dialog, HostEgg, Mark, type MarkMood } from "@scoplen/ui";
+import { Button, Dialog, HostEgg, IconButton, Mark, type MarkMood } from "@scoplen/ui";
+import { Palette } from "lucide-react";
 import { Terminal, type TerminalSink, type TerminalSource } from "@scoplen/terminal/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "./i18n";
 import { commands, type HostKeyDetails } from "./ipc/bindings";
 import { frameChannel } from "./ipc/frames";
+import { useTerminalColors, xtermTheme } from "./terminal-colors";
 
 export type SessionState = "verifying" | "trusting" | "connecting" | "connected" | "closed" | "failed";
 
@@ -24,12 +26,15 @@ export function SessionTerminal({
   label,
   onClose,
   onStateChange,
+  onOpenColors,
 }: {
   profileId: string;
   label: string;
   onClose: () => void;
   /** Told whenever the connection state changes, so the window can show it on the tab. */
   onStateChange?: (state: SessionState) => void;
+  /** Opens the terminal color settings. */
+  onOpenColors?: () => void;
 }) {
   const { t } = useI18n();
   const [state, setState] = useState<SessionState>("verifying");
@@ -99,7 +104,11 @@ export function SessionTerminal({
     }),
     [sessionId],
   );
-  const terminalProfile = useMemo(() => ({ cursorBlink: true, scrollback: 2_000 }), []);
+  const { colors } = useTerminalColors();
+  const terminalProfile = useMemo(
+    () => ({ cursorBlink: true, scrollback: 2_000, theme: xtermTheme(colors) }),
+    [colors],
+  );
 
   const closeTransport = useCallback(() => {
     void commands.sessionCloseTransport(sessionId).catch(() => undefined);
@@ -181,57 +190,61 @@ export function SessionTerminal({
   const face = sessionFaces[state];
 
   return (
-    <main className="flex h-full min-h-0 flex-col bg-terminal text-terminal-foreground" aria-labelledby="session-title">
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b-(length:--scoplen-border-width) border-terminal-border px-4 py-2.5">
+    <main className="flex h-full min-h-0 flex-col bg-background text-foreground" aria-labelledby="session-title">
+      <header className="flex shrink-0 items-center justify-between gap-3 px-4 py-2.5">
         <div className="flex min-w-0 items-center gap-3">
-          <HostEgg
-            seed={profileId}
-            size="1.75rem"
-            mood={face.mood}
-            active={face.active}
-            attention={face.attention}
-            className={face.active ? "text-[color-mix(in_srgb,var(--primary)_80%,white)]" : "text-terminal-muted"}
-          />
+          <HostEgg seed={profileId} size="1.75rem" mood={face.mood} active={face.active} attention={face.attention} />
           <div className="min-w-0">
             <h1 id="session-title" className="ui-display truncate text-base">
               {label}
             </h1>
-            <p className="m-0 flex items-center gap-1.5 text-xs text-terminal-muted" role="status">
+            <p className="m-0 flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
               <span
                 aria-hidden="true"
-                className={`size-1.5 rounded-full ${state === "connected" ? "bg-[color-mix(in_srgb,var(--primary)_80%,white)]" : state === "failed" ? "bg-attention" : "bg-terminal-muted"}`}
+                className={`size-1.5 rounded-full ${state === "connected" ? "bg-primary" : state === "failed" ? "bg-attention" : "bg-muted-foreground"}`}
               />
               {status}
             </p>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          className="shrink-0 text-terminal-foreground hover:bg-terminal-raised"
-          onClick={() => {
-            closeTransport();
-            onClose();
-          }}
-        >
-          {t("session.close")}
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          {onOpenColors ? (
+            <IconButton label={t("session.colors")} onClick={onOpenColors}>
+              <Palette aria-hidden="true" className="size-4" />
+            </IconButton>
+          ) : null}
+          <Button
+            variant="ghost"
+            onClick={() => {
+              closeTransport();
+              onClose();
+            }}
+          >
+            {t("session.close")}
+          </Button>
+        </div>
       </header>
-      <div className="relative min-h-0 flex-1 overflow-hidden px-4 py-3">
-        <Terminal
-          source={source}
-          sink={inputSink}
-          aria-label={t("session.output")}
-          className={`h-full min-h-0 rounded-md transition-opacity duration-(--duration-overlay) ${state === "connected" ? "opacity-100" : "opacity-40"}`}
-          profile={terminalProfile}
-          onTerminalError={(terminalError) => {
-            if (!mounted.current) return;
-            setState("failed");
-            setError(terminalError.message);
-          }}
-        />
-        {state !== "connected" ? (
-          <Stage state={state} seed={profileId} label={label} status={status} error={error} />
-        ) : null}
+      <div className="min-h-0 flex-1 px-3 pb-3">
+        <div
+          className="relative h-full min-h-0 overflow-hidden rounded-xl border-(length:--scoplen-border-width) border-border p-3 shadow-(--scoplen-shadow-card) transition-colors duration-(--duration-state)"
+          style={{ background: colors.background }}
+        >
+          <Terminal
+            source={source}
+            sink={inputSink}
+            aria-label={t("session.output")}
+            className={`h-full min-h-0 transition-opacity duration-(--duration-overlay) ${state === "connected" ? "opacity-100" : "opacity-40"}`}
+            profile={terminalProfile}
+            onTerminalError={(terminalError) => {
+              if (!mounted.current) return;
+              setState("failed");
+              setError(terminalError.message);
+            }}
+          />
+          {state !== "connected" ? (
+            <Stage state={state} seed={profileId} label={label} status={status} error={error} />
+          ) : null}
+        </div>
       </div>
       <Dialog
         open={hostKey !== null}
@@ -315,19 +328,13 @@ function Stage({
 }) {
   const working = state === "verifying" || state === "connecting" || state === "trusting";
   return (
-    <div className="absolute inset-0 grid place-items-center bg-[color-mix(in_srgb,var(--terminal)_82%,transparent)] px-6 backdrop-blur-[2px]">
+    <div className="absolute inset-0 grid place-items-center bg-[color-mix(in_srgb,var(--background)_78%,transparent)] px-6 backdrop-blur-[3px]">
       <div className="scoplen-rise flex max-w-md flex-col items-center text-center">
         {working ? (
           <div aria-hidden="true" className="flex items-center gap-3">
-            <Mark size="2.5rem" mood="awake" look={{ x: 1, y: 0 }} className="text-terminal-foreground" />
-            <span className="scoplen-route relative h-0.5 w-28 rounded-full bg-terminal-border sm:w-40" />
-            <HostEgg
-              seed={seed}
-              size="2.5rem"
-              mood="awake"
-              active
-              className="text-[color-mix(in_srgb,var(--primary)_80%,white)]"
-            />
+            <Mark size="2.5rem" mood="awake" look={{ x: 1, y: 0 }} className="text-foreground" />
+            <span className="scoplen-route relative h-0.5 w-28 rounded-full bg-border-strong sm:w-40" />
+            <HostEgg seed={seed} size="2.5rem" mood="awake" active />
           </div>
         ) : (
           <HostEgg
@@ -335,16 +342,13 @@ function Stage({
             size="3.5rem"
             mood={state === "failed" ? "low" : "closed"}
             attention={state === "failed"}
-            className={state === "failed" ? "" : "text-terminal-muted"}
+            className={state === "failed" ? "" : "text-egg"}
           />
         )}
-        <p className="mt-5 mb-0 font-mono text-sm text-terminal-foreground">{label}</p>
-        <p className="mt-1 mb-0 text-sm text-terminal-muted">{status}</p>
+        <p className="mt-5 mb-0 font-mono text-sm text-foreground">{label}</p>
+        <p className="mt-1 mb-0 text-sm text-muted-foreground">{status}</p>
         {error ? (
-          <p
-            role="alert"
-            className="mt-4 mb-0 text-sm whitespace-pre-wrap text-[color-mix(in_srgb,var(--attention)_70%,white)]"
-          >
+          <p role="alert" className="mt-4 mb-0 text-sm whitespace-pre-wrap text-attention">
             {error}
           </p>
         ) : null}

@@ -5,6 +5,7 @@ import { I18nProvider, useI18n } from "./i18n";
 import { commands, type AppInfo, type Locale, type Status } from "./ipc/bindings";
 import { CreatePassphraseScreen, UnlockScreen, UnreadableScreen } from "./local-data";
 import { Shell } from "./shell";
+import { TerminalColorsProvider } from "./terminal-colors";
 
 type Startup =
   { state: "loading" } | { state: "ready"; info: AppInfo; status: Status } | { state: "failed"; reference: string };
@@ -57,12 +58,14 @@ export function App() {
 
   return (
     <AppearanceProvider>
-      <I18nProvider locale={locale}>
-        <SkipTarget />
-        {startup.state === "loading" ? <StartupLoading /> : null}
-        {startup.state === "ready" ? <Gate info={startup.info} status={startup.status} onStatus={setStatus} /> : null}
-        {startup.state === "failed" ? <StartupError reference={startup.reference} onRetry={retry} /> : null}
-      </I18nProvider>
+      <TerminalColorsProvider>
+        <I18nProvider locale={locale}>
+          <SkipTarget />
+          {startup.state === "loading" ? <StartupLoading /> : null}
+          {startup.state === "ready" ? <Gate info={startup.info} status={startup.status} onStatus={setStatus} /> : null}
+          {startup.state === "failed" ? <StartupError reference={startup.reference} onRetry={retry} /> : null}
+        </I18nProvider>
+      </TerminalColorsProvider>
     </AppearanceProvider>
   );
 }

@@ -169,6 +169,7 @@ describe("settings", () => {
     });
     const { container } = render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Local data" }));
     expect(screen.getByRole("button", { name: "Settings" }).getAttribute("aria-pressed")).toBe("true");
     await userEvent.click(screen.getByRole("button", { name: "Set passphrase" }));
     expect(await violations(container)).toEqual([]);
@@ -189,6 +190,7 @@ describe("settings", () => {
     core({ state: "open", protection: "passphraseOnly" });
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Local data" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Change passphrase" })).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Remove passphrase" })).toBeNull();
   });

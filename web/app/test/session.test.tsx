@@ -3,7 +3,9 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
+import { AppearanceProvider } from "@scoplen/ui";
 import { I18nProvider } from "../src/i18n";
+import { TerminalColorsProvider } from "../src/terminal-colors";
 import { SessionTerminal } from "../src/session";
 import type { ScoplenTerminalElement } from "@scoplen/terminal";
 
@@ -24,9 +26,13 @@ it("routes terminal input to the live SSH session and closes its transport", asy
   const close = vi.fn();
   const { container } = render(
     <StrictMode>
-      <I18nProvider locale="en">
-        <SessionTerminal profileId="profile-1" label="server · root" onClose={close} />
-      </I18nProvider>
+      <AppearanceProvider>
+        <TerminalColorsProvider>
+          <I18nProvider locale="en">
+            <SessionTerminal profileId="profile-1" label="server · root" onClose={close} />
+          </I18nProvider>
+        </TerminalColorsProvider>
+      </AppearanceProvider>
     </StrictMode>,
   );
   await waitFor(() => expect(calls.some((call) => call.command === "session_connect")).toBe(true));

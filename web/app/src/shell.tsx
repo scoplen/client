@@ -8,7 +8,7 @@ import { InventoryContext } from "./inventory/api";
 import { createInventoryApi } from "./inventory/core-api";
 import { InventoryObjects, type ObjectSection } from "./inventory/objects";
 import { SessionTerminal, type SessionState } from "./session";
-import { SettingsView } from "./settings";
+import { SettingsView, type SettingsSection } from "./settings";
 
 type View = "hosts" | "objects" | "settings";
 
@@ -30,6 +30,7 @@ export function Shell({
   const [sessions, setSessions] = useState<OpenSession[]>([]);
   const [activeTab, setActiveTab] = useState("hosts");
   const [states, setStates] = useState<Record<string, SessionState>>({});
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const inventory = useMemo(() => createInventoryApi(), []);
 
   const openObjects = (section: ObjectSection) => {
@@ -69,25 +70,15 @@ export function Shell({
         setActiveTab(id);
         setView("hosts");
       }}
-      onSettings={() => setView(view === "settings" ? "hosts" : "settings")}
+      onSettings={() => {
+        setSettingsSection("appearance");
+        setView(view === "settings" ? "hosts" : "settings");
+      }}
       settingsActive={view === "settings"}
     >
       {view === "settings" ? (
-        <SettingsView status={status} onStatus={onStatus} />
-      ) : activeTab !== "hosts" ? (
-        <div className="h-full min-h-0">
-          {sessions.map((session) => (
-            <div key={session.id} className="h-full min-h-0" hidden={session.id !== activeTab}>
-              <SessionTerminal
-                profileId={session.profileId}
-                label={session.label}
-                onClose={() => closeSession(session.id)}
-                onStateChange={(state) => setStates((current) => ({ ...current, [session.id]: state }))}
-              />
-            </div>
-          ))}
-        </div>
-      ) : view === "objects" ? (
+        <SettingsView key={settingsSection} status={status} onStatus={onStatus} section={settingsSection} />
+      ) : activeTab !== "hosts" ? null : view === "objects" ? (
         <InventoryContext.Provider value={inventory}>
           <InventoryObjects section={objectSection} onBack={() => setView("hosts")} />
         </InventoryContext.Provider>
@@ -98,6 +89,21 @@ export function Shell({
           </main>
         </InventoryContext.Provider>
       )}
+      {/* Sessions stay mounted, and connected, while another tab or Settings is shown. */}
+      {sessions.map((session) => (
+        <div key={session.id} className="h-full min-h-0" hidden={view === "settings" || session.id !== activeTab}>
+          <SessionTerminal
+            profileId={session.profileId}
+            label={session.label}
+            onClose={() => closeSession(session.id)}
+            onStateChange={(state) => setStates((current) => ({ ...current, [session.id]: state }))}
+            onOpenColors={() => {
+              setSettingsSection("terminal");
+              setView("settings");
+            }}
+          />
+        </div>
+      ))}
     </Frame>
   );
 }
