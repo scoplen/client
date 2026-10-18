@@ -4,15 +4,16 @@ import userEvent from "@testing-library/user-event";
 import {
   Button,
   ChoiceList,
+  HostEgg,
   Lockup,
   Mark,
   Notice,
-  ScopeMark,
+  Pick,
   SearchField,
   Segmented,
   SkipLink,
   Toolbar,
-  markPath,
+  bodyPath,
 } from "../src";
 import { violations } from "./axe";
 
@@ -120,11 +121,30 @@ describe("Mark", () => {
   });
 
   it("follows the geometry of the visual identity", () => {
-    expect(markPath("display")).toBe(
-      "M11 8H34V15.5H17V34H8V11A3 3 0 0 1 11 8ZM53 56H30V48.5H47V30H56V53A3 3 0 0 1 53 56Z",
+    expect(bodyPath()).toBe(
+      "M32 7C46 7 57 20.08 57 36.07C57 48.35 46 58 32 58C18 58 7 48.35 7 36.07C7 20.08 18 7 32 7Z",
     );
-    const { container } = render(<Mark variant="display" />);
-    expect(container.querySelector("svg")?.getAttribute("viewBox")).toBe("8 8 48 48");
+    const { container } = render(<Mark />);
+    expect(container.querySelector("svg")?.getAttribute("viewBox")).toBe("0 0 64 64");
+    expect(container.querySelectorAll("[data-eye]")).toHaveLength(2);
+  });
+
+  it("shows its mood on its face", () => {
+    const { container, rerender } = render(<Mark />);
+    expect(container.querySelector("svg")?.dataset.mood).toBe("rest");
+    rerender(<Mark mood="closed" />);
+    expect(container.querySelector("svg")?.dataset.mood).toBe("closed");
+  });
+
+  it("gives each host a stable pose and stays decorative", () => {
+    const first = render(<HostEgg seed="host-1" />).container.innerHTML;
+    const again = render(<HostEgg seed="host-1" />).container.innerHTML;
+    expect(again.replace(/scoplen-eyes-[^")]+/g, "")).toBe(first.replace(/scoplen-eyes-[^")]+/g, ""));
+    expect(
+      render(<HostEgg seed="x" />)
+        .container.querySelector("svg")
+        ?.getAttribute("aria-hidden"),
+    ).toBe("true");
   });
 });
 
@@ -149,11 +169,11 @@ describe("accessibility", () => {
   });
 });
 
-describe("ScopeMark", () => {
+describe("Pick", () => {
   it("is decorative", () => {
     const { container } = render(
       <div className="relative">
-        <ScopeMark />
+        <Pick />
       </div>,
     );
     expect(container.querySelector("[aria-hidden=true]")).toBeTruthy();

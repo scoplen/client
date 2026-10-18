@@ -1,6 +1,10 @@
 {
-  "display": { "start": 8, "end": 56, "length": 26, "vertical": 9, "horizontal": 7.5, "radius": 3 },
-  "small": { "start": 4, "end": 60, "length": 28, "vertical": 12, "horizontal": 11, "radius": 2 },
+  "body": { "top": 7, "bottom": 58, "halfWidth": 25, "centerX": 32, "waist": 0.57 },
+  "tilt": { "angle": -10, "x": 32, "y": 33 },
+  "eyes": {
+    "open": { "x": 18, "y": 28, "width": 9, "height": 18 },
+    "wink": { "x": 35, "y": 38, "width": 13, "height": 7 }
+  },
   "colors": {
     "ink": "#1c1917",
     "paper": "#f5f3ef",

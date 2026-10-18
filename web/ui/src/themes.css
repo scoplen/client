@@ -1,0 +1,307 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Themes (`theme.ts`, `scoplen-docs/18-visual-identity.md`). Each theme sets
+ * every color and shape token for each scheme it supports, on any element
+ * carrying `data-theme` and `data-scheme`, so a settings preview can show a
+ * theme inside a window that uses another. Components read only these
+ * tokens. Every text pair is checked for WCAG 2.2 AA contrast
+ * (`test/tokens.test.ts`), which reads the blocks below by their selectors.
+ */
+
+/* Paper: the default. Warm paper and ink with one deep teal. */
+[data-theme="paper"][data-scheme="light"] {
+  color-scheme: light;
+  --background: #f5f3ef;
+  --foreground: #1c1917;
+  --raised: #fbfaf8;
+  --inset: #ebe8e2;
+  --muted-foreground: #57534e;
+  --border: #e2ded6;
+  --border-strong: #c9c3b8;
+  --primary: #1f6f6b;
+  --primary-hover: #185955;
+  --primary-foreground: #f5f3ef;
+  --attention: #b0451f;
+  --attention-foreground: #f5f3ef;
+  --ring: #1f6f6b;
+  --egg: #c9c1b4;
+  --terminal: #141210;
+  --terminal-raised: #221f1c;
+  --terminal-foreground: #f5f0e8;
+  --terminal-muted: #b6ada3;
+  --terminal-border: #3b3732;
+  --scoplen-radius-sm: 6px;
+  --scoplen-radius-md: 9px;
+  --scoplen-radius-lg: 14px;
+  --scoplen-radius-xl: 20px;
+  --scoplen-border-width: 1px;
+  --scoplen-control-border: transparent;
+  --scoplen-shadow-control: 0 1px 2px rgb(28 25 23 / 0.16);
+  --scoplen-shadow-card: 0 1px 2px rgb(28 25 23 / 0.06);
+  --scoplen-shadow-popover: 0 12px 32px -12px rgb(28 25 23 / 0.28), 0 0 0 1px rgb(28 25 23 / 0.06);
+  --scoplen-shadow-overlay: 0 24px 64px -16px rgb(28 25 23 / 0.38), 0 0 0 1px rgb(28 25 23 / 0.06);
+  --scoplen-press: scale(0.97);
+  --scoplen-font-display: var(--font-serif);
+  --scoplen-display-weight: 500;
+  --scoplen-display-tracking: -0.01em;
+}
+[data-theme="paper"][data-scheme="dark"] {
+  color-scheme: dark;
+  --background: #1c1917;
+  --foreground: #f5f3ef;
+  --raised: #24201d;
+  --inset: #141210;
+  --muted-foreground: #a8a29e;
+  --border: #34302c;
+  --border-strong: #4a453f;
+  --primary: #7cc4bd;
+  --primary-hover: #9ad3cd;
+  --primary-foreground: #1c1917;
+  --attention: #e8875f;
+  --attention-foreground: #1c1917;
+  --ring: #7cc4bd;
+  --egg: #5b554e;
+  --terminal: #110f0e;
+  --terminal-raised: #1f1c19;
+  --terminal-foreground: #f5f0e8;
+  --terminal-muted: #b6ada3;
+  --terminal-border: #34302c;
+  --scoplen-radius-sm: 6px;
+  --scoplen-radius-md: 9px;
+  --scoplen-radius-lg: 14px;
+  --scoplen-radius-xl: 20px;
+  --scoplen-border-width: 1px;
+  --scoplen-control-border: transparent;
+  --scoplen-shadow-control: 0 1px 2px rgb(0 0 0 / 0.4);
+  --scoplen-shadow-card: none;
+  --scoplen-shadow-popover: 0 12px 32px -12px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.08);
+  --scoplen-shadow-overlay: 0 24px 64px -16px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.08);
+  --scoplen-press: scale(0.97);
+  --scoplen-font-display: var(--font-serif);
+  --scoplen-display-weight: 500;
+  --scoplen-display-tracking: -0.01em;
+}
+
+/* Brutal: thick ink outlines, hard offset shadows, buttons that press down. */
+[data-theme="brutal"][data-scheme="light"] {
+  color-scheme: light;
+  --background: #fff4d9;
+  --foreground: #111111;
+  --raised: #ffffff;
+  --inset: #ffe8ad;
+  --muted-foreground: #423d33;
+  --border: #111111;
+  --border-strong: #111111;
+  --primary: #2b3bff;
+  --primary-hover: #1a29e0;
+  --primary-foreground: #ffffff;
+  --attention: #c8261a;
+  --attention-foreground: #ffffff;
+  --ring: #2b3bff;
+  --egg: #ffc22e;
+  --terminal: #111111;
+  --terminal-raised: #222222;
+  --terminal-foreground: #fff4d9;
+  --terminal-muted: #c9bfa6;
+  --terminal-border: #111111;
+  --scoplen-radius-sm: 4px;
+  --scoplen-radius-md: 6px;
+  --scoplen-radius-lg: 8px;
+  --scoplen-radius-xl: 10px;
+  --scoplen-border-width: 2px;
+  --scoplen-control-border: var(--border);
+  --scoplen-shadow-control: 3px 3px 0 #111111;
+  --scoplen-shadow-card: 4px 4px 0 #111111;
+  --scoplen-shadow-popover: 5px 5px 0 #111111;
+  --scoplen-shadow-overlay: 8px 8px 0 #111111;
+  --scoplen-press: translate(3px, 3px);
+  --scoplen-font-display: var(--font-sans);
+  --scoplen-display-weight: 800;
+  --scoplen-display-tracking: -0.025em;
+}
+[data-theme="brutal"][data-scheme="dark"] {
+  color-scheme: dark;
+  --background: #17161a;
+  --foreground: #f7f2e6;
+  --raised: #232128;
+  --inset: #0e0d10;
+  --muted-foreground: #cbc4b4;
+  --border: #f7f2e6;
+  --border-strong: #f7f2e6;
+  --primary: #ffd23f;
+  --primary-hover: #ffe17a;
+  --primary-foreground: #111111;
+  --attention: #ff7d6e;
+  --attention-foreground: #111111;
+  --ring: #ffd23f;
+  --egg: #ff8fb8;
+  --terminal: #0b0a0d;
+  --terminal-raised: #1c1a20;
+  --terminal-foreground: #f7f2e6;
+  --terminal-muted: #b9b2a3;
+  --terminal-border: #f7f2e6;
+  --scoplen-radius-sm: 4px;
+  --scoplen-radius-md: 6px;
+  --scoplen-radius-lg: 8px;
+  --scoplen-radius-xl: 10px;
+  --scoplen-border-width: 2px;
+  --scoplen-control-border: var(--border);
+  --scoplen-shadow-control: 3px 3px 0 #ffd23f;
+  --scoplen-shadow-card: 4px 4px 0 #ffd23f;
+  --scoplen-shadow-popover: 5px 5px 0 #ffd23f;
+  --scoplen-shadow-overlay: 8px 8px 0 #ffd23f;
+  --scoplen-press: translate(3px, 3px);
+  --scoplen-font-display: var(--font-sans);
+  --scoplen-display-weight: 800;
+  --scoplen-display-tracking: -0.025em;
+}
+
+/* Phosphor: an old green-screen terminal, glowing faintly. Dark only. */
+[data-theme="phosphor"][data-scheme="dark"] {
+  color-scheme: dark;
+  --background: #0a0f0b;
+  --foreground: #c6f5c8;
+  --raised: #111a13;
+  --inset: #060a07;
+  --muted-foreground: #7fb083;
+  --border: #1d3322;
+  --border-strong: #2c5234;
+  --primary: #3ddc84;
+  --primary-hover: #6be8a2;
+  --primary-foreground: #03140a;
+  --attention: #ffa05c;
+  --attention-foreground: #170900;
+  --ring: #3ddc84;
+  --egg: #1f5a33;
+  --terminal: #050806;
+  --terminal-raised: #0d150f;
+  --terminal-foreground: #c6f5c8;
+  --terminal-muted: #7fb083;
+  --terminal-border: #1d3322;
+  --scoplen-radius-sm: 2px;
+  --scoplen-radius-md: 3px;
+  --scoplen-radius-lg: 5px;
+  --scoplen-radius-xl: 7px;
+  --scoplen-border-width: 1px;
+  --scoplen-control-border: transparent;
+  --scoplen-shadow-control: 0 0 12px -4px rgb(61 220 132 / 0.55);
+  --scoplen-shadow-card: 0 0 0 1px rgb(61 220 132 / 0.08);
+  --scoplen-shadow-popover: 0 0 0 1px rgb(61 220 132 / 0.35), 0 0 28px -8px rgb(61 220 132 / 0.4);
+  --scoplen-shadow-overlay: 0 0 0 1px rgb(61 220 132 / 0.4), 0 0 48px -12px rgb(61 220 132 / 0.45);
+  --scoplen-press: scale(0.97);
+  --scoplen-font-display: var(--font-mono);
+  --scoplen-display-weight: 600;
+  --scoplen-display-tracking: 0;
+}
+
+/* Midnight: deep navy and a soft violet, for late sessions. Dark only. */
+[data-theme="midnight"][data-scheme="dark"] {
+  color-scheme: dark;
+  --background: #0f1424;
+  --foreground: #e8ecf8;
+  --raised: #171d33;
+  --inset: #0a0e1a;
+  --muted-foreground: #9ca6c4;
+  --border: #252d47;
+  --border-strong: #36405f;
+  --primary: #a78bfa;
+  --primary-hover: #c4b5fd;
+  --primary-foreground: #150c33;
+  --attention: #fb8f83;
+  --attention-foreground: #1d0805;
+  --ring: #a78bfa;
+  --egg: #323c62;
+  --terminal: #090c17;
+  --terminal-raised: #121729;
+  --terminal-foreground: #e8ecf8;
+  --terminal-muted: #9ca6c4;
+  --terminal-border: #252d47;
+  --scoplen-radius-sm: 7px;
+  --scoplen-radius-md: 11px;
+  --scoplen-radius-lg: 16px;
+  --scoplen-radius-xl: 22px;
+  --scoplen-border-width: 1px;
+  --scoplen-control-border: transparent;
+  --scoplen-shadow-control: 0 1px 2px rgb(0 0 0 / 0.5);
+  --scoplen-shadow-card: none;
+  --scoplen-shadow-popover: 0 16px 40px -14px rgb(0 0 0 / 0.75), 0 0 0 1px rgb(167 139 250 / 0.14);
+  --scoplen-shadow-overlay: 0 28px 72px -18px rgb(0 0 0 / 0.8), 0 0 0 1px rgb(167 139 250 / 0.16);
+  --scoplen-press: scale(0.97);
+  --scoplen-font-display: var(--font-serif);
+  --scoplen-display-weight: 500;
+  --scoplen-display-tracking: -0.01em;
+}
+
+/* Sakura: soft blossom pink, very round. */
+[data-theme="sakura"][data-scheme="light"] {
+  color-scheme: light;
+  --background: #fff5f6;
+  --foreground: #2a1a20;
+  --raised: #ffffff;
+  --inset: #fbe7eb;
+  --muted-foreground: #6c5260;
+  --border: #f1d8de;
+  --border-strong: #e3bdc7;
+  --primary: #c2185b;
+  --primary-hover: #a3124b;
+  --primary-foreground: #ffffff;
+  --attention: #a84a00;
+  --attention-foreground: #ffffff;
+  --ring: #c2185b;
+  --egg: #f5c3d0;
+  --terminal: #20141a;
+  --terminal-raised: #2d1d25;
+  --terminal-foreground: #fdeef2;
+  --terminal-muted: #c9aab6;
+  --terminal-border: #40293a;
+  --scoplen-radius-sm: 9px;
+  --scoplen-radius-md: 13px;
+  --scoplen-radius-lg: 20px;
+  --scoplen-radius-xl: 28px;
+  --scoplen-border-width: 1px;
+  --scoplen-control-border: transparent;
+  --scoplen-shadow-control: 0 2px 6px -2px rgb(194 24 91 / 0.35);
+  --scoplen-shadow-card: 0 2px 10px -6px rgb(194 24 91 / 0.25);
+  --scoplen-shadow-popover: 0 14px 36px -14px rgb(120 20 60 / 0.3), 0 0 0 1px rgb(194 24 91 / 0.08);
+  --scoplen-shadow-overlay: 0 26px 64px -18px rgb(120 20 60 / 0.38), 0 0 0 1px rgb(194 24 91 / 0.08);
+  --scoplen-press: scale(0.96);
+  --scoplen-font-display: var(--font-serif);
+  --scoplen-display-weight: 500;
+  --scoplen-display-tracking: -0.01em;
+}
+[data-theme="sakura"][data-scheme="dark"] {
+  color-scheme: dark;
+  --background: #1f1418;
+  --foreground: #fbeef1;
+  --raised: #2a1b21;
+  --inset: #170e12;
+  --muted-foreground: #c9aab5;
+  --border: #3a2830;
+  --border-strong: #523a45;
+  --primary: #f48fb1;
+  --primary-hover: #f8b4cb;
+  --primary-foreground: #2a0b17;
+  --attention: #f5a55e;
+  --attention-foreground: #2a1404;
+  --ring: #f48fb1;
+  --egg: #5c3746;
+  --terminal: #160e12;
+  --terminal-raised: #24171d;
+  --terminal-foreground: #fbeef1;
+  --terminal-muted: #c9aab5;
+  --terminal-border: #3a2830;
+  --scoplen-radius-sm: 9px;
+  --scoplen-radius-md: 13px;
+  --scoplen-radius-lg: 20px;
+  --scoplen-radius-xl: 28px;
+  --scoplen-border-width: 1px;
+  --scoplen-control-border: transparent;
+  --scoplen-shadow-control: 0 2px 6px -2px rgb(0 0 0 / 0.5);
+  --scoplen-shadow-card: none;
+  --scoplen-shadow-popover: 0 14px 36px -14px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(244 143 177 / 0.12);
+  --scoplen-shadow-overlay: 0 26px 64px -18px rgb(0 0 0 / 0.75), 0 0 0 1px rgb(244 143 177 / 0.14);
+  --scoplen-press: scale(0.96);
+  --scoplen-font-display: var(--font-serif);
+  --scoplen-display-weight: 500;
+  --scoplen-display-tracking: -0.01em;
+}

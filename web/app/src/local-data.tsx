@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Field } from "@scoplen/ui";
+import { Button, Field, Mark, type MarkMood } from "@scoplen/ui";
 import { useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
 import { commands, type LocalDataError, type Status, type UnreadableReason } from "./ipc/bindings";
@@ -37,11 +37,39 @@ function useCommand(onStatus: (status: Status) => void) {
   return { busy, error, setError, run };
 }
 
-function Screen({ title, children }: { title: string; children: React.ReactNode }) {
+/**
+ * A screen before the store is open: one card in the middle of the window,
+ * the mark above it. The mark sleeps while the data is locked, is awake for
+ * a new start, and looks worried when the data cannot be read; it shakes its
+ * head when something is refused.
+ */
+function Screen({
+  title,
+  children,
+  mood = "rest",
+  attention,
+  shake,
+}: {
+  title: string;
+  children: React.ReactNode;
+  mood?: MarkMood;
+  attention?: boolean;
+  shake?: unknown;
+}) {
   return (
-    <main id="main" className="mx-auto w-full max-w-md px-6 py-16">
-      <h1 className="font-serif text-2xl font-medium">{title}</h1>
-      {children}
+    <main id="main" className="grid min-h-screen place-items-center bg-background px-6 py-12">
+      <div className="scoplen-rise flex w-full max-w-md flex-col items-center">
+        <Mark
+          size="4rem"
+          mood={mood}
+          gesture={{ name: "shake", at: shake }}
+          className={`mb-6 ${attention ? "text-attention" : "text-primary"}`}
+        />
+        <div className="ui-surface w-full p-7 shadow-(--scoplen-shadow-popover)">
+          <h1 className="ui-display text-2xl">{title}</h1>
+          {children}
+        </div>
+      </div>
     </main>
   );
 }
@@ -60,7 +88,7 @@ export function UnlockScreen({ onStatus }: { onStatus: (status: Status) => void 
   };
 
   return (
-    <Screen title={t("unlock.title")}>
+    <Screen title={t("unlock.title")} mood="closed" shake={error}>
       <p className="mt-3 text-sm text-muted-foreground">{t("unlock.body")}</p>
       <form className="mt-8 flex flex-col gap-6" onSubmit={submit} noValidate>
         <Field
@@ -72,7 +100,7 @@ export function UnlockScreen({ onStatus }: { onStatus: (status: Status) => void 
           onChange={(e) => setPassphrase(e.target.value)}
           error={error ? errorText(error) : undefined}
         />
-        <Button type="submit" variant="primary" busy={busy} className="self-start">
+        <Button type="submit" variant="primary" busy={busy} className="w-full">
           {t("unlock.submit")}
         </Button>
       </form>
@@ -151,7 +179,7 @@ export function CreatePassphraseScreen({ onStatus }: { onStatus: (status: Status
   const errorText = useErrorText();
   const { busy, error, run } = useCommand(onStatus);
   return (
-    <Screen title={t("create.title")}>
+    <Screen title={t("create.title")} mood="awake">
       <p className="mt-3 mb-8 text-sm text-muted-foreground">{t("create.body")}</p>
       <NewPassphrase
         labels={[t("create.field"), t("create.confirm")]}
@@ -180,7 +208,7 @@ export function UnreadableScreen({
   const canStartFresh = reason !== "newerVersion";
 
   return (
-    <Screen title={t("unreadable.title")}>
+    <Screen title={t("unreadable.title")} mood="low" attention shake={error}>
       <p className="mt-3 text-sm">{t(`unreadable.${reason}`)}</p>
       {canStartFresh ? <p className="mt-3 text-sm text-muted-foreground">{t("unreadable.startFresh")}</p> : null}
       {error ? (
@@ -197,7 +225,7 @@ export function UnreadableScreen({
         <div
           role="group"
           aria-labelledby="start-fresh-confirm"
-          className="mt-8 rounded-md border border-border-strong p-4"
+          className="mt-8 rounded-md border-(length:--scoplen-border-width) border-attention bg-[color-mix(in_srgb,var(--attention)_6%,transparent)] p-4"
         >
           <p id="start-fresh-confirm" className="text-sm">
             {t("unreadable.confirm")}
@@ -240,7 +268,7 @@ export function PassphraseSettings({
 
   return (
     <section aria-labelledby="passphrase-title" className="mt-10">
-      <h2 id="passphrase-title" className="font-serif text-lg font-medium">
+      <h2 id="passphrase-title" className="ui-display text-lg">
         {t("settings.passphrase.title")}
       </h2>
       <p className="mt-2 text-sm text-muted-foreground">{t(`settings.passphrase.${status.protection}`)}</p>

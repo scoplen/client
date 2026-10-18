@@ -1,13 +1,15 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Scoplen design tokens and base styles (`scoplen-docs/18-visual-identity.md`).
- * Components use only the semantic names below, never raw colors. Light and
- * dark follow the system; increased contrast and forced colors are honored.
+ * Components use only the semantic names, never raw colors. Colors and shapes
+ * come from the chosen theme (`themes.css`, `theme.ts`); fonts and motion are
+ * shared. Increased contrast and reduced motion are honored in every theme.
  */
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/lora";
 @import "@fontsource-variable/jetbrains-mono";
+@import "./themes.css";
 
 /* Chinese headings: Noto Serif SC at 600, subset to exactly the characters the
    interface uses (scripts/build-cjk-font.py). */
@@ -22,22 +24,6 @@
 @source "./";
 
 :root {
-  color-scheme: light dark;
-
-  --background: #f5f3ef;
-  --foreground: #1c1917;
-  --raised: #fbfaf8;
-  --inset: #ebe8e2;
-  --muted-foreground: #57534e;
-  --border: #e2ded6;
-  --border-strong: #c9c3b8;
-  --primary: #1f6f6b;
-  --primary-hover: #185955;
-  --primary-foreground: #f5f3ef;
-  --attention: #b0451f;
-  --attention-foreground: #f5f3ef;
-  --ring: #1f6f6b;
-
   --font-sans:
     "Inter Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
   --font-serif: "Lora Variable", "Scoplen Serif SC", "Songti SC", serif;
@@ -46,29 +32,15 @@
   --duration-micro: 100ms;
   --duration-state: 160ms;
   --duration-overlay: 220ms;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #1c1917;
-    --foreground: #f5f3ef;
-    --raised: #24201d;
-    --inset: #141210;
-    --muted-foreground: #a8a29e;
-    --border: rgba(255, 255, 255, 0.12);
-    --border-strong: rgba(255, 255, 255, 0.24);
-    --primary: #7cc4bd;
-    --primary-hover: #9ad3cd;
-    --primary-foreground: #1c1917;
-    --attention: #e8875f;
-    --attention-foreground: #1c1917;
-    --ring: #7cc4bd;
-  }
+  --duration-expressive: 360ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* A little overshoot, for things that arrive (a pick, a tab, a hop). */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 /* Increased contrast: secondary text and structure take the full foreground. */
 @media (prefers-contrast: more) {
-  :root {
+  [data-theme][data-scheme] {
     --muted-foreground: var(--foreground);
     --border: var(--foreground);
     --border-strong: var(--foreground);
@@ -80,6 +52,7 @@
     --duration-micro: 0ms;
     --duration-state: 0ms;
     --duration-overlay: 0ms;
+    --duration-expressive: 0ms;
   }
   *,
   *::before,
@@ -105,13 +78,27 @@
   --color-attention: var(--attention);
   --color-attention-foreground: var(--attention-foreground);
   --color-ring: var(--ring);
+  --color-egg: var(--egg);
+  --font-display: var(--scoplen-font-display);
+  --color-terminal: var(--terminal);
+  --color-terminal-raised: var(--terminal-raised);
+  --color-terminal-foreground: var(--terminal-foreground);
+  --color-terminal-muted: var(--terminal-muted);
+  --color-terminal-border: var(--terminal-border);
+  --radius-sm: var(--scoplen-radius-sm);
+  --radius-md: var(--scoplen-radius-md);
+  --radius-lg: var(--scoplen-radius-lg);
+  --radius-xl: var(--scoplen-radius-xl);
+  --shadow-popover: var(--scoplen-shadow-popover);
+  --shadow-overlay: var(--scoplen-shadow-overlay);
   --font-sans: var(--font-sans);
   --font-serif: var(--font-serif);
   --font-mono: var(--font-mono);
 }
 
 @layer base {
-  html {
+  html,
+  [data-theme] {
     background: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
@@ -142,5 +129,198 @@
   }
   :lang(zh-Hans) :is(p, li, dd) {
     line-height: 1.75;
+  }
+}
+
+@layer components {
+  /* Headings in the theme's display face. */
+  .ui-display {
+    font-family: var(--font-display);
+    font-weight: var(--scoplen-display-weight);
+    letter-spacing: var(--scoplen-display-tracking);
+  }
+  /* A raised panel: cards, side panels, the inside of dialogs. */
+  .ui-surface {
+    border: var(--scoplen-border-width) solid var(--border);
+    border-radius: var(--scoplen-radius-lg);
+    background: var(--raised);
+    box-shadow: var(--scoplen-shadow-card);
+  }
+  /* Buttons and other pressable controls take the theme's border, shadow, and press. */
+  .ui-control {
+    border: var(--scoplen-border-width) solid var(--scoplen-control-border);
+    box-shadow: var(--scoplen-shadow-control);
+  }
+  .ui-control:enabled:active {
+    transform: var(--scoplen-press);
+    box-shadow: none;
+  }
+  /* Text inputs. */
+  .ui-input {
+    border: var(--scoplen-border-width) solid var(--border-strong);
+    border-radius: var(--scoplen-radius-md);
+    background: var(--raised);
+    color: var(--foreground);
+    transition:
+      border-color var(--duration-micro),
+      box-shadow var(--duration-micro);
+  }
+  .ui-input::placeholder {
+    color: var(--muted-foreground);
+  }
+  .ui-input:focus-visible {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 24%, transparent);
+    outline: none;
+  }
+  .ui-input[aria-invalid="true"] {
+    border-color: var(--attention);
+  }
+}
+
+/*
+ * The mark's face (components/mark.tsx). Each mood moves and scales the two
+ * eyes from the brand face: the open eye (9 x 18, centered at 22.5, 37) and
+ * the wink (13 x 7, centered at 41.5, 41.5).
+ */
+.scoplen-mark-body,
+.scoplen-mark-tilt {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+.scoplen-mark-tilt {
+  transition: transform var(--duration-expressive) var(--ease-spring);
+}
+.scoplen-mark-face,
+.scoplen-mark [data-eye] {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.scoplen-mark [data-eye],
+.scoplen-mark-look {
+  transition: transform var(--duration-state) var(--ease-out);
+}
+.scoplen-mark[data-mood="awake"] [data-eye="wink"] {
+  transform: translateY(-4.5px) scale(0.69, 2.57);
+}
+.scoplen-mark[data-mood="closed"] [data-eye="open"] {
+  transform: translateY(4.5px) scale(1.44, 0.39);
+}
+.scoplen-mark[data-mood="low"] [data-eye="open"] {
+  transform: translateY(3px) scale(0.8, 0.75);
+}
+.scoplen-mark[data-mood="low"] [data-eye="wink"] {
+  transform: translateY(-1.5px) scale(0.55, 1.9);
+}
+
+/*
+ * The pick (components/pick.tsx): the open eye on a selected item's left
+ * edge. It grows in with a little overshoot, then blinks once.
+ */
+.scoplen-pick {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 0.3125rem;
+  height: 1rem;
+  margin-top: -0.5rem;
+  border-radius: 999px;
+  background: var(--primary);
+  pointer-events: none;
+  animation:
+    scoplen-pick-in var(--duration-expressive) var(--ease-spring),
+    scoplen-pick-blink 240ms ease-in-out calc(var(--duration-expressive) + 120ms);
+}
+@keyframes scoplen-pick-in {
+  from {
+    transform: scaleY(0);
+  }
+}
+@keyframes scoplen-pick-blink {
+  50% {
+    transform: scaleY(0.12);
+  }
+}
+
+/* A notice arrives from below with a little bounce. */
+.scoplen-notice {
+  animation: scoplen-notice-in var(--duration-expressive) var(--ease-spring);
+}
+@keyframes scoplen-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.94);
+  }
+}
+
+/* A new tab pops into the strip. */
+.scoplen-tab-in {
+  animation: scoplen-tab-in var(--duration-expressive) var(--ease-spring);
+}
+@keyframes scoplen-tab-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
+/* Content that appears in place (an empty state, a panel) rises a little. */
+.scoplen-rise {
+  animation: scoplen-rise var(--duration-expressive) var(--ease-out);
+}
+@keyframes scoplen-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* A side panel slides in from its edge. */
+.scoplen-slide-in {
+  animation: scoplen-slide-in var(--duration-overlay) var(--ease-out);
+}
+@keyframes scoplen-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+/* A mark that arrives with a small hop. */
+.scoplen-hop-in {
+  animation: scoplen-hop-in var(--duration-expressive) var(--ease-spring);
+}
+@keyframes scoplen-hop-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.7);
+  }
+}
+
+/*
+ * A route being walked while a session connects: a dot travels from you to
+ * the host and back. It runs only while the connection is being made.
+ */
+.scoplen-route::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-top: -0.25rem;
+  border-radius: 999px;
+  background: var(--primary);
+  box-shadow: 0 0 10px var(--primary);
+  animation: scoplen-route 1.4s var(--ease-out) infinite alternate;
+}
+@keyframes scoplen-route {
+  to {
+    left: calc(100% - 0.5rem);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scoplen-route::after {
+    left: calc(50% - 0.25rem);
   }
 }

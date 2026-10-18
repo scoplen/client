@@ -4,11 +4,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /**
- * Text and accent pairs must meet WCAG 2.2 AA (4.5:1 for text) in both modes
- * (`scoplen-docs/18-visual-identity.md`). The values are read from the
- * stylesheet so that a token change is checked.
+ * Text and accent pairs must meet WCAG 2.2 AA (4.5:1 for text) in every
+ * theme and scheme (`scoplen-docs/18-visual-identity.md`). The values are read
+ * from the stylesheet so that a token change, or a new theme, is checked.
  */
-const css = readFileSync(fileURLToPath(new URL("../src/styles.css", import.meta.url)), "utf8");
+const css = readFileSync(fileURLToPath(new URL("../src/themes.css", import.meta.url)), "utf8");
 
 function tokens(block: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -16,9 +16,10 @@ function tokens(block: string): Record<string, string> {
   return out;
 }
 
-const light = tokens(css.slice(css.indexOf(":root {"), css.indexOf("@media (prefers-color-scheme: dark)")));
-const darkStart = css.indexOf("@media (prefers-color-scheme: dark)");
-const dark = tokens(css.slice(darkStart, css.indexOf("@media (prefers-contrast: more)")));
+/** Every theme and scheme block in the stylesheet, by its selector. */
+const blocks = [...css.matchAll(/\[data-theme="([a-z]+)"\]\[data-scheme="(light|dark)"\]\s*\{([^}]*)\}/g)].map(
+  ([, theme, scheme, body]) => [`${theme} ${scheme}`, tokens(body!)] as const,
+);
 
 function luminance(hex: string) {
   const [r, g, b] = [1, 3, 5].map((i) => {
@@ -44,12 +45,24 @@ const pairs: [string, string][] = [
   ["primary-foreground", "primary-hover"],
   ["attention", "background"],
   ["attention-foreground", "attention"],
+  ["terminal-foreground", "terminal"],
+  ["terminal-muted", "terminal"],
 ];
 
-describe.each([
-  ["light", light],
-  ["dark", dark],
-])("%s tokens", (_, set) => {
+it("has every theme in both of its schemes", () => {
+  expect(blocks.map(([name]) => name)).toEqual([
+    "paper light",
+    "paper dark",
+    "brutal light",
+    "brutal dark",
+    "phosphor dark",
+    "midnight dark",
+    "sakura light",
+    "sakura dark",
+  ]);
+});
+
+describe.each(blocks)("%s tokens", (_, set) => {
   it.each(pairs)("%s on %s meets 4.5:1", (fg, bg) => {
     expect(set[fg], fg).toBeDefined();
     expect(set[bg], bg).toBeDefined();

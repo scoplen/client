@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Dialog, Field, IconButton, Tag, TextAreaField } from "@scoplen/ui";
+import { Button, Dialog, Field, HostEgg, IconButton, Tag, TextAreaField } from "@scoplen/ui";
 import { Pencil, Plus, X } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useI18n } from "../i18n";
@@ -39,13 +39,22 @@ export function HostDetailsPanel({
   return (
     <aside
       aria-labelledby="host-details-title"
-      className="flex w-[22rem] shrink-0 flex-col border-l border-border bg-raised max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-20 max-lg:shadow-[-12px_0_32px_-16px_rgba(28,25,23,0.35)]"
+      className="scoplen-slide-in flex w-[22rem] shrink-0 flex-col border-l-(length:--scoplen-border-width) border-border bg-raised max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-20 max-lg:shadow-(--scoplen-shadow-overlay)"
     >
-      <div className="flex items-start gap-2 px-5 pt-5">
+      <div className="flex items-start gap-3 px-5 pt-6">
+        {details.state === "ready" && details.data ? (
+          <HostEgg
+            key={details.data.id}
+            seed={details.data.id}
+            active
+            size="2.75rem"
+            className="scoplen-hop-in -mt-1"
+          />
+        ) : null}
         <div className="min-w-0 flex-1">
           {details.state === "ready" && details.data ? (
             <>
-              <h2 id="host-details-title" className="m-0 font-serif text-lg font-medium break-words">
+              <h2 id="host-details-title" className="ui-display m-0 text-xl break-words">
                 {details.data.name}
               </h2>
               <p className="mt-0.5 mb-0 font-mono text-xs break-all text-muted-foreground">
@@ -79,14 +88,14 @@ export function HostDetailsPanel({
       </div>
 
       {details.state === "ready" && details.data ? (
-        <div className="border-t border-border px-5 py-3">
-          <Button variant="ghost" className="-ml-3 gap-1.5" onClick={() => setEditing(true)}>
+        <div className="flex items-center gap-1 border-t-(length:--scoplen-border-width) border-border px-4 py-3">
+          <Button variant="ghost" className="gap-1.5" onClick={() => setEditing(true)}>
             <Pencil aria-hidden="true" className="size-4" />
             {t("host.edit")}
           </Button>
           <Button
             variant="ghost"
-            className="-ml-3 text-attention hover:bg-inset"
+            className="ml-auto text-attention hover:bg-[color-mix(in_srgb,var(--attention)_10%,transparent)]"
             onClick={() => onDelete(details.data!)}
           >
             {t("host.delete")}
@@ -386,7 +395,7 @@ function GroupDialog({
             id="group-parent"
             value={parent}
             onChange={(event) => setParent(event.target.value)}
-            className="h-9 rounded-md border border-border-strong bg-inset px-3 text-sm font-normal"
+            className="ui-input h-10 px-3 text-sm font-normal"
           >
             <option value="">{t("host.edit.groupNoParent")}</option>
             {parentOptions.map((candidate) => (
@@ -417,7 +426,9 @@ function groupErrorText(t: ReturnType<typeof useI18n>["t"], error: GroupError): 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="mb-6 last:mb-0">
-      <h3 className="mt-0 mb-2 text-xs font-medium text-muted-foreground">{title}</h3>
+      <h3 className="mt-0 mb-2 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">
+        {title}
+      </h3>
       {children}
     </section>
   );
@@ -444,7 +455,7 @@ function Body({
         </Section>
       ) : host.logins.length > 1 ? (
         <Section title={t("host.logins")}>
-          <ul className="m-0 flex list-none flex-col gap-3 p-0">
+          <ul className="m-0 flex list-none flex-col gap-2 p-0">
             {host.logins.map((login) => (
               <li key={login.id}>
                 <LoginLine login={login} hostName={host.name} onConnect={onConnect} />
@@ -491,7 +502,7 @@ function LoginLine({
   const { t } = useI18n();
   const label = `${hostName} · ${login.name ?? login.username}`;
   return (
-    <div className="flex flex-col gap-0.5">
+    <div className="flex flex-col gap-0.5 rounded-lg border-(length:--scoplen-border-width) border-border bg-background px-3 py-2.5">
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate font-mono text-sm">{login.name ?? login.username}</span>
@@ -500,7 +511,7 @@ function LoginLine({
           ) : null}
         </span>
         {onConnect ? (
-          <Button variant="primary" className="h-8 shrink-0 px-3 text-xs" onClick={() => onConnect(login.id, label)}>
+          <Button variant="primary" className="h-8 shrink-0 px-3.5 text-xs" onClick={() => onConnect(login.id, label)}>
             {t("session.connect")}
           </Button>
         ) : null}

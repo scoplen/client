@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Confirm, Dialog, Field, Notice, TextAreaField } from "@scoplen/ui";
+import { Button, Confirm, Dialog, Field, IconButton, Mark, Notice, TextAreaField } from "@scoplen/ui";
 import { Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
@@ -107,12 +107,12 @@ export function InventoryObjects({ section: initialSection, onBack }: { section:
   return (
     <main id="main" tabIndex={-1} className="h-full min-h-0 overflow-y-auto px-6 py-6 focus:outline-none">
       <div className="mx-auto max-w-4xl">
-        <header className="flex flex-wrap items-start gap-4 border-b border-border pb-5">
+        <header className="flex flex-wrap items-start gap-4 pb-2">
           <Button variant="ghost" onClick={onBack} className="-ml-3">
             {t("objects.back")}
           </Button>
           <div className="min-w-0 flex-1">
-            <h1 className="font-serif text-2xl font-medium">{title}</h1>
+            <h1 className="ui-display text-3xl">{title}</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>
           </div>
           <Button variant="primary" onClick={() => setEditing({ kind: section })} className="gap-1.5">
@@ -129,9 +129,9 @@ export function InventoryObjects({ section: initialSection, onBack }: { section:
                 ? t("objects.list.keys")
                 : t("objects.list.routes")
           }
-          className="mt-5 border-b border-border"
+          className="mt-5"
         >
-          <div role="tablist" className="flex gap-1" aria-label={t("frame.tabs")}>
+          <div role="tablist" className="inline-flex gap-1 rounded-full bg-inset p-1" aria-label={t("frame.tabs")}>
             {(["logins", "keys", "routes"] as ObjectSection[]).map((value) => {
               const selected = value === section;
               const label =
@@ -143,7 +143,7 @@ export function InventoryObjects({ section: initialSection, onBack }: { section:
                   role="tab"
                   aria-selected={selected}
                   onClick={() => setSection(value)}
-                  className="relative -mb-px rounded-t-md border border-b-0 border-transparent px-4 py-2 text-sm text-muted-foreground hover:text-foreground aria-selected:border-border aria-selected:bg-background aria-selected:text-foreground"
+                  className="relative rounded-full border-(length:--scoplen-border-width) border-transparent px-4 py-1.5 text-sm text-muted-foreground transition-[background-color,color,box-shadow] duration-(--duration-state) hover:text-foreground aria-selected:border-border aria-selected:bg-raised aria-selected:font-medium aria-selected:text-foreground aria-selected:shadow-(--scoplen-shadow-control)"
                 >
                   {label}
                 </button>
@@ -284,7 +284,7 @@ function ProfileList({
   const list = (profiles: AccessProfileSummary[], orphan = false) => (
     <ul
       aria-label={orphan ? t("objects.orphaned.title") : t("objects.list.logins")}
-      className="m-0 list-none divide-y divide-border rounded-lg border border-border p-0"
+      className="ui-surface m-0 list-none divide-y divide-border overflow-hidden p-0"
     >
       {profiles.map((profile) => {
         const name = profile.name ?? (orphan ? profile.username : `${profile.username}@${profile.hostName}`);
@@ -305,7 +305,10 @@ function ProfileList({
                   ? t("objects.orphaned.missingForward")
                   : t("objects.orphaned.missingObject");
         return (
-          <li key={profile.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+          <li
+            key={profile.id}
+            className="flex flex-wrap items-center gap-3 px-4 py-3 transition-colors duration-(--duration-micro) hover:bg-inset/50"
+          >
             <div className="min-w-0 flex-1">
               <p className="m-0 truncate text-sm font-medium">{name}</p>
               <p className="m-0 truncate font-mono text-xs text-muted-foreground">
@@ -386,12 +389,15 @@ function CredentialList({
   return (
     <ul
       aria-label={t("objects.list.keys")}
-      className="m-0 list-none divide-y divide-border rounded-lg border border-border p-0"
+      className="ui-surface m-0 list-none divide-y divide-border overflow-hidden p-0"
     >
       {data.data.map((credential) => {
         const name = credential.name ?? credentialKindText(t, credential.kind);
         return (
-          <li key={credential.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+          <li
+            key={credential.id}
+            className="flex flex-wrap items-center gap-3 px-4 py-3 transition-colors duration-(--duration-micro) hover:bg-inset/50"
+          >
             <div className="min-w-0 flex-1">
               <p className="m-0 truncate text-sm font-medium">{name}</p>
               <p className="m-0 text-xs text-muted-foreground">
@@ -442,12 +448,15 @@ function RouteList({
   const list = (routes: RouteSummary[], isOrphaned = false) => (
     <ul
       aria-label={isOrphaned ? t("objects.orphaned.title") : t("objects.list.routes")}
-      className="m-0 list-none divide-y divide-border rounded-lg border border-border p-0"
+      className="ui-surface m-0 list-none divide-y divide-border overflow-hidden p-0"
     >
       {routes.map((route) => {
         const restoreTarget = isOrphaned ? routeOrphanRestoreTarget(route, profiles, credentials) : null;
         return (
-          <li key={route.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+          <li
+            key={route.id}
+            className="flex flex-wrap items-center gap-3 px-4 py-3 transition-colors duration-(--duration-micro) hover:bg-inset/50"
+          >
             <div className="min-w-0 flex-1">
               <p className="m-0 truncate text-sm font-medium">{route.name}</p>
               <p className="m-0 text-xs text-muted-foreground">
@@ -531,17 +540,10 @@ function RowActions({
 }) {
   const { t } = useI18n();
   return (
-    <div className="flex shrink-0 gap-1">
-      <Button
-        variant="ghost"
-        disabled={disabled || editDisabled}
-        onClick={onEdit}
-        aria-label={t("objects.edit", { name })}
-        className="gap-1.5"
-      >
+    <div className="ml-auto flex shrink-0 gap-0.5">
+      <IconButton label={t("objects.edit", { name })} disabled={disabled || editDisabled} onClick={onEdit}>
         <Pencil aria-hidden="true" className="size-4" />
-        <span className="hidden sm:inline">{t("objects.edit", { name })}</span>
-      </Button>
+      </IconButton>
       {onRestore ? (
         <Button
           variant="ghost"
@@ -555,16 +557,14 @@ function RowActions({
           <span className="hidden sm:inline">{t("objects.orphaned.restore")}</span>
         </Button>
       ) : null}
-      <Button
-        variant="ghost"
+      <IconButton
+        label={t("objects.delete", { name })}
         disabled={disabled}
         onClick={onDelete}
-        aria-label={t("objects.delete", { name })}
-        className="gap-1.5 text-attention"
+        className="hover:bg-[color-mix(in_srgb,var(--attention)_10%,transparent)] hover:text-attention"
       >
         <Trash2 aria-hidden="true" className="size-4" />
-        <span className="hidden sm:inline">{t("objects.delete", { name })}</span>
-      </Button>
+      </IconButton>
     </div>
   );
 }
@@ -581,14 +581,22 @@ function Loading() {
 function FailureNotice({ reference }: { reference: string }) {
   const { t } = useI18n();
   return (
-    <p role="alert" className="py-12 text-center text-sm text-attention">
-      {t("failed.body")} {t("startup.error.reference", { reference })}
-    </p>
+    <div className="flex flex-col items-center py-12 text-center">
+      <Mark size="3rem" mood="low" className="mb-4 text-attention" />
+      <p role="alert" className="m-0 max-w-sm text-sm text-attention">
+        {t("failed.body")} {t("startup.error.reference", { reference })}
+      </p>
+    </div>
   );
 }
 
 function Empty({ text }: { text: string }) {
-  return <p className="py-12 text-center text-sm text-muted-foreground">{text}</p>;
+  return (
+    <div className="scoplen-rise flex flex-col items-center py-12 text-center text-sm text-muted-foreground">
+      <Mark size="3rem" mood="awake" look={{ x: 0, y: -0.6 }} className="mb-4 text-egg" />
+      <p className="m-0 max-w-sm">{text}</p>
+    </div>
+  );
 }
 
 function SelectField({
@@ -617,7 +625,7 @@ function SelectField({
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        className="h-9 rounded-md border border-border-strong bg-inset px-3 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-1"
+        className="ui-input h-10 px-3 text-sm"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>

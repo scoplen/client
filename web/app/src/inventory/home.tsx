@@ -1,5 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Confirm, Dialog, IconButton, Notice, ScopeMark, SearchField, Tag } from "@scoplen/ui";
+import {
+  Button,
+  Confirm,
+  Dialog,
+  HostEgg,
+  IconButton,
+  Mark,
+  Notice,
+  Pick,
+  SearchField,
+  Tag,
+  type MarkMood,
+} from "@scoplen/ui";
 import { Plus, RotateCcw, Star } from "lucide-react";
 import { useRef, useState, type KeyboardEvent } from "react";
 import { useI18n } from "../i18n";
@@ -172,13 +184,13 @@ export function HostsHome({
       />
 
       <section aria-labelledby="hosts-title" className="@container flex min-w-0 flex-1 flex-col">
-        <header className="flex flex-wrap items-center gap-x-4 gap-y-3 px-6 pt-5 pb-4">
+        <header className="flex flex-wrap items-center gap-x-4 gap-y-3 px-6 pt-6 pb-4">
           <div className="flex min-w-32 flex-1 items-baseline gap-3">
-            <h1 id="hosts-title" className="truncate font-serif text-xl font-medium">
+            <h1 id="hosts-title" className="ui-display truncate text-2xl">
               {title}
             </h1>
             {hosts.state === "ready" ? (
-              <span className="shrink-0 text-sm text-muted-foreground">
+              <span className="shrink-0 rounded-full bg-inset px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
                 {t("hosts.count", { count: hosts.data.length })}
               </span>
             ) : null}
@@ -198,7 +210,7 @@ export function HostsHome({
           </Button>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
           {source.kind === "recent" ? (
             <RecentSessionSection sessions={recentSessions} onSelect={setSelected} onReconnect={reconnect} />
           ) : null}
@@ -208,9 +220,11 @@ export function HostsHome({
             </p>
           ) : null}
           {hosts.state === "failed" ? (
-            <p role="alert" className="px-3 py-6 text-sm text-attention">
-              {t("failed.body")} {t("startup.error.reference", { reference: hosts.reference })}
-            </p>
+            <Empty mood="low" attention>
+              <p role="alert" className="max-w-sm text-attention">
+                {t("failed.body")} {t("startup.error.reference", { reference: hosts.reference })}
+              </p>
+            </Empty>
           ) : null}
           {hosts.state === "ready" ? (
             <HostList
@@ -220,15 +234,15 @@ export function HostsHome({
               onFavorite={(host) => void api.setFavorite(host.id, !host.favorite)}
               empty={
                 query.trim() !== "" ? (
-                  <Empty>
+                  <Empty mood="awake" look={{ x: -0.8, y: 0.2 }}>
                     <p>{t("hosts.noMatch", { query: query.trim() })}</p>
                     <Button variant="ghost" className="mt-3" onClick={() => setQuery("")}>
                       {t("hosts.noMatch.clear")}
                     </Button>
                   </Empty>
                 ) : source.kind === "all" ? (
-                  <Empty>
-                    <h2 className="font-serif text-lg font-medium text-foreground">{t("hosts.empty.title")}</h2>
+                  <Empty mood="awake" look={{ x: 0, y: -0.7 }} large>
+                    <h2 className="ui-display text-xl text-foreground">{t("hosts.empty.title")}</h2>
                     <p className="mt-2 max-w-sm">{t("hosts.empty.body")}</p>
                     <div className="mt-5 flex flex-wrap justify-center gap-2">
                       <Button variant="primary" onClick={() => setAdding(true)}>
@@ -433,9 +447,33 @@ function openSshSkipReasonText(t: ReturnType<typeof useI18n>["t"], reason: OpenS
   }
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
+/**
+ * An empty or failed list: the mark, looking at what to do next (or down,
+ * when something failed), above the words and actions.
+ */
+function Empty({
+  children,
+  mood = "rest",
+  look,
+  large,
+  attention,
+}: {
+  children: React.ReactNode;
+  mood?: MarkMood;
+  look?: { x: number; y: number };
+  large?: boolean;
+  attention?: boolean;
+}) {
   return (
-    <div className="flex flex-col items-center px-6 py-20 text-center text-sm text-muted-foreground">{children}</div>
+    <div className="scoplen-rise flex flex-col items-center px-6 py-16 text-center text-sm text-muted-foreground">
+      <Mark
+        size={large ? "4.5rem" : "3rem"}
+        mood={mood}
+        look={look}
+        className={`mb-5 ${attention ? "text-attention" : large ? "text-primary" : "text-egg"}`}
+      />
+      {children}
+    </div>
   );
 }
 
@@ -536,6 +574,9 @@ function RecentSessionRow({
   );
 }
 
+const sideItem =
+  "flex h-8 w-full items-center truncate rounded-md pr-3 pl-3.5 text-left text-sm text-muted-foreground transition-colors duration-(--duration-micro) hover:bg-inset hover:text-foreground aria-[current=page]:bg-raised aria-[current=page]:font-medium aria-[current=page]:text-foreground aria-[current=page]:shadow-(--scoplen-shadow-card)";
+
 function Sidebar({
   source,
   onSource,
@@ -558,16 +599,22 @@ function Sidebar({
   const { t } = useI18n();
   const is = (other: HostSource) =>
     other.kind === source.kind && (other.kind !== "group" || (source.kind === "group" && source.id === other.id));
-  const item = (label: string, target: HostSource, depth = 0) => (
-    <li key={target.kind === "group" ? target.id : target.kind}>
+  const item = (label: string, target: HostSource, depth = 0, count?: number) => (
+    <li key={target.kind === "group" ? target.id : target.kind} className="relative">
+      {is(target) ? <Pick /> : null}
       <button
         type="button"
         aria-current={is(target) ? "page" : undefined}
         onClick={() => onSource(target)}
-        style={{ paddingLeft: `${0.75 + depth * 0.875}rem` }}
-        className="flex h-8 w-full items-center truncate rounded-md pr-3 text-left text-sm text-muted-foreground hover:bg-inset hover:text-foreground aria-[current=page]:bg-inset aria-[current=page]:font-medium aria-[current=page]:text-foreground"
+        style={{ paddingLeft: `${0.875 + depth * 0.875}rem` }}
+        className={sideItem}
       >
         <span className="truncate">{label}</span>
+        {count !== undefined ? (
+          <span aria-hidden="true" className="ml-auto pl-2 text-xs tabular-nums opacity-70">
+            {count}
+          </span>
+        ) : null}
       </button>
     </li>
   );
@@ -585,7 +632,7 @@ function Sidebar({
   return (
     <nav
       aria-label={t("hosts.sidebar")}
-      className="hidden w-56 shrink-0 flex-col gap-5 overflow-y-auto border-r border-border px-3 py-4 md:flex"
+      className="hidden w-56 shrink-0 flex-col gap-6 overflow-y-auto border-r-(length:--scoplen-border-width) border-border bg-inset/40 px-3 py-5 md:flex"
     >
       <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
         {item(t("hosts.title"), { kind: "all" })}
@@ -594,43 +641,37 @@ function Sidebar({
       </ul>
       {ordered.length > 0 ? (
         <div>
-          <h2 className="mb-1 px-3 text-xs font-medium text-muted-foreground">{t("hosts.groups")}</h2>
+          <h2 className="mb-1.5 px-3.5 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">
+            {t("hosts.groups")}
+          </h2>
           <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
-            {ordered.map(({ group, depth }) => item(group.name, { kind: "group", id: group.id }, depth))}
+            {ordered.map(({ group, depth }) =>
+              item(group.name, { kind: "group", id: group.id }, depth, group.hostCount),
+            )}
           </ul>
         </div>
       ) : null}
       {onOpenObjects ? (
         <div>
-          <h2 className="mb-1 px-3 text-xs font-medium text-muted-foreground">{t("hosts.manage")}</h2>
+          <h2 className="mb-1.5 px-3.5 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">
+            {t("hosts.manage")}
+          </h2>
           <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
             <li>
-              <button
-                type="button"
-                onClick={() => onOpenObjects("logins")}
-                className="flex h-8 w-full items-center truncate rounded-md px-3 text-left text-sm text-muted-foreground hover:bg-inset hover:text-foreground"
-              >
+              <button type="button" onClick={() => onOpenObjects("logins")} className={sideItem}>
                 {t("frame.logins")}
               </button>
             </li>
             {keys ? (
               <li>
-                <button
-                  type="button"
-                  onClick={() => onOpenObjects("keys")}
-                  className="flex h-8 w-full items-center truncate rounded-md px-3 text-left text-sm text-muted-foreground hover:bg-inset hover:text-foreground"
-                >
+                <button type="button" onClick={() => onOpenObjects("keys")} className={sideItem}>
                   {t("frame.keys")}
                 </button>
               </li>
             ) : null}
             {routes ? (
               <li>
-                <button
-                  type="button"
-                  onClick={() => onOpenObjects("routes")}
-                  className="flex h-8 w-full items-center truncate rounded-md px-3 text-left text-sm text-muted-foreground hover:bg-inset hover:text-foreground"
-                >
+                <button type="button" onClick={() => onOpenObjects("routes")} className={sideItem}>
                   {t("frame.routes")}
                 </button>
               </li>
@@ -680,59 +721,101 @@ function HostList({
   };
 
   return (
-    <ul ref={list} aria-label={t("hosts.list")} className="m-0 flex list-none flex-col p-0">
-      {hosts.map((host, index) => {
-        const isSelected = host.id === selected;
-        const tags = Object.entries(host.tags);
-        return (
-          <li key={host.id} className="group relative flex items-center rounded-md hover:bg-inset/60">
-            {isSelected ? <ScopeMark /> : null}
-            <button
-              type="button"
-              data-host=""
-              aria-current={isSelected ? "true" : undefined}
-              onClick={() => onSelect(host.id)}
-              onKeyDown={(event) => move(event, index)}
-              className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-md py-2 pr-2 pl-3 text-left focus-visible:outline-offset-0"
-            >
-              <span className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium text-foreground">{host.name}</span>
-                {host.restored ? <span className="shrink-0 text-xs text-primary">{t("hosts.restored")}</span> : null}
-              </span>
-              <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                <span className="truncate font-mono">
-                  {host.username ? `${host.username}@` : ""}
-                  {host.address}
-                  {host.port !== 22 ? `:${host.port}` : ""}
-                </span>
-                {host.route.kind !== "direct" ? (
-                  <span className="shrink-0 truncate">· {routeText(t, host.route)}</span>
-                ) : null}
-              </span>
-            </button>
-            {tags.length > 0 ? (
-              <span className="mr-1 hidden shrink-0 items-center gap-1 @2xl:flex">
-                {tags.slice(0, 2).map(([key, value]) => (
-                  <Tag key={key}>{value ? `${key}: ${value}` : key}</Tag>
-                ))}
-                {tags.length > 2 ? <Tag>+{tags.length - 2}</Tag> : null}
+    <ul ref={list} aria-label={t("hosts.list")} className="m-0 flex list-none flex-col gap-0.5 p-0">
+      {hosts.map((host, index) => (
+        <HostRow
+          key={host.id}
+          host={host}
+          selected={host.id === selected}
+          onSelect={() => onSelect(host.id)}
+          onKeyDown={(event) => move(event, index)}
+          onFavorite={() => onFavorite(host)}
+        />
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * One host: its egg, its name, and where it is. The egg blinks when the
+ * pointer arrives, and takes the accent while the host is selected.
+ */
+function HostRow({
+  host,
+  selected,
+  onSelect,
+  onKeyDown,
+  onFavorite,
+}: {
+  host: HostSummary;
+  selected: boolean;
+  onSelect: () => void;
+  onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
+  onFavorite: () => void;
+}) {
+  const { t } = useI18n();
+  const [blinks, setBlinks] = useState(0);
+  const tags = Object.entries(host.tags);
+  return (
+    <li
+      onPointerEnter={() => setBlinks((n) => n + 1)}
+      className={[
+        "group relative flex items-center rounded-lg border-(length:--scoplen-border-width) transition-[background-color,border-color,box-shadow] duration-(--duration-state)",
+        selected ? "border-border bg-raised shadow-(--scoplen-shadow-card)" : "border-transparent hover:bg-inset/70",
+      ].join(" ")}
+    >
+      {selected ? <Pick /> : null}
+      <button
+        type="button"
+        data-host=""
+        aria-current={selected ? "true" : undefined}
+        onClick={onSelect}
+        onKeyDown={onKeyDown}
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-lg py-2.5 pr-2 pl-3.5 text-left focus-visible:outline-offset-0"
+      >
+        <HostEgg seed={host.id} active={selected} blink={blinks} />
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="flex items-center gap-2">
+            <span className="truncate text-sm font-medium text-foreground">{host.name}</span>
+            {host.restored ? (
+              <span className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] px-1.5 text-xs text-primary">
+                {t("hosts.restored")}
               </span>
             ) : null}
-            <IconButton
-              label={
-                host.favorite
-                  ? t("hosts.favorite.remove", { name: host.name })
-                  : t("hosts.favorite.add", { name: host.name })
-              }
-              pressed={host.favorite}
-              onClick={() => onFavorite(host)}
-              className={`mr-1 ${host.favorite ? "" : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"}`}
-            >
-              <Star aria-hidden="true" className={`size-4 ${host.favorite ? "fill-current" : ""}`} />
-            </IconButton>
-          </li>
-        );
-      })}
-    </ul>
+          </span>
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="truncate font-mono">
+              {host.username ? `${host.username}@` : ""}
+              {host.address}
+              {host.port !== 22 ? `:${host.port}` : ""}
+            </span>
+            {host.route.kind !== "direct" ? (
+              <span className="shrink-0 truncate">· {routeText(t, host.route)}</span>
+            ) : null}
+          </span>
+        </span>
+      </button>
+      {tags.length > 0 ? (
+        <span className="mr-1 hidden shrink-0 items-center gap-1 @2xl:flex">
+          {tags.slice(0, 2).map(([key, value]) => (
+            <Tag key={key}>{value ? `${key}: ${value}` : key}</Tag>
+          ))}
+          {tags.length > 2 ? <Tag>+{tags.length - 2}</Tag> : null}
+        </span>
+      ) : null}
+      <IconButton
+        label={
+          host.favorite ? t("hosts.favorite.remove", { name: host.name }) : t("hosts.favorite.add", { name: host.name })
+        }
+        pressed={host.favorite}
+        onClick={onFavorite}
+        className={`mr-1.5 ${host.favorite ? "" : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"}`}
+      >
+        <Star
+          aria-hidden="true"
+          className={`size-4 transition-transform duration-(--duration-state) ease-(--ease-spring) ${host.favorite ? "scale-110 fill-current" : ""}`}
+        />
+      </IconButton>
+    </li>
   );
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, SkipLink } from "@scoplen/ui";
+import { AppearanceProvider, Button, SkipLink } from "@scoplen/ui";
 import { useCallback, useEffect, useState } from "react";
 import { I18nProvider, useI18n } from "./i18n";
 import { commands, type AppInfo, type Locale, type Status } from "./ipc/bindings";
@@ -56,12 +56,14 @@ export function App() {
     setStartup((current) => (current.state === "ready" ? { ...current, status } : current));
 
   return (
-    <I18nProvider locale={locale}>
-      <SkipTarget />
-      {startup.state === "loading" ? <StartupLoading /> : null}
-      {startup.state === "ready" ? <Gate info={startup.info} status={startup.status} onStatus={setStatus} /> : null}
-      {startup.state === "failed" ? <StartupError reference={startup.reference} onRetry={retry} /> : null}
-    </I18nProvider>
+    <AppearanceProvider>
+      <I18nProvider locale={locale}>
+        <SkipTarget />
+        {startup.state === "loading" ? <StartupLoading /> : null}
+        {startup.state === "ready" ? <Gate info={startup.info} status={startup.status} onStatus={setStatus} /> : null}
+        {startup.state === "failed" ? <StartupError reference={startup.reference} onRetry={retry} /> : null}
+      </I18nProvider>
+    </AppearanceProvider>
   );
 }
 
@@ -74,7 +76,7 @@ function StartupLoading() {
   const { t } = useI18n();
   return (
     <main id="main" className="mx-auto max-w-xl px-6 py-16" aria-busy="true" aria-live="polite">
-      <h1 className="font-serif text-xl font-medium">{t("startup.loading.title")}</h1>
+      <h1 className="ui-display text-xl">{t("startup.loading.title")}</h1>
       <p className="mt-3 text-sm text-muted-foreground">{t("startup.loading.body")}</p>
     </main>
   );
@@ -99,7 +101,7 @@ function StartupError({ reference, onRetry }: { reference: string; onRetry: () =
   return (
     <main id="main" className="mx-auto max-w-xl px-6 py-16">
       <div role="alert">
-        <h1 className="font-serif text-xl font-medium">{t("startup.error.title")}</h1>
+        <h1 className="ui-display text-xl">{t("startup.error.title")}</h1>
         <p className="mt-3 text-sm">{t("startup.error.body")}</p>
         <p className="mt-3 font-mono text-xs text-muted-foreground select-all">
           {t("startup.error.reference", { reference })}

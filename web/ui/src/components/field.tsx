@@ -29,11 +29,7 @@ export function Field({ label, hint, error, className, ref, ...input }: FieldPro
         id={id}
         aria-invalid={error ? true : undefined}
         aria-describedby={[errorId, hintId].filter(Boolean).join(" ") || undefined}
-        className={[
-          "h-9 rounded-md border bg-inset px-3 text-sm text-foreground",
-          "transition-colors duration-(--duration-micro) focus-visible:outline-2 focus-visible:outline-offset-1",
-          error ? "border-attention" : "border-border-strong",
-        ].join(" ")}
+        className={["ui-input h-10 px-3 text-sm"].join(" ")}
         {...input}
       />
       {error ? (

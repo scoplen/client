@@ -19,7 +19,7 @@ export interface SearchFieldProps {
 export function SearchField({ label, placeholder, value, onChange, clearLabel, className, ref }: SearchFieldProps) {
   return (
     <div className={["relative flex items-center", className].filter(Boolean).join(" ")}>
-      <Search aria-hidden="true" className="pointer-events-none absolute left-2.5 size-4 text-muted-foreground" />
+      <Search aria-hidden="true" className="pointer-events-none absolute left-3 size-4 text-muted-foreground" />
       <input
         ref={ref}
         type="search"
@@ -33,7 +33,7 @@ export function SearchField({ label, placeholder, value, onChange, clearLabel, c
             onChange("");
           }
         }}
-        className="h-8 w-full rounded-md border border-border-strong bg-inset pr-8 pl-8 text-sm text-foreground placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
+        className="ui-input h-9 w-full rounded-full! pr-8 pl-9 text-sm [&::-webkit-search-cancel-button]:hidden"
       />
       {value !== "" ? (
         <button
@@ -41,7 +41,7 @@ export function SearchField({ label, placeholder, value, onChange, clearLabel, c
           aria-label={clearLabel}
           title={clearLabel}
           onClick={() => onChange("")}
-          className="absolute right-1 grid size-6 place-items-center rounded text-muted-foreground hover:text-foreground"
+          className="absolute right-1.5 grid size-6 place-items-center rounded-full text-muted-foreground hover:bg-inset hover:text-foreground"
         >
           <X aria-hidden="true" className="size-3.5" />
         </button>

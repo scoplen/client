@@ -7,8 +7,8 @@ import { HostsHome } from "./inventory/home";
 import { InventoryContext } from "./inventory/api";
 import { createInventoryApi } from "./inventory/core-api";
 import { InventoryObjects, type ObjectSection } from "./inventory/objects";
-import { PassphraseSettings } from "./local-data";
-import { SessionTerminal } from "./session";
+import { SessionTerminal, type SessionState } from "./session";
+import { SettingsView } from "./settings";
 
 type View = "hosts" | "objects" | "settings";
 
@@ -29,6 +29,7 @@ export function Shell({
   const [objectSection, setObjectSection] = useState<ObjectSection>("logins");
   const [sessions, setSessions] = useState<OpenSession[]>([]);
   const [activeTab, setActiveTab] = useState("hosts");
+  const [states, setStates] = useState<Record<string, SessionState>>({});
   const inventory = useMemo(() => createInventoryApi(), []);
 
   const openObjects = (section: ObjectSection) => {
@@ -51,7 +52,12 @@ export function Shell({
 
   const tabs = [
     { id: "hosts", label: t("frame.hosts") },
-    ...sessions.map((session) => ({ id: session.id, label: session.label })),
+    ...sessions.map((session) => ({
+      id: session.id,
+      label: session.label,
+      seed: session.profileId,
+      state: states[session.id],
+    })),
   ];
 
   return (
@@ -67,9 +73,7 @@ export function Shell({
       settingsActive={view === "settings"}
     >
       {view === "settings" ? (
-        <main id="main" tabIndex={-1} className="mx-auto max-w-xl px-6 py-10 focus:outline-none">
-          <Settings status={status} onStatus={onStatus} />
-        </main>
+        <SettingsView status={status} onStatus={onStatus} />
       ) : activeTab !== "hosts" ? (
         <div className="h-full min-h-0">
           {sessions.map((session) => (
@@ -78,6 +82,7 @@ export function Shell({
                 profileId={session.profileId}
                 label={session.label}
                 onClose={() => closeSession(session.id)}
+                onStateChange={(state) => setStates((current) => ({ ...current, [session.id]: state }))}
               />
             </div>
           ))}
@@ -94,15 +99,5 @@ export function Shell({
         </InventoryContext.Provider>
       )}
     </Frame>
-  );
-}
-
-function Settings({ status, onStatus }: { status: Status & { state: "open" }; onStatus: (status: Status) => void }) {
-  const { t } = useI18n();
-  return (
-    <>
-      <h1 className="font-serif text-2xl font-medium">{t("settings.title")}</h1>
-      <PassphraseSettings status={status} onStatus={onStatus} />
-    </>
   );
 }

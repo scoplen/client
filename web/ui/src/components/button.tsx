@@ -12,10 +12,10 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const roles: Record<Role, string> = {
-  primary: "bg-primary text-primary-foreground hover:bg-primary-hover",
-  secondary: "border border-border-strong bg-raised text-foreground hover:bg-inset",
-  ghost: "text-foreground hover:bg-inset",
-  destructive: "bg-attention text-attention-foreground hover:opacity-90",
+  primary: "ui-control bg-primary text-primary-foreground hover:bg-primary-hover",
+  secondary: "ui-control border-border-strong! bg-raised text-foreground hover:bg-inset",
+  ghost: "border-(length:--scoplen-border-width) border-transparent text-foreground hover:bg-inset",
+  destructive: "ui-control bg-attention text-attention-foreground hover:opacity-90",
 };
 
 /**
@@ -40,8 +40,9 @@ export function Button({
       disabled={disabled || busy}
       aria-busy={busy || undefined}
       className={[
-        "relative inline-flex h-9 items-center justify-center rounded-md px-4 text-sm font-medium",
-        "transition-colors duration-(--duration-micro) disabled:cursor-not-allowed disabled:opacity-55",
+        "relative inline-flex h-9 items-center justify-center rounded-md px-4 text-sm font-medium select-none",
+        "transition-[background-color,color,transform,box-shadow] duration-(--duration-micro) ease-(--ease-out)",
+        "disabled:cursor-not-allowed disabled:opacity-55",
         roles[variant],
         className,
       ]

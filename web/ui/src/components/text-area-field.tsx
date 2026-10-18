@@ -21,10 +21,7 @@ export function TextAreaField({ label, hint, error, className, ...input }: TextA
         id={id}
         aria-invalid={error ? true : undefined}
         aria-describedby={[errorId, hintId].filter(Boolean).join(" ") || undefined}
-        className={[
-          "min-h-28 resize-y rounded-md border bg-inset px-3 py-2 font-mono text-xs text-foreground",
-          error ? "border-attention" : "border-border-strong",
-        ].join(" ")}
+        className="ui-input min-h-28 resize-y px-3 py-2 font-mono text-xs"
         {...input}
       />
       {error ? (

@@ -6,11 +6,16 @@ The screens never read the store, decide business rules, or hold secrets. Anythi
 
 ## Seeing the screens
 
-`pnpm --dir web/app dev`, then open `/gallery.html`. The gallery renders every screen and state with sample data (`web/app/src/gallery/sample-inventory.ts`), in English or Chinese, as on macOS or Windows. It is a development tool: it is not built into the application, and its sample data is not a reference implementation of the core.
+`pnpm --dir web/app dev`, then open `/gallery.html`. The gallery renders every screen and state with sample data, in any theme, (`web/app/src/gallery/sample-inventory.ts`), in English or Chinese, as on macOS or Windows. It is a development tool: it is not built into the application, and its sample data is not a reference implementation of the core.
 
-## Window
+## Look and feel
 
-`web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts; each session adds a tab after it (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 84 px for the window controls, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.
+The interface has a character: the Scoplen mark, a small tilted egg whose eyes are a text cursor and a wink (`web/ui/src/components/mark.tsx`). It reacts only when something happens, never on its own: it watches the field being typed in the Add host dialog and shuts its eyes for a password or key, sleeps while the local data is locked, shakes its head when something is refused, and every host has its own egg in one of a few poses chosen from its identifier (`host-egg.tsx`). A session tab's egg shows the connection: eyes wide while connecting, asleep once closed, the attention color when it failed. The selected item is marked by the mark's open eye on its left edge (`pick.tsx`). With reduced motion the faces still change but nothing animates.
+
+Colors and shapes come from a theme the person chooses in Settings (`web/ui/src/themes.css`, `theme.tsx`): Paper (the default), Brutal, Sakura, Midnight, and Phosphor, each in light and dark where it has both, or following the system. A theme sets every color token and its radii, border width, shadows, the way buttons press, and the heading face; components read only the tokens. Every theme's text pairs are checked for WCAG AA contrast by `web/ui/test/tokens.test.ts`. The choice is an interface preference of the device and is kept in the webview's local storage until the core offers a settings store.
+
+
+`web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 84 px for the window controls, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.
 
 ## Inventory (roadmap C3)
 

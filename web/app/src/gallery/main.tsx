@@ -5,15 +5,25 @@
 // /gallery.html). It is not part of the application and is never built into it.
 
 import "@scoplen/ui/styles.css";
+import {
+  AppearanceProvider,
+  applyStoredAppearance,
+  themes,
+  useAppearance,
+  type SchemeChoice,
+  type ThemeId,
+} from "@scoplen/ui";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { StrictMode, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Frame } from "../frame";
 import { I18nProvider, useI18n } from "../i18n";
 import { HostsHome } from "../inventory/home";
+import { InventoryObjects } from "../inventory/objects";
 import { InventoryContext } from "../inventory/api";
 import type { Locale, Platform, Status } from "../ipc/bindings";
-import { CreatePassphraseScreen, PassphraseSettings, UnlockScreen, UnreadableScreen } from "../local-data";
+import { CreatePassphraseScreen, UnlockScreen, UnreadableScreen } from "../local-data";
+import { SettingsView } from "../settings";
 import { sampleHosts, sampleInventory } from "./sample-inventory";
 
 // The local-data screens call the core; answer them as a core would.
@@ -33,6 +43,7 @@ mockIPC((cmd, args) => {
 
 const screens = {
   hosts: "Hosts",
+  objects: "Logins, keys, and routes",
   firstRun: "Hosts: first run",
   failed: "Hosts: failed to load",
   settings: "Settings",
@@ -90,6 +101,7 @@ function Gallery() {
           <option value="en">English</option>
           <option value="zh-Hans">简体中文</option>
         </select>
+        <ThemeControls />
         <select
           aria-label="Platform"
           value={platform}
@@ -101,6 +113,36 @@ function Gallery() {
         </select>
       </aside>
     </I18nProvider>
+  );
+}
+
+function ThemeControls() {
+  const { appearance, setAppearance } = useAppearance();
+  return (
+    <>
+      <select
+        aria-label="Theme"
+        value={appearance.theme}
+        onChange={(e) => setAppearance({ ...appearance, theme: e.target.value as ThemeId })}
+        className="rounded border border-border bg-inset px-1 py-0.5"
+      >
+        {themes.map((theme) => (
+          <option key={theme.id} value={theme.id}>
+            {theme.id}
+          </option>
+        ))}
+      </select>
+      <select
+        aria-label="Scheme"
+        value={appearance.scheme}
+        onChange={(e) => setAppearance({ ...appearance, scheme: e.target.value as SchemeChoice })}
+        className="rounded border border-border bg-inset px-1 py-0.5"
+      >
+        <option value="system">system</option>
+        <option value="light">light</option>
+        <option value="dark">dark</option>
+      </select>
+    </>
   );
 }
 
@@ -137,22 +179,25 @@ function Screen({
       settingsActive={settings}
     >
       {settings ? (
-        <main className="mx-auto max-w-xl px-6 py-10">
-          <h1 className="font-serif text-2xl font-medium">{t("settings.title")}</h1>
-          <PassphraseSettings
-            status={status.state === "open" ? status : { state: "open", protection: "keystore" }}
-            onStatus={onStatus}
-          />
-        </main>
+        <SettingsView
+          status={status.state === "open" ? status : { state: "open", protection: "keystore" }}
+          onStatus={onStatus}
+        />
+      ) : screen === "objects" ? (
+        <InventoryObjects section="logins" onBack={() => onSettings("hosts")} />
       ) : (
-        <HostsHome />
+        <HostsHome onOpenObjects={() => onSettings("objects")} />
       )}
     </Frame>
   );
 }
 
+applyStoredAppearance();
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Gallery />
+    <AppearanceProvider>
+      <Gallery />
+    </AppearanceProvider>
   </StrictMode>,
 );

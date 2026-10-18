@@ -1,13 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, ChoiceList, Dialog, Field, Segmented, TextAreaField } from "@scoplen/ui";
+import { Button, ChoiceList, Dialog, Field, Mark, Segmented, TextAreaField, type MarkMood } from "@scoplen/ui";
 import { ChevronRight, FileKey } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useState, type FocusEvent, type FormEvent } from "react";
 import { useI18n } from "../i18n";
 import { useInventory, type AddHostError, type HostDetails, type SignIn } from "./api";
 
 type Method = "password" | "key" | "agent";
 type KeySource = "file" | "paste" | "generate";
 type Problem = { field: "address" | "port" | "username" | "password" | "key" | "form"; message: string };
+
+/**
+ * Where the dialog's mark looks while each field has focus. It watches what
+ * is typed, except a secret: for a password or a key it shuts its eyes and
+ * turns away.
+ */
+const watching: Record<string, { mood: MarkMood; look?: { x: number; y: number }; tilt?: number }> = {
+  address: { mood: "awake", look: { x: 0.2, y: 1 } },
+  username: { mood: "awake", look: { x: 0.1, y: 1 } },
+  secret: { mood: "closed", tilt: -14 },
+  name: { mood: "awake", look: { x: 0.5, y: 1 } },
+  port: { mood: "awake", look: { x: 1, y: 1 } },
+};
 
 /**
  * Adding a host asks only what the first connection needs: where the host
@@ -37,6 +50,10 @@ export function AddHostDialog({
   const [port, setPort] = useState("");
   const [problem, setProblem] = useState<Problem | null>(null);
   const [busy, setBusy] = useState(false);
+  const [watched, setWatched] = useState<string | null>(null);
+  const onFocusField = (event: FocusEvent<HTMLFormElement>) =>
+    setWatched((event.target as HTMLElement).dataset.watch ?? null);
+  const face = (watched && watching[watched]) || { mood: "rest" as const };
 
   const reset = () => {
     setAddress("");
@@ -151,6 +168,16 @@ export function AddHostDialog({
       title={t("add.title")}
       description={t("add.description")}
       closeLabel={t("add.close")}
+      // A problem makes the mark shake its head once.
+      mark={
+        <Mark
+          size="2.5rem"
+          mood={busy ? "awake" : face.mood}
+          look={busy ? { x: 0, y: -0.6 } : face.look}
+          tilt={face.tilt}
+          gesture={{ name: "shake", at: problem }}
+        />
+      }
       footer={
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
@@ -162,13 +189,21 @@ export function AddHostDialog({
         </>
       }
     >
-      <form id="add-host" onSubmit={(e) => void submit(e)} noValidate className="flex flex-col gap-5">
+      <form
+        id="add-host"
+        onSubmit={(e) => void submit(e)}
+        onFocus={onFocusField}
+        onBlur={() => setWatched(null)}
+        noValidate
+        className="flex flex-col gap-5"
+      >
         <Field
           label={t("add.address")}
           hint={t("add.address.hint")}
           value={address}
           onChange={(e) => setAddress(e.target.value)}
           error={error("address")}
+          data-watch="address"
           autoFocus
           autoCapitalize="off"
           autoCorrect="off"
@@ -180,6 +215,7 @@ export function AddHostDialog({
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           error={error("username")}
+          data-watch="username"
           autoComplete="username"
           autoCapitalize="off"
           autoCorrect="off"
@@ -210,6 +246,7 @@ export function AddHostDialog({
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             error={error("password")}
+            data-watch="secret"
           />
         ) : null}
 
@@ -263,6 +300,7 @@ export function AddHostDialog({
                 value={keyText}
                 onChange={(e) => setKeyText(e.target.value)}
                 error={error("key")}
+                data-watch="secret"
                 spellCheck={false}
                 autoCapitalize="off"
                 autoCorrect="off"
@@ -296,6 +334,7 @@ export function AddHostDialog({
                 hint={t("add.name.hint")}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                data-watch="name"
               />
               <Field
                 label={t("add.port")}
@@ -303,6 +342,7 @@ export function AddHostDialog({
                 placeholder="22"
                 value={port}
                 onChange={(e) => setPort(e.target.value)}
+                data-watch="port"
                 error={error("port")}
                 className="[&_input]:font-mono"
               />

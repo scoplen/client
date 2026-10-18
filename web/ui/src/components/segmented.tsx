@@ -24,11 +24,11 @@ export function Segmented<T extends string>({ legend, options, value, onChange }
   return (
     <fieldset className="m-0 flex flex-col gap-1.5 border-0 p-0">
       <legend className="mb-1.5 p-0 text-sm font-medium text-foreground">{legend}</legend>
-      <div className="inline-flex w-full rounded-md border border-border-strong bg-inset p-0.5">
+      <div className="inline-flex w-full rounded-md border-(length:--scoplen-border-width) border-border-strong bg-inset p-0.5">
         {options.map((option) => (
           <label
             key={option.value}
-            className="relative flex-1 cursor-pointer rounded-[5px] px-3 py-1.5 text-center text-sm text-muted-foreground transition-colors duration-(--duration-micro) has-checked:bg-raised has-checked:text-foreground has-checked:shadow-[0_0_0_1px_var(--border)] has-focus-visible:outline-2 has-focus-visible:outline-ring"
+            className="relative flex-1 cursor-pointer rounded-sm px-3 py-1.5 text-center text-sm text-muted-foreground transition-[background-color,color,box-shadow] duration-(--duration-state) ease-(--ease-out) hover:text-foreground has-checked:bg-raised has-checked:font-medium has-checked:text-foreground has-checked:shadow-(--scoplen-shadow-control) has-focus-visible:outline-2 has-focus-visible:outline-ring"
           >
             <input
               type="radio"
