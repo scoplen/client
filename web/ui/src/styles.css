@@ -100,9 +100,16 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
+  /* An application window, not a page: the window itself never scrolls or
+     bounces; only the regions inside it scroll. */
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
   body {
     margin: 0;
-    min-height: 100vh;
   }
   :focus-visible {
     outline: 2px solid var(--ring);

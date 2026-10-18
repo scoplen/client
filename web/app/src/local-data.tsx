@@ -57,7 +57,7 @@ function Screen({
   shake?: unknown;
 }) {
   return (
-    <main id="main" className="grid min-h-screen place-items-center bg-background px-6 py-12">
+    <main id="main" className="grid h-screen place-items-center overflow-y-auto bg-background px-6 py-12">
       <div className="scoplen-rise flex w-full max-w-md flex-col items-center">
         <Mark
           size="4rem"
