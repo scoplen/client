@@ -110,6 +110,20 @@
   }
   body {
     margin: 0;
+    /* Interface text is not selectable, as in a native application; text
+       people copy (fields, terminal output, addresses, keys) opts back in. */
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+  }
+  input,
+  textarea,
+  [contenteditable="true"],
+  pre,
+  code,
+  .select-text {
+    -webkit-user-select: text;
+    user-select: text;
   }
   :focus-visible {
     outline: 2px solid var(--ring);
@@ -325,4 +339,17 @@
   .scoplen-route::after {
     left: calc(50% - 0.25rem);
   }
+}
+
+/* A menu opens from where it was asked for, quickly. */
+.scoplen-menu {
+  transform-origin: var(--transform-origin);
+  transition:
+    opacity 120ms var(--ease-out),
+    transform 120ms var(--ease-out);
+}
+.scoplen-menu[data-starting-style],
+.scoplen-menu[data-ending-style] {
+  opacity: 0;
+  transform: scale(0.96);
 }

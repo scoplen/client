@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-import { render, screen } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   Button,
   ChoiceList,
+  ContextMenuProvider,
   HostEgg,
   Lockup,
   Mark,
@@ -14,6 +15,7 @@ import {
   SkipLink,
   Toolbar,
   bodyPath,
+  useContextMenu,
 } from "../src";
 import { violations } from "./axe";
 
@@ -245,5 +247,52 @@ describe("Notice", () => {
     await vi.advanceTimersByTimeAsync(1100);
     expect(onDismiss).toHaveBeenCalled();
     vi.useRealTimers();
+  });
+});
+
+describe("ContextMenuProvider", () => {
+  const labels = { cut: "Cut", copy: "Copy", paste: "Paste", selectAll: "Select all" };
+
+  function Row({ onDelete }: { onDelete: () => void }) {
+    const menu = useContextMenu();
+    return (
+      <div onContextMenu={(event) => menu(event, [{ label: "Delete nas", destructive: true, onSelect: onDelete }])}>
+        nas
+      </div>
+    );
+  }
+
+  it("opens the offered menu and runs the chosen entry", async () => {
+    const onDelete = vi.fn();
+    render(
+      <ContextMenuProvider editLabels={labels}>
+        <Row onDelete={onDelete} />
+      </ContextMenuProvider>,
+    );
+    fireEvent.contextMenu(screen.getByText("nas"), { clientX: 10, clientY: 10 });
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Delete nas" }));
+    expect(onDelete).toHaveBeenCalled();
+  });
+
+  it("keeps the web view's menu away where nothing is offered", () => {
+    render(
+      <ContextMenuProvider editLabels={labels}>
+        <p>plain text</p>
+      </ContextMenuProvider>,
+    );
+    const event = createEvent.contextMenu(screen.getByText("plain text"));
+    fireEvent(screen.getByText("plain text"), event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("offers editing in text fields", async () => {
+    render(
+      <ContextMenuProvider editLabels={labels}>
+        <input aria-label="Name" defaultValue="prod" />
+      </ContextMenuProvider>,
+    );
+    fireEvent.contextMenu(screen.getByLabelText("Name"), { clientX: 10, clientY: 10 });
+    expect(await screen.findByRole("menuitem", { name: /Select all/ })).toBeTruthy();
   });
 });

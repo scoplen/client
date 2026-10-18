@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 export { Button, type ButtonProps } from "./components/button";
 export { ChoiceList, type Choice, type ChoiceListProps } from "./components/choice-list";
+export {
+  ContextMenuProvider,
+  shortcutModifier,
+  useContextMenu,
+  type ContextMenuEntry,
+  type EditMenuLabels,
+} from "./components/context-menu";
 export { Confirm, Dialog, type ConfirmProps, type DialogProps } from "./components/dialog";
 export { Field, type FieldProps } from "./components/field";
 export { HostEgg, type HostEggProps } from "./components/host-egg";

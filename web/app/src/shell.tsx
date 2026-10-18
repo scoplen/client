@@ -46,9 +46,21 @@ export function Shell({
     setView("hosts");
   };
 
-  const closeSession = (id: string) => {
-    setSessions((current) => current.filter((session) => session.id !== id));
-    setActiveTab("hosts");
+  const closeSession = (id: string) => closeSessions([id]);
+
+  // Closing tabs ends their sessions; if the open tab goes, its left neighbor opens.
+  const closeSessions = (ids: string[]) => {
+    const order = ["hosts", ...sessions.map((session) => session.id)];
+    if (ids.includes(activeTab)) {
+      const index = order.indexOf(activeTab);
+      const next =
+        order
+          .slice(0, index)
+          .reverse()
+          .find((id) => !ids.includes(id)) ?? "hosts";
+      setActiveTab(next);
+    }
+    setSessions((current) => current.filter((session) => !ids.includes(session.id)));
   };
 
   const tabs = [
@@ -75,6 +87,11 @@ export function Shell({
         setView(view === "settings" ? "hosts" : "settings");
       }}
       settingsActive={view === "settings"}
+      onCloseTabs={closeSessions}
+      onDuplicate={(id) => {
+        const session = sessions.find((candidate) => candidate.id === id);
+        if (session) openSession(session.profileId, session.label);
+      }}
     >
       {view === "settings" ? (
         <SettingsView key={settingsSection} status={status} onStatus={onStatus} section={settingsSection} />

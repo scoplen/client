@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Dialog, HostEgg, IconButton, Mark, type MarkMood } from "@scoplen/ui";
+import {
+  Button,
+  Dialog,
+  HostEgg,
+  IconButton,
+  Mark,
+  shortcutModifier,
+  useContextMenu,
+  type MarkMood,
+} from "@scoplen/ui";
+import type { ScoplenTerminalElement } from "@scoplen/terminal";
 import { Palette } from "lucide-react";
 import { Terminal, type TerminalSink, type TerminalSource } from "@scoplen/terminal/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -105,6 +115,8 @@ export function SessionTerminal({
     [sessionId],
   );
   const { colors } = useTerminalColors();
+  const terminal = useRef<ScoplenTerminalElement>(null);
+  const menu = useContextMenu();
 
   // The remote terminal follows the window: the size is sent once the session
   // is connected, and again whenever the grid changes.
@@ -237,10 +249,30 @@ export function SessionTerminal({
       </header>
       <div className="min-h-0 flex-1 px-3 pb-3">
         <div
+          onContextMenu={(event) =>
+            menu(event, [
+              {
+                label: t("menu.copy"),
+                shortcut: `${shortcutModifier}C`,
+                onSelect: () => void terminal.current?.copySelection(),
+              },
+              {
+                label: t("menu.paste"),
+                shortcut: `${shortcutModifier}V`,
+                disabled: state !== "connected",
+                onSelect: () => void terminal.current?.paste(),
+              },
+              "separator",
+              { label: t("menu.copyAll"), onSelect: () => void terminal.current?.copyAll() },
+              { label: t("menu.clear"), onSelect: () => terminal.current?.clearOutput() },
+              ...(onOpenColors ? ["separator" as const, { label: t("session.colors"), onSelect: onOpenColors }] : []),
+            ])
+          }
           className="relative h-full min-h-0 overflow-hidden rounded-xl border-(length:--scoplen-border-width) border-border p-3 shadow-(--scoplen-shadow-card) transition-colors duration-(--duration-state)"
           style={{ background: colors.background }}
         >
           <Terminal
+            ref={terminal}
             source={source}
             sink={inputSink}
             aria-label={t("session.output")}
@@ -297,15 +329,15 @@ export function SessionTerminal({
             <dl className="grid gap-3">
               <div>
                 <dt className="text-muted-foreground">{t("session.trust.algorithm")}</dt>
-                <dd className="m-0 mt-1 font-mono">{hostKey.algorithm}</dd>
+                <dd className="m-0 mt-1 font-mono select-text">{hostKey.algorithm}</dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">{t("session.trust.fingerprint")}</dt>
-                <dd className="m-0 mt-1 break-all font-mono">{hostKey.fingerprint}</dd>
+                <dd className="m-0 mt-1 break-all font-mono select-text">{hostKey.fingerprint}</dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">{t("session.trust.publicKey")}</dt>
-                <dd className="m-0 mt-1 break-all rounded-md bg-inset p-3 font-mono text-xs leading-5">
+                <dd className="m-0 mt-1 break-all rounded-md bg-inset p-3 font-mono text-xs leading-5 select-text">
                   {hostKey.key}
                 </dd>
               </div>

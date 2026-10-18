@@ -11,6 +11,7 @@ import {
 } from "@scoplen/ui";
 import { useState } from "react";
 import { useI18n } from "./i18n";
+import { languageChoices, useLanguage, type LanguageChoice } from "./language";
 import type { Status } from "./ipc/bindings";
 import { PassphraseSettings } from "./local-data";
 import { TerminalSettings } from "./terminal-settings";
@@ -106,6 +107,7 @@ function Appearance() {
         />
         {darkOnly ? <p className="mt-2 text-sm text-muted-foreground">{t("settings.appearance.darkOnly")}</p> : null}
       </div>
+      <Language />
     </section>
   );
 }
@@ -159,5 +161,26 @@ function ThemeChoice({
         <span className="block text-xs text-muted-foreground">{t(`settings.theme.${id}.description`)}</span>
       </span>
     </label>
+  );
+}
+
+/** The interface language; each language is named in itself. */
+function Language() {
+  const { t } = useI18n();
+  const { choice, setChoice } = useLanguage();
+  const names: Record<LanguageChoice, string> = {
+    system: t("settings.language.system"),
+    en: "English",
+    "zh-Hans": "简体中文",
+  };
+  return (
+    <div className="mt-6 max-w-sm">
+      <Segmented<LanguageChoice>
+        legend={t("settings.language")}
+        value={choice}
+        onChange={setChoice}
+        options={languageChoices.map((value) => ({ value, label: names[value] }))}
+      />
+    </div>
   );
 }

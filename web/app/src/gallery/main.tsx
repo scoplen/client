@@ -23,6 +23,7 @@ import { InventoryObjects } from "../inventory/objects";
 import { InventoryContext } from "../inventory/api";
 import type { Locale, Platform, Status } from "../ipc/bindings";
 import { CreatePassphraseScreen, UnlockScreen, UnreadableScreen } from "../local-data";
+import { Menus } from "../menus";
 import { SettingsView } from "../settings";
 import { TerminalColorsProvider } from "../terminal-colors";
 import { sampleHosts, sampleInventory } from "./sample-inventory";
@@ -66,53 +67,55 @@ function Gallery() {
 
   return (
     <I18nProvider locale={locale}>
-      <InventoryContext.Provider value={inventory}>
-        <LangAttribute locale={locale} />
-        <Screen
-          key={`${screen}-${locale}`}
-          screen={screen}
-          platform={platform}
-          status={status}
-          onStatus={setStatus}
-          onSettings={setScreen}
-        />
-      </InventoryContext.Provider>
-      <aside
-        aria-label="Gallery controls"
-        className="fixed right-3 bottom-3 z-50 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-raised p-2 text-xs shadow-lg"
-      >
-        <select
-          aria-label="Screen"
-          value={screen}
-          onChange={(e) => setScreen(e.target.value as Screen)}
-          className="rounded border border-border bg-inset px-1 py-0.5"
+      <Menus>
+        <InventoryContext.Provider value={inventory}>
+          <LangAttribute locale={locale} />
+          <Screen
+            key={`${screen}-${locale}`}
+            screen={screen}
+            platform={platform}
+            status={status}
+            onStatus={setStatus}
+            onSettings={setScreen}
+          />
+        </InventoryContext.Provider>
+        <aside
+          aria-label="Gallery controls"
+          className="fixed right-3 bottom-3 z-50 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-raised p-2 text-xs shadow-lg"
         >
-          {Object.entries(screens).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Language"
-          value={locale}
-          onChange={(e) => setLocale(e.target.value as Locale)}
-          className="rounded border border-border bg-inset px-1 py-0.5"
-        >
-          <option value="en">English</option>
-          <option value="zh-Hans">简体中文</option>
-        </select>
-        <ThemeControls />
-        <select
-          aria-label="Platform"
-          value={platform}
-          onChange={(e) => setPlatform(e.target.value as Platform)}
-          className="rounded border border-border bg-inset px-1 py-0.5"
-        >
-          <option value="macos">macOS</option>
-          <option value="windows">Windows</option>
-        </select>
-      </aside>
+          <select
+            aria-label="Screen"
+            value={screen}
+            onChange={(e) => setScreen(e.target.value as Screen)}
+            className="rounded border border-border bg-inset px-1 py-0.5"
+          >
+            {Object.entries(screens).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Language"
+            value={locale}
+            onChange={(e) => setLocale(e.target.value as Locale)}
+            className="rounded border border-border bg-inset px-1 py-0.5"
+          >
+            <option value="en">English</option>
+            <option value="zh-Hans">简体中文</option>
+          </select>
+          <ThemeControls />
+          <select
+            aria-label="Platform"
+            value={platform}
+            onChange={(e) => setPlatform(e.target.value as Platform)}
+            className="rounded border border-border bg-inset px-1 py-0.5"
+          >
+            <option value="macos">macOS</option>
+            <option value="windows">Windows</option>
+          </select>
+        </aside>
+      </Menus>
     </I18nProvider>
   );
 }

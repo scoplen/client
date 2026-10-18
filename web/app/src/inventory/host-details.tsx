@@ -57,7 +57,7 @@ export function HostDetailsPanel({
               <h2 id="host-details-title" className="ui-display m-0 text-xl break-words">
                 {details.data.name}
               </h2>
-              <p className="mt-0.5 mb-0 font-mono text-xs break-all text-muted-foreground">
+              <p className="mt-0.5 mb-0 font-mono text-xs break-all text-muted-foreground select-text">
                 {details.data.address}
                 {details.data.port !== 22 ? `:${details.data.port}` : ""}
               </p>

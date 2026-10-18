@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { I18nProvider, useI18n } from "./i18n";
 import { commands, type AppInfo, type Locale, type Status } from "./ipc/bindings";
 import { CreatePassphraseScreen, UnlockScreen, UnreadableScreen } from "./local-data";
+import { LanguageProvider, useLanguageState } from "./language";
+import { Menus } from "./menus";
 import { Shell } from "./shell";
 import { TerminalColorsProvider } from "./terminal-colors";
 
@@ -44,7 +46,9 @@ export function App() {
     request();
   };
 
-  const locale = startup.state === "ready" ? startup.info.locale : initialLocale();
+  const [language, setLanguage] = useLanguageState();
+  const negotiated = startup.state === "ready" ? startup.info.locale : initialLocale();
+  const locale = language === "system" ? negotiated : language;
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
@@ -59,12 +63,18 @@ export function App() {
   return (
     <AppearanceProvider>
       <TerminalColorsProvider>
-        <I18nProvider locale={locale}>
-          <SkipTarget />
-          {startup.state === "loading" ? <StartupLoading /> : null}
-          {startup.state === "ready" ? <Gate info={startup.info} status={startup.status} onStatus={setStatus} /> : null}
-          {startup.state === "failed" ? <StartupError reference={startup.reference} onRetry={retry} /> : null}
-        </I18nProvider>
+        <LanguageProvider choice={language} setChoice={setLanguage}>
+          <I18nProvider locale={locale}>
+            <Menus>
+              <SkipTarget />
+              {startup.state === "loading" ? <StartupLoading /> : null}
+              {startup.state === "ready" ? (
+                <Gate info={startup.info} status={startup.status} onStatus={setStatus} />
+              ) : null}
+              {startup.state === "failed" ? <StartupError reference={startup.reference} onRetry={retry} /> : null}
+            </Menus>
+          </I18nProvider>
+        </LanguageProvider>
       </TerminalColorsProvider>
     </AppearanceProvider>
   );

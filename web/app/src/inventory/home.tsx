@@ -6,13 +6,14 @@ import {
   HostEgg,
   IconButton,
   Mark,
+  type MarkMood,
   Notice,
   Pick,
   SearchField,
   Tag,
-  type MarkMood,
+  useContextMenu,
 } from "@scoplen/ui";
-import { Plus, RotateCcw, Star } from "lucide-react";
+import { Copy, Plug, Plus, RotateCcw, Star, Trash2 } from "lucide-react";
 import { useRef, useState, type KeyboardEvent } from "react";
 import { useI18n } from "../i18n";
 import { AddHostDialog } from "./add-host";
@@ -100,6 +101,14 @@ export function HostsHome({
             : t("hosts.recentSessions.reconnectFailed");
       setToast({ message });
     }
+  };
+
+  // From the host's menu: connect with its default login, as the details panel would.
+  const connectHost = async (host: HostSummary) => {
+    const outcome = await api.host(host.id);
+    if (outcome.status !== "ok" || !outcome.data) return;
+    const login = outcome.data.logins.find((candidate) => candidate.isDefault) ?? outcome.data.logins[0];
+    if (login) onConnect?.(login.id, `${outcome.data.name} · ${login.name ?? login.username}`);
   };
 
   const onListKeyDown = (event: KeyboardEvent) => {
@@ -232,6 +241,8 @@ export function HostsHome({
               selected={selected}
               onSelect={setSelected}
               onFavorite={(host) => void api.setFavorite(host.id, !host.favorite)}
+              onConnect={onConnect ? (host) => void connectHost(host) : undefined}
+              onDelete={setDeleting}
               empty={
                 query.trim() !== "" ? (
                   <Empty mood="awake" look={{ x: -0.8, y: 0.2 }}>
@@ -688,12 +699,16 @@ function HostList({
   selected,
   onSelect,
   onFavorite,
+  onConnect,
+  onDelete,
   empty,
 }: {
   hosts: HostSummary[];
   selected: Id | null;
   onSelect: (id: Id) => void;
   onFavorite: (host: HostSummary) => void;
+  onConnect?: (host: HostSummary) => void;
+  onDelete: (host: HostSummary) => void;
   empty: React.ReactNode;
 }) {
   const { t } = useI18n();
@@ -730,6 +745,8 @@ function HostList({
           onSelect={() => onSelect(host.id)}
           onKeyDown={(event) => move(event, index)}
           onFavorite={() => onFavorite(host)}
+          onConnect={onConnect && host.loginCount > 0 ? () => onConnect(host) : undefined}
+          onDelete={() => onDelete(host)}
         />
       ))}
     </ul>
@@ -746,19 +763,47 @@ function HostRow({
   onSelect,
   onKeyDown,
   onFavorite,
+  onConnect,
+  onDelete,
 }: {
   host: HostSummary;
   selected: boolean;
   onSelect: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
   onFavorite: () => void;
+  onConnect?: () => void;
+  onDelete: () => void;
 }) {
   const { t } = useI18n();
+  const menu = useContextMenu();
+  const address = `${host.username ? `${host.username}@` : ""}${host.address}${host.port !== 22 ? `:${host.port}` : ""}`;
   const [blinks, setBlinks] = useState(0);
   const tags = Object.entries(host.tags);
   return (
     <li
       onPointerEnter={() => setBlinks((n) => n + 1)}
+      onContextMenu={(event) => {
+        onSelect();
+        menu(event, [
+          ...(onConnect
+            ? [{ label: t("session.connect"), icon: <Plug className="size-4" />, onSelect: onConnect }]
+            : []),
+          { label: t("menu.showDetails"), onSelect },
+          "separator",
+          {
+            label: host.favorite ? t("menu.unfavorite") : t("menu.favorite"),
+            icon: <Star className="size-4" />,
+            onSelect: onFavorite,
+          },
+          {
+            label: t("menu.copyAddress"),
+            icon: <Copy className="size-4" />,
+            onSelect: () => void navigator.clipboard?.writeText(address).catch(() => undefined),
+          },
+          "separator",
+          { label: t("host.delete"), icon: <Trash2 className="size-4" />, destructive: true, onSelect: onDelete },
+        ]);
+      }}
       className={[
         "group relative flex items-center rounded-lg border-(length:--scoplen-border-width) transition-[background-color,border-color,box-shadow] duration-(--duration-state)",
         selected ? "border-border bg-raised shadow-(--scoplen-shadow-card)" : "border-transparent hover:bg-inset/70",
