@@ -57,7 +57,15 @@ export interface TerminalObjectSink {
 export type TerminalSink =
   TerminalObjectSink | WritableStream<TerminalBytes> | ((chunk: TerminalBytes) => void | Promise<void>);
 
+/** The terminal's grid, in character cells. */
+export interface TerminalSize {
+  columns: number;
+  rows: number;
+}
+
 export interface TerminalElementEventMap {
+  /** The grid changed size, for example because the element was resized. */
+  "terminal-resize": CustomEvent<TerminalSize>;
   "terminal-input": CustomEvent<TerminalBytes>;
   "terminal-broadcast-input": CustomEvent<TerminalBytes>;
   "terminal-broadcast-state": CustomEvent<boolean>;

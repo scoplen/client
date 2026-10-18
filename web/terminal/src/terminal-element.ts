@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /* eslint-disable @typescript-eslint/no-invalid-void-type */
+import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
 import { Terminal as XtermTerminal, type ITerminalOptions } from "@xterm/xterm";
 import {
@@ -14,6 +15,7 @@ import {
   type TerminalObjectSink,
   type TerminalProfile,
   type TerminalSink,
+  type TerminalSize,
   type TerminalSource,
   type TerminalSubscription,
 } from "./types";
@@ -145,6 +147,9 @@ export class ScoplenTerminalElement extends HTMLElementBase {
   private broadcastIndicator: HTMLElement | null = null;
   private terminal: XtermTerminal | null = null;
   private searchAddon: SearchAddon | null = null;
+  private fitAddon: FitAddon | null = null;
+  private resizeObserver: ResizeObserver | null = null;
+  private fitFrame = 0;
   private terminalDisposables: Array<{ dispose(): void }> = [];
   private sourceAbort: AbortController | null = null;
   private sourceUnsubscribe: (() => void) | null = null;
@@ -491,7 +496,12 @@ export class ScoplenTerminalElement extends HTMLElementBase {
       this.terminal = terminal;
       this.searchAddon = new SearchAddon();
       terminal.loadAddon(this.searchAddon);
+      this.fitAddon = new FitAddon();
+      terminal.loadAddon(this.fitAddon);
       this.terminalDisposables = [
+        terminal.onResize(({ cols, rows }) => {
+          this.dispatchEvent(new CustomEvent<TerminalSize>("terminal-resize", { detail: { columns: cols, rows } }));
+        }),
         terminal.onData((data) => {
           void this.send(toBinary(data)).catch(() => undefined);
         }),
@@ -503,6 +513,12 @@ export class ScoplenTerminalElement extends HTMLElementBase {
       if (this.outputBytes.byteLength > 0) {
         terminal.write(this.outputBytes);
       }
+      // The grid follows the element: as many rows and columns as fit.
+      if (typeof ResizeObserver === "function") {
+        this.resizeObserver = new ResizeObserver(() => this.scheduleFit());
+        this.resizeObserver.observe(this);
+      }
+      this.scheduleFit();
     } catch (error) {
       this.terminal = null;
       this.searchAddon = null;
@@ -511,7 +527,31 @@ export class ScoplenTerminalElement extends HTMLElementBase {
     }
   }
 
+  /** The terminal's grid size, once it has one. */
+  get size(): TerminalSize | null {
+    return this.terminal ? { columns: this.terminal.cols, rows: this.terminal.rows } : null;
+  }
+
+  /** Fits the grid to the element on the next frame; a hidden element keeps its size. */
+  private scheduleFit(): void {
+    if (typeof requestAnimationFrame !== "function") return;
+    cancelAnimationFrame(this.fitFrame);
+    this.fitFrame = requestAnimationFrame(() => {
+      if (!this.terminal || !this.fitAddon || this.offsetWidth === 0 || this.offsetHeight === 0) return;
+      try {
+        this.fitAddon.fit();
+      } catch {
+        // A renderer that has not measured its cells yet is fitted on the next resize.
+      }
+    });
+  }
+
   private teardownTerminal(): void {
+    if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.fitFrame);
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    this.fitAddon?.dispose();
+    this.fitAddon = null;
     for (const disposable of this.terminalDisposables) {
       disposable.dispose();
     }
@@ -540,6 +580,8 @@ export class ScoplenTerminalElement extends HTMLElementBase {
       // xterm's options object also exposes constructor-only dimensions such as
       // `cols` and `rows`; copying it back would make a profile update throw.
       this.terminal.options = { ...this._profile };
+      // A new font or size changes how many cells fit.
+      this.scheduleFit();
     }
   }
 

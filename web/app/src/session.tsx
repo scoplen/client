@@ -105,6 +105,17 @@ export function SessionTerminal({
     [sessionId],
   );
   const { colors } = useTerminalColors();
+
+  // The remote terminal follows the window: the size is sent once the session
+  // is connected, and again whenever the grid changes.
+  const size = useRef<{ columns: number; rows: number } | null>(null);
+  const sendSize = useCallback(() => {
+    if (!size.current) return;
+    void commands.sessionResize(sessionId, size.current.columns, size.current.rows).catch(() => undefined);
+  }, [sessionId]);
+  useEffect(() => {
+    if (state === "connected") sendSize();
+  }, [state, sendSize]);
   const terminalProfile = useMemo(
     () => ({ cursorBlink: true, scrollback: 2_000, theme: xtermTheme(colors) }),
     [colors],
@@ -235,6 +246,10 @@ export function SessionTerminal({
             aria-label={t("session.output")}
             className={`h-full min-h-0 transition-opacity duration-(--duration-overlay) ${state === "connected" ? "opacity-100" : "opacity-40"}`}
             profile={terminalProfile}
+            onTerminalResize={(next) => {
+              size.current = next;
+              if (state === "connected") sendSize();
+            }}
             onTerminalError={(terminalError) => {
               if (!mounted.current) return;
               setState("failed");

@@ -13,6 +13,7 @@ import type {
   TerminalError,
   TerminalProfile,
   TerminalSink,
+  TerminalSize,
   TerminalSource,
 } from "./types";
 
@@ -31,6 +32,8 @@ export interface TerminalProps extends Omit<HTMLAttributes<ScoplenTerminalElemen
   onTerminalOutput?: (bytes: TerminalBytes) => void;
   onTerminalError?: (error: TerminalError) => void;
   onTerminalComplete?: () => void;
+  /** The grid changed size; a session passes it on to the remote terminal. */
+  onTerminalResize?: (size: TerminalSize) => void;
 }
 
 function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
@@ -58,6 +61,7 @@ export const Terminal = forwardRef<ScoplenTerminalElement, TerminalProps>(functi
     onTerminalOutput,
     onTerminalError,
     onTerminalComplete,
+    onTerminalResize,
     children,
     ...attributes
   },
@@ -78,12 +82,14 @@ export const Terminal = forwardRef<ScoplenTerminalElement, TerminalProps>(functi
     const output = (event: Event) => onTerminalOutput?.((event as CustomEvent<TerminalBytes>).detail.slice());
     const error = (event: Event) => onTerminalError?.((event as CustomEvent<TerminalError>).detail);
     const complete = () => onTerminalComplete?.();
+    const resize = (event: Event) => onTerminalResize?.({ ...(event as CustomEvent<TerminalSize>).detail });
     element.addEventListener("terminal-input", input);
     element.addEventListener("terminal-broadcast-input", broadcastInput);
     element.addEventListener("terminal-broadcast-state", broadcastState);
     element.addEventListener("terminal-output", output);
     element.addEventListener("terminal-error", error);
     element.addEventListener("terminal-complete", complete);
+    element.addEventListener("terminal-resize", resize);
     return () => {
       element.removeEventListener("terminal-input", input);
       element.removeEventListener("terminal-broadcast-input", broadcastInput);
@@ -91,6 +97,7 @@ export const Terminal = forwardRef<ScoplenTerminalElement, TerminalProps>(functi
       element.removeEventListener("terminal-output", output);
       element.removeEventListener("terminal-error", error);
       element.removeEventListener("terminal-complete", complete);
+      element.removeEventListener("terminal-resize", resize);
     };
   }, [
     onTerminalInput,
@@ -99,6 +106,7 @@ export const Terminal = forwardRef<ScoplenTerminalElement, TerminalProps>(functi
     onTerminalOutput,
     onTerminalError,
     onTerminalComplete,
+    onTerminalResize,
   ]);
 
   useLayoutEffect(() => {
@@ -142,4 +150,12 @@ declare module "react" {
   }
 }
 
-export type { TerminalBytes, TerminalClipboard, TerminalError, TerminalProfile, TerminalSink, TerminalSource };
+export type {
+  TerminalBytes,
+  TerminalClipboard,
+  TerminalError,
+  TerminalProfile,
+  TerminalSink,
+  TerminalSize,
+  TerminalSource,
+};

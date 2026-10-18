@@ -18,6 +18,7 @@ export type {
   TerminalElementEventMap,
   TerminalObjectSink,
   TerminalProfile,
+  TerminalSize,
   TerminalSink,
   TerminalSource,
   TerminalSubscription,
