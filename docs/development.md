@@ -9,7 +9,7 @@ pnpm install
 pnpm dev
 ```
 
-On Windows, open a new PowerShell after installing Rust so `%USERPROFILE%\\.cargo\\bin` is present in `PATH`. Verify with `cargo --version`; an existing terminal can be repaired for the current session with `$env:Path = \"$env:USERPROFILE\\.cargo\\bin;$env:Path\"`.
+On Windows, open a new PowerShell after installing Rust so `%USERPROFILE%\.cargo\bin` is present in `PATH`. Verify with `cargo --version`; an existing terminal can be repaired for the current session with `$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"`.
 
 `pnpm dev` starts the frontend on port 5192 and opens the application window against it. The frontend alone (`pnpm --dir web/app dev`) shows the startup error screen, because there is no core to answer; use it only for layout work.
 
