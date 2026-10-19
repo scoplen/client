@@ -17,6 +17,10 @@ shared SSH API cannot discover a server that requires `rsa-sha2-256`; a rejected
 RSA attempt gives an explicit error that names this limitation. It never falls
 back to SHA-1 or password authentication.
 
+Interactive SSH sessions become ready after authentication and shell setup,
+even when the server sends no initial output. Terminal input and PTY resizing
+are available without waiting for a welcome message or prompt.
+
 ## What it does not do
 
 - It sends nothing to the vendor: no telemetry, update server, or crash-report endpoint in Phase 1.

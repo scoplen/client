@@ -198,12 +198,14 @@ pub async fn session_trust_host_key(
     Ok(())
 }
 
-/// Connects one direct password profile and streams its exec or shell output.
+/// Connects one direct profile and streams its exec or shell output.
+/// Interactive shells notify `ready` after authentication, PTY, and shell setup.
 ///
 /// Host-key verification uses active, host-specific trust records and remains
 /// fail-closed for new, changed, revoked, wildcard-only, or CA records.
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::too_many_arguments)] // Tauri injects both state arguments.
 pub async fn session_connect(
     local: tauri::State<'_, LocalDataState>,
     registry: tauri::State<'_, SessionRegistry>,
@@ -212,11 +214,13 @@ pub async fn session_connect(
     pty: bool,
     session_id: String,
     frames: Channel<RawFrame>,
+    ready: Channel<()>,
 ) -> Result<(), String> {
     let mut commands =
         if command.is_none() { Some(registry.register(&session_id, pty)?) } else { None };
     let result =
-        session_connect_inner(&local, profile_id, command, pty, frames, commands.as_mut()).await;
+        session_connect_inner(&local, profile_id, command, pty, frames, ready, commands.as_mut())
+            .await;
     if commands.is_some() {
         registry.remove(&session_id);
     }
@@ -266,6 +270,7 @@ async fn session_connect_inner(
     command: Option<String>,
     pty: bool,
     frames: Channel<RawFrame>,
+    ready: Channel<()>,
     commands: Option<&mut Receiver<SessionCommand>>,
 ) -> Result<(), String> {
     let store = local.store().ok_or_else(|| "local data is locked".to_owned())?;
@@ -276,6 +281,7 @@ async fn session_connect_inner(
     let trust: HostKeyTrust = Arc::new(StoredHostKeyVerifier::new(plan.host_id, records));
     let mut connection =
         SshConnection::connect(&plan, Some(trust)).await.map_err(display_connection_error)?;
+    drop(plan);
     connection.authenticate().await.map_err(display_connection_error)?;
     let mut session = connection.open_session().await.map_err(display_connection_error)?;
     let sender = FrameSender::new(frames);
@@ -293,6 +299,7 @@ async fn session_connect_inner(
         session.request_shell().await.map_err(display_connection_error)?;
         let commands =
             commands.ok_or_else(|| "session command channel is unavailable".to_owned())?;
+        ready.send(()).map_err(|_| "session readiness channel is closed".to_owned())?;
         stream_channel(&mut session, &sender, commands).await?;
     }
     connection.close().await.map_err(display_connection_error)
