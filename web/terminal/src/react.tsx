@@ -116,6 +116,13 @@ export const Terminal = forwardRef<ScoplenTerminalElement, TerminalProps>(functi
       return;
     }
     element.source = source;
+  }, [source]);
+
+  useLayoutEffect(() => {
+    const element = elementRef.current;
+    if (!element) {
+      return;
+    }
     element.sink = sink;
     element.broadcastSink = broadcastSink;
     element.clipboard = clipboard;
@@ -125,7 +132,7 @@ export const Terminal = forwardRef<ScoplenTerminalElement, TerminalProps>(functi
     element.maxOutputBytes = maxOutputBytes;
     element.maxInputBytes = maxInputBytes;
     element.maxPendingWrites = maxPendingWrites;
-  }, [source, sink, broadcastSink, clipboard, profile, maxOutputBytes, maxInputBytes, maxPendingWrites]);
+  }, [sink, broadcastSink, clipboard, profile, maxOutputBytes, maxInputBytes, maxPendingWrites]);
 
   return (
     <scoplen-terminal

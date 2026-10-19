@@ -47,6 +47,23 @@ describe("Terminal React binding", () => {
     expect(cancelled).toBe(1);
   });
 
+  it("updates the profile without restarting the same source", () => {
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn(() => ({ unsubscribe }));
+    const source = { subscribe };
+    const ref = createRef<ScoplenTerminalElement>();
+    const view = render(<Terminal ref={ref} source={source} profile={{ scrollback: 12 }} />);
+    expect(subscribe).toHaveBeenCalledOnce();
+
+    view.rerender(<Terminal ref={ref} source={source} profile={{ scrollback: 24 }} />);
+    expect(ref.current?.profile.scrollback).toBe(24);
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
   it("passes profile, clipboard, broadcast sink, and broadcast events", async () => {
     const ref = createRef<ScoplenTerminalElement>();
     const primary: number[][] = [];
