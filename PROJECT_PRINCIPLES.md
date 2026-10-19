@@ -6,7 +6,7 @@ This repository is a component of Scoplen, a Plystra project, and the full Plyst
 
 - Philosophy version reviewed: Plystra Craft 1.0.1
 - Source commit reviewed: `plystra/craft@dd617b370203d5dce1d30b8b81284d16d96a432c`
-- Review date and maintainer: 2026-10-07, immoses (Moses Qiu)
+- Review date and maintainer: 2026-10-07, Plystra LLC
 - Maturity: Exploration
 - Maintenance: Active
 - Components: the desktop application for macOS and Windows, its Rust core and platform layer, the `@scoplen/ui` design system, and later the `@scoplen/terminal` package

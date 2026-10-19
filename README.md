@@ -4,7 +4,7 @@
 
 Scoplen is a Plystra project. The full Plystra philosophy applies; this repository's review record is [PROJECT_PRINCIPLES.md](PROJECT_PRINCIPLES.md), which links to the project record in `scoplen-docs`.
 
-Owner and operator: immoses (Moses Qiu). Responsible maintainer: immoses (Moses Qiu).
+Owner and operator: Plystra LLC. Responsible maintainer: Plystra LLC.
 
 ## Status
 
