@@ -17,14 +17,14 @@ use base64::{
     engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
 };
 use scoplen_client_platform::credentials;
-use scoplen_crypto::{Ed25519SigningKey, P256SigningKey, SecretVec};
+use scoplen_crypto::{Ed25519SigningKey, SecretVec};
 use scoplen_ssh::{
-    ChannelEvent, ClientChannel, ClientConfig, ClientConnection, ClientError, Ed25519SshSigner,
-    HostKey, HostKeyVerificationError, HostKeyVerifier, P256SshSigner, PtyRequest, RsaSshSigner,
-    SignatureAlgorithm, WindowChangeRequest,
+    ChannelEvent, ClientChannel, ClientConfig, ClientConnection, ClientError, EcdsaSshSigner,
+    Ed25519SshSigner, HostKey, HostKeyVerificationError, HostKeyVerifier, PtyRequest, RsaSshSigner,
+    ServerRsaSha2Selection, SignatureAlgorithm, WindowChangeRequest,
 };
 use sha2::{Digest as _, Sha256};
-use ssh_key::{PrivateKey, private::EcdsaKeypair};
+use ssh_key::PrivateKey;
 use uuid::Uuid;
 
 use crate::repository::{
@@ -615,9 +615,12 @@ pub enum SshConnectionError {
     /// The parsed key uses an algorithm without a signer in this build.
     #[error("this SSH private key algorithm is not supported in this build")]
     UnsupportedPrivateKey,
-    /// The server rejected RSA-SHA2-512; this build cannot discover or offer SHA-256.
+    /// The server advertised only SHA-1 for RSA public-key authentication.
+    #[error("the SSH server advertises only legacy ssh-rsa for RSA keys; SHA-1 is not permitted")]
+    RsaSha2Unavailable,
+    /// The server rejected the selected RSA SHA-2 authentication request.
     #[error(
-        "RSA key authentication was rejected; verify the key and whether the server accepts rsa-sha2-512 (rsa-sha2-256 selection is not available in this build)"
+        "RSA key authentication was rejected; verify the key and the server's RSA SHA-2 policy"
     )]
     RsaAuthenticationRejected,
     /// The peer completed key exchange without a key callback result.
@@ -669,8 +672,8 @@ pub struct SshConnection {
 
 enum SoftwareKeySigner {
     Ed25519(Ed25519SshSigner),
-    P256(P256SshSigner),
-    Rsa(Box<RsaSshSigner>),
+    Ecdsa(Box<EcdsaSshSigner>),
+    Rsa(Box<PrivateKey>),
 }
 
 fn parse_software_key(material: &SecretVec) -> Result<SoftwareKeySigner, SshConnectionError> {
@@ -690,17 +693,27 @@ fn parse_software_key(material: &SecretVec) -> Result<SoftwareKeySigner, SshConn
             .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
         return Ok(SoftwareKeySigner::Ed25519(Ed25519SshSigner::new(signing_key)));
     }
-    if let Some(EcdsaKeypair::NistP256 { private, .. }) = key.key_data().ecdsa() {
-        let signing_key = P256SigningKey::from_bytes(private.as_ref())
-            .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
-        return Ok(SoftwareKeySigner::P256(P256SshSigner::new(signing_key)));
-    }
-    if key.key_data().rsa().is_some() {
-        return RsaSshSigner::new(key, SignatureAlgorithm::RsaSha2_512)
-            .map(|signer| SoftwareKeySigner::Rsa(Box::new(signer)))
+    if key.key_data().ecdsa().is_some() {
+        return EcdsaSshSigner::new(key)
+            .map(|signer| SoftwareKeySigner::Ecdsa(Box::new(signer)))
             .map_err(|_| SshConnectionError::InvalidPrivateKey);
     }
+    if key.key_data().rsa().is_some() {
+        return Ok(SoftwareKeySigner::Rsa(Box::new(key)));
+    }
     Err(SshConnectionError::UnsupportedPrivateKey)
+}
+
+fn rsa_signature_algorithm(
+    selection: ServerRsaSha2Selection,
+) -> Result<SignatureAlgorithm, SshConnectionError> {
+    match selection {
+        ServerRsaSha2Selection::Sha512 | ServerRsaSha2Selection::Undetermined => {
+            Ok(SignatureAlgorithm::RsaSha2_512)
+        }
+        ServerRsaSha2Selection::Sha256 => Ok(SignatureAlgorithm::RsaSha2_256),
+        ServerRsaSha2Selection::Sha1OnlyAdvertised => Err(SshConnectionError::RsaSha2Unavailable),
+    }
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -822,19 +835,23 @@ impl SshConnection {
             SoftwareKeySigner::Ed25519(signer) => {
                 self.connection.authenticate_publickey(username, &signer).await.map_err(Into::into)
             }
-            SoftwareKeySigner::P256(signer) => {
-                self.connection.authenticate_publickey(username, &signer).await.map_err(Into::into)
-            }
-            SoftwareKeySigner::Rsa(signer) => {
-                self.connection.authenticate_publickey(username, signer.as_ref()).await.map_err(
-                    |error| {
-                        if matches!(error, ClientError::AuthenticationRejected { .. }) {
-                            SshConnectionError::RsaAuthenticationRejected
-                        } else {
-                            SshConnectionError::Engine(error)
-                        }
-                    },
-                )
+            SoftwareKeySigner::Ecdsa(signer) => self
+                .connection
+                .authenticate_publickey(username, signer.as_ref())
+                .await
+                .map_err(Into::into),
+            SoftwareKeySigner::Rsa(key) => {
+                let selection = self.connection.server_rsa_sha2_selection().await?;
+                let algorithm = rsa_signature_algorithm(selection)?;
+                let signer = RsaSshSigner::new(*key, algorithm)
+                    .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
+                self.connection.authenticate_publickey(username, &signer).await.map_err(|error| {
+                    if matches!(error, ClientError::AuthenticationRejected { .. }) {
+                        SshConnectionError::RsaAuthenticationRejected
+                    } else {
+                        SshConnectionError::Engine(error)
+                    }
+                })
             }
         }
     }
@@ -1003,6 +1020,8 @@ mod tests {
         for (algorithm, expected) in [
             (Algorithm::Ed25519, "ed25519"),
             (Algorithm::Ecdsa { curve: EcdsaCurve::NistP256 }, "p256"),
+            (Algorithm::Ecdsa { curve: EcdsaCurve::NistP384 }, "p384"),
+            (Algorithm::Ecdsa { curve: EcdsaCurve::NistP521 }, "p521"),
             (Algorithm::Rsa { hash: None }, "rsa"),
         ] {
             let key = PrivateKey::random(&mut rng, algorithm).expect("test key");
@@ -1012,11 +1031,31 @@ mod tests {
             assert!(matches!(
                 (parsed, expected),
                 (SoftwareKeySigner::Ed25519(_), "ed25519")
-                    | (SoftwareKeySigner::P256(_), "p256")
+                    | (SoftwareKeySigner::Ecdsa(_), "p256" | "p384" | "p521")
                     | (SoftwareKeySigner::Rsa(_), "rsa")
             ));
             assert!(!format!("{material:?}").contains("OPENSSH PRIVATE KEY"));
         }
+    }
+
+    #[test]
+    fn rsa_selection_never_chooses_sha1() {
+        assert_eq!(
+            rsa_signature_algorithm(ServerRsaSha2Selection::Sha512).unwrap(),
+            SignatureAlgorithm::RsaSha2_512
+        );
+        assert_eq!(
+            rsa_signature_algorithm(ServerRsaSha2Selection::Sha256).unwrap(),
+            SignatureAlgorithm::RsaSha2_256
+        );
+        assert_eq!(
+            rsa_signature_algorithm(ServerRsaSha2Selection::Undetermined).unwrap(),
+            SignatureAlgorithm::RsaSha2_512
+        );
+        assert!(matches!(
+            rsa_signature_algorithm(ServerRsaSha2Selection::Sha1OnlyAdvertised),
+            Err(SshConnectionError::RsaSha2Unavailable)
+        ));
     }
 
     #[test]

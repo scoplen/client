@@ -19,6 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "success",
             "wrong-key",
             "wrong-rsa-key",
+            "sha1-only",
             "untrusted",
             "invalid",
             "encrypted",
@@ -26,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ]
         .contains(&args[1].as_str())
     {
-        return Err("usage: ssh_private_key_smoke <success|wrong-key|wrong-rsa-key|untrusted|invalid|encrypted|unsupported> <host> <port> <user> <key-file>".into());
+        return Err("usage: ssh_private_key_smoke <success|wrong-key|wrong-rsa-key|sha1-only|untrusted|invalid|encrypted|unsupported> <host> <port> <user> <key-file>".into());
     }
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     runtime.block_on(run(&args))
@@ -80,17 +81,21 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         println!("{} private key rejected", args[1]);
         return Ok(());
     }
-    if args[1] == "wrong-key" || args[1] == "wrong-rsa-key" {
-        let error = connection.authenticate().await.err().ok_or("wrong key accepted")?;
-        let rejected = if args[1] == "wrong-rsa-key" {
-            matches!(error, SshConnectionError::RsaAuthenticationRejected)
-        } else {
-            matches!(error, SshConnectionError::Engine(ClientError::AuthenticationRejected { .. }))
+    if args[1] == "wrong-key" || args[1] == "wrong-rsa-key" || args[1] == "sha1-only" {
+        let error =
+            connection.authenticate().await.err().ok_or("rejected authentication accepted")?;
+        let rejected = match args[1].as_str() {
+            "wrong-rsa-key" => matches!(error, SshConnectionError::RsaAuthenticationRejected),
+            "sha1-only" => matches!(error, SshConnectionError::RsaSha2Unavailable),
+            _ => matches!(
+                error,
+                SshConnectionError::Engine(ClientError::AuthenticationRejected { .. })
+            ),
         };
         if !rejected {
             return Err(format!("unexpected authentication result: {error}").into());
         }
-        println!("wrong private key rejected");
+        println!("{} rejected", args[1]);
         return Ok(());
     }
 

@@ -64,6 +64,20 @@ jobs:
       - name: Unused dependencies
         run: cargo machete
 
+  ssh-private-key-interop:
+    name: OpenSSH software-key interoperability
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Authorize access to proto
+        if: env.SCOPLEN_PROTO_TOKEN != ''
+        shell: bash
+        run: git config --global url."https://x-access-token:${SCOPLEN_PROTO_TOKEN}@github.com/scoplen/proto.git".insteadOf "https://github.com/scoplen/proto.git"
+      - name: Ed25519, NIST ECDSA, and RSA SHA-2 acceptance and refusal
+        shell: pwsh
+        run: ./scripts/test-ssh-private-key.ps1
+
   web:
     name: Frontend
     runs-on: ubuntu-latest
