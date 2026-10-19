@@ -99,10 +99,13 @@ command reads active host-specific trust records before opening a socket;
 new, changed, revoked, wildcard-only, and CA records are rejected. Password
 and OpenSSH Ed25519, ECDSA P-256/P-384/P-521, and RSA private-key
 authentication, one command, and an optional PTY shell are available now.
-Direct connections and saved SOCKS5 or HTTP CONNECT routes without proxy
-credentials use the same target-host trust check. Proxy endpoints must be
-`host:port` or `[IPv6]:port` with a non-zero port; malformed endpoints and
-routes with proxy credentials fail before network I/O. The shared SSH engine
+Direct connections and saved SOCKS5 or HTTP CONNECT routes use the same
+target-host trust check. A proxy route may pair a separate username with a
+password Credential; probe and session setup resolve the same pair. The
+username and resolved password are validated before dialing. The proxy
+receives them over plain TCP, without transport encryption; the target SSH
+connection still verifies its host key and encrypts its traffic. Proxy
+endpoints must be `host:port` or `[IPv6]:port` with a non-zero port. The shared SSH engine
 bounds proxy setup and SSH handshakes separately at ten seconds. Proxy
 rejection and timeouts remain typed failures, and an accepted proxy cannot
 override target-host trust.

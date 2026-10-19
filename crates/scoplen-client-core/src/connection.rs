@@ -21,8 +21,8 @@ use scoplen_client_platform::credentials;
 use scoplen_crypto::{Ed25519SigningKey, SecretVec};
 use scoplen_ssh::{
     ChannelEvent, ClientChannel, ClientConfig, ClientConnection, ClientError, EcdsaSshSigner,
-    Ed25519SshSigner, HostKey, HostKeyVerificationError, HostKeyVerifier, PtyRequest, RsaSshSigner,
-    ServerRsaSha2Selection, SignatureAlgorithm, WindowChangeRequest,
+    Ed25519SshSigner, HostKey, HostKeyVerificationError, HostKeyVerifier, ProxyCredentials,
+    PtyRequest, RsaSshSigner, ServerRsaSha2Selection, SignatureAlgorithm, WindowChangeRequest,
 };
 use sha2::{Digest as _, Sha256};
 use ssh_key::{Kdf, PrivateKey};
@@ -89,6 +89,8 @@ pub enum ConnectionRoute {
         proxy: String,
         /// Optional proxy authentication material.
         credential: Option<CredentialMaterial>,
+        /// Username used only for proxy authentication.
+        username: Option<String>,
     },
     /// Connect through an HTTP CONNECT proxy.
     HttpConnect {
@@ -96,6 +98,8 @@ pub enum ConnectionRoute {
         proxy: String,
         /// Optional proxy authentication material.
         credential: Option<CredentialMaterial>,
+        /// Username used only for proxy authentication.
+        username: Option<String>,
     },
     /// Connect through a local OpenSSH ProxyCommand.
     Command {
@@ -399,14 +403,18 @@ fn resolve_route(
 ) -> Result<ConnectionRoute, ConnectionPlanError> {
     match &route.kind {
         RouteKind::Jump { hops } => Ok(ConnectionRoute::Jump { hops: hops.clone() }),
-        RouteKind::Socks5 { proxy, credential } => Ok(ConnectionRoute::Socks5 {
+        RouteKind::Socks5 { proxy, credential, username } => Ok(ConnectionRoute::Socks5 {
             proxy: proxy.clone(),
             credential: resolve_route_credential(store, *credential, credentials)?,
+            username: username.clone(),
         }),
-        RouteKind::HttpConnect { proxy, credential } => Ok(ConnectionRoute::HttpConnect {
-            proxy: proxy.clone(),
-            credential: resolve_route_credential(store, *credential, credentials)?,
-        }),
+        RouteKind::HttpConnect { proxy, credential, username } => {
+            Ok(ConnectionRoute::HttpConnect {
+                proxy: proxy.clone(),
+                credential: resolve_route_credential(store, *credential, credentials)?,
+                username: username.clone(),
+            })
+        }
         RouteKind::Command { command } => Ok(ConnectionRoute::Command { command: command.clone() }),
         RouteKind::Managed { gateway_network } => {
             Ok(ConnectionRoute::Managed { gateway_network: *gateway_network })
@@ -424,6 +432,9 @@ fn resolve_route_credential(
         .iter()
         .find(|candidate| candidate.meta.id == id)
         .ok_or(ConnectionPlanError::CredentialNotFound)?;
+    if record.kind != CredentialKind::Password {
+        return Err(ConnectionPlanError::InvalidCredential);
+    }
     resolve_credential(store, record).map(Some)
 }
 
@@ -609,9 +620,9 @@ pub enum SshConnectionError {
     /// A saved proxy endpoint is not a valid host and non-zero port.
     #[error("the SSH proxy endpoint must be a host:port or [IPv6]:port")]
     InvalidProxyEndpoint,
-    /// Proxy credentials require an explicit authentication mapping.
-    #[error("authenticated SSH proxy routes are not supported yet")]
-    ProxyAuthenticationUnsupported,
+    /// A proxy auth pair or resolved password violates the saved contract.
+    #[error("the SSH proxy authentication settings are invalid")]
+    InvalidProxyAuthentication,
     /// The saved credential cannot be used by this concrete engine slice.
     #[error("SSH credential kind is not supported by the concrete client engine")]
     UnsupportedCredential,
@@ -670,8 +681,8 @@ const PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 enum TransportRoute<'a> {
     Direct,
-    Socks5 { host: &'a str, port: u16 },
-    HttpConnect { host: &'a str, port: u16 },
+    Socks5 { host: &'a str, port: u16, credentials: Option<ProxyCredentials> },
+    HttpConnect { host: &'a str, port: u16, credentials: Option<ProxyCredentials> },
 }
 
 fn parse_proxy_endpoint(proxy: &str) -> Result<(&str, u16), SshConnectionError> {
@@ -703,20 +714,44 @@ fn parse_proxy_endpoint(proxy: &str) -> Result<(&str, u16), SshConnectionError> 
 fn transport_route(route: &ConnectionRoute) -> Result<TransportRoute<'_>, SshConnectionError> {
     match route {
         ConnectionRoute::Direct => Ok(TransportRoute::Direct),
-        ConnectionRoute::Socks5 { credential: Some(_), .. }
-        | ConnectionRoute::HttpConnect { credential: Some(_), .. } => {
-            Err(SshConnectionError::ProxyAuthenticationUnsupported)
-        }
-        ConnectionRoute::Socks5 { proxy, credential: None } => {
+        ConnectionRoute::Socks5 { proxy, credential, username } => {
             let (host, port) = parse_proxy_endpoint(proxy)?;
-            Ok(TransportRoute::Socks5 { host, port })
+            let credentials = proxy_credentials(username.as_deref(), credential.as_ref(), false)?;
+            Ok(TransportRoute::Socks5 { host, port, credentials })
         }
-        ConnectionRoute::HttpConnect { proxy, credential: None } => {
+        ConnectionRoute::HttpConnect { proxy, credential, username } => {
             let (host, port) = parse_proxy_endpoint(proxy)?;
-            Ok(TransportRoute::HttpConnect { host, port })
+            let credentials = proxy_credentials(username.as_deref(), credential.as_ref(), true)?;
+            Ok(TransportRoute::HttpConnect { host, port, credentials })
         }
         _ => Err(SshConnectionError::UnsupportedRoute),
     }
+}
+
+fn proxy_credentials(
+    username: Option<&str>,
+    credential: Option<&CredentialMaterial>,
+    http_connect: bool,
+) -> Result<Option<ProxyCredentials>, SshConnectionError> {
+    let (Some(username), Some(CredentialMaterial::Password(password))) = (username, credential)
+    else {
+        return if username.is_none() && credential.is_none() {
+            Ok(None)
+        } else {
+            Err(SshConnectionError::InvalidProxyAuthentication)
+        };
+    };
+    if username.is_empty()
+        || username.len() > 255
+        || !username.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+        || (http_connect && username.contains(':'))
+        || (http_connect && !password.as_bytes().iter().all(|byte| (0x20..=0x7e).contains(byte)))
+    {
+        return Err(SshConnectionError::InvalidProxyAuthentication);
+    }
+    ProxyCredentials::new(username.as_bytes(), password.as_bytes())
+        .map(Some)
+        .map_err(|_| SshConnectionError::InvalidProxyAuthentication)
 }
 
 async fn connect_route(
@@ -725,16 +760,22 @@ async fn connect_route(
 ) -> Result<ClientConnection, ClientError> {
     match route {
         TransportRoute::Direct => ClientConnection::connect(config).await,
-        TransportRoute::Socks5 { host, port } => {
-            ClientConnection::connect_via_socks5(config, host, port, None, PROXY_CONNECT_TIMEOUT)
-                .await
+        TransportRoute::Socks5 { host, port, credentials } => {
+            ClientConnection::connect_via_socks5(
+                config,
+                host,
+                port,
+                credentials.as_ref(),
+                PROXY_CONNECT_TIMEOUT,
+            )
+            .await
         }
-        TransportRoute::HttpConnect { host, port } => {
+        TransportRoute::HttpConnect { host, port, credentials } => {
             ClientConnection::connect_via_http_connect(
                 config,
                 host,
                 port,
-                None,
+                credentials.as_ref(),
                 PROXY_CONNECT_TIMEOUT,
             )
             .await
@@ -864,8 +905,8 @@ impl SshConnection {
     /// Open an SSH connection and complete key exchange through its saved route.
     ///
     /// Omitting `trust` is fail-closed and rejects every host key. Route
-    /// Jump, process, and managed routes, authenticated proxies, and credentials
-    /// other than passwords and software keys remain explicit errors.
+    /// Jump, process, and managed routes, and credentials other than passwords
+    /// and software keys remain explicit errors.
     pub async fn connect(
         plan: &ConnectionPlan,
         trust: Option<HostKeyTrust>,
@@ -1197,14 +1238,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_or_authenticated_proxy_routes_fail_before_dial() {
+    async fn invalid_proxy_authentication_fails_before_dial() {
         let mut plan = ConnectionPlan {
             profile_id: Uuid::nil(),
             host_id: Uuid::nil(),
             address: "invalid target".into(),
             port: 22,
             username: "user".into(),
-            route: ConnectionRoute::Socks5 { proxy: "proxy:0".into(), credential: None },
+            route: ConnectionRoute::Socks5 {
+                proxy: "proxy:0".into(),
+                credential: None,
+                username: None,
+            },
             credential: CredentialMaterial::Password(SecretVec::new(b"password".to_vec())),
         };
         assert!(matches!(
@@ -1221,15 +1266,59 @@ mod tests {
             credential: Some(CredentialMaterial::Password(SecretVec::new(
                 b"proxy-secret".to_vec(),
             ))),
+            username: None,
         };
         assert!(matches!(
             probe_host_key(&plan).await,
-            Err(SshConnectionError::ProxyAuthenticationUnsupported)
+            Err(SshConnectionError::InvalidProxyAuthentication)
         ));
         assert!(matches!(
             SshConnection::connect(&plan, None).await,
-            Err(SshConnectionError::ProxyAuthenticationUnsupported)
+            Err(SshConnectionError::InvalidProxyAuthentication)
         ));
+
+        for (username, password, http) in [
+            ("", "pass", false),
+            ("bad\nuser", "pass", false),
+            ("non-ascii-é", "pass", false),
+            ("a:colon", "pass", true),
+            ("a", "", true),
+            ("a", "a\nline", true),
+            ("a", "non-ascii-é", true),
+            ("a", &"x".repeat(256), false),
+        ] {
+            let credential =
+                Some(CredentialMaterial::Password(SecretVec::new(password.as_bytes().to_vec())));
+            plan.route = if http {
+                ConnectionRoute::HttpConnect {
+                    proxy: "127.0.0.1:8080".into(),
+                    credential,
+                    username: Some(username.into()),
+                }
+            } else {
+                ConnectionRoute::Socks5 {
+                    proxy: "127.0.0.1:1080".into(),
+                    credential,
+                    username: Some(username.into()),
+                }
+            };
+            assert!(matches!(
+                probe_host_key(&plan).await,
+                Err(SshConnectionError::InvalidProxyAuthentication)
+            ));
+            assert!(matches!(
+                SshConnection::connect(&plan, None).await,
+                Err(SshConnectionError::InvalidProxyAuthentication)
+            ));
+        }
+        let accepted = proxy_credentials(
+            Some("proxy-user"),
+            Some(&CredentialMaterial::Password(SecretVec::new(b"with:colon".to_vec()))),
+            true,
+        )
+        .expect("colon is allowed in HTTP password")
+        .expect("configured credentials");
+        assert!(!format!("{accepted:?}").contains("with:colon"));
     }
 
     #[test]
@@ -1430,8 +1519,16 @@ mod tests {
             })
             .expect("credential");
         for kind in [
-            RouteKind::Socks5 { proxy: "proxy.example:1080".into(), credential: None },
-            RouteKind::HttpConnect { proxy: "proxy.example:8080".into(), credential: None },
+            RouteKind::Socks5 {
+                proxy: "proxy.example:1080".into(),
+                credential: None,
+                username: None,
+            },
+            RouteKind::HttpConnect {
+                proxy: "proxy.example:8080".into(),
+                credential: None,
+                username: None,
+            },
         ] {
             let route = Repository::<Route>::new(&store)
                 .create(RouteChange { name: Some("proxy".into()), kind: Some(kind.clone()) })
@@ -1449,14 +1546,111 @@ mod tests {
             match (kind, plan.route) {
                 (
                     RouteKind::Socks5 { proxy, .. },
-                    ConnectionRoute::Socks5 { proxy: actual, credential: None },
+                    ConnectionRoute::Socks5 { proxy: actual, credential: None, username: None },
                 )
                 | (
                     RouteKind::HttpConnect { proxy, .. },
-                    ConnectionRoute::HttpConnect { proxy: actual, credential: None },
+                    ConnectionRoute::HttpConnect {
+                        proxy: actual,
+                        credential: None,
+                        username: None,
+                    },
                 ) => assert_eq!(actual, proxy),
                 pair => panic!("incorrect saved proxy route: {pair:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn resolves_saved_authenticated_proxy_routes_without_mixing_target_identity() {
+        let (_dir, store) = store();
+        let host = Repository::<crate::repository::Host>::new(&store)
+            .create(HostChange {
+                name: Some("target".into()),
+                address: Some("target.example".into()),
+                port: Edit::Set(2222),
+                ..Default::default()
+            })
+            .expect("host");
+        let target = Repository::<Credential>::new(&store)
+            .create(CredentialChange {
+                kind: Some(CredentialKind::Password),
+                binding: Some(CredentialBinding::Shared),
+                secret: Edit::Set(SecretVec::new(b"target-secret".to_vec())),
+                ..Default::default()
+            })
+            .expect("target credential");
+        for (http, binding, proxy_secret) in [
+            (false, CredentialBinding::Shared, b"socks-proxy-secret".as_slice()),
+            (true, CredentialBinding::Device, b"http-proxy-secret".as_slice()),
+        ] {
+            let proxy_credential = Repository::<Credential>::new(&store)
+                .create(CredentialChange {
+                    kind: Some(CredentialKind::Password),
+                    binding: Some(binding),
+                    secret: if binding == CredentialBinding::Shared {
+                        Edit::Set(SecretVec::new(proxy_secret.to_vec()))
+                    } else {
+                        Edit::Keep
+                    },
+                    ..Default::default()
+                })
+                .expect("proxy credential");
+            if binding == CredentialBinding::Device {
+                store
+                    .set_device_secret(proxy_credential.meta.id, proxy_secret)
+                    .expect("device password");
+            }
+            let kind = if http {
+                RouteKind::HttpConnect {
+                    proxy: "proxy.example:8080".into(),
+                    credential: Some(proxy_credential.meta.id),
+                    username: Some("http-proxy-user".into()),
+                }
+            } else {
+                RouteKind::Socks5 {
+                    proxy: "proxy.example:1080".into(),
+                    credential: Some(proxy_credential.meta.id),
+                    username: Some("socks-proxy-user".into()),
+                }
+            };
+            let route = Repository::<Route>::new(&store)
+                .create(RouteChange { name: Some("proxy".into()), kind: Some(kind) })
+                .expect("route");
+            let profile = Repository::<AccessProfile>::new(&store)
+                .create(AccessProfileChange {
+                    host: Some(host.meta.id),
+                    username: Some("target-user".into()),
+                    credential: Edit::Set(target.meta.id),
+                    route: Some(RouteChoice::Route(route.meta.id)),
+                    ..Default::default()
+                })
+                .expect("profile");
+            let plan = resolve_connection_plan(&store, profile.meta.id).expect("saved route plan");
+            assert_eq!(plan.username, "target-user");
+            assert_eq!(
+                plan.credential,
+                CredentialMaterial::Password(SecretVec::new(b"target-secret".to_vec()))
+            );
+            let expected_proxy_credential =
+                Some(CredentialMaterial::Password(SecretVec::new(proxy_secret.to_vec())));
+            let expected_route = if http {
+                ConnectionRoute::HttpConnect {
+                    proxy: "proxy.example:8080".into(),
+                    credential: expected_proxy_credential,
+                    username: Some("http-proxy-user".into()),
+                }
+            } else {
+                ConnectionRoute::Socks5 {
+                    proxy: "proxy.example:1080".into(),
+                    credential: expected_proxy_credential,
+                    username: Some("socks-proxy-user".into()),
+                }
+            };
+            assert_eq!(plan.route, expected_route);
+            assert!(transport_route(&plan.route).is_ok());
+            assert!(!format!("{plan:?}").contains("target-secret"));
+            assert!(!format!("{plan:?}").contains("proxy-secret"));
         }
     }
 

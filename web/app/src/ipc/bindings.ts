@@ -637,6 +637,8 @@ export type ObjectEditError =
 { kind: "invalidRoute" } |
 /**  A proxy is not a valid host:port endpoint. */
 { kind: "invalidProxy" } |
+/**  Proxy username and password reference must be a valid pair. */
+{ kind: "invalidProxyAuthentication" } |
 /**  A route command is empty or exceeds the model limit. */
 { kind: "invalidCommand" } |
 /**  Kind and binding do not satisfy the object model. */
@@ -858,9 +860,9 @@ export type RouteDefinition =
 /**  Ordered access profiles used as jump hosts. */
 { kind: "jump"; hops: string[] } |
 /**  A SOCKS5 proxy at `host:port`. */
-{ kind: "socks5"; proxy: string; credential: string | null } |
+{ kind: "socks5"; proxy: string; credential: string | null; username: string | null } |
 /**  An HTTP CONNECT proxy at `host:port`. */
-{ kind: "httpConnect"; proxy: string; credential: string | null } |
+{ kind: "httpConnect"; proxy: string; credential: string | null; username: string | null } |
 /**  A local OpenSSH `ProxyCommand`. */
 { kind: "command"; command: string } |
 /**  A managed gateway network, authored by the organization. */

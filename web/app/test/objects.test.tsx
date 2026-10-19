@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { sampleHosts, sampleInventory } from "../src/gallery/sample-inventory";
 import { I18nProvider } from "../src/i18n";
-import { InventoryContext, type InventoryApi } from "../src/inventory/api";
+import { InventoryContext, type InventoryApi, type RouteInput } from "../src/inventory/api";
 import { InventoryObjects, type ObjectSection } from "../src/inventory/objects";
 import { violations } from "../../ui/test/axe";
 
@@ -88,6 +88,61 @@ describe("independent inventory objects", () => {
     expect(screen.getByText("staging-net")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Edit staging-net" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "Delete staging-net" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("edits a proxy username with only password credentials and clears the pair", async () => {
+    const api = sampleInventory(sampleHosts());
+    const create = api.createRoute;
+    const update = api.updateRoute;
+    const created: RouteInput[] = [];
+    const updated: RouteInput[] = [];
+    api.createRoute = (input) => {
+      created.push(input);
+      return create(input);
+    };
+    api.updateRoute = (id, input) => {
+      updated.push(input);
+      return update(id, input);
+    };
+    show(api, "routes");
+    await screen.findByText("prod-jump");
+    await userEvent.click(screen.getByRole("button", { name: "Add route" }));
+    const dialog = await screen.findByRole("dialog", { name: "New route" });
+    await userEvent.type(within(dialog).getByLabelText("Name"), "office proxy");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Kind"), "httpConnect");
+    await userEvent.type(within(dialog).getByLabelText("Proxy endpoint"), "proxy.example:8080");
+    const credential = within(dialog).getByLabelText("Proxy credential");
+    expect(
+      within(credential)
+        .getAllByRole("option")
+        .map((option) => (option as HTMLOptionElement).value),
+    ).toEqual(["", "c-nas"]);
+    await userEvent.selectOptions(credential, "c-nas");
+    expect(within(dialog).getByText(/plain TCP/)).toBeTruthy();
+    await userEvent.type(within(dialog).getByLabelText("Proxy username"), "proxy-user");
+    expect(await violations(dialog)).toEqual([]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0]?.definition).toEqual({
+      kind: "httpConnect",
+      proxy: "proxy.example:8080",
+      credential: "c-nas",
+      username: "proxy-user",
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New route" })).toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: "Edit office proxy" }));
+    const edit = await screen.findByRole("dialog", { name: "Edit office proxy" });
+    expect((within(edit).getByLabelText("Proxy username") as HTMLInputElement).value).toBe("proxy-user");
+    await userEvent.selectOptions(within(edit).getByLabelText("Proxy credential"), "");
+    expect(within(edit).queryByLabelText("Proxy username")).toBeNull();
+    await userEvent.click(within(edit).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(updated).toHaveLength(1));
+    expect(updated[0]?.definition).toEqual({
+      kind: "httpConnect",
+      proxy: "proxy.example:8080",
+      credential: null,
+      username: null,
+    });
   });
 
   it("presents orphaned logins with restore and delete actions", async () => {

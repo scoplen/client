@@ -1086,6 +1086,9 @@ function RouteEditor({
   const [proxyCredential, setProxyCredential] = useState(
     initial && (initial.kind === "socks5" || initial.kind === "httpConnect") ? (initial.credential ?? "") : "",
   );
+  const [proxyUsername, setProxyUsername] = useState(
+    initial && (initial.kind === "socks5" || initial.kind === "httpConnect") ? (initial.username ?? "") : "",
+  );
   const [command, setCommand] = useState(initial?.kind === "command" ? initial.command : "");
   const [gatewayNetwork, setGatewayNetwork] = useState(initial?.kind === "managed" ? initial.gatewayNetwork : "");
   const [busy, setBusy] = useState(false);
@@ -1099,7 +1102,12 @@ function RouteEditor({
         hops: hops.map((item) => item.trim()).filter(Boolean),
       };
     else if (kind === "socks5" || kind === "httpConnect")
-      definition = { kind, proxy, credential: proxyCredential || null };
+      definition = {
+        kind,
+        proxy,
+        credential: proxyCredential || null,
+        username: proxyCredential ? proxyUsername : null,
+      };
     else if (kind === "command") definition = { kind, command };
     else definition = { kind: "managed", gatewayNetwork };
     setBusy(true);
@@ -1111,10 +1119,12 @@ function RouteEditor({
   };
   const credentialOptions =
     credentials.state === "ready"
-      ? credentials.data.map((credential) => ({
-          value: credential.id,
-          label: credential.name ?? credentialKindText(t, credential.kind),
-        }))
+      ? credentials.data
+          .filter((credential) => credential.kind === "password")
+          .map((credential) => ({
+            value: credential.id,
+            label: credential.name ?? credentialKindText(t, credential.kind),
+          }))
       : [];
   return (
     <EditorDialog
@@ -1195,9 +1205,23 @@ function RouteEditor({
           <SelectField
             label={t("objects.route.proxyCredential")}
             value={proxyCredential}
-            onChange={setProxyCredential}
+            onChange={(next) => {
+              setProxyCredential(next);
+              if (!next) setProxyUsername("");
+            }}
             options={[{ value: "", label: t("objects.route.noCredential") }, ...credentialOptions]}
           />
+          {proxyCredential ? (
+            <>
+              <Field
+                label={t("objects.route.proxyUsername")}
+                value={proxyUsername}
+                onChange={(event) => setProxyUsername(event.target.value)}
+                autoComplete="username"
+              />
+              <p className="m-0 text-xs text-muted-foreground">{t("objects.route.proxyAuthNotice")}</p>
+            </>
+          ) : null}
         </>
       ) : null}
       {kind === "command" ? (
@@ -1314,6 +1338,8 @@ function objectErrorText(t: Translator, error: ObjectEditError): string {
       return t("objects.error.invalidRoute");
     case "invalidProxy":
       return t("objects.error.invalidProxy");
+    case "invalidProxyAuthentication":
+      return t("objects.error.invalidProxyAuthentication");
     case "invalidCommand":
       return t("objects.error.invalidCommand");
     case "invalidCredentialBinding":

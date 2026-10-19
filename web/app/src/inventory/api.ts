@@ -141,8 +141,8 @@ export interface CredentialInput {
 
 export type RouteDefinition =
   | { kind: "jump"; hops: Id[] }
-  | { kind: "socks5"; proxy: string; credential: Id | null }
-  | { kind: "httpConnect"; proxy: string; credential: Id | null }
+  | { kind: "socks5"; proxy: string; credential: Id | null; username: string | null }
+  | { kind: "httpConnect"; proxy: string; credential: Id | null; username: string | null }
   | { kind: "command"; command: string }
   | { kind: "managed"; gatewayNetwork: Id };
 
@@ -210,6 +210,7 @@ export type ObjectEditError =
   | { kind: "invalidCredential" }
   | { kind: "invalidRoute" }
   | { kind: "invalidProxy" }
+  | { kind: "invalidProxyAuthentication" }
   | { kind: "invalidCommand" }
   | { kind: "invalidCredentialBinding" }
   | { kind: "secretRequired" }

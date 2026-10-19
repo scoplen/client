@@ -409,9 +409,9 @@ pub enum RouteDefinition {
     /// Ordered access profiles used as jump hosts.
     Jump { hops: Vec<String> },
     /// A SOCKS5 proxy at `host:port`.
-    Socks5 { proxy: String, credential: Option<String> },
+    Socks5 { proxy: String, credential: Option<String>, username: Option<String> },
     /// An HTTP CONNECT proxy at `host:port`.
-    HttpConnect { proxy: String, credential: Option<String> },
+    HttpConnect { proxy: String, credential: Option<String>, username: Option<String> },
     /// A local OpenSSH `ProxyCommand`.
     Command { command: String },
     /// A managed gateway network, authored by the organization.
@@ -569,6 +569,9 @@ pub enum ObjectEditError {
     /// A proxy is not a valid host:port endpoint.
     #[error("the proxy endpoint is invalid")]
     InvalidProxy,
+    /// Proxy username and password reference must be a valid pair.
+    #[error("the proxy authentication configuration is invalid")]
+    InvalidProxyAuthentication,
     /// A route command is empty or exceeds the model limit.
     #[error("the route command is invalid")]
     InvalidCommand,
@@ -1841,15 +1844,17 @@ impl Inventory {
                 }
                 Ok(RouteKind::Jump { hops: ids })
             }
-            RouteDefinition::Socks5 { proxy, credential } => {
+            RouteDefinition::Socks5 { proxy, credential, username } => {
                 let proxy = validate_proxy(proxy)?;
-                let credential = self.validate_route_credential(credential)?;
-                Ok(RouteKind::Socks5 { proxy, credential })
+                let credential =
+                    self.validate_route_credential(credential, username.as_deref(), false)?;
+                Ok(RouteKind::Socks5 { proxy, credential, username })
             }
-            RouteDefinition::HttpConnect { proxy, credential } => {
+            RouteDefinition::HttpConnect { proxy, credential, username } => {
                 let proxy = validate_proxy(proxy)?;
-                let credential = self.validate_route_credential(credential)?;
-                Ok(RouteKind::HttpConnect { proxy, credential })
+                let credential =
+                    self.validate_route_credential(credential, username.as_deref(), true)?;
+                Ok(RouteKind::HttpConnect { proxy, credential, username })
             }
             RouteDefinition::Command { command } => {
                 validate_text(&command, "command")?;
@@ -1865,12 +1870,28 @@ impl Inventory {
     fn validate_route_credential(
         &self,
         credential: Option<String>,
+        username: Option<&str>,
+        http_connect: bool,
     ) -> Result<Option<Uuid>, ObjectEditError> {
+        if credential.is_some() != username.is_some() {
+            return Err(ObjectEditError::InvalidProxyAuthentication);
+        }
+        if let Some(username) = username
+            && (username.is_empty()
+                || username.len() > 255
+                || !username.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+                || (http_connect && username.contains(':')))
+        {
+            return Err(ObjectEditError::InvalidProxyAuthentication);
+        }
         let Some(credential) = credential else { return Ok(None) };
         let id = parse_object_id(&credential, "credential")?;
-        if Repository::<Credential>::new(&self.store).get(id).map_err(object_from_record)?.is_none()
-        {
-            return Err(ObjectEditError::InvalidCredential);
+        let stored = Repository::<Credential>::new(&self.store)
+            .get(id)
+            .map_err(object_from_record)?
+            .ok_or(ObjectEditError::InvalidCredential)?;
+        if stored.kind != CredentialKind::Password {
+            return Err(ObjectEditError::InvalidProxyAuthentication);
         }
         Ok(Some(id))
     }
@@ -2911,12 +2932,16 @@ fn route_definition(route: &Route) -> RouteDefinition {
         RouteKind::Jump { hops } => {
             RouteDefinition::Jump { hops: hops.iter().copied().map(id).collect() }
         }
-        RouteKind::Socks5 { proxy, credential } => {
-            RouteDefinition::Socks5 { proxy: proxy.clone(), credential: credential.map(id) }
-        }
-        RouteKind::HttpConnect { proxy, credential } => {
-            RouteDefinition::HttpConnect { proxy: proxy.clone(), credential: credential.map(id) }
-        }
+        RouteKind::Socks5 { proxy, credential, username } => RouteDefinition::Socks5 {
+            proxy: proxy.clone(),
+            credential: credential.map(id),
+            username: username.clone(),
+        },
+        RouteKind::HttpConnect { proxy, credential, username } => RouteDefinition::HttpConnect {
+            proxy: proxy.clone(),
+            credential: credential.map(id),
+            username: username.clone(),
+        },
         RouteKind::Command { command } => RouteDefinition::Command { command: command.clone() },
         RouteKind::Managed { gateway_network } => {
             RouteDefinition::Managed { gateway_network: id(*gateway_network) }
@@ -4155,9 +4180,18 @@ mod tests {
                 definition: RouteDefinition::Socks5 {
                     proxy: "127.0.0.1:1080".into(),
                     credential: Some(credential.id.clone()),
+                    username: Some("proxy-user".into()),
                 },
             })
             .unwrap();
+        assert_eq!(
+            route.definition,
+            RouteDefinition::Socks5 {
+                proxy: "127.0.0.1:1080".into(),
+                credential: Some(credential.id.clone()),
+                username: Some("proxy-user".into()),
+            }
+        );
         let profile = inventory
             .update_access_profile(
                 profile_id.clone(),
@@ -4222,6 +4256,60 @@ mod tests {
                 },
             )
             .unwrap();
+    }
+
+    #[test]
+    fn proxy_auth_requires_password_credential_and_exact_username_shape() {
+        let inventory = inventory();
+        let password = inventory
+            .create_credential(CredentialInput {
+                name: Some("proxy password".into()),
+                kind: CredentialKindInput::Password,
+                binding: CredentialBindingInput::Shared,
+                secret: Some("proxy-pass".into()),
+                device_secret: None,
+                public_key: None,
+                provider: BTreeMap::new(),
+                certificate_scope: None,
+            })
+            .unwrap();
+        let private_key = inventory
+            .create_credential(CredentialInput {
+                name: Some("target key".into()),
+                kind: CredentialKindInput::Key,
+                binding: CredentialBindingInput::Shared,
+                secret: Some("private-key".into()),
+                device_secret: None,
+                public_key: None,
+                provider: BTreeMap::new(),
+                certificate_scope: None,
+            })
+            .unwrap();
+        for (username, credential, http) in [
+            (None, Some(password.id.clone()), false),
+            (Some("proxy-user".into()), None, false),
+            (Some(String::new()), Some(password.id.clone()), false),
+            (Some("bad\nuser".into()), Some(password.id.clone()), false),
+            (Some("non-ascii-é".into()), Some(password.id.clone()), false),
+            (Some("a".repeat(256)), Some(password.id.clone()), false),
+            (Some("proxy:user".into()), Some(password.id.clone()), true),
+            (Some("proxy-user".into()), Some(private_key.id.clone()), false),
+        ] {
+            let definition = if http {
+                RouteDefinition::HttpConnect {
+                    proxy: "proxy.example:8080".into(),
+                    credential,
+                    username,
+                }
+            } else {
+                RouteDefinition::Socks5 { proxy: "proxy.example:1080".into(), credential, username }
+            };
+            assert_eq!(
+                inventory.create_route(RouteInput { name: "proxy".into(), definition }),
+                Err(ObjectEditError::InvalidProxyAuthentication)
+            );
+        }
+        assert!(inventory.routes_objects().unwrap().is_empty());
     }
 
     #[test]
@@ -4323,6 +4411,7 @@ mod tests {
                 definition: RouteDefinition::Socks5 {
                     proxy: "not-an-endpoint".into(),
                     credential: None,
+                    username: None,
                 },
             }),
             Err(ObjectEditError::InvalidProxy)

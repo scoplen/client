@@ -186,12 +186,59 @@ fn changing_a_route_kind_leaves_no_fields_of_the_old_kind() {
             route.meta.id,
             RouteChange {
                 name: None,
-                kind: Some(RouteKind::Socks5 { proxy: "127.0.0.1:1080".into(), credential: None }),
+                kind: Some(RouteKind::Socks5 {
+                    proxy: "127.0.0.1:1080".into(),
+                    credential: None,
+                    username: None,
+                }),
             },
         )
         .unwrap();
-    assert_eq!(proxy.kind, RouteKind::Socks5 { proxy: "127.0.0.1:1080".into(), credential: None });
+    assert_eq!(
+        proxy.kind,
+        RouteKind::Socks5 { proxy: "127.0.0.1:1080".into(), credential: None, username: None }
+    );
     assert_eq!(proxy.name, "via jump");
+
+    let credential = new_id();
+    let authenticated = routes
+        .update(
+            route.meta.id,
+            RouteChange {
+                name: None,
+                kind: Some(RouteKind::HttpConnect {
+                    proxy: "127.0.0.1:8080".into(),
+                    credential: Some(credential),
+                    username: Some(" proxy-user ".into()),
+                }),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        authenticated.kind,
+        RouteKind::HttpConnect {
+            proxy: "127.0.0.1:8080".into(),
+            credential: Some(credential),
+            username: Some(" proxy-user ".into()),
+        }
+    );
+    let cleared = routes
+        .update(
+            route.meta.id,
+            RouteChange {
+                name: None,
+                kind: Some(RouteKind::Socks5 {
+                    proxy: "127.0.0.1:1080".into(),
+                    credential: None,
+                    username: None,
+                }),
+            },
+        )
+        .unwrap();
+    assert_eq!(cleared.kind, proxy.kind);
+    let raw = store.get(route.meta.id).unwrap().unwrap();
+    assert!(raw.set_field(5).is_none());
+    assert!(raw.set_field(8).is_none());
 }
 
 #[test]
