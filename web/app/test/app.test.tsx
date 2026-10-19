@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../src/app";
 import type { AppInfo, Status } from "../src/ipc/bindings";
@@ -8,7 +8,10 @@ import { violations } from "../../ui/test/axe";
 
 const info: AppInfo = { version: "0.1.0", platform: "macos", locale: "en" };
 
-afterEach(() => clearMocks());
+afterEach(async () => {
+  await act(async () => cleanup());
+  clearMocks();
+});
 
 type Handler = (cmd: string, args: Record<string, unknown>) => unknown;
 
