@@ -75,7 +75,7 @@ export type SessionError =
   | { kind: "sessionNotFound" }
   | { kind: "alreadyClosed" }
   | { kind: "activeSession" }
-  | { kind: "transportUnavailable" }
+  | { kind: "unsupportedSessionKind" }
   | { kind: "failed"; reference: string };
 
 /** A redacted device-local session entry, newest first. */
@@ -91,6 +91,13 @@ export interface RecentSession {
   startedAt: string;
   endedAt: string | null;
   outcome: RecentSessionOutcome | null;
+}
+
+/** A current, display-safe login resolved from an ended terminal session. */
+export interface ReconnectTarget {
+  profileId: Id;
+  hostName: string;
+  loginName: string;
 }
 
 export interface GroupSummary {
@@ -358,8 +365,8 @@ export interface InventoryApi {
   openSession(profileId: Id, kind: RecentSessionKind): Promise<Outcome<RecentSession, SessionError>>;
   /** Records the outcome from a real connection owner. */
   closeSession(id: Id, outcome: RecentSessionOutcome): Promise<Outcome<null, SessionError>>;
-  /** Requests a reconnect; returns an explicit error until transport is wired. */
-  reconnectSession(id: Id): Promise<Outcome<null, SessionError>>;
+  /** Resolves an ended terminal session for the normal connection entry point. */
+  reconnectSession(id: Id): Promise<Outcome<ReconnectTarget, SessionError>>;
   /** Forgets one ended local session and its saved scrollback. */
   forgetSession(id: Id): Promise<Outcome<null, SessionError>>;
   host(id: Id): Promise<Outcome<HostDetails | null, Failure>>;

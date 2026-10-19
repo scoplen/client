@@ -204,7 +204,6 @@ export const zhHans: Messages = {
   "hosts.recentSessions.closed": "已关闭",
   "hosts.recentSessions.failed": "失败",
   "hosts.recentSessions.reconnect": "重新连接 {name}",
-  "hosts.recentSessions.reconnectUnavailable": "重新连接暂不可用；没有建立连接。",
   "hosts.recentSessions.reconnectFailed": "无法重新连接此会话。",
   "hosts.empty.group": "这个分组里还没有主机。",
   "hosts.noMatch": "没有和「{query}」匹配的主机。",

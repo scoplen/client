@@ -218,7 +218,6 @@ export const en = {
   "hosts.recentSessions.closed": "Closed",
   "hosts.recentSessions.failed": "Failed",
   "hosts.recentSessions.reconnect": "Reconnect {name}",
-  "hosts.recentSessions.reconnectUnavailable": "Reconnect is not available yet; no connection was opened.",
   "hosts.recentSessions.reconnectFailed": "This session could not be reconnected.",
   "hosts.empty.group": "This group has no hosts.",
   "hosts.noMatch": "No hosts match \u201c{query}\u201d.",

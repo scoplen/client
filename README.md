@@ -10,7 +10,7 @@ Owner and operator: immoses (Moses Qiu). Responsible maintainer: immoses (Moses 
 
 Maturity: Exploration. Maintenance: Active.
 
-The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly or through a saved unauthenticated SOCKS5 or HTTP CONNECT proxy, authenticates with a password or an unencrypted OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA private key after an active host-specific trust record matches the target's presented key, then opens an interactive terminal with ANSI rendering, keyboard input, and close handling. New, changed, revoked, wildcard-only, and CA trust records remain fail-closed. Proxy authentication and encrypted private keys return explicit unsupported errors in this build. Jump and ProxyCommand routes, other credential kinds, reconnect orchestration, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
+The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly or through a saved unauthenticated SOCKS5 or HTTP CONNECT proxy, authenticates with a password or an unencrypted OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA private key after an active host-specific trust record matches the target's presented key, then opens an interactive terminal with ANSI rendering, keyboard input, and close handling. New, changed, revoked, wildcard-only, and CA trust records remain fail-closed. Proxy authentication and encrypted private keys return explicit unsupported errors in this build. Jump and ProxyCommand routes, other credential kinds, automatic reconnect, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
 
 RSA private-key authentication selects `rsa-sha2-512` or `rsa-sha2-256` from the
 server's advertised `server-sig-algs`. When the advertisement is unavailable or
@@ -25,7 +25,12 @@ are available without waiting for a welcome message or prompt.
 Accepted SSH connection attempts appear in Recent using device-local history.
 Normal completion records `Closed`; connection errors and cancelled connection
 tasks record `Failed`. Closing a tab releases its transport registration.
-Reconnecting from Recent remains a later session-management outcome.
+An ended terminal in Recent can be started again through the normal Connect
+entry point using its current saved login. The lookup opens no connection and
+does not write history; the new attempt runs the usual host-key checks and
+records its own lifecycle. Active sessions and Files/Forward entries do not
+offer this action. Automatic reconnect and scrollback restoration remain later
+session-management outcomes.
 
 ## What it does not do
 

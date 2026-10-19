@@ -24,6 +24,7 @@ import {
   type HostSummary as IpcHostSummary,
   type NewHost as IpcNewHost,
   type RecentSession as IpcRecentSession,
+  type ReconnectTarget as IpcReconnectTarget,
   type OpenSshImportError as IpcOpenSshImportError,
   type OpenSshImportPreview as IpcOpenSshImportPreview,
   type OpenSshImportResult as IpcOpenSshImportResult,
@@ -58,6 +59,7 @@ import type {
   ObjectEditError,
   Outcome,
   RecentSession,
+  ReconnectTarget,
   RouteInput,
   RouteSummary,
   ForwardSummary,
@@ -117,7 +119,10 @@ export function createInventoryApi(): InventoryApi {
         (await commands.sessionClose(id, sessionOutcome as IpcRecentSessionOutcome)) as Result<null, IpcSessionError>,
       ) as Outcome<null, SessionError>,
     reconnectSession: async (id: string) =>
-      outcome((await commands.sessionReconnect(id)) as Result<null, IpcSessionError>) as Outcome<null, SessionError>,
+      outcome((await commands.sessionReconnect(id)) as Result<IpcReconnectTarget, IpcSessionError>) as Outcome<
+        ReconnectTarget,
+        SessionError
+      >,
     forgetSession: async (id: string) =>
       outcome((await commands.sessionForget(id)) as Result<null, IpcSessionError>) as Outcome<null, SessionError>,
     host: async (id: string) =>

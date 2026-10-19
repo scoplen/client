@@ -29,7 +29,6 @@ import type {
   RouteSummary,
   RecentSessionKind,
   RecentSessionOutcome,
-  SessionError,
 } from "../inventory/api";
 
 const groups: GroupSummary[] = [
@@ -384,6 +383,10 @@ export function sampleInventory(
   let hosts = initial.map((h) => ({ ...h }));
   let availableGroups = groups.map((group) => ({ ...group }));
   const sessions = seededRecentSessions.map((session) => ({ ...session }));
+  const sessionProfiles = new Map<string, Id>([
+    ["s-api-1", "l-1"],
+    ["s-db-1", "l-3"],
+  ]);
   let profiles = profileSeeds(hosts);
   let objectCredentials = sampleCredentialSeeds.map((credential) => ({
     ...credential,
@@ -515,6 +518,7 @@ export function sampleInventory(
         outcome: null,
       };
       sessions.unshift(session);
+      sessionProfiles.set(session.id, profileId);
       changed();
       return wait(ok(session));
     },
@@ -530,11 +534,22 @@ export function sampleInventory(
       return wait(ok(null));
     },
     reconnectSession: (id: string) => {
-      if (!sessions.some((session) => session.id === id)) {
+      const session = sessions.find((candidate) => candidate.id === id);
+      if (!session) {
         return wait({ status: "error" as const, error: { kind: "sessionNotFound" as const } });
       }
-      const error: SessionError = { kind: "transportUnavailable" };
-      return wait({ status: "error" as const, error });
+      if (session.endedAt === null || session.outcome === null) {
+        return wait({ status: "error" as const, error: { kind: "activeSession" as const } });
+      }
+      if (session.kind !== "terminal") {
+        return wait({ status: "error" as const, error: { kind: "unsupportedSessionKind" as const } });
+      }
+      const profile = profiles.find((candidate) => candidate.id === sessionProfiles.get(id));
+      const host = hosts.find((candidate) => candidate.id === profile?.host);
+      if (!profile || !host) {
+        return wait({ status: "error" as const, error: { kind: "profileNotFound" as const } });
+      }
+      return wait(ok({ profileId: profile.id, hostName: host.name, loginName: profile.name ?? profile.username }));
     },
     forgetSession: (id: string) => {
       const index = sessions.findIndex((session) => session.id === id);
@@ -543,6 +558,7 @@ export function sampleInventory(
         return wait({ status: "error" as const, error: { kind: "activeSession" as const } });
       }
       sessions.splice(index, 1);
+      sessionProfiles.delete(id);
       changed();
       return wait(ok(null));
     },

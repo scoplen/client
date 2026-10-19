@@ -11,7 +11,8 @@ use scoplen_client_core::inventory::{
     CredentialSummary, Deletion, DeletionStore, EditHost, EditHostError, Failure, ForwardSummary,
     GroupError, GroupInput, GroupSummary, HostDetails, HostSource, HostSummary, Inventory, NewHost,
     ObjectEditError, OpenSshImportError, OpenSshImportPreview, OpenSshImportResult, RecentSession,
-    RecentSessionKind, RecentSessionOutcome, RouteInput, RouteSummary, SessionError,
+    RecentSessionKind, RecentSessionOutcome, ReconnectTarget, RouteInput, RouteSummary,
+    SessionError,
 };
 use tauri_specta::Event as _;
 
@@ -142,17 +143,14 @@ pub async fn session_close(
     Ok(())
 }
 
-/// Requests a reconnect through the connection engine.
-///
-/// The engine is not part of this client build yet, so the core returns an
-/// explicit boundary error and does not create a new session or claim success.
+/// Resolves an ended terminal session to its current login without opening a connection.
 #[tauri::command]
 #[specta::specta]
 pub async fn session_reconnect(
     local: tauri::State<'_, LocalDataState>,
     state: tauri::State<'_, InventoryState>,
     session_id: String,
-) -> Result<(), SessionError> {
+) -> Result<ReconnectTarget, SessionError> {
     let inventory = facade_session(&local, &state)?;
     blocking_session(move || inventory.reconnect_session(session_id)).await
 }

@@ -67,16 +67,21 @@ describe("the host list", () => {
   });
 
   it("shows redacted recent session history and keeps it separate from host loading", async () => {
-    const { unmount } = show(sampleInventory(sampleHosts()));
+    const onConnect = vi.fn();
+    const { unmount } = show(sampleInventory(sampleHosts()), "en", onConnect);
     await screen.findByText("7 hosts");
     const sidebar = screen.getByRole("navigation", { name: "Hosts" });
-    await userEvent.click(within(sidebar).getByRole("button", { name: "Recent" }));
+    const recent = within(sidebar).getByRole("button", { name: "Recent" });
+    recent.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(recent.getAttribute("aria-current")).toBe("page");
     expect(await screen.findByRole("heading", { level: 2, name: "Recent sessions" })).toBeTruthy();
     expect(screen.getByRole("list", { name: "Recent sessions" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /prod-api-01.*Terminal/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /prod-db-01.*Files/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reconnect prod-db-01" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Reconnect prod-api-01" }));
-    expect(await screen.findByText("Reconnect is not available yet; no connection was opened.")).toBeTruthy();
+    await waitFor(() => expect(onConnect).toHaveBeenCalledWith("l-1", "prod-api-01 · deploy"));
 
     unmount();
     show(sampleInventory(sampleHosts(), { failRecentSessions: true }));
@@ -87,6 +92,28 @@ describe("the host list", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("local session history is unavailable");
     expect(await screen.findByText("2 hosts")).toBeTruthy();
+  });
+
+  it("does not offer reconnect without a connection owner and keeps lookup failures local", async () => {
+    const api = sampleInventory(sampleHosts());
+    const { unmount } = show(api);
+    await screen.findByText("7 hosts");
+    await userEvent.click(
+      within(screen.getByRole("navigation", { name: "Hosts" })).getByRole("button", { name: "Recent" }),
+    );
+    expect(screen.queryByRole("button", { name: "Reconnect prod-api-01" })).toBeNull();
+    unmount();
+
+    const onConnect = vi.fn();
+    api.reconnectSession = vi.fn().mockResolvedValue({ status: "error", error: { kind: "profileNotFound" } });
+    show(api, "en", onConnect);
+    await screen.findByText("7 hosts");
+    await userEvent.click(
+      within(screen.getByRole("navigation", { name: "Hosts" })).getByRole("button", { name: "Recent" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Reconnect prod-api-01" }));
+    expect(await screen.findByText("This session could not be reconnected.")).toBeTruthy();
+    expect(onConnect).not.toHaveBeenCalled();
   });
 
   it("stars and unstars a host", async () => {

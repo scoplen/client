@@ -125,7 +125,7 @@ and command/input fields are bounded at 64 KiB. The desktop session view uses
 registry routes bounded input frames and close requests to the owning SSH
 channel; disconnecting the tab closes that channel. Jump and ProxyCommand routes,
 authenticated proxy routes,
-other credentials, reconnect ownership, and saved scrollback remain
+other credentials, automatic reconnect, and saved scrollback remain
 later connection slices.
 
 After local profile and trust-record preflight, each `session_connect` attempt
@@ -136,6 +136,16 @@ fallback. Opened and closed `SessionChanged` events refresh the existing Recent
 view. A separate registration guard releases the process-local transport ID on
 every exit, including future cancellation. Invalid profiles and locked stores
 are rejected before creating a history row.
+
+Recent reconnect resolves an ended Terminal record to its still-live
+AccessProfile and Host in the core, without opening a socket or writing history.
+The Hosts view passes that profile to the ordinary Connect entry point. The
+connection owner then performs current preflight and host-key verification and
+records a fresh attempt. Active records, Files/Forward kinds, and deleted
+profiles or hosts fail lookup without creating a new session.
+The Hosts source navigation remains available as a horizontally scrolling row
+when the window is narrower than the desktop sidebar breakpoint, including at
+the desktop window's minimum width.
 
 ## Localization
 

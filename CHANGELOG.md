@@ -4,6 +4,7 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Wired ended terminal sessions in Recent to the normal Connect entry point, resolving the current saved login without creating history during lookup; active and unsupported kinds remain unavailable.
 - Fixed terminal profile and theme changes restarting the same source subscription and opening a duplicate SSH connection.
 - Connected real SSH attempts to device-local Recent history, recording normal completion, errors, and cancelled connection tasks, and releasing transport registrations when a task is cancelled.
 - Connected saved unauthenticated SOCKS5 and HTTP CONNECT routes to live SSH host-key probing and sessions through the shared bounded proxy transports. Invalid proxy endpoints and configured proxy credentials fail before dialing; proxy rejection, timeout, and target trust failures stay fail-closed.
