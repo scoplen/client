@@ -23,6 +23,11 @@ Commands are declared in `src-tauri/src/commands.rs` with `#[specta::specta]`. `
 
 Streams use Tauri channels carrying raw binary frames: `FrameSender` on the Rust side (`src-tauri/src/frames.rs`) and `frameChannel` on the frontend (`web/app/src/ipc/frames.ts`). Frames arrive intact and in order; nothing is encoded as JSON.
 
+The interactive `session_connect` command has a separate typed readiness channel.
+It sends once authentication, optional PTY allocation, and the shell request
+succeed. The view becomes connected on that notification, independently of
+terminal output. Ended and unsubscribed views ignore late notifications.
+
 ## Terminal package
 
 `web/terminal` publishes `@scoplen/terminal`, a framework-agnostic custom

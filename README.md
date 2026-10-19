@@ -12,6 +12,10 @@ Maturity: Exploration. Maintenance: Active.
 
 The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. The direct password SSH path now connects to standard servers when an active host-specific trust record matches the presented key, authenticates, and opens an interactive terminal with ANSI rendering, keyboard input, and close handling. New, changed, revoked, wildcard-only, and CA trust records remain fail-closed; jump/proxy routes, non-password credentials, reconnect orchestration, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
 
+Interactive SSH sessions become ready after authentication and shell setup,
+even when the server sends no initial output. Terminal input and PTY resizing
+are available without waiting for a welcome message or prompt.
+
 ## What it does not do
 
 - It sends nothing to the vendor: no telemetry, update server, or crash-report endpoint in Phase 1.

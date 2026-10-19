@@ -30,12 +30,13 @@ export const commands = {
 	 */
 	sessionTrustHostKey: (profileId: string, algorithm: string, key: string, fingerprint: string) => typedError<null, string>(__TAURI_INVOKE("session_trust_host_key", { profileId, algorithm, key, fingerprint })),
 	/**
-	 *  Connects one direct password profile and streams its exec or shell output.
+	 *  Connects one direct profile and streams its exec or shell output.
+	 *  Interactive shells notify `ready` after authentication, PTY, and shell setup.
 	 *
 	 *  Host-key verification uses active, host-specific trust records and remains
 	 *  fail-closed for new, changed, revoked, wildcard-only, or CA records.
 	 */
-	sessionConnect: (profileId: string, command: string | null, pty: boolean, sessionId: string, frames: Channel<ArrayBuffer>) => typedError<null, string>(__TAURI_INVOKE("session_connect", { profileId, command, pty, sessionId, frames })),
+	sessionConnect: (profileId: string, command: string | null, pty: boolean, sessionId: string, frames: Channel<ArrayBuffer>, ready: Channel<null>) => typedError<null, string>(__TAURI_INVOKE("session_connect", { profileId, command, pty, sessionId, frames, ready })),
 	/**  Sends one bounded input chunk to a live shell session. */
 	sessionInput: (sessionId: string, data: number[]) => typedError<null, string>(__TAURI_INVOKE("session_input", { sessionId, data })),
 	/**  Notifies a live SSH PTY of a new character-cell size. */

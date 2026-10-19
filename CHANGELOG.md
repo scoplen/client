@@ -4,6 +4,7 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Fixed silent SSH shells remaining on the connecting screen: the desktop receives an explicit shell-ready notification independently of terminal output, and ignores late notifications after the connection ends.
 - Added the first live direct SSH path: password authentication through the shared `scoplen-ssh` engine, host-specific trust-record verification, bounded command/terminal frames, and fail-closed lifecycle errors for unsupported routes and credentials.
 - Added the application shell: a Tauri 2 application for macOS and Windows with the Scoplen icon, a typed IPC surface generated from Rust, a binary frame channel for streams, and a launch smoke test.
 - Added `@scoplen/ui`: the Scoplen design tokens in light and dark with increased-contrast and reduced-motion support, bundled Inter, Lora, JetBrains Mono, and a Chinese heading subset of Noto Serif SC, the mark and lockup, buttons, a keyboard-navigable toolbar, a skip link, and ICU localization.

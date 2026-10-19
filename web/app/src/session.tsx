@@ -11,6 +11,7 @@ import {
 } from "@scoplen/ui";
 import type { ScoplenTerminalElement } from "@scoplen/terminal";
 import { Palette } from "lucide-react";
+import { Channel } from "@tauri-apps/api/core";
 import { Terminal, type TerminalSink, type TerminalSource } from "@scoplen/terminal/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "./i18n";
@@ -70,10 +71,14 @@ export function SessionTerminal({
     setSource({
       subscribe(onChunk, { signal }) {
         let active = true;
+        let ended = false;
         const frames = frameChannel((chunk) => {
           if (!active || !mounted.current) return;
-          setState("connected");
           onChunk(chunk);
+        });
+        const ready = new Channel<null>(() => {
+          if (!active || ended || !mounted.current) return;
+          setState("connected");
         });
 
         const stop = () => {
@@ -84,9 +89,10 @@ export function SessionTerminal({
         signal.addEventListener("abort", stop, { once: true });
 
         void commands
-          .sessionConnect(profileId, null, true, sessionId, frames)
+          .sessionConnect(profileId, null, true, sessionId, frames, ready)
           .then((result) => {
             if (!active || !mounted.current) return;
+            ended = true;
             if (result.status === "ok") {
               setState("closed");
             } else {
@@ -96,6 +102,7 @@ export function SessionTerminal({
           })
           .catch((cause: unknown) => {
             if (!active || !mounted.current) return;
+            ended = true;
             setState("failed");
             setError(cause instanceof Error ? cause.message : String(cause));
           });
