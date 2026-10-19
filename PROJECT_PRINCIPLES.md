@@ -19,7 +19,13 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
 
 ## Open gaps
 
-- The application shell and the encrypted local store exist. Inventory, terminal, connections, sync, and organization features are open roadmap gates, so the product's primary loop cannot yet be used.
+- The application shell, encrypted local store, inventory, and real SSH terminal path exist,
+  including password/software-key authentication and saved unauthenticated proxy routes.
+  The inventory, terminal, and connection gates still have open outcomes; sync and organization
+  workflows remain incomplete. The canonical roadmap records their implementation evidence.
 - The Windows TPM path of key storage cannot run on hosted CI runners, which have no TPM; only its DPAPI fallback is exercised there.
-- The Windows build and launch are defined in CI but have not been verified locally or by a completed CI run.
+- Windows and macOS build/launch checks pass in completed CI run
+  [39270829781](https://github.com/scoplen/client/actions/runs/39270829781) at `client@76ad83f`,
+  alongside frontend, Rust, dependency, and OpenSSH key/proxy checks. This does not establish
+  release signing, packaging, or the complete C15 platform gate.
 - An accessibility audit against WCAG 2.2 AA on both platforms is scheduled for roadmap C15; the current evidence is automated axe checks, contrast checks of the tokens, and keyboard tests of the components.
