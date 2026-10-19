@@ -65,7 +65,7 @@ jobs:
         run: cargo machete
 
   ssh-private-key-interop:
-    name: OpenSSH software-key interoperability
+    name: OpenSSH key and proxy interoperability
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -77,6 +77,9 @@ jobs:
       - name: Ed25519, NIST ECDSA, and RSA SHA-2 acceptance and refusal
         shell: pwsh
         run: ./scripts/test-ssh-private-key.ps1
+      - name: SOCKS5 and HTTP CONNECT acceptance, refusal, timeout, and host trust
+        shell: pwsh
+        run: ./scripts/test-ssh-proxy-route.ps1
 
   web:
     name: Frontend
