@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 6
+    if ![6, 7].contains(&args.len())
         || ![
             "success",
             "wrong-key",
@@ -23,11 +23,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "untrusted",
             "invalid",
             "encrypted",
+            "wrong-passphrase",
             "unsupported",
         ]
         .contains(&args[1].as_str())
     {
-        return Err("usage: ssh_private_key_smoke <success|wrong-key|wrong-rsa-key|sha1-only|untrusted|invalid|encrypted|unsupported> <host> <port> <user> <key-file>".into());
+        return Err("usage: ssh_private_key_smoke <success|wrong-key|wrong-rsa-key|sha1-only|untrusted|invalid|encrypted|wrong-passphrase|unsupported> <host> <port> <user> <key-file> [passphrase-file]".into());
     }
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     runtime.block_on(run(&args))
@@ -68,11 +69,19 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut connection = SshConnection::connect(&plan, trust).await?;
-    if ["invalid", "encrypted", "unsupported"].contains(&args[1].as_str()) {
-        let error = connection.authenticate().await.err().ok_or("unusable key accepted")?;
+    let authentication = if let Some(path) = args.get(6) {
+        connection.authenticate_with_passphrase(Some(SecretVec::new(fs::read(path)?))).await
+    } else {
+        connection.authenticate().await
+    };
+    if ["invalid", "encrypted", "wrong-passphrase", "unsupported"].contains(&args[1].as_str()) {
+        let error = authentication.err().ok_or("unusable key accepted")?;
         let expected = match args[1].as_str() {
             "invalid" => matches!(error, SshConnectionError::InvalidPrivateKey),
             "encrypted" => matches!(error, SshConnectionError::EncryptedPrivateKey),
+            "wrong-passphrase" => {
+                matches!(error, SshConnectionError::InvalidPrivateKeyPassphrase)
+            }
             _ => matches!(error, SshConnectionError::UnsupportedPrivateKey),
         };
         if !expected {
@@ -82,8 +91,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if args[1] == "wrong-key" || args[1] == "wrong-rsa-key" || args[1] == "sha1-only" {
-        let error =
-            connection.authenticate().await.err().ok_or("rejected authentication accepted")?;
+        let error = authentication.err().ok_or("rejected authentication accepted")?;
         let rejected = match args[1].as_str() {
             "wrong-rsa-key" => matches!(error, SshConnectionError::RsaAuthenticationRejected),
             "sha1-only" => matches!(error, SshConnectionError::RsaSha2Unavailable),
@@ -99,7 +107,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    connection.authenticate().await?;
+    authentication?;
     let mut session = connection.open_session().await?;
     let result = session.exec(b"printf scoplen-key-ok", None).await?;
     if result.stdout != b"scoplen-key-ok" || result.exit_status != Some(0) {

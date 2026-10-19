@@ -2,6 +2,7 @@
 import {
   Button,
   Dialog,
+  Field,
   HostEgg,
   IconButton,
   Mark,
@@ -19,12 +20,13 @@ import { commands, type HostKeyDetails } from "./ipc/bindings";
 import { frameChannel } from "./ipc/frames";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
 
-export type SessionState = "verifying" | "trusting" | "connecting" | "connected" | "closed" | "failed";
+export type SessionState = "verifying" | "trusting" | "passphrase" | "connecting" | "connected" | "closed" | "failed";
 
 /** The face the host's egg makes in each state. */
 const sessionFaces: Record<SessionState, { mood: MarkMood; active: boolean; attention: boolean }> = {
   verifying: { mood: "awake", active: true, attention: false },
   trusting: { mood: "awake", active: true, attention: false },
+  passphrase: { mood: "awake", active: true, attention: false },
   connecting: { mood: "awake", active: true, attention: false },
   connected: { mood: "rest", active: true, attention: false },
   closed: { mood: "closed", active: false, attention: false },
@@ -53,64 +55,86 @@ export function SessionTerminal({
   const [hostKey, setHostKey] = useState<HostKeyDetails | null>(null);
   const [trustError, setTrustError] = useState<string | null>(null);
   const [trustBusy, setTrustBusy] = useState(false);
+  const [passphraseError, setPassphraseError] = useState<string | null>(null);
   const [source, setSource] = useState<TerminalSource | null>(null);
   const mounted = useRef(true);
+  const passphraseInput = useRef<HTMLInputElement>(null);
   const sessionId = useMemo(() => crypto.randomUUID(), []);
   const reportState = useRef(onStateChange);
+  const translate = useRef(t);
   useEffect(() => {
     reportState.current = onStateChange;
+    translate.current = t;
   });
   useEffect(() => {
     reportState.current?.(state);
   }, [state]);
 
-  const connectSession = useCallback(() => {
-    if (!mounted.current) return;
-    setState("connecting");
-    setError(null);
-    setSource({
-      subscribe(onChunk, { signal }) {
-        let active = true;
-        let ended = false;
-        const frames = frameChannel((chunk) => {
-          if (!active || !mounted.current) return;
-          onChunk(chunk);
-        });
-        const ready = new Channel<null>(() => {
-          if (!active || ended || !mounted.current) return;
-          setState("connected");
-        });
-
-        const stop = () => {
-          if (!active) return;
-          active = false;
-          void commands.sessionCloseTransport(sessionId).catch(() => undefined);
-        };
-        signal.addEventListener("abort", stop, { once: true });
-
-        void commands
-          .sessionConnect(profileId, null, true, sessionId, frames, ready)
-          .then((result) => {
+  const connectSession = useCallback(
+    (passphrase: string | null = null) => {
+      if (!mounted.current) return;
+      let pendingPassphrase = passphrase;
+      setState("connecting");
+      setError(null);
+      setSource({
+        subscribe(onChunk, { signal }) {
+          let active = true;
+          let ended = false;
+          const frames = frameChannel((chunk) => {
             if (!active || !mounted.current) return;
-            ended = true;
-            if (result.status === "ok") {
-              setState("closed");
-            } else {
-              setState("failed");
-              setError(result.error);
-            }
-          })
-          .catch((cause: unknown) => {
-            if (!active || !mounted.current) return;
-            ended = true;
-            setState("failed");
-            setError(cause instanceof Error ? cause.message : String(cause));
+            onChunk(chunk);
+          });
+          const ready = new Channel<null>(() => {
+            if (!active || ended || !mounted.current) return;
+            setState("connected");
           });
 
-        return { unsubscribe: stop };
-      },
-    });
-  }, [profileId, sessionId]);
+          const stop = () => {
+            if (!active) return;
+            active = false;
+            void commands.sessionCloseTransport(sessionId).catch(() => undefined);
+          };
+          signal.addEventListener("abort", stop, { once: true });
+
+          const oneTimePassphrase = pendingPassphrase;
+          pendingPassphrase = null;
+          void commands
+            .sessionConnect(profileId, null, true, sessionId, oneTimePassphrase, frames, ready)
+            .then((result) => {
+              if (!active || !mounted.current) return;
+              ended = true;
+              if (result.status === "ok") {
+                setState("closed");
+              } else {
+                if (result.error.kind === "invalidPrivateKeyPassphrase" || result.error.kind === "passphraseRequired") {
+                  setState("passphrase");
+                  setPassphraseError(
+                    translate.current(
+                      result.error.kind === "invalidPrivateKeyPassphrase"
+                        ? "session.passphrase.incorrect"
+                        : "session.passphrase.required",
+                    ),
+                  );
+                  setSource(null);
+                } else {
+                  setState("failed");
+                  setError(result.error.kind === "failed" ? result.error.message : String(result.error));
+                }
+              }
+            })
+            .catch((cause: unknown) => {
+              if (!active || !mounted.current) return;
+              ended = true;
+              setState("failed");
+              setError(cause instanceof Error ? cause.message : String(cause));
+            });
+
+          return { unsubscribe: stop };
+        },
+      });
+    },
+    [profileId, sessionId],
+  );
 
   const inputSink = useMemo<TerminalSink>(
     () => ({
@@ -156,6 +180,7 @@ export function SessionTerminal({
         setError(null);
         setHostKey(null);
         setTrustError(null);
+        setPassphraseError(null);
         const result = await commands.sessionHostKey(profileId);
         if (!active || !mounted.current) return;
         if (result.status === "error") {
@@ -163,8 +188,10 @@ export function SessionTerminal({
           setError(result.error);
           return;
         }
-        if (result.data.status === "trusted") connectSession();
-        else {
+        if (result.data.status === "trusted") {
+          if (result.data.passphraseRequired) setState("passphrase");
+          else connectSession();
+        } else {
           setHostKey(result.data);
           setState("trusting");
         }
@@ -201,7 +228,30 @@ export function SessionTerminal({
       return;
     }
     setHostKey(null);
-    void connectSession();
+    if (hostKey.passphraseRequired) setState("passphrase");
+    else connectSession();
+  };
+
+  const cancelPassphrase = () => {
+    if (passphraseInput.current) passphraseInput.current.value = "";
+    setPassphraseError(null);
+    setState("failed");
+    setError(t("session.passphrase.cancelled"));
+  };
+
+  const submitPassphrase = () => {
+    const value = passphraseInput.current?.value ?? "";
+    if (!value) {
+      setPassphraseError(t("session.passphrase.required"));
+      return;
+    }
+    if (new TextEncoder().encode(value).length > 4096) {
+      setPassphraseError(t("session.passphrase.tooLong"));
+      return;
+    }
+    if (passphraseInput.current) passphraseInput.current.value = "";
+    setPassphraseError(null);
+    connectSession(value);
   };
 
   const status =
@@ -209,13 +259,15 @@ export function SessionTerminal({
       ? t("session.verifying")
       : state === "trusting"
         ? t("session.firstConnection")
-        : state === "connecting"
-          ? t("session.connecting")
-          : state === "connected"
-            ? t("session.connected")
-            : state === "closed"
-              ? t("session.closed")
-              : t("session.failed");
+        : state === "passphrase"
+          ? t("session.passphrase.status")
+          : state === "connecting"
+            ? t("session.connecting")
+            : state === "connected"
+              ? t("session.connected")
+              : state === "closed"
+                ? t("session.closed")
+                : t("session.failed");
 
   const face = sessionFaces[state];
 
@@ -357,6 +409,41 @@ export function SessionTerminal({
           </div>
         ) : null}
       </Dialog>
+      <Dialog
+        open={state === "passphrase"}
+        onOpenChange={(open) => {
+          if (!open) cancelPassphrase();
+        }}
+        title={t("session.passphrase.title")}
+        description={t("session.passphrase.body")}
+        closeLabel={t("session.passphrase.cancel")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={cancelPassphrase}>
+              {t("session.passphrase.cancel")}
+            </Button>
+            <Button variant="primary" onClick={submitPassphrase}>
+              {t("session.passphrase.connect")}
+            </Button>
+          </>
+        }
+      >
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            submitPassphrase();
+          }}
+        >
+          <Field
+            ref={passphraseInput}
+            label={t("session.passphrase.field")}
+            type="password"
+            autoComplete="off"
+            autoFocus
+            error={passphraseError ?? undefined}
+          />
+        </form>
+      </Dialog>
     </main>
   );
 }
@@ -380,7 +467,7 @@ function Stage({
   status: string;
   error: string | null;
 }) {
-  const working = state === "verifying" || state === "connecting" || state === "trusting";
+  const working = state === "verifying" || state === "connecting" || state === "trusting" || state === "passphrase";
   return (
     <div className="absolute inset-0 grid place-items-center bg-[color-mix(in_srgb,var(--background)_78%,transparent)] px-6 backdrop-blur-[3px]">
       <div className="scoplen-rise flex max-w-md flex-col items-center text-center">

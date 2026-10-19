@@ -36,7 +36,7 @@ export const commands = {
 	 *  Host-key verification uses active, host-specific trust records and remains
 	 *  fail-closed for new, changed, revoked, wildcard-only, or CA records.
 	 */
-	sessionConnect: (profileId: string, command: string | null, pty: boolean, sessionId: string, frames: Channel<ArrayBuffer>, ready: Channel<null>) => typedError<null, string>(__TAURI_INVOKE("session_connect", { profileId, command, pty, sessionId, frames, ready })),
+	sessionConnect: (profileId: string, command: string | null, pty: boolean, sessionId: string, passphrase: string | null, frames: Channel<ArrayBuffer>, ready: Channel<null>) => typedError<null, SessionConnectError>(__TAURI_INVOKE("session_connect", { profileId, command, pty, sessionId, passphrase, frames, ready })),
 	/**  Sends one bounded input chunk to a live shell session. */
 	sessionInput: (sessionId: string, data: number[]) => typedError<null, string>(__TAURI_INVOKE("session_input", { sessionId, data })),
 	/**  Notifies a live SSH PTY of a new character-cell size. */
@@ -505,6 +505,8 @@ export type HostKeyDetails = {
 	fingerprint: string,
 	/**  How the key relates to the local Host trust records. */
 	status: HostKeyTrustStatus,
+	/**  Whether the selected saved OpenSSH key requires a one-time passphrase. */
+	passphraseRequired: boolean,
 };
 
 /**  The result of comparing the probed key with this Host's active trust records. */
@@ -928,6 +930,17 @@ export type SessionChanged = {
 	/**  The lifecycle transition. */
 	change: SessionChangeKind,
 };
+
+/**  An SSH connection error safe to return over the desktop IPC boundary. */
+export type SessionConnectError =
+/**  An encrypted saved key needs its passphrase. */
+{ kind: "passphraseRequired" } |
+/**  The passphrase did not open the encrypted key. */
+{ kind: "invalidPrivateKeyPassphrase" } |
+/**  Another connection error; the message contains no credential material. */
+{ kind: "failed";
+/**  Safe error detail for the session UI. */
+message: string };
 
 /**  Why a device-local session event could not be applied. */
 export type SessionError =

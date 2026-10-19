@@ -4502,6 +4502,7 @@ version = "0.1.0"
 dependencies = [
  "scoplen-client-core",
  "scoplen-client-platform",
+ "scoplen-crypto",
  "scoplen-model",
  "scoplen-ssh",
  "serde",

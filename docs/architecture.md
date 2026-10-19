@@ -97,7 +97,7 @@ Route, and device-local credential material, then owns the concrete
 `scoplen-ssh` connection and session channels. The Tauri `session_connect`
 command reads active host-specific trust records before opening a socket;
 new, changed, revoked, wildcard-only, and CA records are rejected. Password
-and unencrypted OpenSSH Ed25519, ECDSA P-256/P-384/P-521, and RSA private-key
+and OpenSSH Ed25519, ECDSA P-256/P-384/P-521, and RSA private-key
 authentication, one command, and an optional PTY shell are available now.
 Direct connections and saved SOCKS5 or HTTP CONNECT routes without proxy
 credentials use the same target-host trust check. Proxy endpoints must be
@@ -106,8 +106,15 @@ routes with proxy credentials fail before network I/O. The shared SSH engine
 bounds proxy setup and SSH handshakes separately at ten seconds. Proxy
 rejection and timeouts remain typed failures, and an accepted proxy cannot
 override target-host trust.
-Encrypted keys require a passphrase flow and return an explicit error in this
-build. The imported ECDSA key's actual curve determines the shared signer.
+Encrypted keys use a one-time passphrase entered after host-key review. The
+Tauri command moves it immediately into a zeroizing secret container, and the
+core decrypts on a blocking worker before selecting the existing signer. The
+key file, passphrase, bcrypt salt, and round count are bounded before the KDF
+runs; closing the session drops the waiting connection future before remote
+authentication or shell setup continues, though a running blocking derivation
+may finish before its secret is released.
+No passphrase is stored or returned over IPC. The imported ECDSA key's actual
+curve determines the shared signer.
 RSA queries the shared connection's bounded, cached `server-sig-algs` selection
 before authentication: it uses SHA-512 when advertised, SHA-256 when that is
 the strongest advertised choice, and SHA-512 once when the result is unknown.
@@ -130,8 +137,9 @@ later connection slices.
 
 After local profile and trust-record preflight, each `session_connect` attempt
 owns a `session_lifecycle::SessionHistoryLease` with a store-generated UUIDv7,
-independent of the frontend transport ID. Normal completion records `Closed`;
-error returns and cancelled futures record `Failed` through the lease's drop
+independent of the frontend transport ID. Normal completion and an explicit
+close during preparation record `Closed`; error returns and externally dropped
+futures record `Failed` through the lease's drop
 fallback. Opened and closed `SessionChanged` events refresh the existing Recent
 view. A separate registration guard releases the process-local transport ID on
 every exit, including future cancellation. Invalid profiles and locked stores
