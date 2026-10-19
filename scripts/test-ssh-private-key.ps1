@@ -33,9 +33,24 @@ try {
         & ssh-keygen @keyArgs
         Check-LastExit "generate wrong $($entry.Name) key"
     }
-    $encryptedKey = Join-Path $scratch 'encrypted'
-    & ssh-keygen -q -t ed25519 -N 'disposable-test-passphrase' -f $encryptedKey
-    Check-LastExit 'generate encrypted key'
+    $passphrase = 'disposable-test-passphrase'
+    $passphraseFile = Join-Path $scratch 'passphrase'
+    $wrongPassphraseFile = Join-Path $scratch 'wrong-passphrase'
+    Set-Content -LiteralPath $passphraseFile -Value $passphrase -NoNewline -Encoding utf8
+    Set-Content -LiteralPath $wrongPassphraseFile -Value 'incorrect-disposable-passphrase' -NoNewline -Encoding utf8
+    foreach ($entry in $keys) {
+        $keyPath = Join-Path $scratch $entry.Name
+        $encryptedKey = Join-Path $scratch "encrypted-$($entry.Name)"
+        Copy-Item -LiteralPath $keyPath -Destination $encryptedKey
+        if ($IsWindows) {
+            Set-Acl -LiteralPath $encryptedKey -AclObject (Get-Acl -LiteralPath $keyPath)
+        } else {
+            & chmod 600 $encryptedKey
+            Check-LastExit "restrict copied $($entry.Name) key"
+        }
+        & ssh-keygen -q -p -P '' -N $passphrase -f $encryptedKey | Out-Null
+        Check-LastExit "encrypt $($entry.Name) key"
+    }
     $invalidKey = Join-Path $scratch 'invalid'
     Set-Content -LiteralPath $invalidKey -Value 'invalid OpenSSH key' -NoNewline
     $buildLog = Join-Path $scratch 'build.log'
@@ -50,6 +65,7 @@ try {
 
     foreach ($entry in $keys) {
         $keyPath = Join-Path $scratch $entry.Name
+        $encryptedKey = Join-Path $scratch "encrypted-$($entry.Name)"
         $wrongKey = Join-Path $scratch "wrong-$($entry.Name)"
         $publicKey = (Get-Content -LiteralPath "$keyPath.pub" -Raw).Trim()
         & docker run --rm -d --name $container -p '127.0.0.1::2222' -e 'USER_NAME=smoke' -e "PUBLIC_KEY=$publicKey" -e 'PASSWORD_ACCESS=false' 'linuxserver/openssh-server@sha256:46f115de7c251558297e7e87566fc3fc08544b63e55502b5cf294454db5d29d1' | Out-Null
@@ -74,6 +90,10 @@ try {
 
             & $smoke success 127.0.0.1 $port smoke $keyPath
             Check-LastExit "$($entry.Name) authentication"
+            & $smoke success 127.0.0.1 $port smoke $encryptedKey $passphraseFile
+            Check-LastExit "$($entry.Name) encrypted-key authentication"
+            & $smoke wrong-passphrase 127.0.0.1 $port smoke $encryptedKey $wrongPassphraseFile
+            Check-LastExit "$($entry.Name) wrong-passphrase rejection"
             $wrongMode = if ($entry.Name -eq 'rsa') { 'wrong-rsa-key' } else { 'wrong-key' }
             & $smoke $wrongMode 127.0.0.1 $port smoke $wrongKey
             Check-LastExit "$($entry.Name) wrong-key rejection"
@@ -82,13 +102,14 @@ try {
             & $smoke invalid 127.0.0.1 $port smoke $invalidKey
             Check-LastExit "$($entry.Name) malformed-key rejection"
             & $smoke encrypted 127.0.0.1 $port smoke $encryptedKey
-            Check-LastExit "$($entry.Name) encrypted-key rejection"
+            Check-LastExit "$($entry.Name) missing-passphrase rejection"
         } finally {
             & docker rm -f $container | Out-Null
         }
     }
 
     $rsaKey = Join-Path $scratch 'rsa'
+    $encryptedRsaKey = Join-Path $scratch 'encrypted-rsa'
     $wrongRsaKey = Join-Path $scratch 'wrong-rsa'
     $rsaPublicKey = (Get-Content -LiteralPath "$rsaKey.pub" -Raw).Trim()
     $setup = @'
@@ -152,6 +173,8 @@ exec /usr/sbin/sshd -D -e -f /tmp/sha1.conf
             }
             & $smoke $mode.Smoke 127.0.0.1 $port smoke $rsaKey
             Check-LastExit "$($mode.Name) RSA authentication policy"
+            & $smoke $mode.Smoke 127.0.0.1 $port smoke $encryptedRsaKey $passphraseFile
+            Check-LastExit "$($mode.Name) encrypted RSA authentication policy"
             if ($mode.Name -ne 'sha1') {
                 & $smoke wrong-rsa-key 127.0.0.1 $port smoke $wrongRsaKey
                 Check-LastExit "$($mode.Name) wrong RSA key rejection"
