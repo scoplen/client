@@ -55,13 +55,8 @@ export const commands = {
 	sessionOpen: (profileId: string, kind: RecentSessionKind) => typedError<RecentSession, SessionError>(__TAURI_INVOKE("session_open", { profileId, kind })),
 	/**  Records the outcome reported by a real connection owner. */
 	sessionClose: (sessionId: string, outcome: RecentSessionOutcome) => typedError<null, SessionError>(__TAURI_INVOKE("session_close", { sessionId, outcome })),
-	/**
-	 *  Requests a reconnect through the connection engine.
-	 *
-	 *  The engine is not part of this client build yet, so the core returns an
-	 *  explicit boundary error and does not create a new session or claim success.
-	 */
-	sessionReconnect: (sessionId: string) => typedError<null, SessionError>(__TAURI_INVOKE("session_reconnect", { sessionId })),
+	/**  Resolves an ended terminal session to its current login without opening a connection. */
+	sessionReconnect: (sessionId: string) => typedError<ReconnectTarget, SessionError>(__TAURI_INVOKE("session_reconnect", { sessionId })),
 	/**  Forgets one ended session and its saved local scrollback. */
 	sessionForget: (sessionId: string) => typedError<null, SessionError>(__TAURI_INVOKE("session_forget", { sessionId })),
 	/**  Reads one host and its logins. */
@@ -812,6 +807,19 @@ export type RecentSessionKind = "terminal" | "files" | "forward";
 /**  How a device-local session ended, when it is no longer open. */
 export type RecentSessionOutcome = "closed" | "failed";
 
+/**
+ *  A live, display-safe terminal target resolved from an ended session.
+ *  Resolving this target neither opens a connection nor records new history.
+ */
+export type ReconnectTarget = {
+	/**  The current AccessProfile to pass to the normal connection entry point. */
+	profileId: string,
+	/**  Current Host display name. */
+	hostName: string,
+	/**  Current login name, or username when unnamed. */
+	loginName: string,
+};
+
 /**  The type of a changed object, in the frontend's terms. */
 export type RecordType =
 /**  A host. */
@@ -933,10 +941,10 @@ export type SessionError =
 { kind: "sessionNotFound" } |
 /**  The session already has an ending outcome. */
 { kind: "alreadyClosed" } |
-/**  A live session must report an outcome before it can be forgotten. */
+/**  A live session must report an outcome before it can be reused or forgotten. */
 { kind: "activeSession" } |
-/**  The connection engine has not been connected to this history service. */
-{ kind: "transportUnavailable" } |
+/**  The saved session kind has no matching live connection entry point yet. */
+{ kind: "unsupportedSessionKind" } |
 /**  The local store failed without exposing its internals or secrets. */
 { kind: "failed";
 /**  A diagnostic reference safe to show for retryable failures. */

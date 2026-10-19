@@ -243,6 +243,19 @@ pub struct RecentSession {
     pub outcome: Option<RecentSessionOutcome>,
 }
 
+/// A live, display-safe terminal target resolved from an ended session.
+/// Resolving this target neither opens a connection nor records new history.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconnectTarget {
+    /// The current AccessProfile to pass to the normal connection entry point.
+    pub profile_id: String,
+    /// Current Host display name.
+    pub host_name: String,
+    /// Current login name, or username when unnamed.
+    pub login_name: String,
+}
+
 /// Why a device-local session event could not be applied.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Type, thiserror::Error)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -262,12 +275,12 @@ pub enum SessionError {
     /// The session already has an ending outcome.
     #[error("the session is already closed")]
     AlreadyClosed,
-    /// A live session must report an outcome before it can be forgotten.
-    #[error("an active session must be closed before it is forgotten")]
+    /// A live session must report an outcome before it can be reused or forgotten.
+    #[error("the session is still active")]
     ActiveSession,
-    /// The connection engine has not been connected to this history service.
-    #[error("connection transport is not available in this build")]
-    TransportUnavailable,
+    /// The saved session kind has no matching live connection entry point yet.
+    #[error("only terminal sessions can be reconnected in this build")]
+    UnsupportedSessionKind,
     /// The local store failed without exposing its internals or secrets.
     #[error("{reference}")]
     Failed {
@@ -2020,15 +2033,37 @@ impl Inventory {
         }
     }
 
-    /// Returns an explicit boundary error until a connection engine owns the
-    /// reconnect operation. It never creates a new history row or reports a
-    /// successful connection on its own.
-    pub fn reconnect_session(&self, session_id: String) -> Result<(), SessionError> {
+    /// Resolves an ended terminal session to its current live login and Host.
+    /// The caller passes this target to the normal connection entry point;
+    /// lookup never opens a socket or creates a history row.
+    pub fn reconnect_session(&self, session_id: String) -> Result<ReconnectTarget, SessionError> {
         let session_id = parse_id(&session_id).map_err(|_| SessionError::InvalidSessionId)?;
-        if self.store.session(session_id).map_err(session_failure)?.is_none() {
-            return Err(SessionError::SessionNotFound);
+        let session = self
+            .store
+            .session(session_id)
+            .map_err(session_failure)?
+            .ok_or(SessionError::SessionNotFound)?;
+        if session.ended_at.is_none() || session.outcome.is_none() {
+            return Err(SessionError::ActiveSession);
         }
-        Err(SessionError::TransportUnavailable)
+        if session.kind != SessionKind::Terminal {
+            return Err(SessionError::UnsupportedSessionKind);
+        }
+        let profiles = self.profiles().map_err(session_failure)?;
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.meta.id == session.profile)
+            .ok_or(SessionError::ProfileNotFound)?;
+        let hosts = self.host_records().map_err(session_failure)?;
+        let host = hosts
+            .iter()
+            .find(|host| host.meta.id == profile.host)
+            .ok_or(SessionError::ProfileNotFound)?;
+        Ok(ReconnectTarget {
+            profile_id: id(profile.meta.id),
+            host_name: host.name.clone(),
+            login_name: profile.name.clone().unwrap_or_else(|| profile.username.clone()),
+        })
     }
 
     /// Gets one host and all of its logins.
@@ -3666,18 +3701,29 @@ mod tests {
             inventory.forget_session(open.id.clone()),
             Err(SessionError::ActiveSession)
         ));
+        assert_eq!(inventory.reconnect_session(open.id.clone()), Err(SessionError::ActiveSession));
 
         inventory.close_session(open.id.clone(), RecentSessionOutcome::Failed).unwrap();
         assert!(matches!(
             inventory.close_session(open.id.clone(), RecentSessionOutcome::Closed),
             Err(SessionError::AlreadyClosed)
         ));
-        assert!(matches!(
+        let count = inventory.recent_sessions().unwrap().len();
+        assert_eq!(
             inventory.reconnect_session(open.id.clone()),
-            Err(SessionError::TransportUnavailable)
-        ));
+            Ok(ReconnectTarget {
+                profile_id: profile,
+                host_name: "api".into(),
+                login_name: "ops".into(),
+            })
+        );
+        assert_eq!(inventory.recent_sessions().unwrap().len(), count);
         inventory.forget_session(open.id.clone()).unwrap();
         assert!(matches!(inventory.reconnect_session(open.id), Err(SessionError::SessionNotFound)));
+        assert_eq!(
+            inventory.reconnect_session("not-a-uuid".into()),
+            Err(SessionError::InvalidSessionId)
+        );
 
         let orphan = id(scoplen_model::new_uuid_v7().unwrap());
         assert!(matches!(
@@ -3688,6 +3734,40 @@ mod tests {
             inventory.open_session("not-a-uuid".into(), RecentSessionKind::Forward),
             Err(SessionError::InvalidProfileId)
         ));
+    }
+
+    #[test]
+    fn reconnect_rejects_unsupported_and_orphaned_history() {
+        let inventory = inventory();
+        let details = inventory
+            .add_host(NewHost {
+                name: Some("api".into()),
+                address: "api.example".into(),
+                port: None,
+                username: "ops".into(),
+                sign_in: SignIn::Agent,
+            })
+            .unwrap();
+        let profile_id = details.logins[0].id.clone();
+        for kind in [RecentSessionKind::Files, RecentSessionKind::Forward] {
+            let session = inventory.open_session(profile_id.clone(), kind).unwrap();
+            inventory.close_session(session.id.clone(), RecentSessionOutcome::Closed).unwrap();
+            assert_eq!(
+                inventory.reconnect_session(session.id),
+                Err(SessionError::UnsupportedSessionKind)
+            );
+        }
+
+        let orphan_profile = scoplen_model::new_uuid_v7().unwrap();
+        let orphan =
+            inventory.store.record_session_start(orphan_profile, SessionKind::Terminal).unwrap();
+        inventory.store.record_session_end(orphan, SessionOutcome::Failed).unwrap();
+        assert_eq!(inventory.reconnect_session(id(orphan)), Err(SessionError::ProfileNotFound));
+
+        let session = inventory.open_session(profile_id, RecentSessionKind::Terminal).unwrap();
+        inventory.close_session(session.id.clone(), RecentSessionOutcome::Closed).unwrap();
+        inventory.store.delete(parse_id(&details.summary.id).unwrap()).unwrap();
+        assert_eq!(inventory.reconnect_session(session.id), Err(SessionError::ProfileNotFound));
     }
 
     #[test]

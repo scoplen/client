@@ -59,6 +59,7 @@ export function HostsHome({
   const [deleting, setDeleting] = useState<HostSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
+  const [reconnectBusy, setReconnectBusy] = useState<Id | null>(null);
   const [importPreview, setImportPreview] = useState<OpenSshImportPreview | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -98,15 +99,21 @@ export function HostsHome({
   };
 
   const reconnect = async (sessionId: Id) => {
-    const outcome = await api.reconnectSession(sessionId);
-    if (outcome.status === "error") {
-      const message =
-        outcome.error.kind === "transportUnavailable"
-          ? t("hosts.recentSessions.reconnectUnavailable")
-          : outcome.error.kind === "failed"
+    if (reconnectBusy || !onConnect) return;
+    setReconnectBusy(sessionId);
+    try {
+      const outcome = await api.reconnectSession(sessionId);
+      if (outcome.status === "ok") {
+        onConnect(outcome.data.profileId, `${outcome.data.hostName} · ${outcome.data.loginName}`);
+      } else {
+        const message =
+          outcome.error.kind === "failed"
             ? `${t("failed.body")} ${t("startup.error.reference", { reference: outcome.error.reference })}`
             : t("hosts.recentSessions.reconnectFailed");
-      setToast({ message });
+        setToast({ message });
+      }
+    } finally {
+      setReconnectBusy(null);
     }
   };
 
@@ -184,7 +191,7 @@ export function HostsHome({
   };
 
   return (
-    <div className="flex h-full min-h-0" onKeyDown={onListKeyDown}>
+    <div className="flex h-full min-h-0 flex-col md:flex-row" onKeyDown={onListKeyDown}>
       <Sidebar
         source={source}
         onSource={(next) => {
@@ -236,7 +243,12 @@ export function HostsHome({
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
               {source.kind === "recent" ? (
-                <RecentSessionSection sessions={recentSessions} onSelect={setSelected} onReconnect={reconnect} />
+                <RecentSessionSection
+                  sessions={recentSessions}
+                  onSelect={setSelected}
+                  onReconnect={onConnect ? reconnect : undefined}
+                  reconnectBusy={reconnectBusy}
+                />
               ) : null}
               {hosts.state === "loading" ? (
                 <p className="sr-only" role="status">
@@ -509,10 +521,12 @@ function RecentSessionSection({
   sessions,
   onSelect,
   onReconnect,
+  reconnectBusy,
 }: {
   sessions: Loaded<RecentSession[]>;
   onSelect: (id: Id) => void;
-  onReconnect: (id: Id) => void;
+  onReconnect?: (id: Id) => void;
+  reconnectBusy: Id | null;
 }) {
   const { t } = useI18n();
   if (sessions.state === "loading") {
@@ -539,7 +553,13 @@ function RecentSessionSection({
       ) : (
         <ul aria-label={t("hosts.recentSessions")} className="m-0 flex list-none flex-col p-0">
           {sessions.data.map((session) => (
-            <RecentSessionRow key={session.id} session={session} onSelect={onSelect} onReconnect={onReconnect} />
+            <RecentSessionRow
+              key={session.id}
+              session={session}
+              onSelect={onSelect}
+              onReconnect={onReconnect}
+              reconnectBusy={reconnectBusy}
+            />
           ))}
         </ul>
       )}
@@ -551,10 +571,12 @@ function RecentSessionRow({
   session,
   onSelect,
   onReconnect,
+  reconnectBusy,
 }: {
   session: RecentSession;
   onSelect: (id: Id) => void;
-  onReconnect: (id: Id) => void;
+  onReconnect?: (id: Id) => void;
+  reconnectBusy: Id | null;
 }) {
   const { t } = useI18n();
   const status = session.outcome === null ? "open" : session.outcome;
@@ -589,11 +611,12 @@ function RecentSessionRow({
           </time>
         ) : null}
       </button>
-      {session.outcome !== null ? (
+      {onReconnect && session.kind === "terminal" && session.outcome !== null && session.endedAt !== null ? (
         <IconButton
           label={t("hosts.recentSessions.reconnect", { name: session.hostName })}
           onClick={() => onReconnect(session.id)}
-          className="mr-1 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+          disabled={reconnectBusy !== null}
+          className="mr-1 focus-visible:opacity-100 md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100"
         >
           <RotateCcw aria-hidden="true" className="size-4" />
         </IconButton>
@@ -614,7 +637,7 @@ function ObjectItem({ current, onClick, children }: { current: boolean; onClick:
 }
 
 const sideItem =
-  "flex h-8 w-full items-center truncate rounded-md pr-3 pl-3.5 text-left text-sm text-muted-foreground transition-colors duration-(--duration-micro) hover:bg-inset hover:text-foreground aria-[current=page]:bg-raised aria-[current=page]:font-medium aria-[current=page]:text-foreground aria-[current=page]:shadow-(--scoplen-shadow-card)";
+  "flex h-8 w-auto items-center truncate rounded-md pr-3 pl-3.5 text-left text-sm text-muted-foreground transition-colors duration-(--duration-micro) hover:bg-inset hover:text-foreground aria-[current=page]:bg-raised aria-[current=page]:font-medium aria-[current=page]:text-foreground aria-[current=page]:shadow-(--scoplen-shadow-card) md:w-full";
 
 function Sidebar({
   source,
@@ -643,7 +666,7 @@ function Sidebar({
     other.kind === source.kind &&
     (other.kind !== "group" || (source.kind === "group" && source.id === other.id));
   const item = (label: string, target: HostSource, depth = 0, count?: number) => (
-    <li key={target.kind === "group" ? target.id : target.kind} className="relative">
+    <li key={target.kind === "group" ? target.id : target.kind} className="relative shrink-0">
       {is(target) ? <Pick /> : null}
       <button
         type="button"
@@ -675,19 +698,19 @@ function Sidebar({
   return (
     <nav
       aria-label={t("hosts.sidebar")}
-      className="hidden w-56 shrink-0 flex-col gap-6 overflow-y-auto border-r-(length:--scoplen-border-width) border-border bg-inset/40 px-3 py-5 md:flex"
+      className="flex max-w-full shrink-0 items-center gap-3 overflow-x-auto border-b-(length:--scoplen-border-width) border-border bg-inset/40 px-3 py-2 md:w-56 md:flex-col md:items-stretch md:gap-6 md:overflow-y-auto md:border-r-(length:--scoplen-border-width) md:border-b-0 md:py-5"
     >
-      <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+      <ul className="m-0 flex shrink-0 list-none gap-0.5 p-0 md:flex-col">
         {item(t("hosts.title"), { kind: "all" })}
         {favorites ? item(t("hosts.favorites"), { kind: "favorites" }) : null}
         {recent ? item(t("hosts.recent"), { kind: "recent" }) : null}
       </ul>
       {ordered.length > 0 ? (
-        <div>
-          <h2 className="mb-1.5 px-3.5 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">
+        <div className="shrink-0 border-l border-border pl-3 md:border-0 md:pl-0">
+          <h2 className="mb-1.5 hidden px-3.5 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase md:block">
             {t("hosts.groups")}
           </h2>
-          <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+          <ul className="m-0 flex list-none gap-0.5 p-0 md:flex-col">
             {ordered.map(({ group, depth }) =>
               item(group.name, { kind: "group", id: group.id }, depth, group.hostCount),
             )}
@@ -695,25 +718,25 @@ function Sidebar({
         </div>
       ) : null}
       {onOpenObjects ? (
-        <div>
-          <h2 className="mb-1.5 px-3.5 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase">
+        <div className="shrink-0 border-l border-border pl-3 md:border-0 md:pl-0">
+          <h2 className="mb-1.5 hidden px-3.5 text-[0.6875rem] font-semibold tracking-wide text-muted-foreground uppercase md:block">
             {t("hosts.manage")}
           </h2>
-          <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
-            <li>
+          <ul className="m-0 flex list-none gap-0.5 p-0 md:flex-col">
+            <li className="shrink-0">
               <ObjectItem current={objects === "logins"} onClick={() => onOpenObjects("logins")}>
                 {t("frame.logins")}
               </ObjectItem>
             </li>
             {keys ? (
-              <li>
+              <li className="shrink-0">
                 <ObjectItem current={objects === "keys"} onClick={() => onOpenObjects("keys")}>
                   {t("frame.keys")}
                 </ObjectItem>
               </li>
             ) : null}
             {routes ? (
-              <li>
+              <li className="shrink-0">
                 <ObjectItem current={objects === "routes"} onClick={() => onOpenObjects("routes")}>
                   {t("frame.routes")}
                 </ObjectItem>
