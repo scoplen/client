@@ -57,11 +57,11 @@ it("routes terminal input to the live SSH session and closes its transport", asy
   ).toBe(true);
 });
 
-function renderSession(onStateChange = vi.fn()) {
-  return render(
+function sessionView(locale: "en" | "zh-Hans", onStateChange: (state: string) => void) {
+  return (
     <AppearanceProvider>
       <TerminalColorsProvider>
-        <I18nProvider locale="en">
+        <I18nProvider locale={locale}>
           <SessionTerminal
             profileId="profile-1"
             label="Silent server"
@@ -70,9 +70,39 @@ function renderSession(onStateChange = vi.fn()) {
           />
         </I18nProvider>
       </TerminalColorsProvider>
-    </AppearanceProvider>,
+    </AppearanceProvider>
   );
 }
+
+function renderSession(onStateChange = vi.fn()) {
+  return render(sessionView("en", onStateChange));
+}
+
+it.each(["connecting", "connected"])("keeps the same SSH transport when locale changes while %s", async (state) => {
+  const calls: string[] = [];
+  let ready: Channel<null> | undefined;
+  mockIPC((command, args) => {
+    calls.push(command);
+    if (command === "session_host_key") {
+      return { algorithm: "ssh-ed25519", key: "key", fingerprint: "SHA256:example", status: "trusted" };
+    }
+    if (command === "session_connect") {
+      ready = (args as { ready: Channel<null> }).ready;
+      return new Promise(() => undefined);
+    }
+    return null;
+  });
+  const onStateChange = vi.fn();
+  const view = renderSession(onStateChange);
+  await waitFor(() => expect(ready).toBeDefined());
+  if (state === "connected") await act(() => ready!.onmessage(null));
+  calls.length = 0;
+  view.rerender(sessionView("zh-Hans", onStateChange));
+  expect(screen.getByRole("status").textContent).toContain(state === "connected" ? "已连接" : "正在连接");
+  expect(calls).not.toContain("session_host_key");
+  expect(calls).not.toContain("session_connect");
+  expect(calls).not.toContain("session_close_transport");
+});
 
 it("makes a silent shell ready without terminal bytes and resizes its PTY", async () => {
   let ready: Channel<null> | undefined;
@@ -157,4 +187,68 @@ it("ignores a late readiness notification after unmounting and closes the transp
   await act(() => ready!.onmessage(null));
   expect(report).not.toHaveBeenCalled();
   expect(close).toHaveBeenCalled();
+});
+
+it("asks for an encrypted key passphrase after host trust and cancels without connecting", async () => {
+  const calls: string[] = [];
+  mockIPC((command) => {
+    calls.push(command);
+    if (command === "session_host_key") {
+      return {
+        algorithm: "ssh-ed25519",
+        key: "key",
+        fingerprint: "SHA256:example",
+        status: "new",
+        passphraseRequired: true,
+      };
+    }
+    return null;
+  });
+  renderSession();
+  await userEvent.click(await screen.findByRole("button", { name: "Trust and connect" }));
+  expect(await screen.findByLabelText("Key passphrase")).toBeTruthy();
+  expect(calls).not.toContain("session_connect");
+  await userEvent.click(screen.getAllByRole("button", { name: "Cancel" })[1]!);
+  expect(calls).not.toContain("session_connect");
+  expect(screen.getByRole("alert").textContent).toContain("cancelled before the key was unlocked");
+});
+
+it("clears each entered passphrase and allows a wrong passphrase to be retried", async () => {
+  const attempts: Array<Record<string, unknown>> = [];
+  mockIPC((command, args) => {
+    if (command === "session_host_key") {
+      return {
+        algorithm: "ssh-ed25519",
+        key: "key",
+        fingerprint: "SHA256:example",
+        status: "trusted",
+        passphraseRequired: true,
+      };
+    }
+    if (command === "session_connect") {
+      attempts.push((args ?? {}) as Record<string, unknown>);
+      if (attempts.length === 1) throw { kind: "invalidPrivateKeyPassphrase" };
+      return new Promise(() => undefined);
+    }
+    return null;
+  });
+  renderSession();
+  const field = (await screen.findByLabelText("Key passphrase")) as HTMLInputElement;
+  await userEvent.click(screen.getByRole("button", { name: "Unlock and connect" }));
+  expect(screen.getByText("Enter the key passphrase to connect.")).toBeTruthy();
+  expect(attempts).toHaveLength(0);
+
+  await userEvent.type(field, "wrong-passphrase");
+  await userEvent.click(screen.getByRole("button", { name: "Unlock and connect" }));
+  await waitFor(() =>
+    expect(screen.getByText("That passphrase did not unlock the key. Check it and try again.")).toBeTruthy(),
+  );
+  expect(attempts[0]?.passphrase).toBe("wrong-passphrase");
+  expect((screen.getByLabelText("Key passphrase") as HTMLInputElement).value).toBe("");
+
+  await userEvent.type(screen.getByLabelText("Key passphrase"), "correct-passphrase");
+  await userEvent.click(screen.getByRole("button", { name: "Unlock and connect" }));
+  await waitFor(() => expect(attempts).toHaveLength(2));
+  expect(attempts[1]?.passphrase).toBe("correct-passphrase");
+  expect(screen.getByRole("status").textContent).toContain("Connecting");
 });
