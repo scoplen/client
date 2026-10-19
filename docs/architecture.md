@@ -97,13 +97,21 @@ endpoint and device-local credential material, then owns the concrete
 `scoplen-ssh` connection and session channels. The Tauri `session_connect`
 command reads active host-specific trust records before opening a socket;
 new, changed, revoked, wildcard-only, and CA records are rejected. Password
-and unencrypted OpenSSH Ed25519, ECDSA P-256, and RSA private-key authentication,
-one command, and an optional PTY shell are available now. Encrypted keys require
-a passphrase flow; ECDSA P-384/P-521 require the shared signer API. Both return
-explicit errors in this build.
-RSA uses SHA-512 signatures; this pinned shared version has no server RSA-SHA2
-discovery, so a server requiring SHA-256 can reject the key and receives an
-explicit diagnostic. SHA-1 is never offered.
+and unencrypted OpenSSH Ed25519, ECDSA P-256/P-384/P-521, and RSA private-key
+authentication, one command, and an optional PTY shell are available now.
+Encrypted keys require a passphrase flow and return an explicit error in this
+build. The imported ECDSA key's actual curve determines the shared signer.
+RSA queries the shared connection's bounded, cached `server-sig-algs` selection
+before authentication: it uses SHA-512 when advertised, SHA-256 when that is
+the strongest advertised choice, and SHA-512 once when the result is unknown.
+A SHA-1-only advertisement fails before authentication; a rejected SHA-2
+attempt does not retry another hash or password. Host-key trust remains a
+prerequisite to all credential use.
+
+The client pins the same proto revision for its shared crates and its Cargo
+`pageant` patch because a Git dependency does not inherit the proto workspace's
+local patch.
+
 Output is delivered as bounded binary frames (8 MiB aggregate per session),
 and command/input fields are bounded at 64 KiB. The desktop session view uses
 `@scoplen/terminal` to interpret ANSI/VT output. A process-local session
