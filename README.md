@@ -10,7 +10,7 @@ Owner and operator: immoses (Moses Qiu). Responsible maintainer: immoses (Moses 
 
 Maturity: Exploration. Maintenance: Active.
 
-The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly or through a saved unauthenticated SOCKS5 or HTTP CONNECT proxy, authenticates with a password or an unencrypted OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA private key after an active host-specific trust record matches the target's presented key, then opens an interactive terminal with ANSI rendering, keyboard input, and close handling. New, changed, revoked, wildcard-only, and CA trust records remain fail-closed. Proxy authentication and encrypted private keys return explicit unsupported errors in this build. Jump and ProxyCommand routes, other credential kinds, automatic reconnect, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
+The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly or through a saved unauthenticated SOCKS5 or HTTP CONNECT proxy, authenticates with a password or an OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA private key after an active host-specific trust record matches the target's presented key, then opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after host-key review. New, changed, revoked, wildcard-only, and CA trust records remain fail-closed. Proxy authentication remains unsupported in this build. Jump and ProxyCommand routes, other credential kinds, automatic reconnect, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
 
 RSA private-key authentication selects `rsa-sha2-512` or `rsa-sha2-256` from the
 server's advertised `server-sig-algs`. When the advertisement is unavailable or
@@ -18,13 +18,24 @@ unrecognized, it tries SHA-512 once; a SHA-1-only advertisement fails before
 authentication. A rejected SHA-2 attempt does not retry another hash or fall
 back to SHA-1 or a password.
 
+Saved encrypted OpenSSH keys use bcrypt-pbkdf for this connection only. The
+passphrase is never saved and is cleared from the input after submission;
+incorrect entry can be retried. Before decryption the client enforces a 64 KiB
+key-file limit, a 4 KiB passphrase limit, a nonempty bcrypt salt of at most 64
+bytes, and 1–256 bcrypt rounds. Larger or malformed work parameters fail
+without running the KDF. Canceling before submission starts no authenticated
+session or Recent attempt; host-key probes may already have occurred.
+If a running connection is canceled while bcrypt is deriving, its bounded
+blocking task may finish before releasing the passphrase; its result is ignored.
+
 Interactive SSH sessions become ready after authentication and shell setup,
 even when the server sends no initial output. Terminal input and PTY resizing
 are available without waiting for a welcome message or prompt.
 
 Accepted SSH connection attempts appear in Recent using device-local history.
-Normal completion records `Closed`; connection errors and cancelled connection
-tasks record `Failed`. Closing a tab releases its transport registration.
+Normal completion and an explicit close during connection preparation record
+`Closed`; connection errors and externally dropped connection tasks record
+`Failed`. Closing a tab releases its transport registration.
 An ended terminal in Recent can be started again through the normal Connect
 entry point using its current saved login. The lookup opens no connection and
 does not write history; the new attempt runs the usual host-key checks and
@@ -76,8 +87,9 @@ pnpm license-check
 
 With PowerShell 7, Docker, and `ssh-keygen` available, `scripts/test-ssh-private-key.ps1`
 starts disposable OpenSSH servers and verifies Ed25519, P-256/P-384/P-521, and RSA key
-authentication, constrained RSA-SHA2-256/512 selection, SHA-1-only refusal,
-wrong-key rejection, invalid/encrypted-key errors, and fail-closed host-key trust.
+authentication, encrypted-key passphrases, constrained RSA-SHA2-256/512
+selection, SHA-1-only refusal, wrong-key rejection, invalid-key errors, and
+fail-closed host-key trust.
 It removes its containers and temporary keys when finished.
 CI runs this fixture on Linux in addition to the macOS and Windows Rust checks.
 

@@ -4,6 +4,7 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Opened saved passphrase-protected OpenSSH software keys during SSH connection, with one-time entry after host-key review, retry for wrong passphrases, bounded bcrypt work, and no stored passphrase.
 - Wired ended terminal sessions in Recent to the normal Connect entry point, resolving the current saved login without creating history during lookup; active and unsupported kinds remain unavailable.
 - Fixed terminal profile and theme changes restarting the same source subscription and opening a duplicate SSH connection.
 - Connected real SSH attempts to device-local Recent history, recording normal completion, errors, and cancelled connection tasks, and releasing transport registrations when a task is cancelled.

@@ -811,7 +811,7 @@ fn parse_software_key(
     if key.is_encrypted() {
         validate_private_key_kdf(key.kdf())?;
         let passphrase = passphrase
-            .filter(|value| value.len() != 0)
+            .filter(|value| !value.as_bytes().is_empty())
             .ok_or(SshConnectionError::EncryptedPrivateKey)?;
         if passphrase.len() > MAX_PRIVATE_KEY_PASSPHRASE {
             return Err(SshConnectionError::InputTooLarge {
