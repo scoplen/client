@@ -90,15 +90,22 @@ Migration 3 adds `implicit_objects`, an encrypted, device-local visibility marke
 
 The empty Hosts list can open a native file picker and preview a limited OpenSSH config before writing. The Rust core reads a bounded UTF-8 file, separates representable literal `Host` blocks from skipped hosts, and reports unsupported directives with line numbers. `Include`, `Match`, wildcard hosts, or global rules can change the meaning of every block, so a file containing them yields a report without importable hosts. The frontend displays that report and sends the preview back for confirmation. The core re-reads and compares the source before import; if it changed, the user must preview again. Identity files and every host are validated before one atomic store transaction. The source config is never written. Complete OpenSSH import and idempotent re-import remain roadmap C10.
 
-## Direct SSH session
+## SSH session routes
 
-`scoplen-client-core::connection` resolves an AccessProfile into a direct
-endpoint and device-local credential material, then owns the concrete
+`scoplen-client-core::connection` resolves an AccessProfile into an endpoint,
+Route, and device-local credential material, then owns the concrete
 `scoplen-ssh` connection and session channels. The Tauri `session_connect`
 command reads active host-specific trust records before opening a socket;
 new, changed, revoked, wildcard-only, and CA records are rejected. Password
 and unencrypted OpenSSH Ed25519, ECDSA P-256/P-384/P-521, and RSA private-key
 authentication, one command, and an optional PTY shell are available now.
+Direct connections and saved SOCKS5 or HTTP CONNECT routes without proxy
+credentials use the same target-host trust check. Proxy endpoints must be
+`host:port` or `[IPv6]:port` with a non-zero port; malformed endpoints and
+routes with proxy credentials fail before network I/O. The shared SSH engine
+bounds proxy setup and SSH handshakes separately at ten seconds. Proxy
+rejection and timeouts remain typed failures, and an accepted proxy cannot
+override target-host trust.
 Encrypted keys require a passphrase flow and return an explicit error in this
 build. The imported ECDSA key's actual curve determines the shared signer.
 RSA queries the shared connection's bounded, cached `server-sig-algs` selection
@@ -116,7 +123,8 @@ Output is delivered as bounded binary frames (8 MiB aggregate per session),
 and command/input fields are bounded at 64 KiB. The desktop session view uses
 `@scoplen/terminal` to interpret ANSI/VT output. A process-local session
 registry routes bounded input frames and close requests to the owning SSH
-channel; disconnecting the tab closes that channel. Jump and proxy routes,
+channel; disconnecting the tab closes that channel. Jump and ProxyCommand routes,
+authenticated proxy routes,
 other credentials, reconnect ownership, and saved scrollback remain
 later connection slices.
 

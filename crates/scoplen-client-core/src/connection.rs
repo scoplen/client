@@ -10,6 +10,7 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use base64::{
@@ -308,9 +309,7 @@ pub fn evaluate_host_key(
 pub async fn probe_host_key(
     plan: &ConnectionPlan,
 ) -> Result<HostKeyPresentation, SshConnectionError> {
-    if !matches!(&plan.route, ConnectionRoute::Direct) {
-        return Err(SshConnectionError::UnsupportedRoute);
-    }
+    let route = transport_route(&plan.route)?;
     if !matches!(
         &plan.credential,
         CredentialMaterial::Password(_) | CredentialMaterial::PrivateKey(_)
@@ -331,7 +330,7 @@ pub async fn probe_host_key(
             Ok(())
         })
         .map_err(ClientError::from)?;
-    let connection = ClientConnection::connect(config).await?;
+    let connection = connect_route(config, route).await?;
     connection.disconnect().await?;
     presented
         .lock()
@@ -603,6 +602,12 @@ pub enum SshConnectionError {
     /// The saved route is not yet supported by this concrete engine.
     #[error("SSH route is not supported by the concrete client engine")]
     UnsupportedRoute,
+    /// A saved proxy endpoint is not a valid host and non-zero port.
+    #[error("the SSH proxy endpoint must be a host:port or [IPv6]:port")]
+    InvalidProxyEndpoint,
+    /// Proxy credentials require an explicit authentication mapping.
+    #[error("authenticated SSH proxy routes are not supported yet")]
+    ProxyAuthenticationUnsupported,
     /// The saved credential cannot be used by this concrete engine slice.
     #[error("SSH credential kind is not supported by the concrete client engine")]
     UnsupportedCredential,
@@ -649,6 +654,82 @@ pub enum SshConnectionError {
     /// Connection lifecycle transition failure.
     #[error(transparent)]
     Lifecycle(#[from] ConnectionStateError),
+}
+
+const PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+enum TransportRoute<'a> {
+    Direct,
+    Socks5 { host: &'a str, port: u16 },
+    HttpConnect { host: &'a str, port: u16 },
+}
+
+fn parse_proxy_endpoint(proxy: &str) -> Result<(&str, u16), SshConnectionError> {
+    let (host, port) = proxy.rsplit_once(':').ok_or(SshConnectionError::InvalidProxyEndpoint)?;
+    let port = port.parse::<u16>().map_err(|_| SshConnectionError::InvalidProxyEndpoint)?;
+    if port == 0 {
+        return Err(SshConnectionError::InvalidProxyEndpoint);
+    }
+    if let Some(ipv6) = host.strip_prefix('[').and_then(|host| host.strip_suffix(']')) {
+        if ipv6.parse::<std::net::Ipv6Addr>().is_ok() {
+            return Ok((ipv6, port));
+        }
+        return Err(SshConnectionError::InvalidProxyEndpoint);
+    }
+    if host.len() > 253
+        || !host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.as_bytes()[0].is_ascii_alphanumeric()
+                && label.as_bytes()[label.len() - 1].is_ascii_alphanumeric()
+                && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return Err(SshConnectionError::InvalidProxyEndpoint);
+    }
+    Ok((host, port))
+}
+
+fn transport_route(route: &ConnectionRoute) -> Result<TransportRoute<'_>, SshConnectionError> {
+    match route {
+        ConnectionRoute::Direct => Ok(TransportRoute::Direct),
+        ConnectionRoute::Socks5 { credential: Some(_), .. }
+        | ConnectionRoute::HttpConnect { credential: Some(_), .. } => {
+            Err(SshConnectionError::ProxyAuthenticationUnsupported)
+        }
+        ConnectionRoute::Socks5 { proxy, credential: None } => {
+            let (host, port) = parse_proxy_endpoint(proxy)?;
+            Ok(TransportRoute::Socks5 { host, port })
+        }
+        ConnectionRoute::HttpConnect { proxy, credential: None } => {
+            let (host, port) = parse_proxy_endpoint(proxy)?;
+            Ok(TransportRoute::HttpConnect { host, port })
+        }
+        _ => Err(SshConnectionError::UnsupportedRoute),
+    }
+}
+
+async fn connect_route(
+    config: ClientConfig,
+    route: TransportRoute<'_>,
+) -> Result<ClientConnection, ClientError> {
+    match route {
+        TransportRoute::Direct => ClientConnection::connect(config).await,
+        TransportRoute::Socks5 { host, port } => {
+            ClientConnection::connect_via_socks5(config, host, port, None, PROXY_CONNECT_TIMEOUT)
+                .await
+        }
+        TransportRoute::HttpConnect { host, port } => {
+            ClientConnection::connect_via_http_connect(
+                config,
+                host,
+                port,
+                None,
+                PROXY_CONNECT_TIMEOUT,
+            )
+            .await
+        }
+    }
 }
 
 /// Output collected from one bounded remote command.
@@ -726,18 +807,16 @@ impl std::fmt::Debug for SshConnection {
 }
 
 impl SshConnection {
-    /// Open a direct SSH connection and complete key exchange.
+    /// Open an SSH connection and complete key exchange through its saved route.
     ///
     /// Omitting `trust` is fail-closed and rejects every host key. Route
-    /// composition and credentials other than passwords and software keys
-    /// remain explicit errors until their adapters are connected.
+    /// Jump, process, and managed routes, authenticated proxies, and credentials
+    /// other than passwords and software keys remain explicit errors.
     pub async fn connect(
         plan: &ConnectionPlan,
         trust: Option<HostKeyTrust>,
     ) -> Result<Self, SshConnectionError> {
-        if !matches!(&plan.route, ConnectionRoute::Direct) {
-            return Err(SshConnectionError::UnsupportedRoute);
-        }
+        let route = transport_route(&plan.route)?;
         if !matches!(
             &plan.credential,
             CredentialMaterial::Password(_) | CredentialMaterial::PrivateKey(_)
@@ -758,7 +837,7 @@ impl SshConnection {
                 verifier.verify(host, key)
             })
             .map_err(ClientError::from)?;
-        let connection = match ClientConnection::connect(config).await {
+        let connection = match connect_route(config, route).await {
             Ok(connection) => connection,
             Err(error) => {
                 let _ = lifecycle.transition(ConnectionState::Failed);
@@ -1005,13 +1084,85 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::repository::{AccessProfileChange, CredentialChange, Edit, HostChange, Provenance};
+    use crate::repository::{
+        AccessProfileChange, CredentialChange, Edit, HostChange, Provenance, RouteChange,
+    };
 
     fn store() -> (tempfile::TempDir, Store) {
         let dir = tempdir().expect("tempdir");
         let store = Store::open(&dir.path().join("local.db"), &LocalDatabaseKey::new([7; 32]))
             .expect("store");
         (dir, store)
+    }
+
+    #[test]
+    fn proxy_endpoints_require_a_host_and_nonzero_port() {
+        assert_eq!(parse_proxy_endpoint("proxy.example:1080").unwrap(), ("proxy.example", 1080));
+        assert_eq!(parse_proxy_endpoint("127.0.0.1:8080").unwrap(), ("127.0.0.1", 8080));
+        assert_eq!(parse_proxy_endpoint("[::1]:8080").unwrap(), ("::1", 8080));
+        for invalid in [
+            "",
+            "proxy",
+            ":1080",
+            "proxy:0",
+            "proxy:65536",
+            "proxy:http",
+            "proxy:22/path",
+            "http://proxy:1080",
+            "user@proxy:1080",
+            "proxy name:1080",
+            "-proxy:1080",
+            "proxy..example:1080",
+            "proxy_:1080",
+            "::1:1080",
+            "[not-ipv6]:1080",
+            "[::1:1080",
+            "proxy:1080:443",
+        ] {
+            assert!(
+                matches!(
+                    parse_proxy_endpoint(invalid),
+                    Err(SshConnectionError::InvalidProxyEndpoint)
+                ),
+                "accepted {invalid:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_or_authenticated_proxy_routes_fail_before_dial() {
+        let mut plan = ConnectionPlan {
+            profile_id: Uuid::nil(),
+            host_id: Uuid::nil(),
+            address: "invalid target".into(),
+            port: 22,
+            username: "user".into(),
+            route: ConnectionRoute::Socks5 { proxy: "proxy:0".into(), credential: None },
+            credential: CredentialMaterial::Password(SecretVec::new(b"password".to_vec())),
+        };
+        assert!(matches!(
+            probe_host_key(&plan).await,
+            Err(SshConnectionError::InvalidProxyEndpoint)
+        ));
+        assert!(matches!(
+            SshConnection::connect(&plan, None).await,
+            Err(SshConnectionError::InvalidProxyEndpoint)
+        ));
+
+        plan.route = ConnectionRoute::HttpConnect {
+            proxy: "127.0.0.1:8080".into(),
+            credential: Some(CredentialMaterial::Password(SecretVec::new(
+                b"proxy-secret".to_vec(),
+            ))),
+        };
+        assert!(matches!(
+            probe_host_key(&plan).await,
+            Err(SshConnectionError::ProxyAuthenticationUnsupported)
+        ));
+        assert!(matches!(
+            SshConnection::connect(&plan, None).await,
+            Err(SshConnectionError::ProxyAuthenticationUnsupported)
+        ));
     }
 
     #[test]
@@ -1123,6 +1274,56 @@ mod tests {
             CredentialMaterial::Password(SecretVec::new(b"correct horse".to_vec()))
         );
         assert!(!format!("{plan:?}").contains("correct horse"));
+    }
+
+    #[test]
+    fn resolves_saved_unauthenticated_proxy_routes() {
+        let (_dir, store) = store();
+        let host = Repository::<crate::repository::Host>::new(&store)
+            .create(HostChange {
+                name: Some("target".into()),
+                address: Some("target.example".into()),
+                port: Edit::Set(2222),
+                ..Default::default()
+            })
+            .expect("host");
+        let credential = Repository::<Credential>::new(&store)
+            .create(CredentialChange {
+                kind: Some(CredentialKind::Password),
+                binding: Some(CredentialBinding::Shared),
+                secret: Edit::Set(SecretVec::new(b"target-password".to_vec())),
+                ..Default::default()
+            })
+            .expect("credential");
+        for kind in [
+            RouteKind::Socks5 { proxy: "proxy.example:1080".into(), credential: None },
+            RouteKind::HttpConnect { proxy: "proxy.example:8080".into(), credential: None },
+        ] {
+            let route = Repository::<Route>::new(&store)
+                .create(RouteChange { name: Some("proxy".into()), kind: Some(kind.clone()) })
+                .expect("route");
+            let profile = Repository::<AccessProfile>::new(&store)
+                .create(AccessProfileChange {
+                    host: Some(host.meta.id),
+                    username: Some("ops".into()),
+                    credential: Edit::Set(credential.meta.id),
+                    route: Some(RouteChoice::Route(route.meta.id)),
+                    ..Default::default()
+                })
+                .expect("profile");
+            let plan = resolve_connection_plan(&store, profile.meta.id).expect("plan");
+            match (kind, plan.route) {
+                (
+                    RouteKind::Socks5 { proxy, .. },
+                    ConnectionRoute::Socks5 { proxy: actual, credential: None },
+                )
+                | (
+                    RouteKind::HttpConnect { proxy, .. },
+                    ConnectionRoute::HttpConnect { proxy: actual, credential: None },
+                ) => assert_eq!(actual, proxy),
+                pair => panic!("incorrect saved proxy route: {pair:?}"),
+            }
+        }
     }
 
     #[test]
