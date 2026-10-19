@@ -10,7 +10,12 @@ Owner and operator: immoses (Moses Qiu). Responsible maintainer: immoses (Moses 
 
 Maturity: Exploration. Maintenance: Active.
 
-The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. The direct password SSH path now connects to standard servers when an active host-specific trust record matches the presented key, authenticates, and opens an interactive terminal with ANSI rendering, keyboard input, and close handling. New, changed, revoked, wildcard-only, and CA trust records remain fail-closed; jump/proxy routes, non-password credentials, reconnect orchestration, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
+The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. Direct SSH now authenticates with a password or an unencrypted OpenSSH Ed25519, ECDSA P-256, or RSA private key after an active host-specific trust record matches the presented key, then opens an interactive terminal with ANSI rendering, keyboard input, and close handling. New, changed, revoked, wildcard-only, and CA trust records remain fail-closed. Encrypted private keys need passphrase entry and decryption before they can authenticate; ECDSA P-384/P-521 need the corresponding shared signer API. These paths return explicit errors in this build. Jump/proxy routes, other credential kinds, reconnect orchestration, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
+
+RSA private-key authentication currently offers `rsa-sha2-512` only. The pinned
+shared SSH API cannot discover a server that requires `rsa-sha2-256`; a rejected
+RSA attempt gives an explicit error that names this limitation. It never falls
+back to SHA-1 or password authentication.
 
 ## What it does not do
 
@@ -53,6 +58,11 @@ pnpm typecheck
 pnpm test
 pnpm license-check
 ```
+
+With PowerShell 7, Docker, and `ssh-keygen` available, `scripts/test-ssh-private-key.ps1`
+starts disposable OpenSSH servers and verifies Ed25519, P-256, and RSA key
+authentication, wrong-key rejection, invalid/encrypted-key errors, and fail-closed host-key trust. It uses a pinned OpenSSH image and removes
+its containers and temporary keys when finished.
 
 On macOS, `scripts/check-offline.sh target/release/bundle/macos/Scoplen.app` verifies that a built application makes no network connection while sync is disabled.
 

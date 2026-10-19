@@ -17,12 +17,14 @@ use base64::{
     engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
 };
 use scoplen_client_platform::credentials;
-use scoplen_crypto::SecretVec;
+use scoplen_crypto::{Ed25519SigningKey, P256SigningKey, SecretVec};
 use scoplen_ssh::{
-    ChannelEvent, ClientChannel, ClientConfig, ClientConnection, ClientError, HostKey,
-    HostKeyVerificationError, HostKeyVerifier, PtyRequest, WindowChangeRequest,
+    ChannelEvent, ClientChannel, ClientConfig, ClientConnection, ClientError, Ed25519SshSigner,
+    HostKey, HostKeyVerificationError, HostKeyVerifier, P256SshSigner, PtyRequest, RsaSshSigner,
+    SignatureAlgorithm, WindowChangeRequest,
 };
 use sha2::{Digest as _, Sha256};
+use ssh_key::{PrivateKey, private::EcdsaKeypair};
 use uuid::Uuid;
 
 use crate::repository::{
@@ -309,7 +311,10 @@ pub async fn probe_host_key(
     if !matches!(&plan.route, ConnectionRoute::Direct) {
         return Err(SshConnectionError::UnsupportedRoute);
     }
-    if !matches!(&plan.credential, CredentialMaterial::Password(_)) {
+    if !matches!(
+        &plan.credential,
+        CredentialMaterial::Password(_) | CredentialMaterial::PrivateKey(_)
+    ) {
         return Err(SshConnectionError::UnsupportedCredential);
     }
 
@@ -601,6 +606,20 @@ pub enum SshConnectionError {
     /// The saved credential cannot be used by this concrete engine slice.
     #[error("SSH credential kind is not supported by the concrete client engine")]
     UnsupportedCredential,
+    /// The stored key is not a valid OpenSSH private key.
+    #[error("the stored SSH private key is invalid or unreadable")]
+    InvalidPrivateKey,
+    /// An encrypted key needs a passphrase flow before it can be used.
+    #[error("this SSH private key is encrypted; passphrase entry is not available yet")]
+    EncryptedPrivateKey,
+    /// The parsed key uses an algorithm without a signer in this build.
+    #[error("this SSH private key algorithm is not supported in this build")]
+    UnsupportedPrivateKey,
+    /// The server rejected RSA-SHA2-512; this build cannot discover or offer SHA-256.
+    #[error(
+        "RSA key authentication was rejected; verify the key and whether the server accepts rsa-sha2-512 (rsa-sha2-256 selection is not available in this build)"
+    )]
+    RsaAuthenticationRejected,
     /// The peer completed key exchange without a key callback result.
     #[error("SSH server did not present a host key")]
     HostKeyProbeMissing,
@@ -645,7 +664,43 @@ pub struct SshConnection {
     connection: ClientConnection,
     lifecycle: ConnectionLifecycle,
     username: String,
-    password: SecretVec,
+    credential: Option<CredentialMaterial>,
+}
+
+enum SoftwareKeySigner {
+    Ed25519(Ed25519SshSigner),
+    P256(P256SshSigner),
+    Rsa(Box<RsaSshSigner>),
+}
+
+fn parse_software_key(material: &SecretVec) -> Result<SoftwareKeySigner, SshConnectionError> {
+    if material.len() > MAX_SSH_INPUT {
+        return Err(SshConnectionError::InputTooLarge {
+            field: "private key",
+            limit: MAX_SSH_INPUT,
+        });
+    }
+    let key = PrivateKey::from_openssh(material.as_bytes())
+        .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
+    if key.is_encrypted() {
+        return Err(SshConnectionError::EncryptedPrivateKey);
+    }
+    if let Some(ed25519) = key.key_data().ed25519() {
+        let signing_key = Ed25519SigningKey::from_bytes(ed25519.private.as_ref())
+            .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
+        return Ok(SoftwareKeySigner::Ed25519(Ed25519SshSigner::new(signing_key)));
+    }
+    if let Some(EcdsaKeypair::NistP256 { private, .. }) = key.key_data().ecdsa() {
+        let signing_key = P256SigningKey::from_bytes(private.as_ref())
+            .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
+        return Ok(SoftwareKeySigner::P256(P256SshSigner::new(signing_key)));
+    }
+    if key.key_data().rsa().is_some() {
+        return RsaSshSigner::new(key, SignatureAlgorithm::RsaSha2_512)
+            .map(|signer| SoftwareKeySigner::Rsa(Box::new(signer)))
+            .map_err(|_| SshConnectionError::InvalidPrivateKey);
+    }
+    Err(SshConnectionError::UnsupportedPrivateKey)
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -661,8 +716,8 @@ impl SshConnection {
     /// Open a direct SSH connection and complete key exchange.
     ///
     /// Omitting `trust` is fail-closed and rejects every host key. Route
-    /// composition and non-password credentials remain explicit errors until
-    /// their platform adapters are connected.
+    /// composition and credentials other than passwords and software keys
+    /// remain explicit errors until their adapters are connected.
     pub async fn connect(
         plan: &ConnectionPlan,
         trust: Option<HostKeyTrust>,
@@ -670,7 +725,10 @@ impl SshConnection {
         if !matches!(&plan.route, ConnectionRoute::Direct) {
             return Err(SshConnectionError::UnsupportedRoute);
         }
-        if !matches!(&plan.credential, CredentialMaterial::Password(_)) {
+        if !matches!(
+            &plan.credential,
+            CredentialMaterial::Password(_) | CredentialMaterial::PrivateKey(_)
+        ) {
             return Err(SshConnectionError::UnsupportedCredential);
         }
         let verifier = trust.unwrap_or_else(|| {
@@ -694,14 +752,11 @@ impl SshConnection {
                 return Err(SshConnectionError::Engine(error));
             }
         };
-        let CredentialMaterial::Password(password) = &plan.credential else {
-            unreachable!("credential checked above")
-        };
         Ok(Self {
             connection,
             lifecycle,
             username: plan.username.clone(),
-            password: password.clone(),
+            credential: Some(plan.credential.clone()),
         })
     }
 
@@ -711,13 +766,31 @@ impl SshConnection {
         self.lifecycle.state()
     }
 
-    /// Authenticate with the password resolved for this plan.
+    /// Authenticate with the credential resolved for this plan.
     pub async fn authenticate(&mut self) -> Result<(), SshConnectionError> {
+        self.lifecycle.transition(ConnectionState::Authenticating)?;
         let username = self.username.clone();
-        let password = std::mem::replace(&mut self.password, SecretVec::new(Vec::new()));
-        let result = self.authenticate_with(&username, &password).await;
-        drop(password);
-        result
+        let credential = self.credential.take().ok_or(SshConnectionError::UnsupportedCredential)?;
+        let result = match credential {
+            CredentialMaterial::Password(password) => {
+                if password.len() > MAX_SSH_INPUT {
+                    Err(SshConnectionError::InputTooLarge {
+                        field: "password",
+                        limit: MAX_SSH_INPUT,
+                    })
+                } else {
+                    self.connection
+                        .authenticate_password(&username, password.as_bytes())
+                        .await
+                        .map_err(SshConnectionError::Engine)
+                }
+            }
+            CredentialMaterial::PrivateKey(key) => {
+                self.authenticate_private_key(&username, &key).await
+            }
+            _ => Err(SshConnectionError::UnsupportedCredential),
+        };
+        self.finish_authentication(result)
     }
 
     /// Authenticate with an explicit username and password.
@@ -727,20 +800,54 @@ impl SshConnection {
         password: &SecretVec,
     ) -> Result<(), SshConnectionError> {
         self.lifecycle.transition(ConnectionState::Authenticating)?;
-        if password.len() > MAX_SSH_INPUT {
-            return Err(SshConnectionError::InputTooLarge {
-                field: "password",
-                limit: MAX_SSH_INPUT,
-            });
-        }
-        match self.connection.authenticate_password(username, password.as_bytes()).await {
-            Ok(()) => {
-                self.lifecycle.transition(ConnectionState::Open)?;
-                Ok(())
+        self.credential.take();
+        let result = if password.len() > MAX_SSH_INPUT {
+            Err(SshConnectionError::InputTooLarge { field: "password", limit: MAX_SSH_INPUT })
+        } else {
+            self.connection
+                .authenticate_password(username, password.as_bytes())
+                .await
+                .map_err(SshConnectionError::Engine)
+        };
+        self.finish_authentication(result)
+    }
+
+    async fn authenticate_private_key(
+        &mut self,
+        username: &str,
+        material: &SecretVec,
+    ) -> Result<(), SshConnectionError> {
+        let signer = parse_software_key(material)?;
+        match signer {
+            SoftwareKeySigner::Ed25519(signer) => {
+                self.connection.authenticate_publickey(username, &signer).await.map_err(Into::into)
             }
+            SoftwareKeySigner::P256(signer) => {
+                self.connection.authenticate_publickey(username, &signer).await.map_err(Into::into)
+            }
+            SoftwareKeySigner::Rsa(signer) => {
+                self.connection.authenticate_publickey(username, signer.as_ref()).await.map_err(
+                    |error| {
+                        if matches!(error, ClientError::AuthenticationRejected { .. }) {
+                            SshConnectionError::RsaAuthenticationRejected
+                        } else {
+                            SshConnectionError::Engine(error)
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    fn finish_authentication(
+        &mut self,
+        result: Result<(), SshConnectionError>,
+    ) -> Result<(), SshConnectionError> {
+        match result {
+            Ok(()) => self.lifecycle.transition(ConnectionState::Open).map_err(Into::into),
             Err(error) => {
                 let _ = self.lifecycle.transition(ConnectionState::Failed);
-                Err(SshConnectionError::Engine(error))
+                Err(error)
             }
         }
     }
@@ -877,6 +984,7 @@ impl SshSession {
 #[cfg(test)]
 mod tests {
     use scoplen_crypto::{LocalDatabaseKey, SecretVec};
+    use ssh_key::{Algorithm, EcdsaCurve};
     use tempfile::tempdir;
 
     use super::*;
@@ -887,6 +995,42 @@ mod tests {
         let store = Store::open(&dir.path().join("local.db"), &LocalDatabaseKey::new([7; 32]))
             .expect("store");
         (dir, store)
+    }
+
+    #[test]
+    fn software_key_parser_accepts_supported_openssh_keys() {
+        let mut rng = ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng);
+        for (algorithm, expected) in [
+            (Algorithm::Ed25519, "ed25519"),
+            (Algorithm::Ecdsa { curve: EcdsaCurve::NistP256 }, "p256"),
+            (Algorithm::Rsa { hash: None }, "rsa"),
+        ] {
+            let key = PrivateKey::random(&mut rng, algorithm).expect("test key");
+            let pem = key.to_openssh(Default::default()).expect("OpenSSH encoding");
+            let material = SecretVec::new(pem.as_bytes().to_vec());
+            let parsed = parse_software_key(&material).expect("supported key");
+            assert!(matches!(
+                (parsed, expected),
+                (SoftwareKeySigner::Ed25519(_), "ed25519")
+                    | (SoftwareKeySigner::P256(_), "p256")
+                    | (SoftwareKeySigner::Rsa(_), "rsa")
+            ));
+            assert!(!format!("{material:?}").contains("OPENSSH PRIVATE KEY"));
+        }
+    }
+
+    #[test]
+    fn software_key_parser_rejects_bad_or_oversized_material_without_disclosing_it() {
+        let bad = SecretVec::new(b"-----BEGIN OPENSSH PRIVATE KEY-----\nnot-a-key".to_vec());
+        let error = parse_software_key(&bad).err().expect("invalid key rejected");
+        assert!(matches!(error, SshConnectionError::InvalidPrivateKey));
+        assert!(!error.to_string().contains("not-a-key"));
+
+        let oversized = SecretVec::new(vec![b'X'; MAX_SSH_INPUT + 1]);
+        assert!(matches!(
+            parse_software_key(&oversized),
+            Err(SshConnectionError::InputTooLarge { field: "private key", .. })
+        ));
     }
 
     #[test]

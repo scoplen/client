@@ -88,17 +88,23 @@ The empty Hosts list can open a native file picker and preview a limited OpenSSH
 ## Direct SSH session
 
 `scoplen-client-core::connection` resolves an AccessProfile into a direct
-endpoint and device-local password material, then owns the concrete
+endpoint and device-local credential material, then owns the concrete
 `scoplen-ssh` connection and session channels. The Tauri `session_connect`
 command reads active host-specific trust records before opening a socket;
 new, changed, revoked, wildcard-only, and CA records are rejected. Password
-authentication, one command, and an optional PTY shell are available now.
+and unencrypted OpenSSH Ed25519, ECDSA P-256, and RSA private-key authentication,
+one command, and an optional PTY shell are available now. Encrypted keys require
+a passphrase flow; ECDSA P-384/P-521 require the shared signer API. Both return
+explicit errors in this build.
+RSA uses SHA-512 signatures; this pinned shared version has no server RSA-SHA2
+discovery, so a server requiring SHA-256 can reject the key and receives an
+explicit diagnostic. SHA-1 is never offered.
 Output is delivered as bounded binary frames (8 MiB aggregate per session),
 and command/input fields are bounded at 64 KiB. The desktop session view uses
 `@scoplen/terminal` to interpret ANSI/VT output. A process-local session
 registry routes bounded input frames and close requests to the owning SSH
 channel; disconnecting the tab closes that channel. Jump and proxy routes,
-non-password credentials, reconnect ownership, and saved scrollback remain
+other credentials, reconnect ownership, and saved scrollback remain
 later connection slices.
 
 ## Localization
