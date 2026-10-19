@@ -3,6 +3,7 @@
 //! The smallest live SSH IPC path: resolve one local profile, connect through
 //! the shared engine, and stream channel bytes as binary Tauri frames.
 
+use crate::events::{SessionChangeKind, SessionChanged};
 use crate::frames::{FrameSender, RawFrame};
 use crate::local_data::LocalDataState;
 use scoplen_client_core::connection::{
@@ -10,10 +11,13 @@ use scoplen_client_core::connection::{
     SshExecOutput, SshSession, StoredHostKeyVerifier, evaluate_host_key, probe_host_key,
     terminal_size,
 };
-use scoplen_client_core::inventory::{DeletionStore, Inventory};
+use scoplen_client_core::inventory::{
+    DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome,
+};
 use scoplen_client_core::repository::{
     Edit, Provenance, Repository, TrustRecord, TrustRecordChange,
 };
+use scoplen_client_core::session_lifecycle::SessionHistoryLease;
 use scoplen_ssh::ChannelEvent;
 use serde::Serialize;
 use specta::Type;
@@ -21,6 +25,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
+use tauri_specta::Event as _;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 const SESSION_COMMAND_QUEUE: usize = 64;
@@ -38,6 +43,17 @@ struct SessionEntry {
     pty: bool,
 }
 
+struct SessionRegistration<'a> {
+    registry: &'a SessionRegistry,
+    session_id: String,
+}
+
+impl Drop for SessionRegistration<'_> {
+    fn drop(&mut self) {
+        self.registry.remove(&self.session_id);
+    }
+}
+
 /// Routes frontend session commands to their owning SSH connection task.
 ///
 /// The registry is process-local and holds no credentials or channel bytes after
@@ -49,7 +65,11 @@ pub struct SessionRegistry {
 }
 
 impl SessionRegistry {
-    fn register(&self, session_id: &str, pty: bool) -> Result<Receiver<SessionCommand>, String> {
+    fn register(
+        &self,
+        session_id: &str,
+        pty: bool,
+    ) -> Result<(SessionRegistration<'_>, Receiver<SessionCommand>), String> {
         if session_id.trim().is_empty() {
             return Err("session id must not be empty".to_owned());
         }
@@ -60,7 +80,7 @@ impl SessionRegistry {
             return Err("session is already connected".to_owned());
         }
         sessions.insert(session_id.to_owned(), SessionEntry { sender, pty });
-        Ok(receiver)
+        Ok((SessionRegistration { registry: self, session_id: session_id.to_owned() }, receiver))
     }
 
     fn remove(&self, session_id: &str) {
@@ -207,6 +227,7 @@ pub async fn session_trust_host_key(
 #[specta::specta]
 #[allow(clippy::too_many_arguments)] // Tauri injects both state arguments.
 pub async fn session_connect(
+    app: tauri::AppHandle,
     local: tauri::State<'_, LocalDataState>,
     registry: tauri::State<'_, SessionRegistry>,
     profile_id: String,
@@ -216,15 +237,14 @@ pub async fn session_connect(
     frames: Channel<RawFrame>,
     ready: Channel<()>,
 ) -> Result<(), String> {
-    let mut commands =
-        if command.is_none() { Some(registry.register(&session_id, pty)?) } else { None };
-    let result =
-        session_connect_inner(&local, profile_id, command, pty, frames, ready, commands.as_mut())
-            .await;
-    if commands.is_some() {
-        registry.remove(&session_id);
-    }
-    result
+    let (_registration, mut commands) = if command.is_none() {
+        let (registration, receiver) = registry.register(&session_id, pty)?;
+        (Some(registration), Some(receiver))
+    } else {
+        (None, None)
+    };
+    session_connect_inner(&app, &local, profile_id, command, pty, frames, ready, commands.as_mut())
+        .await
 }
 
 /// Sends one bounded input chunk to a live shell session.
@@ -264,7 +284,9 @@ pub fn session_close_transport(
     registry.send(&session_id, SessionCommand::Close)
 }
 
+#[allow(clippy::too_many_arguments)] // Forwards the IPC request and both channels into the connection task.
 async fn session_connect_inner(
+    app: &tauri::AppHandle,
     local: &LocalDataState,
     profile_id: String,
     command: Option<String>,
@@ -275,10 +297,20 @@ async fn session_connect_inner(
 ) -> Result<(), String> {
     let store = local.store().ok_or_else(|| "local data is locked".to_owned())?;
     let inventory = Inventory::with_deletions(store.clone(), DeletionStore::default());
-    let plan = inventory.connection_plan(profile_id).map_err(|error| error.to_string())?;
+    let plan = inventory.connection_plan(profile_id.clone()).map_err(|error| error.to_string())?;
     let records =
         Repository::<TrustRecord>::new(&store).list().map_err(|error| error.to_string())?;
     let trust: HostKeyTrust = Arc::new(StoredHostKeyVerifier::new(plan.host_id, records));
+    let closed_app = app.clone();
+    let history =
+        SessionHistoryLease::start(inventory, profile_id, RecentSessionKind::Terminal, move |id| {
+            let _ = SessionChanged { session_id: id.to_owned(), change: SessionChangeKind::Closed }
+                .emit(&closed_app);
+        })
+        .map_err(|error| error.to_string())?;
+    let _ =
+        SessionChanged { session_id: history.id().to_owned(), change: SessionChangeKind::Opened }
+            .emit(app);
     let mut connection =
         SshConnection::connect(&plan, Some(trust)).await.map_err(display_connection_error)?;
     drop(plan);
@@ -302,7 +334,8 @@ async fn session_connect_inner(
         ready.send(()).map_err(|_| "session readiness channel is closed".to_owned())?;
         stream_channel(&mut session, &sender, commands).await?;
     }
-    connection.close().await.map_err(display_connection_error)
+    connection.close().await.map_err(display_connection_error)?;
+    history.finish(RecentSessionOutcome::Closed).map_err(|error| error.to_string())
 }
 
 fn default_pty() -> scoplen_ssh::PtyRequest {
@@ -370,15 +403,20 @@ fn now_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{SessionCommand, SessionRegistry};
+    use std::sync::Arc;
 
     #[test]
     fn registry_routes_commands_and_rejects_duplicate_sessions() {
         let registry = SessionRegistry::default();
-        assert_eq!(registry.register(" ", true).unwrap_err(), "session id must not be empty");
-
-        let mut receiver = registry.register("session-1", true).expect("register session");
         assert_eq!(
-            registry.register("session-1", true).unwrap_err(),
+            registry.register(" ", true).err().expect("empty id rejected"),
+            "session id must not be empty"
+        );
+
+        let (registration, mut receiver) =
+            registry.register("session-1", true).expect("register session");
+        assert_eq!(
+            registry.register("session-1", true).err().expect("duplicate rejected"),
             "session is already connected"
         );
         registry.send("session-1", SessionCommand::Input(vec![1, 2, 3])).expect("route input");
@@ -396,7 +434,7 @@ mod tests {
         );
         assert_eq!(receiver.try_recv().expect("close command"), SessionCommand::Close);
 
-        registry.remove("session-1");
+        drop(registration);
         assert_eq!(
             registry.send("session-1", SessionCommand::Close).unwrap_err(),
             "session is not connected"
@@ -406,7 +444,8 @@ mod tests {
     #[test]
     fn registry_rejects_resize_without_pty() {
         let registry = SessionRegistry::default();
-        let mut receiver = registry.register("session-2", false).expect("register session");
+        let (_registration, mut receiver) =
+            registry.register("session-2", false).expect("register session");
         assert_eq!(
             registry
                 .send("session-2", SessionCommand::Resize { columns: 120, rows: 40 })
@@ -414,5 +453,32 @@ mod tests {
             "session has no PTY to resize"
         );
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn cancelled_connection_future_releases_transport_id() {
+        let registry = Arc::new(SessionRegistry::default());
+        let runtime =
+            tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
+        runtime.block_on(async {
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let task = tokio::spawn({
+                let registry = registry.clone();
+                async move {
+                    let (_registration, _receiver) =
+                        registry.register("transport-1", true).expect("register");
+                    let _ = started.send(());
+                    std::future::pending::<()>().await;
+                }
+            });
+            ready.await.expect("registered");
+            task.abort();
+            assert!(task.await.expect_err("cancelled").is_cancelled());
+        });
+        assert_eq!(
+            registry.send("transport-1", SessionCommand::Close).unwrap_err(),
+            "session is not connected"
+        );
+        let (_registration, _receiver) = registry.register("transport-1", true).expect("reusable");
     }
 }

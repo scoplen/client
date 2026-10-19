@@ -120,6 +120,15 @@ channel; disconnecting the tab closes that channel. Jump and proxy routes,
 other credentials, reconnect ownership, and saved scrollback remain
 later connection slices.
 
+After local profile and trust-record preflight, each `session_connect` attempt
+owns a `session_lifecycle::SessionHistoryLease` with a store-generated UUIDv7,
+independent of the frontend transport ID. Normal completion records `Closed`;
+error returns and cancelled futures record `Failed` through the lease's drop
+fallback. Opened and closed `SessionChanged` events refresh the existing Recent
+view. A separate registration guard releases the process-local transport ID on
+every exit, including future cancellation. Invalid profiles and locked stores
+are rejected before creating a history row.
+
 ## Localization
 
 Messages are ICU MessageFormat catalogs in `web/app/src/messages`. English (`en.ts`) is the source; every other catalog has its type, so a missing key fails type checking, and the catalog tests format every message. The interface language is chosen in the core (`Locale::negotiate`) from the system's preferred languages: Simplified Chinese for `zh-Hans` and Simplified-script regions, otherwise English. A language setting arrives with Preference objects (roadmap C2).

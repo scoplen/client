@@ -1952,11 +1952,11 @@ impl Inventory {
         resolve_connection_plan(&self.store, profile_id)
     }
 
-    /// Records the opening of a session after validating its live login.
+    /// Records a connection attempt after validating its live login.
     ///
-    /// The connection engine calls this only after it has accepted ownership
-    /// of a transport. This method does not open a socket or claim that an SSH
-    /// connection succeeded; it records the device-local lifecycle event.
+    /// The connection engine calls this only after it accepts a real attempt.
+    /// This method does not open a socket or claim that SSH succeeded; its
+    /// owner records a terminal outcome even if dialing fails or is cancelled.
     pub fn open_session(
         &self,
         profile_id: String,
@@ -1975,13 +1975,20 @@ impl Inventory {
             .store
             .record_session_start(profile_id, session_store_kind(kind))
             .map_err(session_failure)?;
-        self.recent_sessions()
-            .map_err(|error| SessionError::Failed { reference: error.to_string() })?
-            .into_iter()
-            .find(|entry| entry.id == id(session))
-            .ok_or_else(|| SessionError::Failed {
-                reference: "the opened session disappeared from local history".into(),
-            })
+        let opened = self
+            .recent_sessions()
+            .map_err(|error| SessionError::Failed { reference: error.to_string() })
+            .and_then(|entries| {
+                entries.into_iter().find(|entry| entry.id == id(session)).ok_or_else(|| {
+                    SessionError::Failed {
+                        reference: "the opened session disappeared from local history".into(),
+                    }
+                })
+            });
+        if opened.is_err() {
+            let _ = self.store.record_session_end(session, SessionOutcome::Failed);
+        }
+        opened
     }
 
     /// Records the terminal outcome of an open session.

@@ -22,6 +22,11 @@ Interactive SSH sessions become ready after authentication and shell setup,
 even when the server sends no initial output. Terminal input and PTY resizing
 are available without waiting for a welcome message or prompt.
 
+Accepted SSH connection attempts appear in Recent using device-local history.
+Normal completion records `Closed`; connection errors and cancelled connection
+tasks record `Failed`. Closing a tab releases its transport registration.
+Reconnecting from Recent remains a later session-management outcome.
+
 ## What it does not do
 
 - It sends nothing to the vendor: no telemetry, update server, or crash-report endpoint in Phase 1.
