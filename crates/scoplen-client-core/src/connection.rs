@@ -25,7 +25,7 @@ use scoplen_ssh::{
     ServerRsaSha2Selection, SignatureAlgorithm, WindowChangeRequest,
 };
 use sha2::{Digest as _, Sha256};
-use ssh_key::PrivateKey;
+use ssh_key::{Kdf, PrivateKey};
 use uuid::Uuid;
 
 use crate::repository::{
@@ -529,6 +529,10 @@ fn store_error(error: impl std::error::Error) -> ConnectionPlanError {
 
 /// Maximum command or channel input accepted by the client engine.
 pub const MAX_SSH_INPUT: usize = 64 * 1024;
+/// Maximum length of an entered OpenSSH private-key passphrase.
+pub const MAX_PRIVATE_KEY_PASSPHRASE: usize = 4096;
+/// Maximum bcrypt work factor accepted from an imported OpenSSH key.
+pub const MAX_PRIVATE_KEY_BCRYPT_ROUNDS: u32 = 256;
 /// Maximum aggregate output retained by one session.
 pub const MAX_SSH_OUTPUT: usize = 8 * 1024 * 1024;
 /// Maximum supported terminal width or height in character cells.
@@ -614,9 +618,15 @@ pub enum SshConnectionError {
     /// The stored key is not a valid OpenSSH private key.
     #[error("the stored SSH private key is invalid or unreadable")]
     InvalidPrivateKey,
-    /// An encrypted key needs a passphrase flow before it can be used.
-    #[error("this SSH private key is encrypted; passphrase entry is not available yet")]
+    /// An encrypted key cannot be opened without its passphrase.
+    #[error("enter the passphrase for this SSH private key")]
     EncryptedPrivateKey,
+    /// The supplied passphrase could not open the encrypted key.
+    #[error("the SSH private-key passphrase is incorrect or the key is unreadable")]
+    InvalidPrivateKeyPassphrase,
+    /// The imported key requests an unsafe bcrypt work factor or salt size.
+    #[error("this SSH private key uses unsupported passphrase work parameters")]
+    PrivateKeyKdfTooExpensive,
     /// The parsed key uses an algorithm without a signer in this build.
     #[error("this SSH private key algorithm is not supported in this build")]
     UnsupportedPrivateKey,
@@ -757,17 +767,61 @@ enum SoftwareKeySigner {
     Rsa(Box<PrivateKey>),
 }
 
-fn parse_software_key(material: &SecretVec) -> Result<SoftwareKeySigner, SshConnectionError> {
+fn read_software_key(material: &SecretVec) -> Result<PrivateKey, SshConnectionError> {
     if material.len() > MAX_SSH_INPUT {
         return Err(SshConnectionError::InputTooLarge {
             field: "private key",
             limit: MAX_SSH_INPUT,
         });
     }
-    let key = PrivateKey::from_openssh(material.as_bytes())
-        .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
+    PrivateKey::from_openssh(material.as_bytes()).map_err(|_| SshConnectionError::InvalidPrivateKey)
+}
+
+fn validate_private_key_kdf(kdf: &Kdf) -> Result<(), SshConnectionError> {
+    match kdf {
+        Kdf::Bcrypt { salt, rounds }
+            if (1..=64).contains(&salt.len())
+                && (1..=MAX_PRIVATE_KEY_BCRYPT_ROUNDS).contains(rounds) => {}
+        _ => return Err(SshConnectionError::PrivateKeyKdfTooExpensive),
+    }
+    Ok(())
+}
+
+/// Whether a saved software key needs a one-time passphrase before authentication.
+/// The encrypted key's KDF parameters are checked before the UI asks for a secret.
+pub fn private_key_passphrase_required(
+    credential: &CredentialMaterial,
+) -> Result<bool, SshConnectionError> {
+    if let CredentialMaterial::PrivateKey(material) = credential {
+        let key = read_software_key(material)?;
+        if key.is_encrypted() {
+            validate_private_key_kdf(key.kdf())?;
+        }
+        Ok(key.is_encrypted())
+    } else {
+        Ok(false)
+    }
+}
+
+fn parse_software_key(
+    material: &SecretVec,
+    passphrase: Option<&SecretVec>,
+) -> Result<SoftwareKeySigner, SshConnectionError> {
+    let mut key = read_software_key(material)?;
     if key.is_encrypted() {
-        return Err(SshConnectionError::EncryptedPrivateKey);
+        validate_private_key_kdf(key.kdf())?;
+        let passphrase = passphrase
+            .filter(|value| value.len() != 0)
+            .ok_or(SshConnectionError::EncryptedPrivateKey)?;
+        if passphrase.len() > MAX_PRIVATE_KEY_PASSPHRASE {
+            return Err(SshConnectionError::InputTooLarge {
+                field: "private-key passphrase",
+                limit: MAX_PRIVATE_KEY_PASSPHRASE,
+            });
+        }
+        key = key
+            .decrypt(passphrase.as_bytes())
+            .map_err(|_| SshConnectionError::InvalidPrivateKeyPassphrase)?;
     }
     if let Some(ed25519) = key.key_data().ed25519() {
         let signing_key = Ed25519SigningKey::from_bytes(ed25519.private.as_ref())
@@ -860,6 +914,15 @@ impl SshConnection {
 
     /// Authenticate with the credential resolved for this plan.
     pub async fn authenticate(&mut self) -> Result<(), SshConnectionError> {
+        self.authenticate_with_passphrase(None).await
+    }
+
+    /// Authenticate with a one-time passphrase for an encrypted software key.
+    /// The passphrase is dropped after authentication and is never saved.
+    pub async fn authenticate_with_passphrase(
+        &mut self,
+        passphrase: Option<SecretVec>,
+    ) -> Result<(), SshConnectionError> {
         self.lifecycle.transition(ConnectionState::Authenticating)?;
         let username = self.username.clone();
         let credential = self.credential.take().ok_or(SshConnectionError::UnsupportedCredential)?;
@@ -878,7 +941,7 @@ impl SshConnection {
                 }
             }
             CredentialMaterial::PrivateKey(key) => {
-                self.authenticate_private_key(&username, &key).await
+                self.authenticate_private_key(&username, key, passphrase).await
             }
             _ => Err(SshConnectionError::UnsupportedCredential),
         };
@@ -907,9 +970,13 @@ impl SshConnection {
     async fn authenticate_private_key(
         &mut self,
         username: &str,
-        material: &SecretVec,
+        material: SecretVec,
+        passphrase: Option<SecretVec>,
     ) -> Result<(), SshConnectionError> {
-        let signer = parse_software_key(material)?;
+        let signer =
+            tokio::task::spawn_blocking(move || parse_software_key(&material, passphrase.as_ref()))
+                .await
+                .map_err(|_| SshConnectionError::InvalidPrivateKey)??;
         match signer {
             SoftwareKeySigner::Ed25519(signer) => {
                 self.connection.authenticate_publickey(username, &signer).await.map_err(Into::into)
@@ -1080,7 +1147,7 @@ impl SshSession {
 #[cfg(test)]
 mod tests {
     use scoplen_crypto::{LocalDatabaseKey, SecretVec};
-    use ssh_key::{Algorithm, EcdsaCurve};
+    use ssh_key::{Algorithm, Cipher, EcdsaCurve};
     use tempfile::tempdir;
 
     use super::*;
@@ -1178,7 +1245,7 @@ mod tests {
             let key = PrivateKey::random(&mut rng, algorithm).expect("test key");
             let pem = key.to_openssh(Default::default()).expect("OpenSSH encoding");
             let material = SecretVec::new(pem.as_bytes().to_vec());
-            let parsed = parse_software_key(&material).expect("supported key");
+            let parsed = parse_software_key(&material, None).expect("supported key");
             assert!(matches!(
                 (parsed, expected),
                 (SoftwareKeySigner::Ed25519(_), "ed25519")
@@ -1187,6 +1254,73 @@ mod tests {
             ));
             assert!(!format!("{material:?}").contains("OPENSSH PRIVATE KEY"));
         }
+    }
+
+    #[test]
+    fn encrypted_software_keys_need_the_correct_one_time_passphrase() {
+        let mut rng = ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng);
+        let passphrase = SecretVec::new(b"disposable-test-passphrase".to_vec());
+        let wrong = SecretVec::new(b"wrong-passphrase".to_vec());
+        for algorithm in [
+            Algorithm::Ed25519,
+            Algorithm::Ecdsa { curve: EcdsaCurve::NistP256 },
+            Algorithm::Rsa { hash: None },
+        ] {
+            let key = PrivateKey::random(&mut rng, algorithm).expect("test key");
+            let encrypted = key
+                .encrypt_with(
+                    Cipher::Aes256Ctr,
+                    Kdf::Bcrypt { salt: vec![7; 16], rounds: 16 },
+                    42,
+                    passphrase.as_bytes(),
+                )
+                .expect("encrypt test key");
+            let text = encrypted.to_openssh(Default::default()).expect("OpenSSH text");
+            let material = SecretVec::new(text.as_bytes().to_vec());
+            assert!(
+                private_key_passphrase_required(&CredentialMaterial::PrivateKey(material.clone()))
+                    .unwrap()
+            );
+            assert!(matches!(
+                parse_software_key(&material, None),
+                Err(SshConnectionError::EncryptedPrivateKey)
+            ));
+            assert!(matches!(
+                parse_software_key(&material, Some(&wrong)),
+                Err(SshConnectionError::InvalidPrivateKeyPassphrase)
+            ));
+            assert!(parse_software_key(&material, Some(&passphrase)).is_ok());
+            assert!(!format!("{material:?}").contains("OPENSSH PRIVATE KEY"));
+        }
+    }
+
+    #[test]
+    fn encrypted_key_kdf_and_passphrase_are_bounded_before_decryption() {
+        let salt = vec![7; 16];
+        for rounds in [1, 16, 256, MAX_PRIVATE_KEY_BCRYPT_ROUNDS] {
+            assert!(validate_private_key_kdf(&Kdf::Bcrypt { salt: salt.clone(), rounds }).is_ok());
+        }
+        for (salt, rounds) in [
+            (Vec::new(), 16),
+            (vec![7; 65], 16),
+            (vec![7; 16], 0),
+            (vec![7; 16], MAX_PRIVATE_KEY_BCRYPT_ROUNDS + 1),
+        ] {
+            assert!(matches!(
+                validate_private_key_kdf(&Kdf::Bcrypt { salt, rounds }),
+                Err(SshConnectionError::PrivateKeyKdfTooExpensive)
+            ));
+        }
+        let mut rng = ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng);
+        let key = PrivateKey::random(&mut rng, Algorithm::Ed25519).expect("test key");
+        let encrypted = key.encrypt(&mut rng, b"test").expect("encrypted key");
+        let text = encrypted.to_openssh(Default::default()).expect("OpenSSH text");
+        let material = SecretVec::new(text.as_bytes().to_vec());
+        let oversized = SecretVec::new(vec![b'x'; MAX_PRIVATE_KEY_PASSPHRASE + 1]);
+        assert!(matches!(
+            parse_software_key(&material, Some(&oversized)),
+            Err(SshConnectionError::InputTooLarge { field: "private-key passphrase", .. })
+        ));
     }
 
     #[test]
@@ -1212,13 +1346,13 @@ mod tests {
     #[test]
     fn software_key_parser_rejects_bad_or_oversized_material_without_disclosing_it() {
         let bad = SecretVec::new(b"-----BEGIN OPENSSH PRIVATE KEY-----\nnot-a-key".to_vec());
-        let error = parse_software_key(&bad).err().expect("invalid key rejected");
+        let error = parse_software_key(&bad, None).err().expect("invalid key rejected");
         assert!(matches!(error, SshConnectionError::InvalidPrivateKey));
         assert!(!error.to_string().contains("not-a-key"));
 
         let oversized = SecretVec::new(vec![b'X'; MAX_SSH_INPUT + 1]);
         assert!(matches!(
-            parse_software_key(&oversized),
+            parse_software_key(&oversized, None),
             Err(SshConnectionError::InputTooLarge { field: "private key", .. })
         ));
     }

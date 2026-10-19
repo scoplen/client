@@ -22,6 +22,7 @@ tauri-build.workspace = true
 [dependencies]
 scoplen-client-core.workspace = true
 scoplen-client-platform.workspace = true
+scoplen-crypto.workspace = true
 scoplen-model.workspace = true
 scoplen-ssh.workspace = true
 uuid.workspace = true

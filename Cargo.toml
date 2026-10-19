@@ -19,7 +19,7 @@ repository = "https://github.com/scoplen/client"
 scoplen-client-core = { path = "crates/scoplen-client-core" }
 scoplen-client-platform = { path = "crates/scoplen-client-platform" }
 scoplen-ssh = { git = "https://github.com/scoplen/proto.git", rev = "f473abf" }
-ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["ed25519", "getrandom", "p256", "p384", "p521", "rsa", "std"] }
+ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["ed25519", "encryption", "getrandom", "p256", "p384", "p521", "rsa", "std"] }
 base64 = "0.22.1"
 rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl"] }
 scoplen-crypto = { git = "https://github.com/scoplen/proto.git", rev = "f473abf" }
