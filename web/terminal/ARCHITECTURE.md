@@ -41,6 +41,10 @@ can bound transport memory even when a profile keeps a larger scrollback.
 5. Reconnecting creates a fresh renderer and replays the bounded byte history;
    the package does not claim durable session serialization.
 
+The React binding assigns `source` only when the source identity changes. Profile,
+theme, sink, and limit updates preserve an existing subscription, so rendering a
+new profile object cannot restart a caller-owned transport.
+
 If xterm.js cannot initialize, the element switches to a `pre` text fallback,
 emits a `renderer` error, and keeps the same binary source/sink and accessibility
 surface. This fallback is for host capability failures; it is not a terminal

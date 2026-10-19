@@ -4,6 +4,7 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Fixed terminal profile and theme changes restarting the same source subscription and opening a duplicate SSH connection.
 - Connected real SSH attempts to device-local Recent history, recording normal completion, errors, and cancelled connection tasks, and releasing transport registrations when a task is cancelled.
 - Upgraded the shared SSH contract and connected OpenSSH ECDSA P-384/P-521 keys and bounded RSA `server-sig-algs` selection. SHA-256-only and SHA-512 servers authenticate with their advertised SHA-2 algorithm; SHA-1-only servers fail closed without a fallback.
 - Connected saved unencrypted OpenSSH Ed25519, ECDSA P-256, and RSA software keys to direct SSH public-key authentication, with explicit encrypted, invalid, unsupported-key, and RSA-SHA2-512 rejection errors and unchanged host-key trust checks.
