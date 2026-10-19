@@ -92,14 +92,28 @@ describe("independent inventory objects", () => {
 
   it("presents orphaned logins with restore and delete actions", async () => {
     const api = sampleInventory(sampleHosts());
+    const accessProfiles = api.accessProfiles;
+    let holdReload = false;
+    let releaseReload!: () => void;
+    const reload = new Promise<void>((resolve) => {
+      releaseReload = resolve;
+    });
+    api.accessProfiles = async () => {
+      const result = await accessProfiles();
+      if (holdReload) await reload;
+      return result;
+    };
     await api.deleteHost("h-api-1");
     show(api, "logins");
     expect(await screen.findByRole("heading", { name: "Orphaned items" })).toBeTruthy();
     expect(screen.getAllByText(/Host no longer available/).length).toBeGreaterThan(0);
     const restore = screen.getAllByRole("button", { name: "Restore reference" })[0]!;
+    holdReload = true;
     await userEvent.click(restore);
     expect(await screen.findByText("Referenced object restored")).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Orphaned items" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Orphaned items" })).toBeTruthy();
+    releaseReload();
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Orphaned items" })).toBeNull());
     expect((await screen.findAllByText("deploy@prod-api-01")).length).toBeGreaterThan(0);
   });
 
