@@ -1,37 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The smallest live SSH IPC path: resolve one local profile, connect through
-//! the shared engine, and stream channel bytes as binary Tauri frames.
+//! Session-owned SSH preparation, per-hop user intents, and binary channel frames.
 
 use crate::events::{SessionChangeKind, SessionChanged};
 use crate::frames::{FrameSender, RawFrame};
 use crate::local_data::LocalDataState;
+use scoplen_client_core::connection::preparation::{
+    PreparationControl, PreparationEvent, PreparationResponse, prepare_connection,
+};
 use scoplen_client_core::connection::{
-    HostKeyPresentation, HostKeyStatus, HostKeyTrust, MAX_PRIVATE_KEY_PASSPHRASE, SshConnection,
-    SshConnectionError, SshExecOutput, SshSession, StoredHostKeyVerifier, evaluate_host_key,
-    private_key_passphrase_required, probe_host_key, terminal_size,
+    SshConnectionError, SshExecOutput, SshSession, terminal_size,
 };
 use scoplen_client_core::inventory::{
     DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome,
 };
-use scoplen_client_core::repository::{
-    Edit, Provenance, Repository, TrustRecord, TrustRecordChange,
-};
 use scoplen_client_core::session_lifecycle::SessionHistoryLease;
 use scoplen_crypto::SecretVec;
 use scoplen_ssh::ChannelEvent;
-use serde::Serialize;
+use serde::Deserialize;
 use specta::Type;
 use std::collections::HashMap;
+#[cfg(test)]
 use std::future::Future;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
 use tauri::ipc::Channel;
 use tauri_specta::Event as _;
 use tokio::sync::{
     mpsc::{self, Receiver, Sender},
     watch,
 };
+use uuid::Uuid;
 
 const SESSION_COMMAND_QUEUE: usize = 64;
 
@@ -46,6 +44,8 @@ struct SessionEntry {
     sender: Sender<SessionCommand>,
     close: watch::Sender<bool>,
     pty: bool,
+    preparation: PreparationControl,
+    commands: Option<Receiver<SessionCommand>>,
 }
 
 struct SessionRegistration<'a> {
@@ -70,33 +70,75 @@ pub struct SessionRegistry {
 }
 
 impl SessionRegistry {
+    #[cfg(test)]
     fn register(
         &self,
         session_id: &str,
         pty: bool,
     ) -> Result<(SessionRegistration<'_>, Receiver<SessionCommand>, watch::Receiver<bool>), String>
     {
+        self.reserve(session_id, pty)?;
+        self.claim(session_id, pty)
+    }
+
+    fn reserve(&self, session_id: &str, pty: bool) -> Result<(), String> {
         if session_id.trim().is_empty() {
             return Err("session id must not be empty".to_owned());
         }
         let (sender, receiver) = mpsc::channel(SESSION_COMMAND_QUEUE);
-        let (close_sender, close_receiver) = watch::channel(false);
+        let (close_sender, _) = watch::channel(false);
         let mut sessions =
             self.sessions.lock().map_err(|_| "session registry is unavailable".to_owned())?;
         if sessions.contains_key(session_id) {
             return Err("session is already connected".to_owned());
         }
-        sessions.insert(session_id.to_owned(), SessionEntry { sender, close: close_sender, pty });
+        sessions.insert(
+            session_id.to_owned(),
+            SessionEntry {
+                sender,
+                close: close_sender,
+                pty,
+                preparation: PreparationControl::default(),
+                commands: Some(receiver),
+            },
+        );
+        Ok(())
+    }
+
+    fn claim(
+        &self,
+        session_id: &str,
+        pty: bool,
+    ) -> Result<(SessionRegistration<'_>, Receiver<SessionCommand>, watch::Receiver<bool>), String>
+    {
+        let mut sessions = self.sessions.lock().map_err(|_| "session registry is unavailable")?;
+        let entry = sessions.get_mut(session_id).ok_or("session reservation is closed")?;
+        if entry.pty != pty {
+            return Err("session reservation has different PTY settings".into());
+        }
+        let receiver = entry.commands.take().ok_or("session is already connected")?;
+        let close = entry.close.subscribe();
         Ok((
             SessionRegistration { registry: self, session_id: session_id.to_owned() },
             receiver,
-            close_receiver,
+            close,
         ))
     }
 
+    fn preparation(&self, session_id: &str) -> Result<PreparationControl, String> {
+        self.sessions
+            .lock()
+            .map_err(|_| "session registry is unavailable")?
+            .get(session_id)
+            .map(|entry| entry.preparation.clone())
+            .ok_or_else(|| "session is not connected".into())
+    }
+
     fn remove(&self, session_id: &str) {
-        if let Ok(mut sessions) = self.sessions.lock() {
-            sessions.remove(session_id);
+        if let Ok(mut sessions) = self.sessions.lock()
+            && let Some(entry) = sessions.remove(session_id)
+        {
+            entry.preparation.cancel();
         }
     }
 
@@ -117,175 +159,66 @@ impl SessionRegistry {
     }
 
     fn close(&self, session_id: &str) -> Result<(), String> {
-        let sessions =
+        let mut sessions =
             self.sessions.lock().map_err(|_| "session registry is unavailable".to_owned())?;
         let entry =
             sessions.get(session_id).ok_or_else(|| "session is not connected".to_owned())?;
+        entry.preparation.cancel();
         entry.close.send_replace(true);
+        if entry.commands.is_some() {
+            sessions.remove(session_id);
+        }
         Ok(())
     }
 }
 
-/// The result of comparing the probed key with this Host's active trust records.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum HostKeyTrustStatus {
-    /// The key already matches an active host-specific trust record.
-    Trusted,
-    /// No active host-specific key exists yet.
-    New,
-    /// An active host-specific key exists, but it does not match.
-    Changed,
+/// Reserve a cancelable transport before the renderer starts preparation.
+/// A disposed renderer closes the acknowledged reservation without connecting.
+#[tauri::command]
+#[specta::specta]
+pub fn session_reserve_transport(
+    registry: tauri::State<'_, SessionRegistry>,
+    session_id: String,
+    pty: bool,
+) -> Result<(), String> {
+    registry.reserve(&session_id, pty)
 }
 
-/// A validated host key suitable for a confirmation dialog.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct HostKeyDetails {
-    /// The SSH algorithm identifier.
-    pub algorithm: String,
-    /// The complete OpenSSH public-key text.
-    pub key: String,
-    /// The OpenSSH SHA-256 fingerprint.
-    pub fingerprint: String,
-    /// How the key relates to the local Host trust records.
-    pub status: HostKeyTrustStatus,
-    /// Whether the selected saved OpenSSH key requires a one-time passphrase.
-    pub passphrase_required: bool,
-}
-
-fn host_key_details(
-    presentation: HostKeyPresentation,
-    status: HostKeyStatus,
-    passphrase_required: bool,
-) -> HostKeyDetails {
-    HostKeyDetails {
-        algorithm: presentation.algorithm,
-        key: presentation.key,
-        fingerprint: presentation.fingerprint,
-        status: match status {
-            HostKeyStatus::Trusted => HostKeyTrustStatus::Trusted,
-            HostKeyStatus::New => HostKeyTrustStatus::New,
-            HostKeyStatus::Changed => HostKeyTrustStatus::Changed,
-        },
-        passphrase_required,
-    }
-}
-
-/// An SSH connection error safe to return over the desktop IPC boundary.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+/// A user intent for the one current preparation prompt.
+#[derive(Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
-pub enum SessionConnectError {
-    /// An encrypted saved key needs its passphrase.
-    PassphraseRequired,
-    /// The passphrase did not open the encrypted key.
-    InvalidPrivateKeyPassphrase,
-    /// Another connection error; the message contains no credential material.
-    Failed {
-        /// Safe error detail for the session UI.
-        message: String,
+pub enum SessionPreparationIntent {
+    /// Accept only the exact host key retained by Rust.
+    AcceptHostKey,
+    /// Supply a one-time key passphrase, never returned to the renderer.
+    Passphrase {
+        /// Write-only secret input.
+        value: String,
     },
 }
 
-impl From<String> for SessionConnectError {
-    fn from(message: String) -> Self {
-        Self::Failed { message }
-    }
-}
-
-impl SessionConnectError {
-    fn from_ssh(error: SshConnectionError) -> Self {
-        match error {
-            SshConnectionError::EncryptedPrivateKey => Self::PassphraseRequired,
-            SshConnectionError::InvalidPrivateKeyPassphrase => Self::InvalidPrivateKeyPassphrase,
-            other => Self::Failed { message: display_connection_error(other) },
-        }
-    }
-}
-
-/// Probe and classify the SSH host key before opening an authenticated session.
-///
-/// New and changed keys are returned to the frontend for explicit confirmation;
-/// this command never writes a trust record and never accepts a key for a later
-/// connection by itself.
+/// Respond to one session-owned, one-use preparation prompt.
 #[tauri::command]
 #[specta::specta]
-pub async fn session_host_key(
-    local: tauri::State<'_, LocalDataState>,
-    profile_id: String,
-) -> Result<HostKeyDetails, String> {
-    let store = local.store().ok_or_else(|| "local data is locked".to_owned())?;
-    let inventory = Inventory::with_deletions(store.clone(), DeletionStore::default());
-    let plan = inventory.connection_plan(profile_id).map_err(|error| error.to_string())?;
-    let records =
-        Repository::<TrustRecord>::new(&store).list().map_err(|error| error.to_string())?;
-    let presentation = probe_host_key(&plan).await.map_err(display_connection_error)?;
-    let status =
-        evaluate_host_key(plan.host_id, &presentation.key, &presentation.fingerprint, &records);
-    let passphrase_required =
-        private_key_passphrase_required(&plan.credential).map_err(display_connection_error)?;
-    Ok(host_key_details(presentation, status, passphrase_required))
-}
-
-/// Trust a previously displayed host key after probing it again.
-///
-/// The expected values bind the confirmation to the exact probe shown to the
-/// user. A changed value aborts without writing anything. Older active direct
-/// key records for the Host are revoked before the new manual record is
-/// created, so a key rotation cannot leave two different keys trusted at once.
-#[tauri::command]
-#[specta::specta]
-pub async fn session_trust_host_key(
-    local: tauri::State<'_, LocalDataState>,
-    profile_id: String,
-    algorithm: String,
-    key: String,
-    fingerprint: String,
+pub fn session_respond(
+    registry: tauri::State<'_, SessionRegistry>,
+    session_id: String,
+    prompt_id: String,
+    intent: SessionPreparationIntent,
 ) -> Result<(), String> {
-    let store = local.store().ok_or_else(|| "local data is locked".to_owned())?;
-    let inventory = Inventory::with_deletions(store.clone(), DeletionStore::default());
-    let plan = inventory.connection_plan(profile_id).map_err(|error| error.to_string())?;
-    let current = probe_host_key(&plan).await.map_err(display_connection_error)?;
-    if current.algorithm != algorithm || current.key != key || current.fingerprint != fingerprint {
-        return Err("host key changed while waiting for confirmation; try again".to_owned());
-    }
-
-    let repository = Repository::<TrustRecord>::new(&store);
-    let records = repository.list().map_err(|error| error.to_string())?;
-    let status = evaluate_host_key(plan.host_id, &current.key, &current.fingerprint, &records);
-    if status == HostKeyStatus::Trusted {
-        return Ok(());
-    }
-
-    for record in records
-        .iter()
-        .filter(|record| record.host == Some(plan.host_id) && !record.revoked && !record.ca)
-    {
-        repository
-            .update(record.meta.id, TrustRecordChange { revoked: Some(true), ..Default::default() })
-            .map_err(|error| error.to_string())?;
-    }
-    repository
-        .create(TrustRecordChange {
-            host: Edit::Set(plan.host_id),
-            key: Edit::Set(current.key),
-            fingerprint: Edit::Set(current.fingerprint),
-            provenance: Some(Provenance::Manual),
-            accepted_at: Edit::Set(now_millis()),
-            ..Default::default()
-        })
-        .map_err(|error| error.to_string())?;
-    Ok(())
+    let response = match intent {
+        SessionPreparationIntent::AcceptHostKey => PreparationResponse::AcceptHostKey,
+        SessionPreparationIntent::Passphrase { value } => {
+            PreparationResponse::Passphrase(SecretVec::new(value.into_bytes()))
+        }
+    };
+    registry.preparation(&session_id)?.respond(&prompt_id, response)
 }
 
-/// Connects one direct profile and streams its exec or shell output.
-/// Interactive shells notify `ready` after authentication, PTY, and shell setup.
-///
-/// Host-key verification uses active, host-specific trust records and remains
-/// fail-closed for new, changed, revoked, wildcard-only, or CA records.
+/// Prepare every hop and stream the target's shell or exec output.
 #[tauri::command]
 #[specta::specta]
-#[allow(clippy::too_many_arguments)] // Tauri injects both state arguments.
+#[allow(clippy::too_many_arguments)]
 pub async fn session_connect(
     app: tauri::AppHandle,
     local: tauri::State<'_, LocalDataState>,
@@ -294,35 +227,24 @@ pub async fn session_connect(
     command: Option<String>,
     pty: bool,
     session_id: String,
-    passphrase: Option<String>,
     frames: Channel<RawFrame>,
     ready: Channel<()>,
-) -> Result<(), SessionConnectError> {
-    let passphrase = passphrase.map(|value| SecretVec::new(value.into_bytes()));
-    if passphrase.as_ref().is_some_and(|value| value.len() > MAX_PRIVATE_KEY_PASSPHRASE) {
-        return Err(SessionConnectError::Failed {
-            message: format!(
-                "SSH private-key passphrase exceeds the {MAX_PRIVATE_KEY_PASSPHRASE}-byte limit"
-            ),
-        });
-    }
-    let (_registration, mut commands, mut close) = if command.is_none() {
-        let (registration, receiver, close) = registry.register(&session_id, pty)?;
-        (Some(registration), Some(receiver), Some(close))
-    } else {
-        (None, None, None)
-    };
+    preparation: Channel<PreparationEvent>,
+) -> Result<(), String> {
+    let (_registration, mut commands, mut close) = registry.claim(&session_id, pty)?;
+    let control = registry.preparation(&session_id)?;
     session_connect_inner(
         &app,
         &local,
         profile_id,
         command,
         pty,
-        passphrase,
         frames,
         ready,
-        commands.as_mut(),
-        close.as_mut(),
+        preparation,
+        &control,
+        &mut commands,
+        &mut close,
     )
     .await
 }
@@ -364,25 +286,23 @@ pub fn session_close_transport(
     registry.close(&session_id)
 }
 
-#[allow(clippy::too_many_arguments)] // Forwards the IPC request and both channels into the connection task.
+#[allow(clippy::too_many_arguments)]
 async fn session_connect_inner(
     app: &tauri::AppHandle,
     local: &LocalDataState,
     profile_id: String,
     command: Option<String>,
     pty: bool,
-    passphrase: Option<SecretVec>,
     frames: Channel<RawFrame>,
     ready: Channel<()>,
-    commands: Option<&mut Receiver<SessionCommand>>,
-    mut close: Option<&mut watch::Receiver<bool>>,
-) -> Result<(), SessionConnectError> {
+    preparation: Channel<PreparationEvent>,
+    control: &PreparationControl,
+    commands: &mut Receiver<SessionCommand>,
+    close: &mut watch::Receiver<bool>,
+) -> Result<(), String> {
     let store = local.store().ok_or_else(|| "local data is locked".to_owned())?;
+    let id = Uuid::parse_str(&profile_id).map_err(|_| "the Login identifier is invalid")?;
     let inventory = Inventory::with_deletions(store.clone(), DeletionStore::default());
-    let plan = inventory.connection_plan(profile_id.clone()).map_err(|error| error.to_string())?;
-    let records =
-        Repository::<TrustRecord>::new(&store).list().map_err(|error| error.to_string())?;
-    let trust: HostKeyTrust = Arc::new(StoredHostKeyVerifier::new(plan.host_id, records));
     let closed_app = app.clone();
     let history =
         SessionHistoryLease::start(inventory, profile_id, RecentSessionKind::Terminal, move |id| {
@@ -393,48 +313,53 @@ async fn session_connect_inner(
     let _ =
         SessionChanged { session_id: history.id().to_owned(), change: SessionChangeKind::Opened }
             .emit(app);
+    let connection = match prepare_connection(&store, id, control, |event| {
+        preparation.send(event).map_err(|_| "connection progress channel is closed".into())
+    })
+    .await
+    {
+        Ok(connection) => connection,
+        Err(error) => {
+            if *close.borrow() {
+                return history.finish(RecentSessionOutcome::Closed).map_err(|e| e.to_string());
+            }
+            return Err(error);
+        }
+    };
     let interactive = command.is_none();
     let pty_request = pty.then(default_pty);
-    let prepare = async {
-        let mut connection =
-            SshConnection::connect(&plan, Some(trust)).await.map_err(display_connection_error)?;
-        connection
-            .authenticate_with_passphrase(passphrase)
-            .await
-            .map_err(SessionConnectError::from_ssh)?;
-        let session = connection.open_session().await.map_err(display_connection_error)?;
-        if interactive {
+    let operation = async {
+        let mut session = connection.open_session().await.map_err(display_connection_error)?;
+        let sender = FrameSender::new(frames);
+        if let Some(command) = command {
+            let output = session
+                .exec(command.as_bytes(), pty_request.as_ref())
+                .await
+                .map_err(display_connection_error)?;
+            send_exec_output(&sender, output)?;
+        } else {
             if let Some(request) = pty_request.as_ref() {
                 session.request_pty(request).await.map_err(display_connection_error)?;
             }
             session.request_shell().await.map_err(display_connection_error)?;
+            if interactive {
+                ready.send(()).map_err(|_| "session readiness channel is closed")?;
+            }
+            stream_channel(&mut session, &sender, commands, close).await?;
         }
-        Ok::<_, SessionConnectError>((connection, session))
+        Ok::<(), String>(())
     };
-    let Some(prepared) = prepare_session_or_close(prepare, close.as_deref_mut()).await else {
-        return history
-            .finish(RecentSessionOutcome::Closed)
-            .map_err(|error| error.to_string().into());
+    let outcome = tokio::select! { biased;
+        _ = control.cancelled() => Ok(()),
+        result = operation => result,
     };
-    let (connection, mut session) = prepared?;
-    let sender = FrameSender::new(frames);
-    if let Some(command) = command {
-        let output = session
-            .exec(command.as_bytes(), pty_request.as_ref())
-            .await
-            .map_err(display_connection_error)?;
-        send_exec_output(&sender, output)?;
-    } else {
-        let commands =
-            commands.ok_or_else(|| "session command channel is unavailable".to_owned())?;
-        ready.send(()).map_err(|_| "session readiness channel is closed".to_owned())?;
-        let close = close.ok_or_else(|| "session close signal is unavailable".to_owned())?;
-        stream_channel(&mut session, &sender, commands, close).await?;
-    }
-    connection.close().await.map_err(display_connection_error)?;
-    history.finish(RecentSessionOutcome::Closed).map_err(|error| error.to_string().into())
+    let cleanup = connection.close().await.map_err(display_connection_error);
+    outcome?;
+    cleanup?;
+    history.finish(RecentSessionOutcome::Closed).map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 async fn prepare_session_or_close<T>(
     prepare: impl Future<Output = T>,
     close: Option<&mut watch::Receiver<bool>>,
@@ -513,12 +438,6 @@ fn display_connection_error(error: SshConnectionError) -> String {
     error.to_string()
 }
 
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{SessionCommand, SessionRegistry, prepare_session_or_close};
@@ -533,6 +452,40 @@ mod tests {
         fn drop(&mut self) {
             self.0.store(true, Ordering::SeqCst);
         }
+    }
+
+    #[test]
+    fn closed_reservation_cannot_be_claimed_or_replied_to() {
+        let registry = SessionRegistry::default();
+        registry.reserve("closed-before-start", true).expect("reserve");
+        let control = registry.preparation("closed-before-start").expect("control");
+        registry.close("closed-before-start").expect("close unclaimed reservation");
+        assert_eq!(
+            registry.claim("closed-before-start", true).err().expect("claim rejected"),
+            "session reservation is closed"
+        );
+        assert!(registry.preparation("closed-before-start").is_err());
+        assert!(control.respond("late", scoplen_client_core::connection::preparation::PreparationResponse::AcceptHostKey).is_err());
+        assert!(registry.sessions.lock().expect("registry").is_empty());
+        registry.reserve("fresh-session", true).expect("fresh reserve");
+        let (_registration, _commands, _close) =
+            registry.claim("fresh-session", true).expect("fresh claim");
+    }
+
+    #[test]
+    fn reservation_is_claimed_once_with_matching_settings() {
+        let registry = SessionRegistry::default();
+        registry.reserve("reserved", true).expect("reserve");
+        assert!(registry.reserve("reserved", true).is_err());
+        assert_eq!(
+            registry.claim("reserved", false).err().expect("mismatch"),
+            "session reservation has different PTY settings"
+        );
+        let (_registration, _commands, _close) = registry.claim("reserved", true).expect("claim");
+        assert_eq!(
+            registry.claim("reserved", true).err().expect("duplicate claim"),
+            "session is already connected"
+        );
     }
 
     #[test]

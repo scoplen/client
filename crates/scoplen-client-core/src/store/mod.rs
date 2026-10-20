@@ -214,17 +214,7 @@ impl Store {
     /// Returns every object of a type that is not deleted, oldest first.
     pub fn list(&self, object_type: ObjectType) -> Result<Vec<Object>, StoreError> {
         let conn = self.conn();
-        let mut statement = conn.prepare_cached(
-            "SELECT id, envelope FROM objects WHERE type = ?1 AND deleted = 0 ORDER BY id",
-        )?;
-        let rows = statement.query_map(params![object_type.to_wire() as i64], |row| {
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
-        })?;
-        rows.map(|row| {
-            let (id, envelope) = row?;
-            decode(&id, &envelope)
-        })
-        .collect()
+        list_objects(&conn, object_type)
     }
 
     /// Returns the identifiers of every object that is not deleted, for
@@ -260,6 +250,37 @@ impl Store {
                 objects.push(apply_write(&tx, self.device_id, write)?);
             }
             tx.commit()?;
+            let changes = grouped_changes(&objects);
+            (objects, changes)
+        };
+        for change in changes {
+            self.notify(&change);
+        }
+        Ok(objects)
+    }
+
+    /// Computes writes from a live snapshot under the same immediate transaction.
+    /// The callback must not reenter this Store. Notifications follow commit.
+    pub(crate) fn write_batch_with_snapshot<E>(
+        &self,
+        object_type: ObjectType,
+        prepare: impl FnOnce(Vec<Object>) -> Result<Vec<LocalWrite>, E>,
+    ) -> Result<Vec<Object>, E>
+    where
+        E: From<StoreError>,
+    {
+        let (objects, changes) = {
+            let mut conn = self.conn();
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(StoreError::from)?;
+            let snapshot = list_objects(&tx, object_type)?;
+            let writes = prepare(snapshot)?;
+            let mut objects = Vec::with_capacity(writes.len());
+            for write in writes {
+                objects.push(apply_write(&tx, self.device_id, write)?);
+            }
+            tx.commit().map_err(StoreError::from)?;
             let changes = grouped_changes(&objects);
             (objects, changes)
         };
@@ -726,6 +747,20 @@ impl Store {
             listener(change);
         }
     }
+}
+
+fn list_objects(conn: &Connection, object_type: ObjectType) -> Result<Vec<Object>, StoreError> {
+    let mut statement = conn.prepare_cached(
+        "SELECT id, envelope FROM objects WHERE type = ?1 AND deleted = 0 ORDER BY id",
+    )?;
+    let rows = statement.query_map(params![object_type.to_wire() as i64], |row| {
+        Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+    })?;
+    rows.map(|row| {
+        let (id, envelope) = row?;
+        decode(&id, &envelope)
+    })
+    .collect()
 }
 
 fn apply_write(

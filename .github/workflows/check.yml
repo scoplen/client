@@ -83,6 +83,9 @@ jobs:
       - name: Saved SSH-agent identity, trust, failure, timeout, and cancellation
         shell: pwsh
         run: ./scripts/test-ssh-agent-unix.ps1
+      - name: Saved jump chains, independent trust and credentials, cancellation, and reconnect
+        shell: pwsh
+        run: ./scripts/test-ssh-jump.ps1
 
   windows-agent-interop:
     name: Windows native agent login

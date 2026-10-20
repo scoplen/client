@@ -114,6 +114,60 @@ fn map_entries_are_added_and_removed_individually() {
 }
 
 #[test]
+fn snapshot_writes_hold_the_store_transaction_until_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("local.db"), &key(1)).unwrap());
+    let original = store.write(host("initial", "example.test")).unwrap();
+    let (started, snapshot_ready) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let first = std::thread::spawn({
+        let store = store.clone();
+        move || {
+            store
+                .write_batch_with_snapshot::<StoreError>(ObjectType::HOST, |objects| {
+                    assert_eq!(text(&objects[0], 1), "initial");
+                    started.send(()).unwrap();
+                    released.recv().unwrap();
+                    Ok(vec![LocalWrite {
+                        id: Some(original.id),
+                        object_type: ObjectType::HOST,
+                        fields: vec![(FieldPath::Field(1), Value::Text("first".into()))],
+                    }])
+                })
+                .unwrap()
+        }
+    });
+    snapshot_ready.recv().unwrap();
+    assert!(store.conn.try_lock().is_err(), "snapshot and writes share the Store lock");
+    let (attempting, attempted) = std::sync::mpsc::channel();
+    let second = std::thread::spawn({
+        let store = store.clone();
+        move || {
+            attempting.send(()).unwrap();
+            store
+                .write_batch_with_snapshot::<StoreError>(ObjectType::HOST, |objects| {
+                    assert_eq!(
+                        text(&objects[0], 1),
+                        "first",
+                        "later snapshot observes committed write"
+                    );
+                    Ok(vec![LocalWrite {
+                        id: Some(original.id),
+                        object_type: ObjectType::HOST,
+                        fields: vec![(FieldPath::Field(1), Value::Text("second".into()))],
+                    }])
+                })
+                .unwrap()
+        }
+    });
+    attempted.recv().unwrap();
+    release.send(()).unwrap();
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(text(&store.get(original.id).unwrap().unwrap(), 1), "second");
+}
+
+#[test]
 fn invalid_objects_are_rejected_and_nothing_is_written() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("local.db"), &key(1)).unwrap();

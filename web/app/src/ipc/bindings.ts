@@ -12,31 +12,15 @@ export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	/**  Called by the frontend once its first screen has rendered. */
 	shellReady: () => __TAURI_INVOKE<void>("shell_ready"),
+	/**  Respond to one session-owned, one-use preparation prompt. */
+	sessionRespond: (sessionId: string, promptId: string, intent: SessionPreparationIntent) => typedError<null, string>(__TAURI_INVOKE("session_respond", { sessionId, promptId, intent })),
 	/**
-	 *  Probe and classify the SSH host key before opening an authenticated session.
-	 *
-	 *  New and changed keys are returned to the frontend for explicit confirmation;
-	 *  this command never writes a trust record and never accepts a key for a later
-	 *  connection by itself.
+	 *  Reserve a cancelable transport before the renderer starts preparation.
+	 *  A disposed renderer closes the acknowledged reservation without connecting.
 	 */
-	sessionHostKey: (profileId: string) => typedError<HostKeyDetails, string>(__TAURI_INVOKE("session_host_key", { profileId })),
-	/**
-	 *  Trust a previously displayed host key after probing it again.
-	 *
-	 *  The expected values bind the confirmation to the exact probe shown to the
-	 *  user. A changed value aborts without writing anything. Older active direct
-	 *  key records for the Host are revoked before the new manual record is
-	 *  created, so a key rotation cannot leave two different keys trusted at once.
-	 */
-	sessionTrustHostKey: (profileId: string, algorithm: string, key: string, fingerprint: string) => typedError<null, string>(__TAURI_INVOKE("session_trust_host_key", { profileId, algorithm, key, fingerprint })),
-	/**
-	 *  Connects one direct profile and streams its exec or shell output.
-	 *  Interactive shells notify `ready` after authentication, PTY, and shell setup.
-	 *
-	 *  Host-key verification uses active, host-specific trust records and remains
-	 *  fail-closed for new, changed, revoked, wildcard-only, or CA records.
-	 */
-	sessionConnect: (profileId: string, command: string | null, pty: boolean, sessionId: string, passphrase: string | null, frames: Channel<ArrayBuffer>, ready: Channel<null>) => typedError<null, SessionConnectError>(__TAURI_INVOKE("session_connect", { profileId, command, pty, sessionId, passphrase, frames, ready })),
+	sessionReserveTransport: (sessionId: string, pty: boolean) => typedError<null, string>(__TAURI_INVOKE("session_reserve_transport", { sessionId, pty })),
+	/**  Prepare every hop and stream the target's shell or exec output. */
+	sessionConnect: (profileId: string, command: string | null, pty: boolean, sessionId: string, frames: Channel<ArrayBuffer>, ready: Channel<null>, preparation: Channel<PreparationEvent>) => typedError<null, string>(__TAURI_INVOKE("session_connect", { profileId, command, pty, sessionId, frames, ready, preparation })),
 	/**  Sends one bounded input chunk to a live shell session. */
 	sessionInput: (sessionId: string, data: number[]) => typedError<null, string>(__TAURI_INVOKE("session_input", { sessionId, data })),
 	/**  Notifies a live SSH PTY of a new character-cell size. */
@@ -495,29 +479,6 @@ export type HostDetails = {
 	logins: LoginSummary[],
 } & HostSummary;
 
-/**  A validated host key suitable for a confirmation dialog. */
-export type HostKeyDetails = {
-	/**  The SSH algorithm identifier. */
-	algorithm: string,
-	/**  The complete OpenSSH public-key text. */
-	key: string,
-	/**  The OpenSSH SHA-256 fingerprint. */
-	fingerprint: string,
-	/**  How the key relates to the local Host trust records. */
-	status: HostKeyTrustStatus,
-	/**  Whether the selected saved OpenSSH key requires a one-time passphrase. */
-	passphraseRequired: boolean,
-};
-
-/**  The result of comparing the probed key with this Host's active trust records. */
-export type HostKeyTrustStatus =
-/**  The key already matches an active host-specific trust record. */
-"trusted" |
-/**  No active host-specific key exists yet. */
-"new" |
-/**  An active host-specific key exists, but it does not match. */
-"changed";
-
 /**  Which hosts to list. */
 export type HostSource =
 /**  Every live host. */
@@ -764,6 +725,74 @@ export type Platform =
 /**  Any other system; Phase 1 ships only macOS and Windows builds. */
 "other";
 
+/**  Safe identity shown on every progress event and prompt. */
+export type PreparationContext = {
+	/**  Login identifier. */
+	profileId: string,
+	/**  Host identifier. */
+	hostId: string,
+	/**  Saved Login label, or its username. */
+	login: string,
+	/**  Saved Host label, or its address. */
+	host: string,
+	/**  Remote username. */
+	username: string,
+	/**  DNS name or IP literal. */
+	address: string,
+	/**  SSH port. */
+	port: number,
+	/**  One-based position, including the target. */
+	position: number,
+	/**  Number of hops plus target. */
+	total: number,
+	/**  Whether this is the target rather than a jump host. */
+	target: boolean,
+};
+
+/**  Typed progress and current user intent requested by Rust. */
+export type PreparationEvent =
+/**  No user response is expected. */
+{ kind: "progress";
+/**  Current hop. */
+context: PreparationContext;
+/**  Current operation. */
+phase: PreparationPhase } |
+/**  Confirm the actual key on this still unauthenticated connection. */
+{ kind: "trust";
+/**  Current hop. */
+context: PreparationContext;
+/**  Fresh one-use response token. */
+promptId: string;
+/**  Key presented by this hop. */
+hostKey: PreparationHostKey } |
+/**  Enter a one-time passphrase for this hop's encrypted software key. */
+{ kind: "passphrase";
+/**  Current hop. */
+context: PreparationContext;
+/**  Fresh one-use response token. */
+promptId: string;
+/**  A preceding local decryption failed. */
+incorrect: boolean };
+
+/**  Display-safe host key associated with the current unauthed connection. */
+export type PreparationHostKey = {
+	/**  Algorithm identifier. */
+	algorithm: string,
+	/**  OpenSSH public key. */
+	key: string,
+	/**  OpenSSH SHA-256 fingerprint. */
+	fingerprint: string,
+	/**  An active record exists but does not match. */
+	changed: boolean,
+};
+
+/**  States emitted by the core, never inferred by the renderer. */
+export type PreparationPhase =
+/**  Dialing or SSH key exchange. */
+"connecting" |
+/**  Authentication after host trust. */
+"authenticating";
+
 /**  How the local database key is protected. */
 export type Protection =
 /**  The platform keystore alone. */
@@ -933,17 +962,6 @@ export type SessionChanged = {
 	change: SessionChangeKind,
 };
 
-/**  An SSH connection error safe to return over the desktop IPC boundary. */
-export type SessionConnectError =
-/**  An encrypted saved key needs its passphrase. */
-{ kind: "passphraseRequired" } |
-/**  The passphrase did not open the encrypted key. */
-{ kind: "invalidPrivateKeyPassphrase" } |
-/**  Another connection error; the message contains no credential material. */
-{ kind: "failed";
-/**  Safe error detail for the session UI. */
-message: string };
-
 /**  Why a device-local session event could not be applied. */
 export type SessionError =
 /**  The profile identifier was not a UUID. */
@@ -964,6 +982,15 @@ export type SessionError =
 { kind: "failed";
 /**  A diagnostic reference safe to show for retryable failures. */
 reference: string };
+
+/**  A user intent for the one current preparation prompt. */
+export type SessionPreparationIntent =
+/**  Accept only the exact host key retained by Rust. */
+{ kind: "acceptHostKey" } |
+/**  Supply a one-time key passphrase, never returned to the renderer. */
+{ kind: "passphrase";
+/**  Write-only secret input. */
+value: string };
 
 /**  How a new host authenticates. */
 export type SignIn =

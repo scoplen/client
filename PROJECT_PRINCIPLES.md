@@ -21,7 +21,8 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
 
 - The application shell, encrypted local store, inventory, and real SSH terminal path exist,
   including password/software-key authentication, exact saved-key system-agent
-  authentication, and saved proxy routes with optional password authentication.
+  authentication, saved proxy routes with optional password authentication, and
+  explicit Jump routes with independent trust and credentials at each hop.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.
 - The Windows TPM path of key storage cannot run on hosted CI runners, which have no TPM; only its DPAPI fallback is exercised there.

@@ -154,6 +154,8 @@ export const zhHans: Messages = {
   "frame.state.connected": "已连接",
   "frame.state.closed": "已关闭",
   "frame.state.failed": "连接失败",
+  "session.route.hop": "跳板主机",
+  "session.route.target": "目标主机",
   "session.connect": "连接",
   "session.connecting": "正在连接",
   "session.verifying": "正在验证主机密钥",
