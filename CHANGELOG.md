@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added Rust-owned automatic terminal reconnect after confirmed network loss, with
+  bounded backoff, fresh trust and credential preparation, a Stop reconnecting action,
+  retained displayed output, and a new transport and Recent entry for every attempt.
+  Background prompts wait for tab selection. Ordered state and binary output plus
+  attempt identifiers prevent stale frames or queued input reaching a new shell.
 - Connected saved ProxyCommand routes to real SSH through a directly invoked local program,
   with portable quoting, bounded literal target substitutions, no implicit shell expansion,
   retained host-key review, a ten-second handshake deadline, and helper cleanup on failure,

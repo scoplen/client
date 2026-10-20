@@ -85,24 +85,43 @@ forget operation so the Recent view reloads without polling. The event carries o
 the session identifier and transition. The connection owner records accepted SSH
 attempts and their closed or failed outcomes; terminal output and credentials stay
 outside history DTOs. Reconnect in Recent starts the normal Connect flow for the
-current saved Login. Automatic reconnect and saved scrollback remain later outcomes.
+current saved Login. Restoring scrollback after tab closure remains a later outcome.
 
 The session header also offers Reconnect after the current connection closes or
-fails. It stays disabled until that connection task settles. The same terminal
+fails. It stays disabled until that attempt finishes cleanup. The same terminal
 element keeps its displayed scrollback while a new transport identifier runs the
 normal host-key review, current saved-credential lookup, and one-time passphrase
 prompt. Each accepted attempt records its own history lifecycle. Old ready,
 output, input-error, and trust results cannot update the replacement connection;
-closing the tab cancels the current attempt. This uses the existing session IPC
-surface and does not add automatic retries or restore output from a closed tab.
+closing the tab cancels the whole logical session. Displayed output is retained
+in the open tab; this does not restore output from a closed tab.
+
+Rust owns automatic retries after a previously ready terminal suffers a typed
+network failure: 1/2/4/8/16-second delays, at most five attempts, and a budget reset
+only after thirty continuous seconds ready or a manual Reconnect. First failures,
+normal exits, authentication/configuration errors, and renderer failures do not
+retry. The interface renders `retrying` events and sends intents; it has no retry
+timer. Stop reconnecting cancels backoff or preparation, while closing a tab
+destroys the session. Each reconnect starts a new remote shell, keeps displayed
+output, and discards queued old input.
 
 The renderer first calls `sessionReserveTransport(sessionId, pty)` and waits for
 its acknowledgment before `sessionConnect`. If the tab closes before that
 acknowledgment, it closes the reservation once acknowledged and never connects.
-`sessionCloseTransport` removes unclaimed reservations and cancels claimed
-preparations; no closed-identifier tombstones are retained.
+`sessionCloseTransport` removes unclaimed reservations and cancels the logical
+session, including timers, prompts, and transports. `sessionRetryTransport` starts
+a fresh manual budget after a `closed` or `failed` event. `sessionStopReconnecting`
+and `sessionFailTransport` cancel an attempt; the interface waits for its terminal
+state event before permitting a retry. If the manager invocation itself fails,
+the interface reserves a fresh logical identifier while retaining the terminal.
 
-`sessionConnect` receives a typed preparation channel. Rust resolves the whole
+`sessionConnect` receives one ordered `Channel<SessionEvent | ArrayBuffer>`.
+State events and raw output share the channel so a new attempt's `starting` event
+precedes its output. Each binary frame begins with that attempt's sixteen-byte
+UUID, which is stripped before the terminal receives the bytes. Input and resize
+intents carry the same attempt identifier; stale frames and queued input cannot
+reach a replacement transport. The terminal source stays subscribed across
+normal closed/failed states and reconnects. Rust resolves the whole
 saved route before dialing, rejecting repeated Login/Host identifiers, target
 loops, missing references, unsupported credentials, and any jump Login whose
 own route is not Direct. It emits per-hop progress, trust, and one-time
@@ -119,7 +138,10 @@ and never enter React state; wrong local decryption requests a fresh prompt on
 the same reviewed connection. Every encrypted hop has its own prompt. Stale,
 duplicate, canceled, and cross-attempt replies fail. Canceling a prompt or
 closing the tab cancels preparation, with reverse cleanup of the entire chain.
-Delayed IPC acknowledgments cannot replace a newer hop's prompt.
+Delayed IPC acknowledgments cannot replace a newer hop's prompt. Background
+sessions retain their pending prompts without opening a portal over the active
+tab. Selecting that tab shows its prompt; hiding it clears any unsubmitted
+passphrase field. The tab's host mark indicates that attention is needed.
 
 ## Connecting a contract
 

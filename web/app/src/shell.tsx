@@ -100,6 +100,7 @@ export function Shell({
           <SessionTerminal
             profileId={session.profileId}
             label={session.label}
+            active={view !== "settings" && session.id === activeTab}
             onClose={() => closeSession(session.id)}
             onStateChange={(state) => setStates((current) => ({ ...current, [session.id]: state }))}
             onOpenColors={() => {

@@ -24,6 +24,9 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   authentication, saved proxy routes with optional password authentication, and
   explicit Jump routes with independent trust and credentials at each hop, and saved
   ProxyCommand routes with bounded literal arguments and owned helper cleanup.
+  Connected terminals have bounded automatic network reconnect with explicit stop,
+  fresh trust and credentials, and attempt-fenced input/output; a reconnect starts
+  a new remote shell and does not restore remote processes or closed-tab scrollback.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.
 - The Windows TPM path of key storage cannot run on hosted CI runners, which have no TPM; only its DPAPI fallback is exercised there.
