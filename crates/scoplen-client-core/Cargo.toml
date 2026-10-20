@@ -29,6 +29,7 @@ zeroize.workspace = true
 workspace = true
 
 [dev-dependencies]
+russh = { version = "=0.64.1", default-features = false, features = ["des", "flate2", "ring", "rsa"] }
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

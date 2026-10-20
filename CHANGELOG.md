@@ -4,6 +4,8 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Connected saved Agent Credentials to the system Unix socket or Windows OpenSSH pipe, matching the exact saved public key after host-key verification, with bounded cancellable local I/O, four authentication workers, explicit failure paths, and no credential fallback.
+
 - Connected saved SOCKS5 and HTTP CONNECT proxy authentication through independent Route usernames and password Credentials, with preflight validation, the same credentials during host-key probing and SSH sessions, and an editor notice that proxy credentials travel over plain TCP.
 - Opened saved passphrase-protected OpenSSH software keys during SSH connection, with one-time entry after host-key review, retry for wrong passphrases, bounded bcrypt work, and no stored passphrase.
 - Wired ended terminal sessions in Recent to the normal Connect entry point, resolving the current saved login without creating history during lookup; active and unsupported kinds remain unavailable.

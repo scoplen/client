@@ -4526,6 +4526,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "rusqlite",
+ "russh",
  "scoplen-client-platform",
  "scoplen-crypto",
  "scoplen-model",
@@ -4553,6 +4554,7 @@ dependencies = [
  "sys-locale",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "uuid",
  "windows",
  "zeroize",

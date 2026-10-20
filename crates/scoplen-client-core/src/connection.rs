@@ -34,6 +34,8 @@ use crate::repository::{
 };
 use crate::store::Store;
 
+mod agent;
+
 /// A resolved credential handed to the SSH adapter.
 ///
 /// Secret-bearing variants use [`SecretVec`], whose debug representation is
@@ -46,7 +48,10 @@ pub enum CredentialMaterial {
     /// An OpenSSH private key held in the encrypted local store.
     PrivateKey(SecretVec),
     /// Resolve a key from the platform SSH agent at connection time.
-    Agent,
+    Agent {
+        /// The exact saved OpenSSH public key; never an implicit first identity.
+        public_key: Option<String>,
+    },
     /// A security-key credential, resolved by the platform adapter.
     SecurityKey {
         /// The public key to select, when known.
@@ -314,12 +319,7 @@ pub async fn probe_host_key(
     plan: &ConnectionPlan,
 ) -> Result<HostKeyPresentation, SshConnectionError> {
     let route = transport_route(&plan.route)?;
-    if !matches!(
-        &plan.credential,
-        CredentialMaterial::Password(_) | CredentialMaterial::PrivateKey(_)
-    ) {
-        return Err(SshConnectionError::UnsupportedCredential);
-    }
+    validate_credential(&plan.credential)?;
 
     let presented = Arc::new(Mutex::new(None::<HostKeyPresentation>));
     let capture = Arc::clone(&presented);
@@ -469,7 +469,9 @@ fn resolve_credential(
                 keystore_handle: device.keystore_handle,
             }))
         }
-        (CredentialKind::Agent, CredentialBinding::None) => Ok(CredentialMaterial::Agent),
+        (CredentialKind::Agent, CredentialBinding::None) => {
+            Ok(CredentialMaterial::Agent { public_key: credential.public_key.clone() })
+        }
         (CredentialKind::SecurityKey, CredentialBinding::None)
         | (CredentialKind::SecurityKey, CredentialBinding::Device) => {
             if credentials::security_key_capability()
@@ -626,6 +628,31 @@ pub enum SshConnectionError {
     /// The saved credential cannot be used by this concrete engine slice.
     #[error("SSH credential kind is not supported by the concrete client engine")]
     UnsupportedCredential,
+    /// An agent credential must select a valid, supported raw public identity.
+    #[error("save a valid OpenSSH public key in this agent credential before connecting")]
+    InvalidAgentPublicKey,
+    /// The system agent could not be opened or queried.
+    #[error("the system SSH agent is unavailable; start it and load the saved key, then reconnect")]
+    AgentUnavailable,
+    /// The agent did not list the exact saved public identity.
+    #[error(
+        "the saved public key is not loaded in the system SSH agent; load that key and reconnect"
+    )]
+    AgentIdentityMissing,
+    /// The agent refused or could not complete a signing operation.
+    #[error(
+        "the SSH agent could not sign; unlock the agent and approve the key request, then reconnect"
+    )]
+    AgentSigningFailed,
+    /// Agent I/O and SSH authentication did not finish within the shared deadline.
+    #[error("SSH agent authentication timed out; check the agent and reconnect")]
+    AgentTimeout,
+    /// Another bounded worker is required before using the system agent.
+    #[error("too many SSH agent connections are starting; wait for one to finish and reconnect")]
+    AgentBusy,
+    /// The connection was cancelled while agent authentication was pending.
+    #[error("SSH agent authentication was cancelled")]
+    AgentCancelled,
     /// The stored key is not a valid OpenSSH private key.
     #[error("the stored SSH private key is invalid or unreadable")]
     InvalidPrivateKey,
@@ -783,6 +810,16 @@ async fn connect_route(
     }
 }
 
+fn validate_credential(credential: &CredentialMaterial) -> Result<(), SshConnectionError> {
+    match credential {
+        CredentialMaterial::Password(_) | CredentialMaterial::PrivateKey(_) => Ok(()),
+        CredentialMaterial::Agent { public_key } => {
+            agent::parse_public_key(public_key.as_deref()).map(|_| ())
+        }
+        _ => Err(SshConnectionError::UnsupportedCredential),
+    }
+}
+
 /// Output collected from one bounded remote command.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SshExecOutput {
@@ -796,7 +833,7 @@ pub struct SshExecOutput {
 
 /// A live SSH connection owned by the client core.
 pub struct SshConnection {
-    connection: ClientConnection,
+    connection: Option<ClientConnection>,
     lifecycle: ConnectionLifecycle,
     username: String,
     credential: Option<CredentialMaterial>,
@@ -904,20 +941,15 @@ impl std::fmt::Debug for SshConnection {
 impl SshConnection {
     /// Open an SSH connection and complete key exchange through its saved route.
     ///
-    /// Omitting `trust` is fail-closed and rejects every host key. Route
-    /// Jump, process, and managed routes, and credentials other than passwords
-    /// and software keys remain explicit errors.
+    /// Omitting `trust` is fail-closed and rejects every host key. Jump,
+    /// process, and managed routes remain explicit errors. Credentials support
+    /// passwords, software keys, and explicitly selected system-agent keys.
     pub async fn connect(
         plan: &ConnectionPlan,
         trust: Option<HostKeyTrust>,
     ) -> Result<Self, SshConnectionError> {
         let route = transport_route(&plan.route)?;
-        if !matches!(
-            &plan.credential,
-            CredentialMaterial::Password(_) | CredentialMaterial::PrivateKey(_)
-        ) {
-            return Err(SshConnectionError::UnsupportedCredential);
-        }
+        validate_credential(&plan.credential)?;
         let verifier = trust.unwrap_or_else(|| {
             Arc::new(|_: &str, _: &HostKey| {
                 Err(HostKeyVerificationError::Rejected(
@@ -940,7 +972,7 @@ impl SshConnection {
             }
         };
         Ok(Self {
-            connection,
+            connection: Some(connection),
             lifecycle,
             username: plan.username.clone(),
             credential: Some(plan.credential.clone()),
@@ -975,7 +1007,7 @@ impl SshConnection {
                         limit: MAX_SSH_INPUT,
                     })
                 } else {
-                    self.connection
+                    self.connection_mut()?
                         .authenticate_password(&username, password.as_bytes())
                         .await
                         .map_err(SshConnectionError::Engine)
@@ -983,6 +1015,9 @@ impl SshConnection {
             }
             CredentialMaterial::PrivateKey(key) => {
                 self.authenticate_private_key(&username, key, passphrase).await
+            }
+            CredentialMaterial::Agent { public_key } => {
+                self.authenticate_agent(&username, public_key.as_deref()).await
             }
             _ => Err(SshConnectionError::UnsupportedCredential),
         };
@@ -1000,7 +1035,7 @@ impl SshConnection {
         let result = if password.len() > MAX_SSH_INPUT {
             Err(SshConnectionError::InputTooLarge { field: "password", limit: MAX_SSH_INPUT })
         } else {
-            self.connection
+            self.connection_mut()?
                 .authenticate_password(username, password.as_bytes())
                 .await
                 .map_err(SshConnectionError::Engine)
@@ -1019,28 +1054,36 @@ impl SshConnection {
                 .await
                 .map_err(|_| SshConnectionError::InvalidPrivateKey)??;
         match signer {
-            SoftwareKeySigner::Ed25519(signer) => {
-                self.connection.authenticate_publickey(username, &signer).await.map_err(Into::into)
-            }
+            SoftwareKeySigner::Ed25519(signer) => self
+                .connection_mut()?
+                .authenticate_publickey(username, &signer)
+                .await
+                .map_err(Into::into),
             SoftwareKeySigner::Ecdsa(signer) => self
-                .connection
+                .connection_mut()?
                 .authenticate_publickey(username, signer.as_ref())
                 .await
                 .map_err(Into::into),
             SoftwareKeySigner::Rsa(key) => {
-                let selection = self.connection.server_rsa_sha2_selection().await?;
+                let selection = self.connection_mut()?.server_rsa_sha2_selection().await?;
                 let algorithm = rsa_signature_algorithm(selection)?;
                 let signer = RsaSshSigner::new(*key, algorithm)
                     .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
-                self.connection.authenticate_publickey(username, &signer).await.map_err(|error| {
-                    if matches!(error, ClientError::AuthenticationRejected { .. }) {
-                        SshConnectionError::RsaAuthenticationRejected
-                    } else {
-                        SshConnectionError::Engine(error)
-                    }
-                })
+                self.connection_mut()?.authenticate_publickey(username, &signer).await.map_err(
+                    |error| {
+                        if matches!(error, ClientError::AuthenticationRejected { .. }) {
+                            SshConnectionError::RsaAuthenticationRejected
+                        } else {
+                            SshConnectionError::Engine(error)
+                        }
+                    },
+                )
             }
         }
+    }
+
+    fn connection_mut(&mut self) -> Result<&mut ClientConnection, SshConnectionError> {
+        self.connection.as_mut().ok_or(SshConnectionError::AgentCancelled)
     }
 
     fn finish_authentication(
@@ -1061,12 +1104,15 @@ impl SshConnection {
         if self.state() != ConnectionState::Open {
             return Err(SshConnectionError::Engine(ClientError::NotAuthenticated));
         }
-        Ok(SshSession { channel: self.connection.open_session().await?, output_bytes: 0 })
+        let connection = self.connection.as_ref().ok_or(SshConnectionError::AgentCancelled)?;
+        Ok(SshSession { channel: connection.open_session().await?, output_bytes: 0 })
     }
 
     /// Close the SSH connection and mark it closed.
     pub async fn close(mut self) -> Result<(), SshConnectionError> {
-        self.connection.disconnect().await?;
+        if let Some(connection) = self.connection.take() {
+            connection.disconnect().await?;
+        }
         let _ = self.lifecycle.transition(ConnectionState::Closed);
         Ok(())
     }
@@ -1497,6 +1543,66 @@ mod tests {
             CredentialMaterial::Password(SecretVec::new(b"correct horse".to_vec()))
         );
         assert!(!format!("{plan:?}").contains("correct horse"));
+    }
+
+    #[test]
+    fn saved_agent_plan_preserves_its_exact_public_identity() {
+        let (_dir, store) = store();
+        let mut rng = ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng);
+        let key = PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap();
+        let public_key = key.public_key().to_openssh().unwrap();
+        let host = Repository::<crate::repository::Host>::new(&store)
+            .create(HostChange {
+                name: Some("fixture".into()),
+                address: Some("127.0.0.1".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let credential = Repository::<Credential>::new(&store)
+            .create(CredentialChange {
+                kind: Some(CredentialKind::Agent),
+                binding: Some(CredentialBinding::None),
+                public_key: Edit::Set(public_key.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+        let profile = Repository::<AccessProfile>::new(&store)
+            .create(AccessProfileChange {
+                host: Some(host.meta.id),
+                username: Some("ops".into()),
+                credential: Edit::Set(credential.meta.id),
+                ..Default::default()
+            })
+            .unwrap();
+        let plan = resolve_connection_plan(&store, profile.meta.id).unwrap();
+        assert_eq!(plan.credential, CredentialMaterial::Agent { public_key: Some(public_key) });
+        assert!(validate_credential(&plan.credential).is_ok());
+        assert!(!private_key_passphrase_required(&plan.credential).unwrap());
+    }
+
+    #[tokio::test]
+    async fn absent_or_invalid_agent_identity_fails_before_network_or_agent_io() {
+        for public_key in
+            [None, Some("ssh-ed25519 AAAA".into()), Some("x".repeat(MAX_SSH_INPUT + 1))]
+        {
+            let plan = ConnectionPlan {
+                profile_id: Uuid::nil(),
+                host_id: Uuid::nil(),
+                address: "invalid target".into(),
+                port: 22,
+                username: "ops".into(),
+                route: ConnectionRoute::Direct,
+                credential: CredentialMaterial::Agent { public_key },
+            };
+            assert!(matches!(
+                probe_host_key(&plan).await,
+                Err(SshConnectionError::InvalidAgentPublicKey)
+            ));
+            assert!(matches!(
+                SshConnection::connect(&plan, None).await,
+                Err(SshConnectionError::InvalidAgentPublicKey)
+            ));
+        }
     }
 
     #[test]
