@@ -9,7 +9,9 @@ Interface copy follows `scoplen-docs/11-client-architecture.md` §4.1: English i
 Every source file carries an SPDX header. Commit subjects use `type(scope): description`. Contributions require the Developer Certificate of Origin sign-off (`git commit -s`).
 
 The DCO workflow treats the signed repository-import snapshot in
-`DCO_IMPORT_BASELINE` as the boundary of the imported history. Initial pushes and new branches
-check that snapshot and every descendant commit, including merges. Later pushes and pull requests
-check their full event range. A signed branch tip cannot hide an unsigned intermediate commit.
+`DCO_IMPORT_BASELINE` as the boundary of the imported history. An initial default-branch push
+checks that snapshot and every descendant commit. A new branch checks every commit it adds beyond
+the fetched default branch, including merges, without rechecking already published history. Later
+pushes and pull requests check their full event range. A signed branch tip cannot hide an unsigned
+intermediate commit. If the default branch was not fetched, the new-branch check fails closed.
 Run `bash scripts/test-dco.sh` to verify these cases locally.
