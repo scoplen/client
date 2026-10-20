@@ -207,7 +207,7 @@ async fn oversized_username_without_command_substitution_fails_before_any_side_e
         Ok(())
     })
     .await;
-    assert_eq!(result.err().unwrap(), SshConnectionError::InvalidUsername.to_string());
+    assert_eq!(result.err().unwrap().to_string(), SshConnectionError::InvalidUsername.to_string());
     assert_eq!(events.load(Ordering::SeqCst), 0);
     assert!(Repository::<TrustRecord>::new(&store).list().unwrap().is_empty());
 
@@ -239,7 +239,7 @@ async fn progress_callback_can_cancel_before_any_network_operation() {
         Ok(())
     })
     .await;
-    assert_eq!(result.err().unwrap(), "connection was cancelled");
+    assert_eq!(result.err().unwrap().to_string(), "connection was cancelled");
     assert_eq!(events.load(Ordering::SeqCst), 1);
 }
 

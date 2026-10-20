@@ -209,7 +209,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         if cancel_position.is_some()
             || ["wrong-password", "closed", "denied", "timeout", "cancel-setup"].contains(&mode)
         {
-            let error = result.err().ok_or("expected failure was accepted")?;
+            let error = result.err().ok_or("expected failure was accepted")?.to_string();
             if mode == "timeout" && !error.contains("timed out") {
                 return Err(format!("unexpected timeout result: {error}").into());
             }

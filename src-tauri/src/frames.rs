@@ -7,6 +7,7 @@
 //! (`scoplen-docs/11-client-architecture.md` §4). The frontend receives each
 //! frame as an `ArrayBuffer` (`web/app/src/ipc/frames.ts`).
 
+use scoplen_client_core::session_manager::SessionEvent;
 use tauri::ipc::{Channel, InvokeResponseBody, IpcResponse};
 
 /// A raw binary frame sent through a Tauri channel.
@@ -51,6 +52,35 @@ impl FrameSender {
     }
 }
 
+/// Ordered terminal state or transport-tagged raw output on one IPC channel.
+pub enum SessionMessage {
+    /// Display-safe manager state, serialized as JSON.
+    Event(SessionEvent),
+    /// Raw output prefixed with its 16-byte transport UUID.
+    Output(uuid::Uuid, Vec<u8>),
+}
+
+impl specta::Type for SessionMessage {
+    fn definition(types: &mut specta::Types) -> specta::datatype::DataType {
+        let _ = <SessionEvent as specta::Type>::definition(types);
+        specta_typescript::define("SessionEvent | ArrayBuffer").into()
+    }
+}
+
+impl IpcResponse for SessionMessage {
+    fn body(self) -> tauri::Result<InvokeResponseBody> {
+        match self {
+            Self::Event(event) => Ok(InvokeResponseBody::Json(serde_json::to_string(&event)?)),
+            Self::Output(transport, bytes) => {
+                let mut frame = Vec::with_capacity(16 + bytes.len());
+                frame.extend_from_slice(transport.as_bytes());
+                frame.extend_from_slice(&bytes);
+                Ok(InvokeResponseBody::Raw(frame))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{FrameSender, RawFrame};
@@ -86,5 +116,66 @@ mod tests {
         let channel = Channel::new(|_| Err(tauri::Error::FailedToReceiveMessage));
         let error = FrameSender::new(channel).send(vec![1]).unwrap_err();
         assert_eq!(error.to_string(), "the frame channel to the frontend is closed");
+    }
+
+    #[test]
+    fn session_frames_keep_transport_identity_and_payload_as_binary() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let sink = received.clone();
+        let channel = Channel::new(move |body| {
+            sink.lock().unwrap().push(body);
+            Ok(())
+        });
+        let transport = uuid::Uuid::now_v7();
+        channel.send(super::SessionMessage::Output(transport, vec![0, 255, 10])).unwrap();
+        let received = received.lock().unwrap();
+        let InvokeResponseBody::Raw(bytes) = &received[0] else { panic!("JSON terminal frame") };
+        assert_eq!(&bytes[..16], transport.as_bytes());
+        assert_eq!(&bytes[16..], &[0, 255, 10]);
+    }
+
+    #[test]
+    fn state_and_output_share_one_ordered_channel_across_attempts() {
+        use super::SessionMessage;
+        use scoplen_client_core::session_manager::SessionEvent;
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let sink = received.clone();
+        let channel = Channel::new(move |body| {
+            sink.lock().unwrap().push(body);
+            Ok(())
+        });
+        for automatic in [false, true] {
+            let transport = uuid::Uuid::now_v7();
+            channel
+                .send(SessionMessage::Event(SessionEvent::Starting {
+                    transport_id: transport.to_string(),
+                    automatic,
+                }))
+                .unwrap();
+            channel.send(SessionMessage::Output(transport, vec![0, 255])).unwrap();
+            channel
+                .send(SessionMessage::Event(SessionEvent::Ready {
+                    transport_id: transport.to_string(),
+                }))
+                .unwrap();
+        }
+        let received = received.lock().unwrap();
+        for attempt in received.as_chunks::<3>().0 {
+            let InvokeResponseBody::Json(start) = &attempt[0] else {
+                panic!("starting must precede output")
+            };
+            let starting: serde_json::Value = serde_json::from_str(start).unwrap();
+            assert_eq!(starting["kind"], "starting");
+            let transport =
+                uuid::Uuid::parse_str(starting["transportId"].as_str().unwrap()).unwrap();
+            let InvokeResponseBody::Raw(output) = &attempt[1] else {
+                panic!("output must stay binary")
+            };
+            assert_eq!(&output[..16], transport.as_bytes());
+            let InvokeResponseBody::Json(ready) = &attempt[2] else {
+                panic!("readiness must remain a state event")
+            };
+            assert_eq!(serde_json::from_str::<serde_json::Value>(ready).unwrap()["kind"], "ready");
+        }
     }
 }

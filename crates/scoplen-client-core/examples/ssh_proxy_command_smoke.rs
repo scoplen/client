@@ -222,7 +222,7 @@ async fn run_case(
             drop(connection);
         }
     } else {
-        let error = result.err().ok_or("expected ProxyCommand failure")?;
+        let error = result.err().ok_or("expected ProxyCommand failure")?.to_string();
         if mode == "timeout" {
             assert!(started.elapsed() >= Duration::from_secs(9), "setup timeout fired prematurely");
             assert!(error.contains("timed out"), "timeout must remain actionable: {error}");
