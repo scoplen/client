@@ -4505,7 +4505,6 @@ dependencies = [
  "scoplen-client-platform",
  "scoplen-crypto",
  "scoplen-model",
- "scoplen-ssh",
  "serde",
  "serde_json",
  "specta",
@@ -4515,7 +4514,6 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-specta",
  "thiserror 2.0.21",
- "tokio",
  "uuid",
  "zeroize",
 ]
