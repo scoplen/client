@@ -158,6 +158,7 @@ export class ScoplenTerminalElement extends HTMLElementBase {
   private writeTail: Promise<void> = Promise.resolve();
   private pendingWrites = 0;
   private lifecycleGeneration = 0;
+  private sinkGeneration = 0;
   private connected = false;
   private listenersAttached = false;
   private _broadcastInput = false;
@@ -211,8 +212,10 @@ export class ScoplenTerminalElement extends HTMLElementBase {
   }
 
   set sink(sink: TerminalSink | null) {
+    if (this._sink === sink) return;
     this.releaseSinkWriter();
     this._sink = sink;
+    this.sinkGeneration += 1;
   }
 
   get broadcastSink(): TerminalSink | null {
@@ -354,31 +357,40 @@ export class ScoplenTerminalElement extends HTMLElementBase {
 
     const bytes = cloneBytes(chunk);
     const generation = this.lifecycleGeneration;
+    const sinkGeneration = this.sinkGeneration;
+    const sink = this._sink;
+    const isCurrent = () =>
+      this.connected && generation === this.lifecycleGeneration && sinkGeneration === this.sinkGeneration;
     this.pendingWrites += 1;
     const task = this.writeTail.then(async () => {
-      if (!this.connected || generation !== this.lifecycleGeneration) {
+      if (!isCurrent()) {
         throw new TerminalDisconnectedError();
       }
-      if (this._sink === null) {
+      if (sink === null) {
         this.dispatchInput(bytes);
       } else {
         try {
-          await this.writeSink(this._sink, bytes, false);
+          await this.writeSink(sink, bytes, false);
         } catch (error) {
+          if (!isCurrent()) throw new TerminalDisconnectedError();
           this.reportError(error);
           throw error;
         }
       }
+      if (!isCurrent()) throw new TerminalDisconnectedError();
       if (this._broadcastInput) {
         this.dispatchEvent(new CustomEvent<TerminalBytes>("terminal-broadcast-input", { detail: cloneBytes(bytes) }));
+        if (!isCurrent()) throw new TerminalDisconnectedError();
         if (this._broadcastSink) {
           try {
             await this.writeSink(this._broadcastSink, bytes, true);
           } catch (error) {
+            if (!isCurrent()) throw new TerminalDisconnectedError();
             this.reportError(error);
           }
         }
       }
+      if (!isCurrent()) throw new TerminalDisconnectedError();
     });
     this.writeTail = task.catch(() => undefined);
     return task.finally(() => {

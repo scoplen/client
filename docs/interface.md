@@ -79,6 +79,15 @@ attempts and their closed or failed outcomes; terminal output and credentials st
 outside history DTOs. Reconnect in Recent starts the normal Connect flow for the
 current saved Login. Automatic reconnect and saved scrollback remain later outcomes.
 
+The session header also offers Reconnect after the current connection closes or
+fails. It stays disabled until that connection task settles. The same terminal
+element keeps its displayed scrollback while a new transport identifier runs the
+normal host-key review, current saved-credential lookup, and one-time passphrase
+prompt. Each accepted attempt records its own history lifecycle. Old ready,
+output, input-error, and trust results cannot update the replacement connection;
+closing the tab cancels the current attempt. This uses the existing session IPC
+commands and does not add automatic retries or restore output from a closed tab.
+
 ## Connecting a contract
 
 1. Add the commands in `src-tauri` with `#[specta::specta]` and run `pnpm bindings`.
