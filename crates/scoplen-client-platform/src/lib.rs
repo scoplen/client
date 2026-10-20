@@ -10,6 +10,7 @@
 
 pub mod credentials;
 pub mod keystore;
+pub mod ssh_agent;
 
 /// The user's preferred languages as the operating system reports them, most
 /// preferred first, as BCP 47 or POSIX tags.

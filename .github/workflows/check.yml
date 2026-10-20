@@ -80,6 +80,28 @@ jobs:
       - name: SOCKS5 and HTTP CONNECT acceptance, refusal, timeout, and host trust
         shell: pwsh
         run: ./scripts/test-ssh-proxy-route.ps1
+      - name: Saved SSH-agent identity, trust, failure, timeout, and cancellation
+        shell: pwsh
+        run: ./scripts/test-ssh-agent-unix.ps1
+
+  windows-agent-interop:
+    name: Windows native agent login
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Authorize access to proto
+        if: env.SCOPLEN_PROTO_TOKEN != ''
+        shell: bash
+        run: git config --global url."https://x-access-token:${SCOPLEN_PROTO_TOKEN}@github.com/scoplen/proto.git".insteadOf "https://github.com/scoplen/proto.git"
+      - name: Start isolated runner OpenSSH agent
+        shell: pwsh
+        run: |
+          Set-Service ssh-agent -StartupType Manual
+          Start-Service ssh-agent
+      - name: Saved AgentStream identity, SSH command, and failure controls
+        shell: pwsh
+        run: ./scripts/test-ssh-agent-windows.ps1
 
   web:
     name: Frontend

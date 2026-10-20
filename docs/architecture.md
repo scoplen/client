@@ -125,6 +125,24 @@ A SHA-1-only advertisement fails before authentication; a rejected SHA-2
 attempt does not retry another hash or password. Host-key trust remains a
 prerequisite to all credential use.
 
+Agent Credentials retain their saved `public_key` in the resolved plan. Before
+any network access the core validates a supported raw OpenSSH public key; only
+after host-key trust succeeds does it connect to the system agent. The platform
+crate selects the Unix `SSH_AUTH_SOCK` or a local Windows named pipe and exposes
+a bounded synchronous byte interface backed by an async local I/O task. The
+shared `AgentClient`, framed channel, and `AgentSshSigner` own protocol messages
+and signatures. The core requires the exact public-key blob to appear among
+the agent identities; it never substitutes a first identity or another credential.
+
+Synchronous signer calls run on at most four blocking workers, leaving the app
+executor responsive. One absolute ten-second deadline covers agent connection,
+all partial local reads/writes, identity listing, and SSH authentication. Dropping
+the authentication future aborts agent I/O and notifies the worker, which discards
+its result; only a live caller restores its connection and advances to Open.
+This path adds no unsafe code, protocol format, IPC field, private-key export,
+Pageant discovery, or forwarding permission. RSA agents use the existing bounded
+SHA-2 discovery and never retry with SHA-1 or a password.
+
 The client pins the same proto revision for its shared crates and its Cargo
 `pageant` patch because a Git dependency does not inherit the proto workspace's
 local patch.
@@ -134,8 +152,7 @@ and command/input fields are bounded at 64 KiB. The desktop session view uses
 `@scoplen/terminal` to interpret ANSI/VT output. A process-local session
 registry routes bounded input frames and close requests to the owning SSH
 channel; disconnecting the tab closes that channel. Jump and ProxyCommand routes,
-authenticated proxy routes,
-other credentials, automatic reconnect, and saved scrollback remain
+remaining credential providers, automatic reconnect, and saved scrollback remain
 later connection slices.
 
 After local profile and trust-record preflight, each `session_connect` attempt

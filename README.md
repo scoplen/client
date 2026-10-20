@@ -10,13 +10,31 @@ Owner and operator: immoses (Moses Qiu). Responsible maintainer: immoses (Moses 
 
 Maturity: Exploration. Maintenance: Active.
 
-The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly or through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, authenticates to the target with a password or an OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA private key after an active host-specific trust record matches the target's presented key, then opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after host-key review. New, changed, revoked, wildcard-only, and CA trust records remain fail-closed. Jump and ProxyCommand routes, other target credential kinds, automatic reconnect, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
+The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly or through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, authenticates to the target with a password or an OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA private key, or an explicitly selected key in the system SSH agent after an active host-specific trust record matches the target's presented key, then opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after host-key review. New, changed, revoked, wildcard-only, and CA trust records remain fail-closed. Jump and ProxyCommand routes, other target credential kinds, automatic reconnect, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
 
 RSA private-key authentication selects `rsa-sha2-512` or `rsa-sha2-256` from the
 server's advertised `server-sig-algs`. When the advertisement is unavailable or
 unrecognized, it tries SHA-512 once; a SHA-1-only advertisement fails before
 authentication. A rejected SHA-2 attempt does not retry another hash or fall
 back to SHA-1 or a password.
+
+Saved Agent Credentials can authenticate through the system SSH agent. In the
+credential editor choose Agent, paste the exact OpenSSH public key, and assign
+that credential to the host's Login. The key must already be loaded in the
+agent; comments do not affect identity matching. An agent credential without
+a public key fails before dialing. The client never selects the first agent
+identity, imports a private key from the agent, or falls back to a password.
+Unix uses `SSH_AUTH_SOCK`; Windows uses that variable when it names a local
+pipe, otherwise the standard OpenSSH pipe when the variable is absent.
+Pageant discovery and agent forwarding remain later outcomes.
+
+Host-key review completes before querying or signing with the agent. A single
+ten-second deadline covers local agent connection, identities, signing, and SSH
+authentication, including partial reads. At most four agent authentication
+workers run concurrently. Closing a pending connection cancels local agent I/O
+and discards the authentication result; no shell is opened by the cancelled task.
+Missing keys, locked or unavailable agents, signing refusal, and timeouts are
+explicit failures. Agent RSA keys use the same SHA-2 selection policy as software keys.
 
 Saved encrypted OpenSSH keys use bcrypt-pbkdf for this connection only. The
 passphrase is never saved and is cleared from the input after submission;
@@ -100,6 +118,18 @@ rejection, proxy refusal, stalled proxy timeouts, and target
 host-key mismatch for both proxy types. It requires PowerShell 7, Docker, and
 `ssh-keygen`; the script removes its container and temporary key when finished.
 CI runs the same proxy fixture on Linux.
+
+`scripts/test-ssh-agent-unix.ps1` runs the saved Credential resolver and platform
+Unix socket transport against a disposable real OpenSSH agent and server in
+Docker. It checks exact key selection with an unrelated identity loaded first,
+missing identities, host-key rejection, unavailable agents, signing refusal,
+disconnect, timeout, cancellation, and successful controls after failures.
+`scripts/test-ssh-agent-pipe.ps1` exercises an isolated Windows mock agent pipe
+against a disposable OpenSSH server without touching the user's system agent.
+`scripts/test-ssh-agent-windows.ps1` is restricted to an isolated Windows GitHub
+runner and checks the complete saved-key path through the real Microsoft agent,
+using a disposable loopback Rust SSH protocol peer. That peer does not establish
+Windows OpenSSH-server interoperability. Each fixture cleans up its own resources.
 
 On macOS, `scripts/check-offline.sh target/release/bundle/macos/Scoplen.app` verifies that a built application makes no network connection while sync is disabled.
 
