@@ -10,7 +10,18 @@ Owner and operator: Plystra LLC. Responsible maintainer: Plystra LLC.
 
 Maturity: Exploration. Maintenance: Active.
 
-The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly or through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, authenticates to the target with a password or an OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA private key, or an explicitly selected key in the system SSH agent after an active host-specific trust record matches the target's presented key, then opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after host-key review. New, changed, revoked, wildcard-only, and CA trust records remain fail-closed. Jump and ProxyCommand routes, other target credential kinds, automatic reconnect, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
+The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly, through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, or through an explicit saved Jump chain. Each SSH host uses its saved password, OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA software key, or an explicitly selected key in the system SSH agent, after independent host-key review. The target opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after that host's review. New or changed keys require explicit acceptance; wildcard-only and CA records do not authorize raw host keys. ProxyCommand routes, other credential kinds, automatic reconnect, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
+
+To use Jump, create a Jump route containing the ordered Logins for the jump
+hosts, then assign that route to the target Login. Every jump Login must select
+Direct. The client rejects nested Jump, proxy, or command routes on a jump
+Login, missing references, and repeated Logins or Hosts, including the target,
+before network or agent access. Each dialog identifies the jump or target,
+position, Host, Login, and endpoint. Trust acceptance applies only to the exact
+key on the retained connection; authentication and the next hop wait for it.
+Changed keys require a separate review. Forwarded connection setup has a
+ten-second deadline. Cancellation or failure closes the current connection and
+its parents in reverse order; the target owns that chain until the session ends.
 
 RSA private-key authentication selects `rsa-sha2-512` or `rsa-sha2-256` from the
 server's advertised `server-sig-algs`. When the advertisement is unavailable or
@@ -41,8 +52,10 @@ passphrase is never saved and is cleared from the input after submission;
 incorrect entry can be retried. Before decryption the client enforces a 64 KiB
 key-file limit, a 4 KiB passphrase limit, a nonempty bcrypt salt of at most 64
 bytes, and 1–256 bcrypt rounds. Larger or malformed work parameters fail
-without running the KDF. Canceling before submission starts no authenticated
-session or Recent attempt; host-key probes may already have occurred.
+without running the KDF. Each encrypted key in a Jump chain gets an independent
+blank prompt, and a wrong passphrase can be retried on the same reviewed
+connection. Cancellation closes the whole chain and records the accepted
+connection attempt as closed in Recent.
 If a running connection is canceled while bcrypt is deriving, its bounded
 blocking task may finish before releasing the passphrase; its result is ignored.
 
@@ -133,6 +146,10 @@ missing identities, host-key rejection, unavailable agents, signing refusal,
 disconnect, timeout, cancellation, and successful controls after failures.
 `scripts/test-ssh-agent-pipe.ps1` exercises an isolated Windows mock agent pipe
 against a disposable OpenSSH server without touching the user's system agent.
+`scripts/test-ssh-jump.ps1` checks three independent OpenSSH hosts, saved ordered
+routes, new and changed trust at every position, password/software-key/Agent
+authentication, wrong-passphrase retries, refusal, timeout, cancellation, and a
+fresh successful connection after failures.
 `scripts/test-ssh-agent-windows.ps1` is restricted to an isolated Windows GitHub
 runner and checks the complete saved-key path through the real Microsoft agent,
 using a disposable loopback Rust SSH protocol peer. That peer does not establish

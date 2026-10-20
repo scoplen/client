@@ -4,6 +4,9 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Connected saved ordered Jump routes to real SSH with independent host-key review and password, encrypted software-key, or exact-key Agent authentication at every hop. The core retains each reviewed connection, fences one-use prompts, retries local passphrases, bounds forwarded setup, and closes chains in reverse on cancellation or failure. Invalid chains and non-Direct routes on jump Logins fail before dialing.
+- Reserved transports before connection preparation so closing a tab before the IPC acknowledgment cannot start a late SSH connection or leave an unclaimed registry entry.
+
 - Added manual Reconnect in ended session tabs, preserving displayed terminal output while rechecking host trust and current saved credentials, requesting a fresh one-time passphrase, and using a new transport and history entry for every attempt. Pending tasks and stale results cannot overlap or revive an old connection.
 - Cancelled terminal input queued for a replaced sink so delayed keystrokes and old write errors cannot reach a replacement connection.
 

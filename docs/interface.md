@@ -64,7 +64,7 @@ labels and usage counts; secrets never cross the IPC boundary.
 A saved Agent Credential connects only when its Public key field contains the
 exact raw OpenSSH public key loaded in the system agent. The existing Login
 credential selector assigns it to a host. Missing or malformed public keys are
-reported before host-key probing; the Connect flow keeps its normal host-key
+reported before dialing; the Connect flow keeps its normal host-key
 review and reports missing identities, agent signing failures, and timeouts in
 the existing session error surface. It never prompts for a password fallback.
 Agent forwarding and Pageant discovery remain unavailable.
@@ -86,7 +86,32 @@ normal host-key review, current saved-credential lookup, and one-time passphrase
 prompt. Each accepted attempt records its own history lifecycle. Old ready,
 output, input-error, and trust results cannot update the replacement connection;
 closing the tab cancels the current attempt. This uses the existing session IPC
-commands and does not add automatic retries or restore output from a closed tab.
+surface and does not add automatic retries or restore output from a closed tab.
+
+The renderer first calls `sessionReserveTransport(sessionId, pty)` and waits for
+its acknowledgment before `sessionConnect`. If the tab closes before that
+acknowledgment, it closes the reservation once acknowledged and never connects.
+`sessionCloseTransport` removes unclaimed reservations and cancels claimed
+preparations; no closed-identifier tombstones are retained.
+
+`sessionConnect` receives a typed preparation channel. Rust resolves the whole
+saved route before dialing, rejecting repeated Login/Host identifiers, target
+loops, missing references, unsupported credentials, and any jump Login whose
+own route is not Direct. It emits per-hop progress, trust, and one-time
+passphrase prompts, each identifying the Host, Login, username, endpoint, and
+position. Trust review retains the same unauthenticated SSH connection; its
+first negotiated key is pinned for all rekeys. Before agent access, private-key
+decryption, or remote authentication, Rust requires exact saved trust or
+explicit acceptance of that connection's key.
+
+`sessionRespond(sessionId, promptId, intent)` accepts only the current,
+correctly typed, one-use prompt. Trust intents contain no renderer-supplied
+host or key. Passphrase intents are write-only, clear the input before sending,
+and never enter React state; wrong local decryption requests a fresh prompt on
+the same reviewed connection. Every encrypted hop has its own prompt. Stale,
+duplicate, canceled, and cross-attempt replies fail. Canceling a prompt or
+closing the tab cancels preparation, with reverse cleanup of the entire chain.
+Delayed IPC acknowledgments cannot replace a newer hop's prompt.
 
 ## Connecting a contract
 

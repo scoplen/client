@@ -166,6 +166,8 @@ export const en = {
   "frame.state.connected": "Connected",
   "frame.state.closed": "Closed",
   "frame.state.failed": "Failed",
+  "session.route.hop": "Jump host",
+  "session.route.target": "Target host",
   "session.connect": "Connect",
   "session.connecting": "Connecting",
   "session.verifying": "Verifying host key",

@@ -35,6 +35,7 @@ use crate::repository::{
 use crate::store::Store;
 
 mod agent;
+pub mod preparation;
 
 /// A resolved credential handed to the SSH adapter.
 ///
@@ -297,7 +298,9 @@ pub fn evaluate_host_key(
     fingerprint: &str,
     records: &[TrustRecord],
 ) -> HostKeyStatus {
-    let active = records.iter().filter(|record| record.host == Some(host_id) && !record.revoked);
+    let active = records
+        .iter()
+        .filter(|record| record.host == Some(host_id) && !record.revoked && !record.ca);
     let mut found = false;
     for record in active {
         found = true;
@@ -616,6 +619,9 @@ impl HostKeyVerifier for StoredHostKeyVerifier {
 /// Errors returned by the concrete client connection owner.
 #[derive(Debug, thiserror::Error)]
 pub enum SshConnectionError {
+    /// Opening the next jump channel or its SSH handshake exceeded the budget.
+    #[error("SSH jump setup timed out; check forwarding access and the next host, then reconnect")]
+    JumpSetupTimeout,
     /// The saved route is not yet supported by this concrete engine.
     #[error("SSH route is not supported by the concrete client engine")]
     UnsupportedRoute,
@@ -834,6 +840,7 @@ pub struct SshExecOutput {
 /// A live SSH connection owned by the client core.
 pub struct SshConnection {
     connection: Option<ClientConnection>,
+    parents: Vec<ClientConnection>,
     lifecycle: ConnectionLifecycle,
     username: String,
     credential: Option<CredentialMaterial>,
@@ -948,6 +955,14 @@ impl SshConnection {
         plan: &ConnectionPlan,
         trust: Option<HostKeyTrust>,
     ) -> Result<Self, SshConnectionError> {
+        Self::connect_over(plan, trust, None).await
+    }
+
+    async fn connect_over(
+        plan: &ConnectionPlan,
+        trust: Option<HostKeyTrust>,
+        parent: Option<&Self>,
+    ) -> Result<Self, SshConnectionError> {
         let route = transport_route(&plan.route)?;
         validate_credential(&plan.credential)?;
         let verifier = trust.unwrap_or_else(|| {
@@ -964,15 +979,30 @@ impl SshConnection {
                 verifier.verify(host, key)
             })
             .map_err(ClientError::from)?;
-        let connection = match connect_route(config, route).await {
+        let setup = async {
+            if let Some(parent) = parent {
+                let parent = parent.connection.as_ref().ok_or(ClientError::NotAuthenticated)?;
+                tokio::time::timeout(
+                    PROXY_CONNECT_TIMEOUT,
+                    ClientConnection::connect_via_direct_tcpip(config, parent, "127.0.0.1", 0),
+                )
+                .await
+                .map_err(|_| SshConnectionError::JumpSetupTimeout)?
+                .map_err(SshConnectionError::Engine)
+            } else {
+                connect_route(config, route).await.map_err(SshConnectionError::Engine)
+            }
+        };
+        let connection = match setup.await {
             Ok(connection) => connection,
             Err(error) => {
                 let _ = lifecycle.transition(ConnectionState::Failed);
-                return Err(SshConnectionError::Engine(error));
+                return Err(error);
             }
         };
         Ok(Self {
             connection: Some(connection),
+            parents: Vec::new(),
             lifecycle,
             username: plan.username.clone(),
             credential: Some(plan.credential.clone()),
@@ -996,6 +1026,21 @@ impl SshConnection {
         &mut self,
         passphrase: Option<SecretVec>,
     ) -> Result<(), SshConnectionError> {
+        // Local decryption can be retried on this same, already reviewed KEX.
+        // It must complete before consuming the credential or starting auth.
+        if let Some(CredentialMaterial::PrivateKey(material)) = &self.credential {
+            let material = material.clone();
+            let signer = tokio::task::spawn_blocking(move || {
+                parse_software_key(&material, passphrase.as_ref())
+            })
+            .await
+            .map_err(|_| SshConnectionError::InvalidPrivateKey)??;
+            self.lifecycle.transition(ConnectionState::Authenticating)?;
+            self.credential.take();
+            let username = self.username.clone();
+            let result = self.authenticate_software_key(&username, signer).await;
+            return self.finish_authentication(result);
+        }
         self.lifecycle.transition(ConnectionState::Authenticating)?;
         let username = self.username.clone();
         let credential = self.credential.take().ok_or(SshConnectionError::UnsupportedCredential)?;
@@ -1012,9 +1057,6 @@ impl SshConnection {
                         .await
                         .map_err(SshConnectionError::Engine)
                 }
-            }
-            CredentialMaterial::PrivateKey(key) => {
-                self.authenticate_private_key(&username, key, passphrase).await
             }
             CredentialMaterial::Agent { public_key } => {
                 self.authenticate_agent(&username, public_key.as_deref()).await
@@ -1043,16 +1085,11 @@ impl SshConnection {
         self.finish_authentication(result)
     }
 
-    async fn authenticate_private_key(
+    async fn authenticate_software_key(
         &mut self,
         username: &str,
-        material: SecretVec,
-        passphrase: Option<SecretVec>,
+        signer: SoftwareKeySigner,
     ) -> Result<(), SshConnectionError> {
-        let signer =
-            tokio::task::spawn_blocking(move || parse_software_key(&material, passphrase.as_ref()))
-                .await
-                .map_err(|_| SshConnectionError::InvalidPrivateKey)??;
         match signer {
             SoftwareKeySigner::Ed25519(signer) => self
                 .connection_mut()?
@@ -1110,11 +1147,26 @@ impl SshConnection {
 
     /// Close the SSH connection and mark it closed.
     pub async fn close(mut self) -> Result<(), SshConnectionError> {
+        let mut result = Ok(());
         if let Some(connection) = self.connection.take() {
-            connection.disconnect().await?;
+            result = connection.disconnect().await.map_err(SshConnectionError::Engine);
+        }
+        while let Some(parent) = self.parents.pop() {
+            if let Err(error) = parent.disconnect().await
+                && result.is_ok()
+            {
+                result = Err(SshConnectionError::Engine(error));
+            }
         }
         let _ = self.lifecycle.transition(ConnectionState::Closed);
-        Ok(())
+        result
+    }
+}
+
+impl Drop for SshConnection {
+    fn drop(&mut self) {
+        self.connection.take();
+        while self.parents.pop().is_some() {}
     }
 }
 

@@ -26,8 +26,8 @@ pub fn ipc() -> Builder<tauri::Wry> {
         .commands(collect_commands![
             commands::app_info,
             commands::shell_ready,
-            ssh::session_host_key,
-            ssh::session_trust_host_key,
+            ssh::session_respond,
+            ssh::session_reserve_transport,
             ssh::session_connect,
             ssh::session_input,
             ssh::session_resize,
