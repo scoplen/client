@@ -362,9 +362,9 @@ pub enum RouteKind {
     /// Through jump hosts, in order (logins of the hops).
     Jump { hops: Vec<Uuid> },
     /// Through a SOCKS5 proxy at `host:port`.
-    Socks5 { proxy: String, credential: Option<Uuid> },
+    Socks5 { proxy: String, credential: Option<Uuid>, username: Option<String> },
     /// Through an HTTP CONNECT proxy at `host:port`.
-    HttpConnect { proxy: String, credential: Option<Uuid> },
+    HttpConnect { proxy: String, credential: Option<Uuid>, username: Option<String> },
     /// Through a `ProxyCommand`.
     Command { command: String },
     /// Through the organization's bastion; organization vault only.
@@ -408,8 +408,16 @@ impl Record for Route {
                 };
                 RouteKind::Jump { hops }
             }
-            2 => RouteKind::Socks5 { proxy: proxy()?, credential: fields::uuid(o, 5)? },
-            3 => RouteKind::HttpConnect { proxy: proxy()?, credential: fields::uuid(o, 5)? },
+            2 => RouteKind::Socks5 {
+                proxy: proxy()?,
+                credential: fields::uuid(o, 5)?,
+                username: fields::text(o, 8)?,
+            },
+            3 => RouteKind::HttpConnect {
+                proxy: proxy()?,
+                credential: fields::uuid(o, 5)?,
+                username: fields::text(o, 8)?,
+            },
             4 => RouteKind::Command { command: known(o, 6, fields::text(o, 6)?)? },
             5 => RouteKind::Managed { gateway_network: known(o, 7, fields::uuid(o, 7)?)? },
             _ => return Err(RecordError::Shape(o.object_type, 2)),
@@ -425,17 +433,17 @@ impl Change for RouteChange {
         if let Some(kind) = self.kind {
             // Every kind-specific field is written, set or cleared, so that a
             // change of kind leaves no field of the previous kind behind.
-            let (number, hops, proxy, credential, command, network) = match kind {
-                RouteKind::Jump { hops } => (1u64, Some(hops), None, None, None, None),
-                RouteKind::Socks5 { proxy, credential } => {
-                    (2, None, Some(proxy), credential, None, None)
+            let (number, hops, proxy, credential, command, network, username) = match kind {
+                RouteKind::Jump { hops } => (1u64, Some(hops), None, None, None, None, None),
+                RouteKind::Socks5 { proxy, credential, username } => {
+                    (2, None, Some(proxy), credential, None, None, username)
                 }
-                RouteKind::HttpConnect { proxy, credential } => {
-                    (3, None, Some(proxy), credential, None, None)
+                RouteKind::HttpConnect { proxy, credential, username } => {
+                    (3, None, Some(proxy), credential, None, None, username)
                 }
-                RouteKind::Command { command } => (4, None, None, None, Some(command), None),
+                RouteKind::Command { command } => (4, None, None, None, Some(command), None, None),
                 RouteKind::Managed { gateway_network } => {
-                    (5, None, None, None, None, Some(gateway_network))
+                    (5, None, None, None, None, Some(gateway_network), None)
                 }
             };
             w.set(2, Some(Value::UInt(number)));
@@ -446,6 +454,7 @@ impl Change for RouteChange {
             w.edit(5, Edit::from_option(credential), uuid_value);
             w.edit(6, Edit::from_option(command), text_value);
             w.edit(7, Edit::from_option(network), uuid_value);
+            w.edit(8, Edit::from_option(username), text_value);
         }
         Ok(w.0)
     }

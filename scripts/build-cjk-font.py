@@ -48,13 +48,16 @@ def main():
     wanted = {ord(c) for c in TEXT.read_text(encoding="utf-8") if ord(c) >= 0x2E80}
     slices = json.loads((SOURCE / "unicode.json").read_text())
     parts = []
+    source_timestamps = []
     with tempfile.TemporaryDirectory() as tmp:
         for name, ranges in slices.items():
             codes = parse_ranges(ranges) & wanted
             if not codes:
                 continue
             key = name.strip("[]")
-            font = instantiateVariableFont(TTFont(SOURCE / f"files/noto-serif-sc-{key}-wght-normal.woff2"), {"wght": WEIGHT})
+            font = TTFont(SOURCE / f"files/noto-serif-sc-{key}-wght-normal.woff2")
+            source_timestamps.append(font["head"].created)
+            font = instantiateVariableFont(font, {"wght": WEIGHT})
             options = subset.Options()
             options.layout_features = ["*"]
             options.name_IDs = ["*"]
@@ -68,6 +71,9 @@ def main():
             parts.append(str(path))
         merged = Merger().merge(parts)
         merged.flavor = "woff2"
+        merged.recalcTimestamp = False
+        merged["head"].created = min(source_timestamps)
+        merged["head"].modified = min(source_timestamps)
         OUT.mkdir(parents=True, exist_ok=True)
         merged.save(OUT / "scoplen-serif-sc.woff2")
         covered = sorted(merged.getBestCmap())

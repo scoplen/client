@@ -328,6 +328,9 @@ export const en = {
   "objects.route.proxy": "Proxy endpoint",
   "objects.route.proxyCredential": "Proxy credential",
   "objects.route.noCredential": "No proxy credential",
+  "objects.route.proxyUsername": "Proxy username",
+  "objects.route.proxyAuthNotice":
+    "This proxy uses plain TCP. It receives your username and password without transport encryption.",
   "objects.route.command": "ProxyCommand",
   "objects.route.gatewayNetwork": "Gateway network",
   "objects.route.kind.jump": "Jump host chain",
@@ -348,6 +351,8 @@ export const en = {
   "objects.error.invalidCredential": "Choose a valid credential for this login.",
   "objects.error.invalidRoute": "Choose a valid route for this login.",
   "objects.error.invalidProxy": "Enter a host:port proxy endpoint.",
+  "objects.error.invalidProxyAuthentication":
+    "Choose a password and enter a valid proxy username. HTTP CONNECT usernames cannot contain a colon.",
   "objects.error.invalidCommand": "Enter a ProxyCommand.",
   "objects.error.invalidCredentialBinding": "That credential kind cannot use this storage option.",
   "objects.error.secretRequired": "Enter the secret material for this credential.",

@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use scoplen_client_core::connection::{
     ConnectionPlan, ConnectionRoute, CredentialMaterial, HostKeyPresentation, HostKeyTrust,
     SshConnection, SshConnectionError, probe_host_key,
@@ -32,6 +33,7 @@ enum ProxyBehavior {
     Forward,
     Reject,
     Stall,
+    RejectAuthentication,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -53,6 +55,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 proxy_case(kind, ProxyBehavior::Reject, port, &args[3], &key).await?;
                 proxy_case(kind, ProxyBehavior::Stall, port, &args[3], &key).await?;
                 untrusted_case(kind, port, &args[3], &key).await?;
+                authenticated_proxy_case(kind, ProxyBehavior::Forward, port, &args[3], &key)
+                    .await?;
+                authenticated_proxy_case(
+                    kind,
+                    ProxyBehavior::RejectAuthentication,
+                    port,
+                    &args[3],
+                    &key,
+                )
+                .await?;
             }
         }
         Ok::<_, Box<dyn std::error::Error>>(())
@@ -111,6 +123,7 @@ async fn proxy_case(
         behavior,
         target_port,
         if matches!(behavior, ProxyBehavior::Forward) { 2 } else { 1 },
+        false,
     )?;
     let plan = plan("target.example", target_port, user, key, route);
     if matches!(behavior, ProxyBehavior::Forward) {
@@ -131,6 +144,7 @@ async fn proxy_case(
                 )))
             ),
             ProxyBehavior::Forward => unreachable!(),
+            ProxyBehavior::RejectAuthentication => unreachable!(),
         };
         if !expected {
             return Err(format!("unexpected proxy failure: {error}").into());
@@ -146,7 +160,7 @@ async fn untrusted_case(
     user: &str,
     key: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (route, server) = start_proxy(kind, ProxyBehavior::Forward, target_port, 2)?;
+    let (route, server) = start_proxy(kind, ProxyBehavior::Forward, target_port, 2, false)?;
     let plan = plan("target.example", target_port, user, key, route);
     let mut expected = probe_host_key(&plan).await?;
     expected.fingerprint.push('x');
@@ -168,6 +182,57 @@ async fn untrusted_case(
     Ok(())
 }
 
+async fn authenticated_proxy_case(
+    kind: ProxyKind,
+    behavior: ProxyBehavior,
+    target_port: u16,
+    user: &str,
+    key: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (mut route, server) = start_proxy(
+        kind,
+        behavior,
+        target_port,
+        if matches!(behavior, ProxyBehavior::Forward) { 2 } else { 1 },
+        true,
+    )?;
+    if matches!(behavior, ProxyBehavior::RejectAuthentication) {
+        match &mut route {
+            ConnectionRoute::Socks5 { credential, .. }
+            | ConnectionRoute::HttpConnect { credential, .. } => {
+                *credential =
+                    Some(CredentialMaterial::Password(SecretVec::new(b"wrong-pass".to_vec())));
+            }
+            _ => unreachable!(),
+        }
+    }
+    let plan = plan("target.example", target_port, user, key, route);
+    if matches!(behavior, ProxyBehavior::Forward) {
+        authenticated_command(&plan).await?;
+    } else {
+        let error = probe_host_key(&plan).await.err().ok_or("proxy accepted wrong password")?;
+        let expected = match kind {
+            ProxyKind::Socks5 => matches!(
+                error,
+                SshConnectionError::Engine(ClientError::Proxy(ProxyTransportError::Proxy(
+                    ProxyError::AuthenticationRejected { .. }
+                )))
+            ),
+            ProxyKind::HttpConnect => matches!(
+                error,
+                SshConnectionError::Engine(ClientError::Proxy(ProxyTransportError::Proxy(
+                    ProxyError::Rejected { code: 407, .. }
+                )))
+            ),
+        };
+        if !expected {
+            return Err(format!("unexpected proxy authentication failure: {error}").into());
+        }
+    }
+    server.join().map_err(|_| "authenticated proxy fixture thread panicked")??;
+    Ok(())
+}
+
 type ProxyServer = thread::JoinHandle<io::Result<()>>;
 
 fn start_proxy(
@@ -175,13 +240,17 @@ fn start_proxy(
     behavior: ProxyBehavior,
     target_port: u16,
     connections: usize,
+    authenticated: bool,
 ) -> io::Result<(ConnectionRoute, ProxyServer)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let endpoint = format!("127.0.0.1:{}", listener.local_addr()?.port());
+    let credential =
+        authenticated.then(|| CredentialMaterial::Password(SecretVec::new(b"proxy-pass".to_vec())));
+    let username = authenticated.then(|| "proxy-user".to_owned());
     let route = match kind {
-        ProxyKind::Socks5 => ConnectionRoute::Socks5 { proxy: endpoint, credential: None },
+        ProxyKind::Socks5 => ConnectionRoute::Socks5 { proxy: endpoint, credential, username },
         ProxyKind::HttpConnect => {
-            ConnectionRoute::HttpConnect { proxy: endpoint, credential: None }
+            ConnectionRoute::HttpConnect { proxy: endpoint, credential, username }
         }
     };
     let server = thread::spawn(move || {
@@ -189,8 +258,12 @@ fn start_proxy(
             let (mut client, _) = listener.accept()?;
             client.set_read_timeout(Some(Duration::from_secs(15)))?;
             match kind {
-                ProxyKind::Socks5 => socks_handshake(&mut client, target_port, behavior)?,
-                ProxyKind::HttpConnect => http_handshake(&mut client, target_port, behavior)?,
+                ProxyKind::Socks5 => {
+                    socks_handshake(&mut client, target_port, behavior, authenticated)?
+                }
+                ProxyKind::HttpConnect => {
+                    http_handshake(&mut client, target_port, behavior, authenticated)?
+                }
             }
             match behavior {
                 ProxyBehavior::Forward => relay(client, target_port)?,
@@ -201,6 +274,7 @@ fn start_proxy(
                         return Err(io::Error::other("stalled proxy was not disconnected"));
                     }
                 }
+                ProxyBehavior::RejectAuthentication => {}
             }
         }
         Ok(())
@@ -212,13 +286,42 @@ fn socks_handshake(
     client: &mut TcpStream,
     target_port: u16,
     behavior: ProxyBehavior,
+    authenticated: bool,
 ) -> io::Result<()> {
     let mut greeting = [0; 3];
     client.read_exact(&mut greeting)?;
-    if greeting != [5, 1, 0] {
+    if greeting != [5, 1, if authenticated { 2 } else { 0 }] {
         return Err(io::Error::other("unexpected SOCKS greeting"));
     }
-    client.write_all(&[5, 0])?;
+    client.write_all(&[5, if authenticated { 2 } else { 0 }])?;
+    if authenticated {
+        let mut header = [0; 2];
+        client.read_exact(&mut header)?;
+        if header != [1, 10] {
+            return Err(io::Error::other("unexpected SOCKS auth header"));
+        }
+        let mut username = [0; 10];
+        client.read_exact(&mut username)?;
+        let mut password_len = [0];
+        client.read_exact(&mut password_len)?;
+        let mut password = vec![0; usize::from(password_len[0])];
+        client.read_exact(&mut password)?;
+        if username != *b"proxy-user"
+            || password
+                != if matches!(behavior, ProxyBehavior::RejectAuthentication) {
+                    b"wrong-pass".as_slice()
+                } else {
+                    b"proxy-pass".as_slice()
+                }
+        {
+            return Err(io::Error::other("unexpected SOCKS auth identity"));
+        }
+        if matches!(behavior, ProxyBehavior::RejectAuthentication) {
+            client.write_all(&[1, 1])?;
+            return Ok(());
+        }
+        client.write_all(&[1, 0])?;
+    }
     let mut request = [0; 5];
     client.read_exact(&mut request)?;
     if request[..4] != [5, 1, 0, 3] {
@@ -243,6 +346,7 @@ fn http_handshake(
     client: &mut TcpStream,
     target_port: u16,
     behavior: ProxyBehavior,
+    authenticated: bool,
 ) -> io::Result<()> {
     let mut request = Vec::new();
     while !request.ends_with(b"\r\n\r\n") && request.len() < 8192 {
@@ -253,6 +357,26 @@ fn http_handshake(
     let expected = format!("CONNECT target.example:{target_port} HTTP/1.1\r\n");
     if !request.starts_with(expected.as_bytes()) || !request.ends_with(b"\r\n\r\n") {
         return Err(io::Error::other("unexpected HTTP CONNECT target"));
+    }
+    if authenticated {
+        let password = if matches!(behavior, ProxyBehavior::RejectAuthentication) {
+            "wrong-pass"
+        } else {
+            "proxy-pass"
+        };
+        let auth = format!(
+            "Proxy-Authorization: Basic {}\r\n",
+            STANDARD.encode(format!("proxy-user:{password}"))
+        );
+        if !request.windows(auth.len()).any(|window| window == auth.as_bytes()) {
+            return Err(io::Error::other("unexpected HTTP proxy authentication"));
+        }
+        if matches!(behavior, ProxyBehavior::RejectAuthentication) {
+            client.write_all(
+                b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n",
+            )?;
+            return Ok(());
+        }
     }
     if matches!(behavior, ProxyBehavior::Reject) {
         client.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")?;
