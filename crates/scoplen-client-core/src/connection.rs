@@ -9,6 +9,8 @@
 
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
+    fmt,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -22,7 +24,8 @@ use scoplen_crypto::{Ed25519SigningKey, SecretVec};
 use scoplen_ssh::{
     ChannelEvent, ClientChannel, ClientConfig, ClientConnection, ClientError, EcdsaSshSigner,
     Ed25519SshSigner, HostKey, HostKeyVerificationError, HostKeyVerifier, ProxyCredentials,
-    PtyRequest, RsaSshSigner, ServerRsaSha2Selection, SignatureAlgorithm, WindowChangeRequest,
+    PtyRequest, RsaSshSigner, ServerRsaSha2Selection, SignatureAlgorithm, UserAuthContext,
+    WindowChangeRequest,
 };
 use sha2::{Digest as _, Sha256};
 use ssh_key::{Kdf, PrivateKey};
@@ -36,6 +39,7 @@ use crate::store::Store;
 
 mod agent;
 pub mod preparation;
+mod proxy_command;
 
 /// A resolved credential handed to the SSH adapter.
 ///
@@ -80,7 +84,7 @@ pub enum CredentialMaterial {
 }
 
 /// A route resolved from an AccessProfile.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum ConnectionRoute {
     /// Connect directly to the host.
     Direct,
@@ -117,6 +121,31 @@ pub enum ConnectionRoute {
         /// The organization-owned gateway network.
         gateway_network: Uuid,
     },
+}
+
+impl fmt::Debug for ConnectionRoute {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Direct => formatter.write_str("Direct"),
+            Self::Jump { hops } => formatter.debug_struct("Jump").field("hops", hops).finish(),
+            Self::Socks5 { proxy, credential, username } => formatter
+                .debug_struct("Socks5")
+                .field("proxy", proxy)
+                .field("credential", credential)
+                .field("username", username)
+                .finish(),
+            Self::HttpConnect { proxy, credential, username } => formatter
+                .debug_struct("HttpConnect")
+                .field("proxy", proxy)
+                .field("credential", credential)
+                .field("username", username)
+                .finish(),
+            Self::Command { .. } => formatter.debug_struct("Command").finish_non_exhaustive(),
+            Self::Managed { gateway_network } => {
+                formatter.debug_struct("Managed").field("gateway_network", gateway_network).finish()
+            }
+        }
+    }
 }
 
 /// All local inputs required to start one SSH connection.
@@ -321,7 +350,7 @@ pub fn evaluate_host_key(
 pub async fn probe_host_key(
     plan: &ConnectionPlan,
 ) -> Result<HostKeyPresentation, SshConnectionError> {
-    let route = transport_route(&plan.route)?;
+    let route = transport_route(plan)?;
     validate_credential(&plan.credential)?;
 
     let presented = Arc::new(Mutex::new(None::<HostKeyPresentation>));
@@ -619,6 +648,14 @@ impl HostKeyVerifier for StoredHostKeyVerifier {
 /// Errors returned by the concrete client connection owner.
 #[derive(Debug, thiserror::Error)]
 pub enum SshConnectionError {
+    /// The saved username cannot be used for SSH authentication.
+    #[error(
+        "the SSH username must contain 1-4096 bytes without NUL; edit the Login before connecting"
+    )]
+    InvalidUsername,
+    /// A saved command cannot be safely expanded into bounded process arguments.
+    #[error("ProxyCommand is invalid: {0}; edit the route before connecting")]
+    InvalidProxyCommand(&'static str),
     /// Opening the next jump channel or its SSH handshake exceeded the budget.
     #[error("SSH jump setup timed out; check forwarding access and the next host, then reconnect")]
     JumpSetupTimeout,
@@ -716,6 +753,7 @@ enum TransportRoute<'a> {
     Direct,
     Socks5 { host: &'a str, port: u16, credentials: Option<ProxyCredentials> },
     HttpConnect { host: &'a str, port: u16, credentials: Option<ProxyCredentials> },
+    Command { program: OsString, arguments: Vec<OsString> },
 }
 
 fn parse_proxy_endpoint(proxy: &str) -> Result<(&str, u16), SshConnectionError> {
@@ -744,8 +782,10 @@ fn parse_proxy_endpoint(proxy: &str) -> Result<(&str, u16), SshConnectionError> 
     Ok((host, port))
 }
 
-fn transport_route(route: &ConnectionRoute) -> Result<TransportRoute<'_>, SshConnectionError> {
-    match route {
+fn transport_route(plan: &ConnectionPlan) -> Result<TransportRoute<'_>, SshConnectionError> {
+    UserAuthContext::new(plan.username.clone(), "ssh-connection")
+        .map_err(|_| SshConnectionError::InvalidUsername)?;
+    match &plan.route {
         ConnectionRoute::Direct => Ok(TransportRoute::Direct),
         ConnectionRoute::Socks5 { proxy, credential, username } => {
             let (host, port) = parse_proxy_endpoint(proxy)?;
@@ -756,6 +796,11 @@ fn transport_route(route: &ConnectionRoute) -> Result<TransportRoute<'_>, SshCon
             let (host, port) = parse_proxy_endpoint(proxy)?;
             let credentials = proxy_credentials(username.as_deref(), credential.as_ref(), true)?;
             Ok(TransportRoute::HttpConnect { host, port, credentials })
+        }
+        ConnectionRoute::Command { command } => {
+            let (program, arguments) =
+                proxy_command::resolve(command, &plan.address, plan.port, &plan.username)?;
+            Ok(TransportRoute::Command { program, arguments })
         }
         _ => Err(SshConnectionError::UnsupportedRoute),
     }
@@ -809,6 +854,15 @@ async fn connect_route(
                 host,
                 port,
                 credentials.as_ref(),
+                PROXY_CONNECT_TIMEOUT,
+            )
+            .await
+        }
+        TransportRoute::Command { program, arguments } => {
+            ClientConnection::connect_via_proxy_command(
+                config,
+                program,
+                &arguments,
                 PROXY_CONNECT_TIMEOUT,
             )
             .await
@@ -948,8 +1002,8 @@ impl std::fmt::Debug for SshConnection {
 impl SshConnection {
     /// Open an SSH connection and complete key exchange through its saved route.
     ///
-    /// Omitting `trust` is fail-closed and rejects every host key. Jump,
-    /// process, and managed routes remain explicit errors. Credentials support
+    /// Omitting `trust` is fail-closed and rejects every host key. Jump chains
+    /// require `prepare_connection`; managed routes remain explicit errors. Credentials support
     /// passwords, software keys, and explicitly selected system-agent keys.
     pub async fn connect(
         plan: &ConnectionPlan,
@@ -963,7 +1017,7 @@ impl SshConnection {
         trust: Option<HostKeyTrust>,
         parent: Option<&Self>,
     ) -> Result<Self, SshConnectionError> {
-        let route = transport_route(&plan.route)?;
+        let route = transport_route(plan)?;
         validate_credential(&plan.credential)?;
         let verifier = trust.unwrap_or_else(|| {
             Arc::new(|_: &str, _: &HostKey| {
@@ -1806,7 +1860,7 @@ mod tests {
                 }
             };
             assert_eq!(plan.route, expected_route);
-            assert!(transport_route(&plan.route).is_ok());
+            assert!(transport_route(&plan).is_ok());
             assert!(!format!("{plan:?}").contains("target-secret"));
             assert!(!format!("{plan:?}").contains("proxy-secret"));
         }

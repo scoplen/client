@@ -1155,7 +1155,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1439,7 +1439,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2893,7 +2893,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.21",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3301,7 +3301,7 @@ dependencies = [
 [[package]]
 name = "pageant"
 version = "0.2.2"
-source = "git+https://github.com/scoplen/proto.git?rev=22f5ef0#22f5ef0fa10920000fccfee20c08ccb5d269a3ab"
+source = "git+https://github.com/scoplen/proto.git?rev=26699ff#26699ffcb3a90cdb8cd787a4f5bae7ea14df2401"
 dependencies = [
  "base16ct 1.0.0",
  "byteorder",
@@ -3868,7 +3868,7 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools",
  "log",
  "multimap",
@@ -4355,7 +4355,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4478,7 +4478,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scoplen-api"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=22f5ef0#22f5ef0fa10920000fccfee20c08ccb5d269a3ab"
+source = "git+https://github.com/scoplen/proto.git?rev=26699ff#26699ffcb3a90cdb8cd787a4f5bae7ea14df2401"
 dependencies = [
  "base64 0.22.1",
  "prost",
@@ -4563,7 +4563,7 @@ dependencies = [
 [[package]]
 name = "scoplen-crypto"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=22f5ef0#22f5ef0fa10920000fccfee20c08ccb5d269a3ab"
+source = "git+https://github.com/scoplen/proto.git?rev=26699ff#26699ffcb3a90cdb8cd787a4f5bae7ea14df2401"
 dependencies = [
  "argon2 0.5.3",
  "base64 0.22.1",
@@ -4592,7 +4592,7 @@ dependencies = [
 [[package]]
 name = "scoplen-model"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=22f5ef0#22f5ef0fa10920000fccfee20c08ccb5d269a3ab"
+source = "git+https://github.com/scoplen/proto.git?rev=26699ff#26699ffcb3a90cdb8cd787a4f5bae7ea14df2401"
 dependencies = [
  "thiserror 2.0.21",
  "unicode-normalization",
@@ -4606,7 +4606,7 @@ version = "0.1.0"
 [[package]]
 name = "scoplen-ssh"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=22f5ef0#22f5ef0fa10920000fccfee20c08ccb5d269a3ab"
+source = "git+https://github.com/scoplen/proto.git?rev=26699ff#26699ffcb3a90cdb8cd787a4f5bae7ea14df2401"
 dependencies = [
  "pageant",
  "russh",
@@ -5013,7 +5013,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5706,10 +5706,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6108,7 +6108,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.21",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6490,7 +6490,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6511,7 +6511,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-quartz-core",
  "raw-window-handle",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
  "windows-version",
 ]
 
@@ -6881,7 +6881,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

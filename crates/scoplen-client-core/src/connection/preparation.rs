@@ -290,7 +290,7 @@ fn resolve_steps(store: &Store, target_id: Uuid) -> Result<Vec<Step>, String> {
     let total = u32::try_from(plans.len()).map_err(|_| "the jump route is too large")?;
     let mut steps = Vec::with_capacity(plans.len());
     for (index, plan) in plans.into_iter().enumerate() {
-        transport_route(&plan.route).map_err(|e| e.to_string())?;
+        transport_route(&plan).map_err(|e| e.to_string())?;
         validate_credential(&plan.credential).map_err(|e| e.to_string())?;
         let passphrase =
             private_key_passphrase_required(&plan.credential).map_err(|e| e.to_string())?;

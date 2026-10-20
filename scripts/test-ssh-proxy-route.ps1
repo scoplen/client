@@ -17,7 +17,7 @@ try {
     $publicKey = (Get-Content -LiteralPath "$key.pub" -Raw).Trim()
 
     $buildLog = Join-Path $scratch 'build.log'
-    & cargo build --quiet --locked -p scoplen-client-core --example ssh_proxy_route_smoke 2> $buildLog
+    & cargo build --quiet --locked -p scoplen-client-core --example ssh_proxy_route_smoke --example ssh_proxy_command_smoke 2> $buildLog
     if ($LASTEXITCODE -ne 0) {
         Get-Content -LiteralPath $buildLog | Select-Object -Last 40
         Check-LastExit 'build proxy route smoke example'
@@ -49,6 +49,9 @@ try {
 
     & $smoke all $port smoke $key
     Check-LastExit 'direct, SOCKS5, and HTTP CONNECT interoperability'
+    $commandSmoke = Join-Path $targetRoot "debug/examples/ssh_proxy_command_smoke$suffix"
+    & $commandSmoke $port smoke $key
+    Check-LastExit 'saved ProxyCommand preparation, SSH, and child cleanup'
 } finally {
     & docker rm -f $container 2>$null | Out-Null
     $resolved = [System.IO.Path]::GetFullPath($scratch)

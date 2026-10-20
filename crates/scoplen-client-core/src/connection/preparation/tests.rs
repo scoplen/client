@@ -191,6 +191,43 @@ async fn invalid_chains_fail_before_network_or_agent_access() {
 }
 
 #[tokio::test]
+async fn oversized_username_without_command_substitution_fails_before_any_side_effect() {
+    let (_dir, store) = store();
+    let target = login(&store, "target");
+    route(&store, target, RouteKind::Command { command: "must-not-execute %h %p".into() });
+    Repository::<AccessProfile>::new(&store)
+        .update(
+            target,
+            AccessProfileChange { username: Some("x".repeat(4097)), ..Default::default() },
+        )
+        .unwrap();
+    let events = AtomicUsize::new(0);
+    let result = prepare_connection(&store, target, &PreparationControl::default(), |_| {
+        events.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })
+    .await;
+    assert_eq!(result.err().unwrap(), SshConnectionError::InvalidUsername.to_string());
+    assert_eq!(events.load(Ordering::SeqCst), 0);
+    assert!(Repository::<TrustRecord>::new(&store).list().unwrap().is_empty());
+
+    let mut plan = resolve_connection_plan(&store, target).unwrap();
+    for username in [String::new(), "bad\0user".into(), "\u{1f980}".repeat(1025)] {
+        plan.username = username;
+        assert!(matches!(
+            SshConnection::connect(&plan, None).await,
+            Err(SshConnectionError::InvalidUsername)
+        ));
+        assert!(matches!(
+            super::super::probe_host_key(&plan).await,
+            Err(SshConnectionError::InvalidUsername)
+        ));
+    }
+    plan.username = "\u{1f980}".repeat(1024);
+    assert!(transport_route(&plan).is_ok());
+}
+
+#[tokio::test]
 async fn progress_callback_can_cancel_before_any_network_operation() {
     let (_dir, store) = store();
     let target = login(&store, "target");
