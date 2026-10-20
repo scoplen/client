@@ -11,6 +11,7 @@ pub mod inventory;
 pub mod local_data;
 pub mod local_key;
 pub mod locale;
+pub mod personal_server;
 pub mod repository;
 pub mod session_lifecycle;
 pub mod session_manager;

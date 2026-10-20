@@ -9,6 +9,7 @@ pub mod events;
 pub mod frames;
 pub mod inventory;
 pub mod local_data;
+pub mod personal_server;
 mod smoke;
 pub mod ssh;
 mod window_state;
@@ -76,6 +77,12 @@ pub fn ipc() -> Builder<tauri::Wry> {
             local_data::set_local_passphrase,
             local_data::remove_local_passphrase,
             local_data::start_with_empty_local_data,
+            personal_server::personal_server_status,
+            personal_server::prepare_personal_enrollment,
+            personal_server::save_personal_recovery_key,
+            personal_server::confirm_personal_recovery_key,
+            personal_server::submit_personal_enrollment,
+            personal_server::authenticate_personal_server,
         ])
         .events(collect_events![events::StoreChanged, events::SessionChanged])
 }
@@ -123,6 +130,7 @@ pub fn run() {
             app.manage(local);
             app.manage(ssh::SessionManager::default());
             app.manage(inventory::InventoryState::default());
+            app.manage(scoplen_client_core::personal_server::PersonalServer::default());
             Ok(())
         })
         .on_window_event(|window, event| {

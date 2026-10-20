@@ -10,6 +10,7 @@
 
 pub mod device;
 mod migrations;
+pub(crate) mod personal;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

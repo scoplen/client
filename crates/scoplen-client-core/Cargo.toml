@@ -11,7 +11,10 @@ publish = false
 
 [dependencies]
 base64.workspace = true
+reqwest.workspace = true
 rusqlite.workspace = true
+rustls.workspace = true
+scoplen-api.workspace = true
 scoplen-client-platform.workspace = true
 scoplen-crypto.workspace = true
 scoplen-model.workspace = true
@@ -29,7 +32,9 @@ zeroize.workspace = true
 workspace = true
 
 [dev-dependencies]
+rcgen.workspace = true
 russh = { version = "=0.64.1", default-features = false, features = ["des", "flate2", "ring", "rsa"] }
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+tokio-rustls.workspace = true
