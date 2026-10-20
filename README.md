@@ -10,7 +10,7 @@ Owner and operator: Plystra LLC. Responsible maintainer: Plystra LLC.
 
 Maturity: Exploration. Maintenance: Active.
 
-The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly, through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, through an explicit saved Jump chain, or through a saved local ProxyCommand. Each SSH host uses its saved password, OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA software key, or an explicitly selected key in the system SSH agent, after independent host-key review. The target opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after that host's review. New or changed keys require explicit acceptance; wildcard-only and CA records do not authorize raw host keys. Other credential kinds, automatic reconnect, and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
+The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly, through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, through an explicit saved Jump chain, or through a saved local ProxyCommand. Each SSH host uses its saved password, OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA software key, or an explicitly selected key in the system SSH agent, after independent host-key review. The target opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after that host's review. New or changed keys require explicit acceptance; wildcard-only and CA records do not authorize raw host keys. Other credential kinds and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
 
 To use Jump, create a Jump route containing the ordered Logins for the jump
 hosts, then assign that route to the target Login. Every jump Login must select
@@ -86,6 +86,18 @@ current saved login, and prompts again when a one-time key passphrase is needed.
 Each attempt uses a new transport identifier and records a separate Recent
 entry. Closing the tab cancels its pending connection.
 
+A terminal that has connected successfully retries confirmed network failures after
+1, 2, 4, 8, and 16 seconds, with at most five automatic attempts. Thirty continuous
+seconds connected reset the budget; choosing Reconnect starts a fresh budget.
+The first failed connection, normal remote exit, authentication or configuration
+errors, and terminal rendering errors do not trigger automatic retries. Each
+attempt reads the current saved Login, Host, Route, and Credential, repeats host-key
+review when required, and asks again for one-time passphrases. A background tab
+shows that it needs attention and waits until selected before displaying a prompt.
+Stop reconnecting cancels the delay or current preparation while retaining the tab.
+Reconnecting starts a new remote shell and keeps the current displayed output;
+queued input is discarded and remote processes are not restored.
+
 Accepted SSH connection attempts appear in Recent using device-local history.
 Normal completion and an explicit close during connection preparation record
 `Closed`; connection errors and externally dropped connection tasks record
@@ -94,8 +106,8 @@ An ended terminal in Recent can be started again through the normal Connect
 entry point using its current saved login. The lookup opens no connection and
 does not write history; the new attempt runs the usual host-key checks and
 records its own lifecycle. Active sessions and Files/Forward entries do not
-offer this action. Automatic reconnect and restoring scrollback after closing a tab remain later
-session-management outcomes.
+offer this action. Restoring scrollback after closing a tab remains a later
+session-management outcome.
 
 ## What it does not do
 

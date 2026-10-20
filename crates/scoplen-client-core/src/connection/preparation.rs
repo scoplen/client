@@ -115,6 +115,29 @@ pub enum PreparationResponse {
     Passphrase(SecretVec),
 }
 
+/// A preparation failure whose network cause remains available to session policy.
+#[derive(Debug, thiserror::Error)]
+pub enum PreparationError {
+    /// Typed transport, authentication, or protocol failure.
+    #[error(transparent)]
+    Connection(#[from] SshConnectionError),
+    /// Local configuration, cancellation, prompt, or frontend failure.
+    #[error("{0}")]
+    Local(String),
+}
+
+impl From<String> for PreparationError {
+    fn from(value: String) -> Self {
+        Self::Local(value)
+    }
+}
+
+impl From<&str> for PreparationError {
+    fn from(value: &str) -> Self {
+        Self::Local(value.into())
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum PromptKind {
     Trust,
@@ -148,6 +171,11 @@ impl Default for PreparationControl {
 }
 
 impl PreparationControl {
+    /// Whether the person has cancelled this exact preparation attempt.
+    pub fn is_cancelled(&self) -> bool {
+        self.state.lock().map_or(true, |state| state.cancelled)
+    }
+
     /// Cancel pending I/O and prompts. Linearizes against trust writes.
     pub fn cancel(&self) {
         if let Ok(mut state) = self.state.lock() {
@@ -367,7 +395,7 @@ pub async fn prepare_connection(
     profile_id: Uuid,
     control: &PreparationControl,
     emit: impl Fn(PreparationEvent) -> Result<(), String>,
-) -> Result<SshConnection, String> {
+) -> Result<SshConnection, PreparationError> {
     let steps = resolve_steps(store, profile_id)?;
     let mut connections = ConnectionStack(Vec::new());
     let result = async {
@@ -380,15 +408,14 @@ pub async fn prepare_connection(
             let presented = Arc::new(PresentedKey::default());
             let connection = control
                 .run(async {
-                    SshConnection::connect_over(
+                    Ok(SshConnection::connect_over(
                         &step.plan,
                         Some(presented.clone()),
                         connections.0.last(),
                     )
-                    .await
-                    .map_err(|e| e.to_string())
+                    .await)
                 })
-                .await?;
+                .await??;
             connections.0.push(connection);
             let key = presented
                 .0
@@ -453,13 +480,13 @@ pub async fn prepare_connection(
                         incorrect = true
                     }
                     result => {
-                        result.map_err(|e| e.to_string())?;
+                        result?;
                         break;
                     }
                 }
             }
         }
-        Ok::<(), String>(())
+        Ok::<(), PreparationError>(())
     }
     .await;
     if let Err(error) = result {

@@ -18,9 +18,10 @@ export interface FrameTab {
 /** The face a session tab's egg makes for each connection state. */
 const faces: Record<SessionState, { mood: MarkMood; active: boolean; attention: boolean }> = {
   verifying: { mood: "awake", active: true, attention: false },
-  trusting: { mood: "awake", active: true, attention: false },
-  passphrase: { mood: "awake", active: true, attention: false },
+  trusting: { mood: "awake", active: true, attention: true },
+  passphrase: { mood: "awake", active: true, attention: true },
   connecting: { mood: "awake", active: true, attention: false },
+  reconnecting: { mood: "awake", active: true, attention: false },
   connected: { mood: "rest", active: true, attention: false },
   closed: { mood: "closed", active: false, attention: false },
   failed: { mood: "low", active: false, attention: true },
