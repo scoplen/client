@@ -24,7 +24,6 @@ scoplen-client-core.workspace = true
 scoplen-client-platform.workspace = true
 scoplen-crypto.workspace = true
 scoplen-model.workspace = true
-scoplen-ssh.workspace = true
 uuid.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -35,7 +34,6 @@ zeroize.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-specta.workspace = true
-tokio.workspace = true
 
 [lints]
 workspace = true
