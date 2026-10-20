@@ -986,7 +986,7 @@ export type SessionError =
 /**  A diagnostic reference safe to show for retryable failures. */
 reference: string };
 
-/**  Display-safe state of one logical terminal. Output uses a separate binary stream. */
+/**  Display-safe state of one logical terminal. Output is delivered as binary frames. */
 export type SessionEvent =
 /**  A fresh transport is about to resolve the current saved Login. */
 { kind: "starting";

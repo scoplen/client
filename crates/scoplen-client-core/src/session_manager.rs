@@ -7,7 +7,7 @@ use std::io::ErrorKind;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use scoplen_ssh::{ChannelEvent, ClientError, TransportError};
+use scoplen_ssh::{ChannelEvent, ClientError, ProxyError, ProxyTransportError, TransportError};
 use serde::Serialize;
 use specta::Type;
 use tokio::sync::{mpsc, watch};
@@ -26,7 +26,7 @@ const COMMAND_QUEUE: usize = 64;
 const STABLE_READY: Duration = Duration::from_secs(30);
 const RETRY_DELAYS: [u8; 5] = [1, 2, 4, 8, 16];
 
-/// Display-safe state of one logical terminal. Output uses a separate binary stream.
+/// Display-safe state of one logical terminal. Output is delivered as binary frames.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SessionEvent {
@@ -148,10 +148,10 @@ struct RetryBudget {
 }
 
 impl RetryBudget {
-    fn ended(&mut self, ready_at: Option<Instant>) {
-        if let Some(ready_at) = ready_at {
+    fn ended(&mut self, ready_for: Option<Duration>) {
+        if let Some(ready_for) = ready_for {
             self.ever_ready = true;
-            if ready_at.elapsed() >= STABLE_READY {
+            if ready_for >= STABLE_READY {
                 self.attempts = 0;
             }
         }
@@ -209,19 +209,28 @@ fn retryable_transport(error: &TransportError) -> bool {
         | TransportError::Connect { kind, .. }
         | TransportError::Io { kind, .. } => retryable_io(*kind),
         TransportError::ConnectTimeout { .. } => true,
+        TransportError::Proxy { error: ProxyError::Io { kind, .. }, .. } => retryable_io(*kind),
         _ => false,
     }
 }
 
 fn retryable_connection(error: &SshConnectionError) -> bool {
     match error {
+        SshConnectionError::Engine(ClientError::NetworkLost) => true,
         SshConnectionError::Engine(ClientError::Transport(error)) => retryable_io(error.kind()),
         SshConnectionError::Engine(ClientError::DirectTcp(error)) => retryable_transport(error),
+        SshConnectionError::Engine(ClientError::Proxy(ProxyTransportError::Transport(error))) => {
+            retryable_transport(error)
+        }
+        SshConnectionError::Engine(ClientError::Proxy(ProxyTransportError::Proxy(
+            ProxyError::Io { kind, .. },
+        ))) => retryable_io(*kind),
         SshConnectionError::Engine(
             ClientError::DirectSshHandshakeTimeout { .. }
             | ClientError::ProxySshHandshakeTimeout { .. }
             | ClientError::ProxyCommandHandshakeTimeout { .. },
-        ) => true,
+        )
+        | SshConnectionError::JumpSetupTimeout => true,
         _ => false,
     }
 }
@@ -357,6 +366,31 @@ impl SessionManager {
         Ok(())
     }
 
+    fn register_attempt(
+        &self,
+        session_id: &str,
+        transport: Uuid,
+        control: &PreparationControl,
+        sender: mpsc::Sender<TransportCommand>,
+        intents: &mut watch::Receiver<Intent>,
+    ) -> Result<Intent, String> {
+        let mut sessions = self.sessions.lock().map_err(|_| "session manager is unavailable")?;
+        let entry = sessions.get_mut(session_id).ok_or("session is closed")?;
+        let requested = *entry.intent.borrow();
+        if matches!(requested, Intent::None | Intent::Retry) {
+            entry.intent.send_replace(Intent::None);
+            entry.phase = Phase::Running;
+            entry.active = Some(ActiveAttempt {
+                id: transport,
+                control: control.clone(),
+                sender,
+                ready: false,
+            });
+        }
+        intents.borrow_and_update();
+        Ok(requested)
+    }
+
     /// Run one logical terminal until tab closure. Closed and failed terminals
     /// remain owned here so manual reconnect does not replace the terminal.
     #[allow(clippy::too_many_arguments)]
@@ -387,25 +421,29 @@ impl SessionManager {
             let transport = Uuid::now_v7();
             let control = PreparationControl::default();
             let (sender, mut commands) = mpsc::channel(COMMAND_QUEUE);
-            {
-                let mut sessions =
-                    self.sessions.lock().map_err(|_| "session manager is unavailable")?;
-                let entry = sessions.get_mut(session_id).ok_or("session is closed")?;
-                if *entry.intent.borrow() == Intent::Close {
-                    return Ok(());
+            let requested =
+                self.register_attempt(session_id, transport, &control, sender, &mut intents)?;
+            match requested {
+                Intent::Close => return Ok(()),
+                Intent::Stop | Intent::Fail => {
+                    match self.wait_after_stop(session_id, requested, &mut intents, &emit).await? {
+                        Intent::Close => return Ok(()),
+                        Intent::Retry => {
+                            budget = RetryBudget::default();
+                            automatic = false;
+                            continue;
+                        }
+                        _ => return Err("unexpected session intent".into()),
+                    }
                 }
-                entry.intent.send_replace(Intent::None);
-                intents.borrow_and_update();
-                entry.phase = Phase::Running;
-                entry.active = Some(ActiveAttempt {
-                    id: transport,
-                    control: control.clone(),
-                    sender,
-                    ready: false,
-                });
+                Intent::Retry => {
+                    budget = RetryBudget::default();
+                    automatic = false;
+                }
+                Intent::None => {}
             }
             emit(SessionEvent::Starting { transport_id: transport.to_string(), automatic })?;
-            let mut ready_at = None;
+            let mut ready_for = None;
             let result = self
                 .attempt(
                     session_id,
@@ -416,7 +454,7 @@ impl SessionManager {
                     transport,
                     &control,
                     &mut commands,
-                    &mut ready_at,
+                    &mut ready_for,
                     &emit,
                     &output,
                     history_changed.clone(),
@@ -426,8 +464,8 @@ impl SessionManager {
             let completed = if requested == Intent::None { Some(result) } else { None };
             control.cancel();
             self.phase(session_id, Phase::Ended)?;
-            budget.ended(ready_at);
-            let mut next = match completed {
+            budget.ended(ready_for);
+            let next = match completed {
                 None => requested,
                 Some(Ok(())) => {
                     emit(SessionEvent::Closed)?;
@@ -465,19 +503,7 @@ impl SessionManager {
                     }
                 }
             };
-            while matches!(next, Intent::Stop | Intent::Fail) {
-                self.phase(session_id, Phase::Ended)?;
-                if next == Intent::Fail {
-                    emit(SessionEvent::Failed {
-                        error: "The terminal could not continue. Reconnect to start a new shell."
-                            .into(),
-                        exhausted: false,
-                    })?;
-                } else {
-                    emit(SessionEvent::Closed)?;
-                }
-                next = self.wait_manual(&mut intents).await;
-            }
+            let next = self.wait_after_stop(session_id, next, &mut intents, &emit).await?;
             match next {
                 Intent::Close => return Ok(()),
                 Intent::Retry => {
@@ -488,6 +514,29 @@ impl SessionManager {
                 Intent::Stop | Intent::Fail => return Err("unexpected session intent".into()),
             }
         }
+    }
+
+    async fn wait_after_stop(
+        &self,
+        session_id: &str,
+        mut next: Intent,
+        intents: &mut watch::Receiver<Intent>,
+        emit: &impl Fn(SessionEvent) -> Result<(), String>,
+    ) -> Result<Intent, String> {
+        while matches!(next, Intent::Stop | Intent::Fail) {
+            self.phase(session_id, Phase::Ended)?;
+            if next == Intent::Fail {
+                emit(SessionEvent::Failed {
+                    error: "The terminal could not continue. Reconnect to start a new shell."
+                        .into(),
+                    exhausted: false,
+                })?;
+            } else {
+                emit(SessionEvent::Closed)?;
+            }
+            next = self.wait_manual(intents).await;
+        }
+        Ok(next)
     }
 
     async fn wait_manual(&self, intents: &mut watch::Receiver<Intent>) -> Intent {
@@ -513,7 +562,7 @@ impl SessionManager {
         transport: Uuid,
         control: &PreparationControl,
         commands: &mut mpsc::Receiver<TransportCommand>,
-        ready_at: &mut Option<Instant>,
+        ready_for: &mut Option<Duration>,
         emit: &impl Fn(SessionEvent) -> Result<(), String>,
         output: &impl Fn(Uuid, Vec<u8>) -> Result<(), String>,
         history_changed: impl Fn(&str, HistoryChange) + Clone + Send + Sync + 'static,
@@ -545,6 +594,7 @@ impl SessionManager {
             }
             Err(error) => return Err(error.into()),
         };
+        let mut ready_at = None;
         let operation = async {
             let mut session = connection.open_session().await?;
             let pty_request = pty.then(default_pty);
@@ -566,11 +616,17 @@ impl SessionManager {
                     })?;
                     let entry = sessions
                         .get_mut(session_id)
-                        .and_then(|entry| entry.active.as_mut())
                         .ok_or_else(|| AttemptError::Local("session is closed".into()))?;
-                    entry.ready = true;
+                    if *entry.intent.borrow() != Intent::None {
+                        return Ok(());
+                    }
+                    let active = entry
+                        .active
+                        .as_mut()
+                        .ok_or_else(|| AttemptError::Local("session is closed".into()))?;
+                    active.ready = true;
                 }
-                *ready_at = Some(Instant::now());
+                ready_at = Some(Instant::now());
                 emit(SessionEvent::Ready { transport_id: transport.to_string() })
                     .map_err(AttemptError::Local)?;
                 stream_channel(&mut session, transport, commands, output).await?;
@@ -581,6 +637,7 @@ impl SessionManager {
             _ = control.cancelled() => Ok(()),
             result = operation => result,
         };
+        *ready_for = ready_at.map(|started| started.elapsed());
         let _ = connection.close().await;
         result?;
         history
@@ -606,19 +663,96 @@ async fn stream_channel(
     commands: &mut mpsc::Receiver<TransportCommand>,
     output: &impl Fn(Uuid, Vec<u8>) -> Result<(), String>,
 ) -> Result<(), AttemptError> {
+    let mut terminal = false;
     loop {
         tokio::select! { biased;
             command = commands.recv() => match command {
-                Some(TransportCommand::Input(data)) => session.send_data(&data).await?,
-                Some(TransportCommand::Resize { columns, rows }) => session.resize(columns, rows).await?,
+                Some(TransportCommand::Input(data)) => {
+                    if let Err(error) = session.send_data(&data).await {
+                        return confirm_send_failure(session, transport, error, terminal, output).await;
+                    }
+                },
+                Some(TransportCommand::Resize { columns, rows }) => {
+                    if let Err(error) = session.resize(columns, rows).await {
+                        return confirm_send_failure(session, transport, error, terminal, output).await;
+                    }
+                },
                 None => return Ok(()),
             },
             event = session.next_event() => match event? {
                 Some(ChannelEvent::Data(data) | ChannelEvent::ExtendedData { data, .. }) => output(transport, data).map_err(AttemptError::Local)?,
                 Some(ChannelEvent::Close) | None => return Ok(()),
+                Some(ChannelEvent::ExitStatus(_) | ChannelEvent::ExitSignal { .. } | ChannelEvent::OpenFailure { .. }) => terminal = true,
                 Some(_) => {},
             },
         }
+    }
+}
+
+async fn confirm_send_failure(
+    session: &mut SshSession,
+    transport: Uuid,
+    original: SshConnectionError,
+    mut terminal: bool,
+    output: &impl Fn(Uuid, Vec<u8>) -> Result<(), String>,
+) -> Result<(), AttemptError> {
+    if !matches!(
+        original,
+        SshConnectionError::Engine(ClientError::Channel | ClientError::ConnectionClosed)
+    ) {
+        return Err(original.into());
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let event = tokio::time::timeout_at(deadline, session.next_event())
+            .await
+            .unwrap_or(Err(SshConnectionError::Engine(ClientError::Channel)));
+        match send_failure_event(event, &mut terminal) {
+            SendFailureEvent::Output(data) => {
+                output(transport, data).map_err(AttemptError::Local)?;
+            }
+            SendFailureEvent::Complete => return Ok(()),
+            SendFailureEvent::Continue => {}
+            SendFailureEvent::NetworkLost => {
+                return Err(SshConnectionError::Engine(ClientError::NetworkLost).into());
+            }
+            SendFailureEvent::Original => return Err(original.into()),
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum SendFailureEvent {
+    Output(Vec<u8>),
+    Continue,
+    Complete,
+    NetworkLost,
+    Original,
+}
+
+fn send_failure_event(
+    event: Result<Option<ChannelEvent>, SshConnectionError>,
+    terminal: &mut bool,
+) -> SendFailureEvent {
+    match event {
+        Ok(Some(ChannelEvent::Data(data) | ChannelEvent::ExtendedData { data, .. })) => {
+            SendFailureEvent::Output(data)
+        }
+        Ok(Some(ChannelEvent::Close)) => SendFailureEvent::Complete,
+        Ok(Some(
+            ChannelEvent::ExitStatus(_)
+            | ChannelEvent::ExitSignal { .. }
+            | ChannelEvent::OpenFailure { .. },
+        )) => {
+            *terminal = true;
+            SendFailureEvent::Continue
+        }
+        Ok(Some(_)) => SendFailureEvent::Continue,
+        Err(SshConnectionError::Engine(ClientError::NetworkLost)) if !*terminal => {
+            SendFailureEvent::NetworkLost
+        }
+        _ if *terminal => SendFailureEvent::Complete,
+        _ => SendFailureEvent::Original,
     }
 }
 

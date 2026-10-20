@@ -15,20 +15,22 @@ fn store() -> (tempfile::TempDir, Arc<Store>) {
 fn only_ready_sessions_receive_five_exponential_retries() {
     let mut budget = RetryBudget::default();
     assert_eq!(budget.next(), None, "initial failure must not loop");
-    budget.ended(Some(Instant::now()));
+    budget.ended(Some(Duration::ZERO));
     for delay in RETRY_DELAYS {
         assert_eq!(budget.next(), Some(delay));
-        budget.ended(Some(Instant::now()));
+        budget.ended(Some(Duration::ZERO));
     }
     assert_eq!(budget.next(), None, "brief readiness must not reset exhaustion");
-    budget.ended(Some(Instant::now() - Duration::from_secs(29)));
+    budget.ended(Some(Duration::from_secs(29)));
     assert_eq!(budget.next(), None);
-    budget.ended(Some(Instant::now() - Duration::from_secs(30)));
+    budget.ended(Some(Duration::from_secs(30)));
     assert_eq!(budget.next(), Some(1));
 }
 
 #[test]
 fn only_typed_network_causes_qualify_for_automatic_reconnect() {
+    use scoplen_ssh::{ProxyOperation, ProxyProtocol};
+    assert!(retryable_connection(&SshConnectionError::Engine(ClientError::NetworkLost)));
     for kind in [ErrorKind::ConnectionReset, ErrorKind::ConnectionRefused, ErrorKind::TimedOut] {
         assert!(retryable_connection(&SshConnectionError::Engine(ClientError::Transport(
             std::io::Error::from(kind),
@@ -52,6 +54,17 @@ fn only_typed_network_causes_qualify_for_automatic_reconnect() {
     ] {
         assert!(!retryable_connection(&error), "{error}");
     }
+    assert!(retryable_connection(&SshConnectionError::Engine(ClientError::Proxy(
+        ProxyError::Io {
+            protocol: ProxyProtocol::HttpConnect,
+            operation: ProxyOperation::Read,
+            kind: ErrorKind::TimedOut
+        }
+        .into(),
+    ))));
+    assert!(!retryable_connection(&SshConnectionError::Engine(ClientError::Proxy(
+        ProxyError::AuthenticationRejected { protocol: ProxyProtocol::Socks5, code: 1 }.into(),
+    ))));
 }
 
 #[test]
@@ -64,6 +77,167 @@ fn closing_an_unclaimed_reservation_prevents_any_attempt() {
     assert!(manager.sessions.lock().unwrap().is_empty());
     assert!(manager.retry("logical").is_err());
     manager.reserve("logical", true).unwrap();
+}
+
+#[test]
+fn failed_send_keeps_output_and_half_close_before_confirmed_network_loss() {
+    let mut terminal = false;
+    let mut output = Vec::new();
+    for event in [
+        ChannelEvent::Data(b"before".to_vec()),
+        ChannelEvent::Success,
+        ChannelEvent::Eof,
+        ChannelEvent::ExtendedData {
+            data_type: scoplen_ssh::ExtendedDataType::Stderr,
+            data: b"after".to_vec(),
+        },
+    ] {
+        match send_failure_event(Ok(Some(event)), &mut terminal) {
+            SendFailureEvent::Output(bytes) => output.extend(bytes),
+            SendFailureEvent::Continue => {}
+            other => panic!("must drain queued output before deciding: {other:?}"),
+        }
+    }
+    assert_eq!(output, b"beforeafter");
+    assert!(!terminal, "EOF only closes one direction");
+    assert_eq!(
+        send_failure_event(
+            Err(SshConnectionError::Engine(ClientError::NetworkLost)),
+            &mut terminal
+        ),
+        SendFailureEvent::NetworkLost
+    );
+}
+
+#[test]
+fn failed_send_keeps_terminal_priority_and_preserves_tail_output() {
+    for event in [
+        ChannelEvent::ExitStatus(0),
+        ChannelEvent::ExitSignal {
+            signal: "TERM".into(),
+            core_dumped: false,
+            error_message: String::new(),
+            language_tag: String::new(),
+        },
+        ChannelEvent::OpenFailure { code: 1, reason: String::new() },
+    ] {
+        let mut terminal = false;
+        assert_eq!(send_failure_event(Ok(Some(event)), &mut terminal), SendFailureEvent::Continue);
+        assert!(terminal);
+        assert_eq!(
+            send_failure_event(Ok(Some(ChannelEvent::Data(b"tail".to_vec()))), &mut terminal),
+            SendFailureEvent::Output(b"tail".to_vec())
+        );
+        assert_eq!(
+            send_failure_event(
+                Err(SshConnectionError::Engine(ClientError::NetworkLost)),
+                &mut terminal
+            ),
+            SendFailureEvent::Complete
+        );
+        assert_eq!(send_failure_event(Ok(None), &mut terminal), SendFailureEvent::Complete);
+    }
+    assert_eq!(
+        send_failure_event(Ok(Some(ChannelEvent::Close)), &mut false),
+        SendFailureEvent::Complete
+    );
+}
+
+#[test]
+fn failed_send_keeps_unknown_none_and_other_errors_nonretryable() {
+    for event in [
+        Ok(None),
+        Err(SshConnectionError::Engine(ClientError::Protocol)),
+        Err(SshConnectionError::Engine(ClientError::Channel)),
+        Err(SshConnectionError::OutputTooLarge { limit: 1 }),
+    ] {
+        assert_eq!(send_failure_event(event, &mut false), SendFailureEvent::Original);
+    }
+}
+#[tokio::test]
+async fn pending_stop_fail_and_close_win_before_automatic_or_manual_attempt_registration() {
+    for previous in [Intent::None, Intent::Retry] {
+        for pending in [Intent::Stop, Intent::Fail, Intent::Close] {
+            let manager = Arc::new(SessionManager::default());
+            manager.reserve("logical", true).unwrap();
+            let mut intents = {
+                let mut sessions = manager.sessions.lock().unwrap();
+                let entry = sessions.get_mut("logical").unwrap();
+                entry.phase =
+                    if previous == Intent::Retry { Phase::Ended } else { Phase::Retrying };
+                entry.receiver.take().unwrap()
+            };
+            if previous == Intent::Retry {
+                manager.retry("logical").unwrap();
+            }
+            intents.borrow_and_update();
+            let (reached, at_registration) = tokio::sync::oneshot::channel();
+            let (resume, gate) = tokio::sync::oneshot::channel();
+            let attempt = tokio::spawn({
+                let manager = manager.clone();
+                async move {
+                    reached.send(()).unwrap();
+                    gate.await.unwrap();
+                    let (sender, _) = mpsc::channel(COMMAND_QUEUE);
+                    manager.register_attempt(
+                        "logical",
+                        Uuid::now_v7(),
+                        &PreparationControl::default(),
+                        sender,
+                        &mut intents,
+                    )
+                }
+            });
+            at_registration.await.unwrap();
+            manager.intent("logical", pending).unwrap();
+            resume.send(()).unwrap();
+            assert_eq!(attempt.await.unwrap().unwrap(), pending);
+            let sessions = manager.sessions.lock().unwrap();
+            let entry = sessions.get("logical").unwrap();
+            assert!(entry.active.is_none(), "{pending:?} must prevent transport registration");
+            assert_eq!(*entry.intent.borrow(), pending, "pending intent must not be cleared");
+        }
+    }
+}
+
+#[tokio::test]
+async fn stop_before_the_reserved_owner_starts_waits_for_manual_retry_without_dialing() {
+    let (_dir, store) = store();
+    let manager = SessionManager::default();
+    manager.reserve("logical", true).unwrap();
+    manager.stop("logical").unwrap();
+    let starts = AtomicUsize::new(0);
+    let closed = AtomicUsize::new(0);
+    manager
+        .run(
+            "logical",
+            "invalid-profile",
+            None,
+            true,
+            store,
+            |event| {
+                match event {
+                    SessionEvent::Closed => {
+                        assert_eq!(starts.load(Ordering::SeqCst), 0);
+                        closed.fetch_add(1, Ordering::SeqCst);
+                        manager.retry("logical").unwrap();
+                    }
+                    SessionEvent::Starting { automatic, .. } => {
+                        assert!(!automatic);
+                        starts.fetch_add(1, Ordering::SeqCst);
+                    }
+                    SessionEvent::Failed { .. } => manager.close("logical").unwrap(),
+                    _ => panic!("stopped reservation must not connect automatically"),
+                }
+                Ok(())
+            },
+            |_, _| panic!("no transport"),
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
+    assert_eq!(closed.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -143,6 +317,52 @@ async fn failed_initial_attempt_waits_for_manual_intent_and_keeps_the_logical_id
     let starts = starts.lock().unwrap();
     assert_eq!(starts.len(), 2);
     assert_ne!(starts[0], starts[1]);
+    assert!(manager.sessions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn repeated_stop_and_fail_keep_the_ended_session_available_for_manual_retry() {
+    let (_dir, store) = store();
+    let manager = SessionManager::default();
+    manager.reserve("logical", true).unwrap();
+    let starts = AtomicUsize::new(0);
+    let failures = AtomicUsize::new(0);
+    let closed = AtomicUsize::new(0);
+    manager
+        .run(
+            "logical",
+            "invalid-profile",
+            None,
+            true,
+            store,
+            |event| {
+                match event {
+                    SessionEvent::Starting { automatic, .. } => {
+                        assert!(!automatic);
+                        starts.fetch_add(1, Ordering::SeqCst);
+                    }
+                    SessionEvent::Failed { .. } => match failures.fetch_add(1, Ordering::SeqCst) {
+                        0 => manager.fail("logical").unwrap(),
+                        1 => manager.stop("logical").unwrap(),
+                        2 => manager.close("logical").unwrap(),
+                        _ => panic!("only the explicit manual intent may start a new attempt"),
+                    },
+                    SessionEvent::Closed => {
+                        closed.fetch_add(1, Ordering::SeqCst);
+                        manager.retry("logical").unwrap();
+                    }
+                    _ => panic!("no automatic or network activity expected"),
+                }
+                Ok(())
+            },
+            |_, _| panic!("invalid profile has no transport"),
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(starts.load(Ordering::SeqCst), 2);
+    assert_eq!(failures.load(Ordering::SeqCst), 3);
+    assert_eq!(closed.load(Ordering::SeqCst), 1);
     assert!(manager.sessions.lock().unwrap().is_empty());
 }
 
