@@ -55,6 +55,12 @@ object, `WritableStream<Uint8Array>`, or a function. `send()` serializes sink
 writes and returns a promise; `maxPendingWrites` rejects new input with a
 `TerminalBackpressureError` when the sink cannot keep up.
 
+Replacing `sink` cancels input queued for its previous assignment with
+`TerminalDisconnectedError`, including when a sink is removed and later reused.
+An old write's completion or failure cannot write to the replacement sink or
+emit an error into its connection. Assigning the same sink again keeps its
+queued input. Output remains available when the source or sink changes.
+
 Output bytes are written to xterm.js and retained as the most recent
 `maxOutputBytes` bytes (1 MiB by default). `profile.scrollback` controls the
 xterm scrollback row limit. Input frames are limited to 64 KiB and pending sink

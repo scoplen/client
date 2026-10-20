@@ -162,6 +162,7 @@ export const zhHans: Messages = {
   "session.closed": "会话已关闭",
   "session.failed": "连接失败",
   "session.close": "关闭会话",
+  "session.reconnect": "重新连接",
   "session.output": "终端输出",
   "session.waiting": "正在等待终端输出……",
   "session.trust.title": "确认这台主机的密钥",

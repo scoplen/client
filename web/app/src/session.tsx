@@ -57,9 +57,16 @@ export function SessionTerminal({
   const [trustBusy, setTrustBusy] = useState(false);
   const [passphraseError, setPassphraseError] = useState<string | null>(null);
   const [source, setSource] = useState<TerminalSource | null>(null);
+  const [hasOutput, setHasOutput] = useState(false);
+  const [transportPending, setTransportPending] = useState(false);
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
   const mounted = useRef(true);
+  const generation = useRef(0);
+  const connecting = useRef(false);
+  const retrying = useRef(false);
+  const connectionEnded = useRef(false);
+  const trusting = useRef(false);
   const passphraseInput = useRef<HTMLInputElement>(null);
-  const sessionId = useMemo(() => crypto.randomUUID(), []);
   const reportState = useRef(onStateChange);
   const translate = useRef(t);
   useEffect(() => {
@@ -72,7 +79,11 @@ export function SessionTerminal({
 
   const connectSession = useCallback(
     (passphrase: string | null = null) => {
-      if (!mounted.current) return;
+      if (!mounted.current || connecting.current) return;
+      const current = generation.current;
+      connecting.current = true;
+      connectionEnded.current = false;
+      setTransportPending(true);
       let pendingPassphrase = passphrase;
       setState("connecting");
       setError(null);
@@ -81,11 +92,13 @@ export function SessionTerminal({
           let active = true;
           let ended = false;
           const frames = frameChannel((chunk) => {
-            if (!active || !mounted.current) return;
+            if (!active || !mounted.current || current !== generation.current) return;
+            if (chunk.length) setHasOutput(true);
             onChunk(chunk);
           });
           const ready = new Channel<null>(() => {
-            if (!active || ended || !mounted.current) return;
+            if (!active || ended || connectionEnded.current || !mounted.current || current !== generation.current)
+              return;
             setState("connected");
           });
 
@@ -101,8 +114,9 @@ export function SessionTerminal({
           void commands
             .sessionConnect(profileId, null, true, sessionId, oneTimePassphrase, frames, ready)
             .then((result) => {
-              if (!active || !mounted.current) return;
+              if (!active || !mounted.current || current !== generation.current) return;
               ended = true;
+              if (connectionEnded.current) return;
               if (result.status === "ok") {
                 setState("closed");
               } else {
@@ -123,10 +137,16 @@ export function SessionTerminal({
               }
             })
             .catch((cause: unknown) => {
-              if (!active || !mounted.current) return;
+              if (!active || !mounted.current || current !== generation.current) return;
               ended = true;
+              if (connectionEnded.current) return;
               setState("failed");
               setError(cause instanceof Error ? cause.message : String(cause));
+            })
+            .finally(() => {
+              if (!mounted.current || current !== generation.current) return;
+              connecting.current = false;
+              setTransportPending(false);
             });
 
           return { unsubscribe: stop };
@@ -170,19 +190,20 @@ export function SessionTerminal({
 
   useEffect(() => {
     let active = true;
+    const current = ++generation.current;
     mounted.current = true;
 
     void (async () => {
       try {
         await Promise.resolve();
-        if (!active || !mounted.current) return;
+        if (!active || !mounted.current || current !== generation.current) return;
         setState("verifying");
         setError(null);
         setHostKey(null);
         setTrustError(null);
         setPassphraseError(null);
         const result = await commands.sessionHostKey(profileId);
-        if (!active || !mounted.current) return;
+        if (!active || !mounted.current || current !== generation.current) return;
         if (result.status === "error") {
           setState("failed");
           setError(result.error);
@@ -196,9 +217,11 @@ export function SessionTerminal({
           setState("trusting");
         }
       } catch (cause) {
-        if (!active || !mounted.current) return;
+        if (!active || !mounted.current || current !== generation.current) return;
         setState("failed");
         setError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        if (active && mounted.current && current === generation.current) retrying.current = false;
       }
     })();
 
@@ -210,26 +233,52 @@ export function SessionTerminal({
   }, [connectSession, profileId, sessionId]);
 
   const cancelTrust = () => {
-    if (trustBusy) return;
+    if (trusting.current) return;
     setHostKey(null);
     setState("failed");
     setError(t("session.trust.cancelled"));
   };
 
   const trustAndConnect = async () => {
-    if (!hostKey || trustBusy) return;
+    if (!hostKey || trusting.current || !mounted.current) return;
+    const current = generation.current;
+    trusting.current = true;
     setTrustBusy(true);
     setTrustError(null);
-    const result = await commands.sessionTrustHostKey(profileId, hostKey.algorithm, hostKey.key, hostKey.fingerprint);
-    if (!mounted.current) return;
-    setTrustBusy(false);
-    if (result.status === "error") {
-      setTrustError(result.error);
-      return;
+    try {
+      const result = await commands.sessionTrustHostKey(profileId, hostKey.algorithm, hostKey.key, hostKey.fingerprint);
+      if (!mounted.current || current !== generation.current) return;
+      if (result.status === "error") {
+        setTrustError(result.error);
+        return;
+      }
+      setHostKey(null);
+      if (hostKey.passphraseRequired) setState("passphrase");
+      else connectSession();
+    } catch (cause) {
+      if (!mounted.current || current !== generation.current) return;
+      setTrustError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (mounted.current && current === generation.current) {
+        trusting.current = false;
+        setTrustBusy(false);
+      }
     }
+  };
+
+  const reconnect = () => {
+    if (!mounted.current || connecting.current || retrying.current || (state !== "closed" && state !== "failed"))
+      return;
+    retrying.current = true;
+    generation.current++;
+    connectionEnded.current = true;
+    trusting.current = false;
+    setTrustBusy(false);
     setHostKey(null);
-    if (hostKey.passphraseRequired) setState("passphrase");
-    else connectSession();
+    setError(null);
+    setSource(null);
+    setState("verifying");
+    setSessionId(crypto.randomUUID());
   };
 
   const cancelPassphrase = () => {
@@ -273,7 +322,7 @@ export function SessionTerminal({
 
   return (
     <main className="flex h-full min-h-0 flex-col bg-background text-foreground" aria-labelledby="session-title">
-      <header className="flex shrink-0 items-center justify-between gap-3 px-4 py-2.5">
+      <header className="flex shrink-0 flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <HostEgg seed={profileId} size="1.75rem" mood={face.mood} active={face.active} attention={face.attention} />
           <div className="min-w-0">
@@ -289,7 +338,12 @@ export function SessionTerminal({
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center justify-end gap-1">
+          {state === "closed" || state === "failed" ? (
+            <Button variant="primary" disabled={transportPending} onClick={reconnect}>
+              {t("session.reconnect")}
+            </Button>
+          ) : null}
           {onOpenColors ? (
             <IconButton label={t("session.colors")} onClick={onOpenColors}>
               <Palette aria-hidden="true" className="size-4" />
@@ -298,6 +352,9 @@ export function SessionTerminal({
           <Button
             variant="ghost"
             onClick={() => {
+              mounted.current = false;
+              generation.current++;
+              if (passphraseInput.current) passphraseInput.current.value = "";
               closeTransport();
               onClose();
             }}
@@ -306,6 +363,11 @@ export function SessionTerminal({
           </Button>
         </div>
       </header>
+      {hasOutput && error ? (
+        <p role="alert" className="mx-4 mt-0 mb-2 text-sm whitespace-pre-wrap text-attention">
+          {error}
+        </p>
+      ) : null}
       <div className="min-h-0 flex-1 px-3 pb-3">
         <div
           onContextMenu={(event) =>
@@ -333,9 +395,9 @@ export function SessionTerminal({
           <Terminal
             ref={terminal}
             source={source}
-            sink={inputSink}
+            sink={state === "connected" ? inputSink : null}
             aria-label={t("session.output")}
-            className={`h-full min-h-0 transition-opacity duration-(--duration-overlay) ${state === "connected" ? "opacity-100" : "opacity-40"}`}
+            className={`h-full min-h-0 transition-opacity duration-(--duration-overlay) ${state === "connected" || hasOutput ? "opacity-100" : "opacity-40"}`}
             profile={terminalProfile}
             onTerminalResize={(next) => {
               size.current = next;
@@ -343,11 +405,13 @@ export function SessionTerminal({
             }}
             onTerminalError={(terminalError) => {
               if (!mounted.current) return;
+              connectionEnded.current = true;
+              closeTransport();
               setState("failed");
               setError(terminalError.message);
             }}
           />
-          {state !== "connected" ? (
+          {state !== "connected" && !hasOutput ? (
             <Stage state={state} seed={profileId} label={label} status={status} error={error} />
           ) : null}
         </div>

@@ -252,3 +252,275 @@ it("clears each entered passphrase and allows a wrong passphrase to be retried",
   expect(attempts[1]?.passphrase).toBe("correct-passphrase");
   expect(screen.getByRole("status").textContent).toContain("Connecting");
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+function reconnectFixture() {
+  const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const connections: Array<{
+    sessionId: string;
+    frames: Channel<ArrayBuffer>;
+    ready: Channel<null>;
+    passphrase: string | null;
+    finish: { resolve(): void; reject(reason: unknown): void };
+  }> = [];
+  const hostKeys: Array<unknown> = [];
+  const trusts: Array<ReturnType<typeof deferred<null>>> = [];
+  const inputs: Array<ReturnType<typeof deferred<null>>> = [];
+  mockIPC((command, args) => {
+    const payload = (args ?? {}) as Record<string, unknown>;
+    calls.push({ command, args: payload });
+    if (command === "session_host_key") {
+      return (
+        hostKeys.shift() ?? {
+          algorithm: "ssh-ed25519",
+          key: "saved key",
+          fingerprint: "SHA256:saved",
+          status: "trusted",
+        }
+      );
+    }
+    if (command === "session_trust_host_key") return trusts.shift()?.promise ?? null;
+    if (command === "session_input") return inputs.shift()?.promise ?? null;
+    if (command === "session_connect") {
+      const finish = deferred<null>();
+      connections.push({
+        ...(payload as unknown as (typeof connections)[number]),
+        finish: { resolve: () => finish.resolve(null), reject: finish.reject },
+      });
+      return finish.promise;
+    }
+    return null;
+  });
+  return { calls, connections, hostKeys, trusts, inputs };
+}
+
+it.each(["closed", "failed"])(
+  "reconnects a %s session in place with fresh channels and preserved output",
+  async (ending) => {
+    const fixture = reconnectFixture();
+    const view = renderSession();
+    await waitFor(() => expect(fixture.connections).toHaveLength(1));
+    const first = fixture.connections[0]!;
+    const terminal = view.container.querySelector("scoplen-terminal") as ScoplenTerminalElement;
+    await act(() => {
+      first.ready.onmessage(null);
+      first.frames.onmessage(new TextEncoder().encode("first session\r\n").buffer);
+    });
+    await act(() => {
+      if (ending === "closed") first.finish.resolve();
+      else first.finish.reject("server disconnected");
+    });
+    expect(screen.getByRole("status").textContent).toContain(ending === "closed" ? "closed" : "failed");
+    expect(screen.getByRole("button", { name: "Reconnect" })).toHaveProperty("disabled", false);
+    const reconnect = screen.getByRole("button", { name: "Reconnect" });
+    act(() => {
+      reconnect.click();
+      reconnect.click();
+    });
+    await waitFor(() => expect(fixture.connections).toHaveLength(2));
+    const second = fixture.connections[1]!;
+    expect(second.sessionId).not.toBe(first.sessionId);
+    expect(fixture.calls.filter((call) => call.command === "session_host_key")).toHaveLength(2);
+    expect(view.container.querySelector("scoplen-terminal")).toBe(terminal);
+    expect(new TextDecoder().decode(terminal.getOutput())).toBe("first session\r\n");
+    expect(screen.getByRole("status").textContent).toContain("Connecting");
+    await act(() => {
+      first.ready.onmessage(null);
+      first.frames.onmessage(new TextEncoder().encode("stale output").buffer);
+    });
+    expect(screen.getByRole("status").textContent).toContain("Connecting");
+    expect(new TextDecoder().decode(terminal.getOutput())).toBe("first session\r\n");
+    await act(() => {
+      second.ready.onmessage(null);
+      second.frames.onmessage(new TextEncoder().encode("second session").buffer);
+    });
+    expect(new TextDecoder().decode(terminal.getOutput())).toBe("first session\r\nsecond session");
+    await terminal.send(new Uint8Array([13]));
+    expect(fixture.calls.filter((call) => call.command === "session_input").at(-1)?.args.sessionId).toBe(
+      second.sessionId,
+    );
+    expect(
+      fixture.calls.some(
+        (call) => call.command === "session_close_transport" && call.args.sessionId === first.sessionId,
+      ),
+    ).toBe(true);
+  },
+);
+
+it("waits for a failed terminal transport to settle before allowing reconnect", async () => {
+  const fixture = reconnectFixture();
+  const view = renderSession();
+  await waitFor(() => expect(fixture.connections).toHaveLength(1));
+  const terminal = view.container.querySelector("scoplen-terminal") as ScoplenTerminalElement;
+  act(() => {
+    terminal.dispatchEvent(new CustomEvent("terminal-error", { detail: { message: "terminal write failed" } }));
+  });
+  expect(screen.getByRole("button", { name: "Reconnect" })).toHaveProperty("disabled", true);
+  await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  expect(fixture.connections).toHaveLength(1);
+  await act(() => fixture.connections[0]!.ready.onmessage(null));
+  expect(screen.getByRole("status").textContent).toContain("failed");
+  await act(() => fixture.connections[0]!.finish.resolve());
+  expect(screen.getByRole("button", { name: "Reconnect" })).toHaveProperty("disabled", false);
+  await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  await waitFor(() => expect(fixture.connections).toHaveLength(2));
+});
+
+it("reviews a changed host key again, then re-reads trust after a cancelled reconnect", async () => {
+  const fixture = reconnectFixture();
+  renderSession();
+  await waitFor(() => expect(fixture.connections).toHaveLength(1));
+  await act(() => fixture.connections[0]!.finish.resolve());
+  fixture.hostKeys.push({
+    algorithm: "ssh-ed25519",
+    key: "rotated key",
+    fingerprint: "SHA256:rotated",
+    status: "changed",
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  expect(await screen.findByText("Host key changed")).toBeTruthy();
+  expect(screen.getByText("SHA256:rotated")).toBeTruthy();
+  expect(fixture.connections).toHaveLength(1);
+  await userEvent.click(screen.getAllByRole("button", { name: "Cancel" })[1]!);
+  expect(fixture.calls.filter((call) => call.command === "session_trust_host_key")).toHaveLength(0);
+  expect(fixture.connections).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  await waitFor(() => expect(fixture.connections).toHaveLength(2));
+  expect(fixture.calls.filter((call) => call.command === "session_host_key")).toHaveLength(3);
+});
+
+it("prompts for a fresh one-time key passphrase after reconnect", async () => {
+  const fixture = reconnectFixture();
+  const encryptedKey = {
+    algorithm: "ssh-ed25519",
+    key: "key",
+    fingerprint: "SHA256:saved",
+    status: "trusted",
+    passphraseRequired: true,
+  };
+  fixture.hostKeys.push(encryptedKey, encryptedKey);
+  renderSession();
+  await userEvent.type(await screen.findByLabelText("Key passphrase"), "first-unlock");
+  await userEvent.click(screen.getByRole("button", { name: "Unlock and connect" }));
+  await waitFor(() => expect(fixture.connections).toHaveLength(1));
+  await act(() => fixture.connections[0]!.finish.resolve());
+  await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  const field = (await screen.findByLabelText("Key passphrase")) as HTMLInputElement;
+  expect(field.value).toBe("");
+  expect(fixture.connections).toHaveLength(1);
+  await userEvent.type(field, "second-unlock");
+  await userEvent.click(screen.getByRole("button", { name: "Unlock and connect" }));
+  await waitFor(() => expect(fixture.connections).toHaveLength(2));
+  expect(fixture.connections.map((connection) => connection.passphrase)).toEqual(["first-unlock", "second-unlock"]);
+  expect(fixture.connections[1]!.sessionId).not.toBe(fixture.connections[0]!.sessionId);
+});
+
+it.each(["probe", "trust"])("ignores a late reconnect %s result after closing its tab", async (stage) => {
+  const fixture = reconnectFixture();
+  const view = renderSession();
+  await waitFor(() => expect(fixture.connections).toHaveLength(1));
+  await act(() => fixture.connections[0]!.finish.resolve());
+  const probe = deferred<unknown>();
+  const trust = deferred<null>();
+  if (stage === "probe") fixture.hostKeys.push(probe.promise);
+  else {
+    fixture.hostKeys.push({ algorithm: "ssh-ed25519", key: "changed", fingerprint: "SHA256:new", status: "changed" });
+    fixture.trusts.push(trust);
+  }
+  await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  if (stage === "trust") await userEvent.click(await screen.findByRole("button", { name: "Trust and connect" }));
+  else await waitFor(() => expect(fixture.calls.filter((call) => call.command === "session_host_key")).toHaveLength(2));
+  if (stage === "probe") await userEvent.click(screen.getByRole("button", { name: "Close session" }));
+  view.unmount();
+  await act(() => {
+    probe.resolve({ algorithm: "ssh-ed25519", key: "key", fingerprint: "SHA256:saved", status: "trusted" });
+    trust.resolve(null);
+  });
+  expect(fixture.connections).toHaveLength(1);
+});
+
+it("cancels pending and queued input from an old transport after reconnect", async () => {
+  const fixture = reconnectFixture();
+  const pending = deferred<null>();
+  fixture.inputs.push(pending);
+  const view = renderSession();
+  await waitFor(() => expect(fixture.connections).toHaveLength(1));
+  const first = fixture.connections[0]!;
+  const terminal = view.container.querySelector("scoplen-terminal") as ScoplenTerminalElement;
+  await act(() => first.ready.onmessage(null));
+  const write = terminal.send(new Uint8Array([13]));
+  const queued = terminal.send(new Uint8Array([14]));
+  const cancelled = Promise.allSettled([write, queued]);
+  await waitFor(() => expect(fixture.calls.filter((call) => call.command === "session_input")).toHaveLength(1));
+  await act(() => first.finish.resolve());
+  await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  await waitFor(() => expect(fixture.connections).toHaveLength(2));
+  await act(() => fixture.connections[1]!.ready.onmessage(null));
+  await act(async () => {
+    pending.reject("old input failed");
+    expect((await cancelled).map((result) => result.status)).toEqual(["rejected", "rejected"]);
+  });
+  expect(screen.getByRole("status").textContent).toContain("Connected");
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(fixture.calls.filter((call) => call.command === "session_input")).toHaveLength(1);
+  await terminal.send(new Uint8Array([15]));
+  expect(fixture.calls.filter((call) => call.command === "session_input").at(-1)?.args).toMatchObject({
+    sessionId: fixture.connections[1]!.sessionId,
+    data: [15],
+  });
+});
+
+it("uses only the reviewed replacement key when trusting a reconnect", async () => {
+  const fixture = reconnectFixture();
+  renderSession();
+  await waitFor(() => expect(fixture.connections).toHaveLength(1));
+  await act(() => fixture.connections[0]!.finish.resolve());
+  fixture.hostKeys.push({
+    algorithm: "ecdsa-sha2-nistp256",
+    key: "rotated key",
+    fingerprint: "SHA256:new",
+    status: "changed",
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Trust and connect" }));
+  await waitFor(() => expect(fixture.connections).toHaveLength(2));
+  expect(fixture.calls.filter((call) => call.command === "session_trust_host_key")).toEqual([
+    {
+      command: "session_trust_host_key",
+      args: { profileId: "profile-1", algorithm: "ecdsa-sha2-nistp256", key: "rotated key", fingerprint: "SHA256:new" },
+    },
+  ]);
+});
+
+it("closes a pending reconnect and ignores its late ready, output, and failure", async () => {
+  const fixture = reconnectFixture();
+  const view = renderSession();
+  await waitFor(() => expect(fixture.connections).toHaveLength(1));
+  await act(() => fixture.connections[0]!.finish.resolve());
+  await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  await waitFor(() => expect(fixture.connections).toHaveLength(2));
+  const second = fixture.connections[1]!;
+  const terminal = view.container.querySelector("scoplen-terminal") as ScoplenTerminalElement;
+  await userEvent.click(screen.getByRole("button", { name: "Close session" }));
+  await act(() => {
+    second.ready.onmessage(null);
+    second.frames.onmessage(new TextEncoder().encode("late data").buffer);
+    second.finish.reject("late failure");
+  });
+  expect(new TextDecoder().decode(terminal.getOutput())).toBe("");
+  expect(screen.getByRole("status").textContent).toContain("Connecting");
+  expect(
+    fixture.calls.some(
+      (call) => call.command === "session_close_transport" && call.args.sessionId === second.sessionId,
+    ),
+  ).toBe(true);
+});

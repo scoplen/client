@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-import { ScoplenTerminalElement, TerminalBackpressureError, TerminalBoundsError, type TerminalBytes } from "../src";
+import {
+  ScoplenTerminalElement,
+  TerminalBackpressureError,
+  TerminalBoundsError,
+  TerminalDisconnectedError,
+  type TerminalBytes,
+} from "../src";
 
 function mount(options: { source?: ScoplenTerminalElement["source"]; sink?: ScoplenTerminalElement["sink"] } = {}) {
   const element = document.createElement("scoplen-terminal") as ScoplenTerminalElement;
@@ -97,6 +103,71 @@ describe("ScoplenTerminalElement", () => {
     resolvers.shift()?.();
     await expect(first).resolves.toBeUndefined();
     await expect(second).resolves.toBeUndefined();
+  });
+
+  it.each(["direct", "via-null", "reused-after-null"])(
+    "cancels queued input when a sink is replaced %s without affecting the replacement",
+    async (replacement) => {
+      for (const failed of [false, true]) {
+        const oldWrites: number[][] = [];
+        const newWrites: number[][] = [];
+        const broadcasts: number[][] = [];
+        const errors: unknown[] = [];
+        let release!: () => void;
+        let reject!: (reason: unknown) => void;
+        const pending = new Promise<void>((resolve, fail) => {
+          release = resolve;
+          reject = fail;
+        });
+        const oldSink = (bytes: TerminalBytes) => {
+          oldWrites.push([...bytes]);
+          if (oldWrites.length === 1) return pending;
+        };
+        const element = mount({ sink: oldSink });
+        element.broadcastSink = (bytes) => {
+          broadcasts.push([...bytes]);
+        };
+        await element.setBroadcastInput(true, () => true);
+        element.addEventListener("terminal-error", (event) => errors.push((event as CustomEvent).detail));
+        const first = element.send(new Uint8Array([1]));
+        const queued = element.send(new Uint8Array([2]));
+        const cancelled = Promise.allSettled([first, queued]);
+        await flush();
+        expect(oldWrites).toEqual([[1]]);
+        if (replacement !== "direct") element.sink = null;
+        element.sink =
+          replacement === "reused-after-null"
+            ? oldSink
+            : (bytes) => {
+                newWrites.push([...bytes]);
+              };
+        const control = element.send(new Uint8Array([3]));
+        if (failed) reject(new Error("old transport failed"));
+        else release();
+        for (const result of await cancelled) {
+          expect(result.status).toBe("rejected");
+          if (result.status === "rejected") expect(result.reason).toBeInstanceOf(TerminalDisconnectedError);
+        }
+        await expect(control).resolves.toBeUndefined();
+        expect(oldWrites).toEqual(replacement === "reused-after-null" ? [[1], [3]] : [[1]]);
+        expect(newWrites).toEqual(replacement === "reused-after-null" ? [] : [[3]]);
+        expect(broadcasts).toEqual([[3]]);
+        expect(errors).toEqual([]);
+        element.remove();
+      }
+    },
+  );
+
+  it("keeps queued input when the same sink is assigned again", async () => {
+    const writes: number[][] = [];
+    const sink = (bytes: TerminalBytes) => {
+      writes.push([...bytes]);
+    };
+    const element = mount({ sink });
+    const pending = element.send(new Uint8Array([1]));
+    element.sink = sink;
+    await pending;
+    expect(writes).toEqual([[1]]);
   });
 
   it("maps keyboard input to bytes at the sink boundary", async () => {

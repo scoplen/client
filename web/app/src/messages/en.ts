@@ -174,6 +174,7 @@ export const en = {
   "session.closed": "Session closed",
   "session.failed": "Connection failed",
   "session.close": "Close session",
+  "session.reconnect": "Reconnect",
   "session.output": "Terminal output",
   "session.waiting": "Waiting for terminal output…",
   "session.trust.title": "Verify this host key",

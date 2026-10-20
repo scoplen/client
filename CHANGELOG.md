@@ -4,6 +4,9 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added manual Reconnect in ended session tabs, preserving displayed terminal output while rechecking host trust and current saved credentials, requesting a fresh one-time passphrase, and using a new transport and history entry for every attempt. Pending tasks and stale results cannot overlap or revive an old connection.
+- Cancelled terminal input queued for a replaced sink so delayed keystrokes and old write errors cannot reach a replacement connection.
+
 - Connected saved Agent Credentials to the system Unix socket or Windows OpenSSH pipe, matching the exact saved public key after host-key verification, with bounded cancellable local I/O, four authentication workers, explicit failure paths, and no credential fallback.
 
 - Connected saved SOCKS5 and HTTP CONNECT proxy authentication through independent Route usernames and password Credentials, with preflight validation, the same credentials during host-key probing and SSH sessions, and an editor notice that proxy credentials travel over plain TCP.

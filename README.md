@@ -50,6 +50,13 @@ Interactive SSH sessions become ready after authentication and shell setup,
 even when the server sends no initial output. Terminal input and PTY resizing
 are available without waiting for a welcome message or prompt.
 
+When a session closes or fails, choose Reconnect in its header to connect again
+in the same tab. Its displayed terminal output stays available. Reconnect waits
+for the previous connection task to finish, rechecks the host key, resolves the
+current saved login, and prompts again when a one-time key passphrase is needed.
+Each attempt uses a new transport identifier and records a separate Recent
+entry. Closing the tab cancels its pending connection.
+
 Accepted SSH connection attempts appear in Recent using device-local history.
 Normal completion and an explicit close during connection preparation record
 `Closed`; connection errors and externally dropped connection tasks record
@@ -58,7 +65,7 @@ An ended terminal in Recent can be started again through the normal Connect
 entry point using its current saved login. The lookup opens no connection and
 does not write history; the new attempt runs the usual host-key checks and
 records its own lifecycle. Active sessions and Files/Forward entries do not
-offer this action. Automatic reconnect and scrollback restoration remain later
+offer this action. Automatic reconnect and restoring scrollback after closing a tab remain later
 session-management outcomes.
 
 ## What it does not do
