@@ -12,20 +12,23 @@ export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	/**  Called by the frontend once its first screen has rendered. */
 	shellReady: () => __TAURI_INVOKE<void>("shell_ready"),
-	/**  Respond to one session-owned, one-use preparation prompt. */
+	/**  Reply to the current session-owned, one-use preparation prompt. */
 	sessionRespond: (sessionId: string, promptId: string, intent: SessionPreparationIntent) => typedError<null, string>(__TAURI_INVOKE("session_respond", { sessionId, promptId, intent })),
-	/**
-	 *  Reserve a cancelable transport before the renderer starts preparation.
-	 *  A disposed renderer closes the acknowledged reservation without connecting.
-	 */
+	/**  Reserve a logical session before starting its cancellable manager task. */
 	sessionReserveTransport: (sessionId: string, pty: boolean) => typedError<null, string>(__TAURI_INVOKE("session_reserve_transport", { sessionId, pty })),
-	/**  Prepare every hop and stream the target's shell or exec output. */
-	sessionConnect: (profileId: string, command: string | null, pty: boolean, sessionId: string, frames: Channel<ArrayBuffer>, ready: Channel<null>, preparation: Channel<PreparationEvent>) => typedError<null, string>(__TAURI_INVOKE("session_connect", { profileId, command, pty, sessionId, frames, ready, preparation })),
-	/**  Sends one bounded input chunk to a live shell session. */
-	sessionInput: (sessionId: string, data: number[]) => typedError<null, string>(__TAURI_INVOKE("session_input", { sessionId, data })),
-	/**  Notifies a live SSH PTY of a new character-cell size. */
-	sessionResize: (sessionId: string, columns: number, rows: number) => typedError<null, string>(__TAURI_INVOKE("session_resize", { sessionId, columns, rows })),
-	/**  Closes the transport for a live shell session. */
+	/**  Own one logical terminal until tab closure. Ended terminals await manual retry. */
+	sessionConnect: (profileId: string, command: string | null, pty: boolean, sessionId: string, messages: Channel<SessionEvent | ArrayBuffer>) => typedError<null, string>(__TAURI_INVOKE("session_connect", { profileId, command, pty, sessionId, messages })),
+	/**  Route one bounded input frame to the exact ready transport. */
+	sessionInput: (sessionId: string, transportId: string, data: number[]) => typedError<null, string>(__TAURI_INVOKE("session_input", { sessionId, transportId, data })),
+	/**  Resize the exact ready transport's pseudo-terminal. */
+	sessionResize: (sessionId: string, transportId: string, columns: number, rows: number) => typedError<null, string>(__TAURI_INVOKE("session_resize", { sessionId, transportId, columns, rows })),
+	/**  Begin an explicit reconnect with a fresh automatic retry budget. */
+	sessionRetryTransport: (sessionId: string) => typedError<null, string>(__TAURI_INVOKE("session_retry_transport", { sessionId })),
+	/**  Cancel preparation or back-off while preserving the terminal for manual retry. */
+	sessionStopReconnecting: (sessionId: string) => typedError<null, string>(__TAURI_INVOKE("session_stop_reconnecting", { sessionId })),
+	/**  Stop an unusable terminal without triggering automatic reconnect. */
+	sessionFailTransport: (sessionId: string) => typedError<null, string>(__TAURI_INVOKE("session_fail_transport", { sessionId })),
+	/**  End the complete logical session, including every timer, prompt, and transport. */
 	sessionCloseTransport: (sessionId: string) => typedError<null, string>(__TAURI_INVOKE("session_close_transport", { sessionId })),
 	/**  Returns which inventory areas have content. */
 	inventoryAreas: () => typedError<Areas, Failure>(__TAURI_INVOKE("inventory_areas")),
@@ -983,13 +986,48 @@ export type SessionError =
 /**  A diagnostic reference safe to show for retryable failures. */
 reference: string };
 
-/**  A user intent for the one current preparation prompt. */
+/**  Display-safe state of one logical terminal. Output uses a separate binary stream. */
+export type SessionEvent =
+/**  A fresh transport is about to resolve the current saved Login. */
+{ kind: "starting";
+/**  Opaque attempt identity used to fence input and output. */
+transportId: string;
+/**  Whether this attempt follows the automatic reconnect policy. */
+automatic: boolean } |
+/**  Progress or a one-time prompt for this transport. */
+{ kind: "preparation";
+/**  Current transport identity. */
+transportId: string;
+/**  Current hop's progress or prompt. */
+event: PreparationEvent } |
+/**  Shell setup completed independently of receiving output. */
+{ kind: "ready";
+/**  Only this transport may receive subsequent terminal input. */
+transportId: string } |
+/**  A typed network failure qualified for the next bounded retry. */
+{ kind: "retrying";
+/**  One-based automatic attempt number, at most five. */
+attempt: number;
+/**  Fixed delay before the next attempt. */
+delaySeconds: number;
+/**  Display-safe reason for the preceding failure. */
+error: string } |
+/**  The remote shell exited or the person stopped reconnecting. */
+{ kind: "closed" } |
+/**  The session remains available for an explicit manual reconnect. */
+{ kind: "failed";
+/**  Actionable error, without credential or helper output. */
+error: string;
+/**  All five automatic attempts have been consumed. */
+exhausted: boolean };
+
+/**  A one-time response to the current attempt's preparation prompt. */
 export type SessionPreparationIntent =
 /**  Accept only the exact host key retained by Rust. */
 { kind: "acceptHostKey" } |
-/**  Supply a one-time key passphrase, never returned to the renderer. */
+/**  Supply a write-only key passphrase, never returned to the renderer. */
 { kind: "passphrase";
-/**  Write-only secret input. */
+/**  One-time secret input. */
 value: string };
 
 /**  How a new host authenticates. */
