@@ -69,6 +69,14 @@ review and reports missing identities, agent signing failures, and timeouts in
 the existing session error surface. It never prompts for a password fallback.
 Agent forwarding and Pageant discovery remain unavailable.
 
+Saved ProxyCommand Routes use the existing Route editor and Login selector. At Connect,
+Rust parses quotes and expands only `%h`, `%p`, `%r`, and `%%` as literal arguments;
+it rejects malformed or oversized commands before process creation, SSH-agent access, or private-key decryption.
+The local program carries the target SSH stream without an implicit shell. The existing
+host-key and one-time passphrase prompts remain bound to that retained connection.
+Timeout, helper failure, and cancellation use the existing session failure surface;
+closing or reconnecting releases the previous helper before preparing a new attempt.
+
 Every operation that can fail returns `Outcome`; a `Failure` carries a reference for support, free of secrets.
 
 The tier-0 OpenSSH importer accepts simple literal `Host` blocks with `HostName`, `User`, `Port`, and `IdentityFile` values. It skips a host block when a directive or value in that block cannot be represented. Global settings, wildcard `Host` patterns, `Include`, and `Match` can affect other blocks, so the preview excludes every host in those files and explains why. Full OpenSSH semantics, `known_hosts`, keys discovery, and idempotent re-import belong to roadmap C10; this flow is limited to an empty inventory.

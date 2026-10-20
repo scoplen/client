@@ -77,7 +77,7 @@ jobs:
       - name: Ed25519, NIST ECDSA, and RSA SHA-2 acceptance and refusal
         shell: pwsh
         run: ./scripts/test-ssh-private-key.ps1
-      - name: SOCKS5 and HTTP CONNECT acceptance, refusal, timeout, and host trust
+      - name: SOCKS5, HTTP CONNECT, and saved ProxyCommand trust, timeout, and cleanup
         shell: pwsh
         run: ./scripts/test-ssh-proxy-route.ps1
       - name: Saved SSH-agent identity, trust, failure, timeout, and cancellation

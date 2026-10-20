@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Connected saved ProxyCommand routes to real SSH through a directly invoked local program,
+  with portable quoting, bounded literal target substitutions, no implicit shell expansion,
+  retained host-key review, a ten-second handshake deadline, and helper cleanup on failure,
+  cancellation, close, or drop. Command text and arguments are redacted from diagnostics.
+- Reject invalid SSH usernames before connection preparation, even when a ProxyCommand
+  does not substitute the username. Windows helpers do not open console windows, and
+  `.bat`/`.cmd` programs that would invoke an implicit shell fail before spawning.
 - Connected saved ordered Jump routes to real SSH with independent host-key review and password, encrypted software-key, or exact-key Agent authentication at every hop. The core retains each reviewed connection, fences one-use prompts, retries local passphrases, bounds forwarded setup, and closes chains in reverse on cancellation or failure. Invalid chains and non-Direct routes on jump Logins fail before dialing.
 - Reserved transports before connection preparation so closing a tab before the IPC acknowledgment cannot start a late SSH connection or leave an unclaimed registry entry.
 
