@@ -86,4 +86,24 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     ) STRICT, WITHOUT ROWID;
     CREATE INDEX implicit_objects_by_type ON implicit_objects (object_type);
     "#,
+    // 4: a pending Personal identity is durable before its first network request.
+    r#"
+    CREATE TABLE personal_server (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK (length(account_id) = 16),
+        personal_vault_id BLOB NOT NULL CHECK (length(personal_vault_id) = 16),
+        device_name TEXT NOT NULL,
+        private_material BLOB NOT NULL,
+        enrollment_request BLOB,
+        recovery_saved INTEGER NOT NULL DEFAULT 0 CHECK (recovery_saved IN (0, 1)),
+        recovery_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (recovery_confirmed IN (0, 1)),
+        enrollment_attempted INTEGER NOT NULL DEFAULT 0 CHECK (enrollment_attempted IN (0, 1)),
+        access_token BLOB,
+        refresh_token BLOB,
+        access_expires_at INTEGER,
+        refresh_expires_at INTEGER,
+        CHECK (recovery_confirmed = 0 OR recovery_saved = 1)
+    ) STRICT;
+    "#,
 ];

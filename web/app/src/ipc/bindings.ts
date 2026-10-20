@@ -123,6 +123,18 @@ export const commands = {
 	removeLocalPassphrase: () => typedError<Status, LocalDataError>(__TAURI_INVOKE("remove_local_passphrase")),
 	/**  Keeps unreadable local data aside and starts with empty local data. */
 	startWithEmptyLocalData: () => typedError<Status, LocalDataError>(__TAURI_INVOKE("start_with_empty_local_data")),
+	/**  Return public Personal server metadata without opening a network connection. */
+	personalServerStatus: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("personal_server_status")),
+	/**  Persist the invitation's generated identity locally before any network request. */
+	preparePersonalEnrollment: (invitationUrl: string, deviceName: string) => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("prepare_personal_enrollment", { invitationUrl, deviceName })),
+	/**  Save the recovery key directly from Rust through a native file picker. */
+	savePersonalRecoveryKey: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("save_personal_recovery_key")),
+	/**  Confirm that the recovery key has been saved safely before invitation redemption. */
+	confirmPersonalRecoveryKey: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("confirm_personal_recovery_key")),
+	/**  Redeem the invitation at most once and confirm the retained device identity. */
+	submitPersonalEnrollment: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("submit_personal_enrollment")),
+	/**  Retry fresh device authentication without replaying invitation redemption. */
+	authenticatePersonalServer: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("authenticate_personal_server")),
 };
 
 /** Events */
@@ -717,6 +729,70 @@ export type OpenSshUnsupportedDirective = {
 	line: number,
 	/**  The directive name as written. */
 	directive: string,
+};
+
+/**  Safe failures contain no source body, URL fragment, token, or underlying network diagnostic. */
+export type PersonalServerError =
+/**  The encrypted store is unavailable or an operation could not be committed. */
+"storage" |
+/**  An operation is already running. */
+"busy" |
+/**  An invitation did not have the exact canonical HTTPS fragment form. */
+"invitation" |
+/**  A certificate display name must be a bounded, nonempty printable string. */
+"deviceName" |
+/**  A persisted identity must not be silently replaced. */
+"alreadyConfigured" |
+/**  A generated key or stored identity is unavailable. */
+"identity" |
+/**  Setup has not reached the required phase. */
+"recoveryRequired" |
+/**  The recovery file was not written. */
+"recoverySave" |
+/**  An attempted redemption cannot be replayed. */
+"alreadyAttempted" |
+/**  An encrypted-store identity must exist before any network operation. */
+"notConfigured" |
+/**  A bounded verified HTTPS exchange did not complete. */
+"network" |
+/**  The connector failed before sending an HTTP request, without any timeout. */
+"connectionBeforeRequest" |
+/**  Authentication was denied without exposing arbitrary server content. */
+"authentication" |
+/**  A bounded response or its cryptographic binding was invalid. */
+"invalidResponse";
+
+/**  Redacted progress of this device's Personal server enrollment. */
+export type PersonalServerPhase =
+/**  No invitation has been prepared. */
+"not_configured" |
+/**  Save the generated recovery key and confirm that it is kept safely. */
+"recovery_required" |
+/**  The single invitation redemption may now be submitted. */
+"ready_to_enroll" |
+/**  Enrollment may have committed; only fresh device authentication is safe. */
+"enrollment_unconfirmed" |
+/**  This identity has an unexpired, verified device access token. */
+"authenticated";
+
+/**  Public metadata only. No token, invitation, recovery key, or private key crosses IPC. */
+export type PersonalServerStatus = {
+	/**  Current safe next action. */
+	phase: PersonalServerPhase,
+	/**  The exact user-selected canonical HTTPS origin. */
+	origin: string | null,
+	/**  The retained account identity. */
+	accountId: string | null,
+	/**  The retained device identity. */
+	deviceId: string | null,
+	/**  The retained Personal vault identity; existing local objects remain local. */
+	personalVaultId: string | null,
+	/**  This device's user-selected name. */
+	deviceName: string | null,
+	/**  A native recovery-file save completed successfully. */
+	recoveryKeySaved: boolean,
+	/**  The user explicitly confirmed keeping the recovery key safely. */
+	recoveryKeyConfirmed: boolean,
 };
 
 /**  The desktop platform the application runs on. */
