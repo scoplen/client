@@ -109,6 +109,12 @@ records its own lifecycle. Active sessions and Files/Forward entries do not
 offer this action. Restoring scrollback after closing a tab remains a later
 session-management outcome.
 
+Settings → Personal account can prepare a Personal invitation from a user-selected HTTPS
+Scoplen server, save and confirm a recovery file, join, and authenticate the first device.
+The same pending identity is retained across restarts and uncertain responses. This build
+does not yet synchronize inventory, pair another device, or rotate refresh credentials.
+Existing local SSH data is not uploaded by account setup.
+
 ## What it does not do
 
 - It sends nothing to the vendor: no telemetry, update server, or crash-report endpoint in Phase 1.
@@ -200,7 +206,17 @@ SPL_SMOKE_TEST=1 target/release/bundle/macos/Scoplen.app/Contents/MacOS/scoplen
 
 ## Data and privacy
 
-Everything Scoplen keeps is stored on the device, in the application data directory (`~/Library/Application Support/com.scoplen.client` on macOS, `%APPDATA%\com.scoplen.client` on Windows). The store is a SQLCipher database encrypted with a random 256-bit key. That key is held in the macOS Keychain (only on this device, after the first unlock) or, on Windows, wrapped by a TPM-held key or by DPAPI for the current user. With a local passphrase, the key is additionally wrapped with a key derived from the passphrase by Argon2id; forgetting the passphrase makes the data unrecoverable. If the key is lost, Scoplen keeps the unreadable store under a new name and can start with empty data. Network access is initiated only by an explicit SSH session command; there is no background sync or telemetry in this build.
+Scoplen keeps its local data in the application data directory (`~/Library/Application Support/com.scoplen.client` on macOS, `%APPDATA%\com.scoplen.client` on Windows). The store is a SQLCipher database encrypted with a random 256-bit key. That key is held in the macOS Keychain (only on this device, after the first unlock) or, on Windows, wrapped by a TPM-held key or by DPAPI for the current user. With a local passphrase, the key is additionally wrapped with a key derived from the passphrase by Argon2id; forgetting the passphrase makes the data unrecoverable. If the key is lost, Scoplen keeps the unreadable store under a new name and can start with empty data.
+
+Network access follows explicit SSH actions or Personal enrollment/authentication. Personal
+setup sends the invitation token, public identity metadata, signed certificates, and encrypted
+account material only to the selected origin. Its HTTPS transport verifies certificates,
+rejects redirects, and bounds exchanges and response bodies. Device signing/KEM keys currently
+use software implementations protected by SQLCipher; hardware device signing is not implemented.
+The recovery key is exported as a plaintext file only at the user's chosen location: Unix files
+are created with mode 0600, while Windows uses the destination directory's inherited ACLs.
+Keep that file private and offline. Access/refresh tokens and secret keys never cross IPC into the frontend. There is
+no inventory sync, background network activity, or telemetry in this build.
 
 ## Security
 

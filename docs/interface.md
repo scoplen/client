@@ -21,6 +21,31 @@ The terminal has its own colors, chosen in Settings → Terminal (`web/app/src/t
 
 `web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 92 px for the window controls, which sit centered in it, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.
 
+## Personal account setup
+
+Settings → Personal account opens the optional first-device flow. It reads public status
+without network access. The invitation is a hidden, uncontrolled input: submitting clears
+its DOM value and passes it once to Rust. The frontend retains no invitation, recovery key,
+private key, access token, or refresh token. The device name and trusted server origin are
+shown before joining. Rust parses the invitation, generates the shared K-2 artifacts, and
+persists the same pending identity in SQLCipher before any request.
+
+Save recovery file opens a native picker and writes the plaintext backup directly from Rust
+to a new file; existing files are not overwritten. Cancellation retains the current phase.
+The user separately confirms that the file is kept safely before Join becomes available.
+Clear connector failures before any HTTP request allow explicit Join again with the same
+identity. Timeouts, lost responses, and unknown outcomes retain the pending identity and show
+Authenticate this device, which uses a fresh challenge without replaying the invitation.
+Errors use typed localized codes; arbitrary IPC or server diagnostics are not rendered.
+
+Authenticated status means Rust verified the unexpired device access token against the exact
+chosen HTTPS origin's JWKS and the saved account/device/key identity. It does not mean inventory
+has synchronized. Existing hosts and credentials remain local. Pairing, refresh rotation,
+profile display, and inventory pull/push remain separate outcomes. Settings navigation supports
+arrow keys, Home/End, visible focus, and wrapping at narrow widths. An explicit action that
+advances to another phase focuses its heading; initial status reads and same-phase actions
+retain keyboard focus.
+
 ## Inventory (roadmap C3)
 
 Contract: `web/app/src/inventory/api.ts` (`InventoryApi`). Screens: `inventory/home.tsx` (sidebar, list, details; the logins, keys, and routes editors open beside the sidebar, which stays), `inventory/host-details.tsx`, `inventory/add-host.tsx`.
