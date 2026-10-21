@@ -83,6 +83,7 @@ pub fn ipc() -> Builder<tauri::Wry> {
             personal_server::confirm_personal_recovery_key,
             personal_server::submit_personal_enrollment,
             personal_server::authenticate_personal_server,
+            personal_server::update_personal_invitation,
         ])
         .events(collect_events![events::StoreChanged, events::SessionChanged])
 }

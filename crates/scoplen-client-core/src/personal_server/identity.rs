@@ -6,7 +6,7 @@ use scoplen_api::{
     sync::{SyncAccountDeviceWrap, SyncAccountKeyBundleUpdate},
 };
 use scoplen_crypto::{
-    AccountKemKeyWrap, AccountSigningKeyWrap, DeviceArkWrap, DeviceCertificate,
+    AccountKemKeyWrap, AccountSigningKeyWrap, DeviceArkWrap, DeviceCertificate, P256SigningKey,
     PersonalEnrollmentArtifacts, PersonalEnrollmentContext, PersonalVaultKeyWrap, RecoveryBlob,
     RecoveryKey, SecretVec, generate_account_keys, generate_device_keys, generate_symmetric_key,
 };
@@ -35,6 +35,46 @@ impl<'a> Secrets<'a> {
 
 fn invalid(_: impl std::fmt::Debug) -> PersonalServerError {
     PersonalServerError::Identity
+}
+
+pub(super) fn replace_invitation(
+    store: &Store,
+    pending: &PersonalRecord,
+    invitation: Invitation,
+) -> Result<SecretVec, PersonalServerError> {
+    let encoded = pending.enrollment_request.as_ref().ok_or(PersonalServerError::Identity)?;
+    let mut request = PersonalEnrollmentRequest::from_json(encoded.as_bytes()).map_err(invalid)?;
+    let result = (|| {
+        let secrets = Secrets::parse(&pending.private_material)?;
+        let signing = P256SigningKey::from_bytes(secrets.signing()).map_err(invalid)?;
+        if request.account_id != pending.account_id
+            || request.personal_vault_id != pending.personal_vault_id
+            || request.device_certificate.device_id != store.device_id()
+            || request.device_certificate.signing_public_key != signing.public_key_sec1()
+        {
+            return Err(PersonalServerError::Identity);
+        }
+        request.invitation_token.copy_from_slice(invitation.token.as_bytes());
+        request.device_signature = PersonalEnrollmentContext::new(
+            &pending.origin,
+            &request.invitation_token,
+            request.account_id,
+            request.personal_vault_id,
+            PersonalEnrollmentArtifacts {
+                account_signing_public_key: &request.account_signing_public_key,
+                account_kem_public_key: &request.account_kem_public_key,
+                key_bundle_update: &request.key_bundle_update.to_cbor().map_err(invalid)?,
+                device_certificate: &request.device_certificate.encode().map_err(invalid)?,
+                wrapped_personal_vault_key: &request.wrapped_personal_vault_key,
+            },
+        )
+        .map_err(invalid)?
+        .sign(&signing)
+        .map_err(invalid)?;
+        request.to_json().map(SecretVec::new).map_err(invalid)
+    })();
+    request.invitation_token.zeroize();
+    result
 }
 
 pub(super) fn prepare(

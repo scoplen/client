@@ -138,6 +138,21 @@ impl Store {
         Ok(())
     }
 
+    pub(crate) fn replace_personal_invitation(
+        &self,
+        expected: &SecretVec,
+        replacement: &SecretVec,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn();
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        Ok(conn.execute(
+            "UPDATE personal_server SET enrollment_request = ?1, enrollment_attempted = 0
+             WHERE singleton = 1 AND enrollment_attempted = 1 AND recovery_confirmed = 1
+             AND enrollment_request = ?2 AND access_token IS NULL",
+            params![replacement.as_bytes(), expected.as_bytes()],
+        )? == 1)
+    }
+
     pub(crate) fn save_personal_tokens(
         &self,
         access: &[u8],
@@ -146,7 +161,7 @@ impl Store {
         refresh_expires_at: u64,
     ) -> Result<(), StoreError> {
         self.conn().execute(
-            "UPDATE personal_server SET access_token = ?1, refresh_token = ?2, enrollment_request = NULL,
+            "UPDATE personal_server SET access_token = ?1, refresh_token = ?2,
                 access_expires_at = ?3, refresh_expires_at = ?4 WHERE singleton = 1",
             params![
                 access,

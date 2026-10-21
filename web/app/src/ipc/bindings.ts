@@ -135,6 +135,8 @@ export const commands = {
 	submitPersonalEnrollment: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("submit_personal_enrollment")),
 	/**  Retry fresh device authentication without replaying invitation redemption. */
 	authenticatePersonalServer: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("authenticate_personal_server")),
+	/**  Import a same-origin invitation after fresh authentication, retaining the existing identity. */
+	updatePersonalInvitation: (invitationUrl: string) => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("update_personal_invitation", { invitationUrl })),
 };
 
 /** Events */

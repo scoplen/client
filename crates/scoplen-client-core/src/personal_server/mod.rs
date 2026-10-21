@@ -251,7 +251,7 @@ impl PersonalServer {
                 return Err(PersonalServerError::InvalidResponse);
             }
         }
-        authenticate(&store, &pending, transport).await?;
+        authenticate(&store, &pending, transport).await?.require_authenticated()?;
         status(&store)
     }
 
@@ -267,8 +267,40 @@ impl PersonalServer {
         }
         store.clear_personal_tokens().map_err(storage)?;
         let transport = self.transport.as_ref().map_err(|error| *error)?;
-        authenticate(&store, &pending, transport).await?;
+        authenticate(&store, &pending, transport).await?.require_authenticated()?;
         status(&store)
+    }
+
+    /// Authenticate the retained identity before importing a same-origin replacement invitation.
+    /// Importing never redeems it; a separate explicit submit is required.
+    pub async fn update_invitation(
+        &self,
+        store: Arc<Store>,
+        invitation_url: Zeroizing<String>,
+    ) -> Result<PersonalServerStatus, PersonalServerError> {
+        let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
+        let pending = record(&store)?;
+        let invitation = Invitation::parse(&invitation_url)?;
+        if invitation.origin != pending.origin {
+            return Err(PersonalServerError::Invitation);
+        }
+        if !pending.enrollment_attempted {
+            return Err(PersonalServerError::AlreadyConfigured);
+        }
+        store.clear_personal_tokens().map_err(storage)?;
+        let transport = self.transport.as_ref().map_err(|error| *error)?;
+        match authenticate(&store, &pending, transport).await? {
+            AuthenticationOutcome::Authenticated => status(&store),
+            AuthenticationOutcome::DeviceDenied => {
+                let replacement = identity::replace_invitation(&store, &pending, invitation)?;
+                let expected =
+                    pending.enrollment_request.as_ref().ok_or(PersonalServerError::Identity)?;
+                if !store.replace_personal_invitation(expected, &replacement).map_err(storage)? {
+                    return Err(PersonalServerError::Storage);
+                }
+                status(&store)
+            }
+        }
     }
 }
 
@@ -345,11 +377,25 @@ impl Invitation {
     }
 }
 
+enum AuthenticationOutcome {
+    Authenticated,
+    DeviceDenied,
+}
+
+impl AuthenticationOutcome {
+    fn require_authenticated(self) -> Result<(), PersonalServerError> {
+        match self {
+            Self::Authenticated => Ok(()),
+            Self::DeviceDenied => Err(PersonalServerError::Authentication),
+        }
+    }
+}
+
 async fn authenticate(
     store: &Store,
     pending: &PersonalRecord,
     transport: &Transport,
-) -> Result<(), PersonalServerError> {
+) -> Result<AuthenticationOutcome, PersonalServerError> {
     let request =
         AuthChallengeRequest::new(store.device_id()).map_err(|_| PersonalServerError::Identity)?;
     let response = transport
@@ -383,6 +429,16 @@ async fn authenticate(
         )
         .await?;
     if response.status != 200 {
+        if response.status == 401
+            && response.problem_json
+            && let Ok(problem) =
+                serde_json::from_slice::<scoplen_api::ProblemDetails>(response.body.as_bytes())
+            && problem.status == 401
+            && problem.code.as_str() == "auth.authentication_required"
+            && !problem.retryable
+        {
+            return Ok(AuthenticationOutcome::DeviceDenied);
+        }
         return Err(PersonalServerError::Authentication);
     }
     let tokens = AuthTokenResponse::from_json(response.text()?)
@@ -424,7 +480,8 @@ async fn authenticate(
             access_expires,
             refresh_expires,
         )
-        .map_err(storage)
+        .map_err(storage)?;
+    Ok(AuthenticationOutcome::Authenticated)
 }
 
 fn save_private_file(path: &Path, contents: &[u8]) -> Result<(), PersonalServerError> {
