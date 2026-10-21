@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added first-device Personal account setup in Settings, with Rust-owned invitation parsing,
+  encrypted pending identity, native recovery-file export and explicit confirmation, bounded
+  verified HTTPS, and fresh device authentication after uncertain enrollment. The interface
+  uses localized typed errors and never receives recovery keys, private keys, or access tokens.
+  Inventory sync remains unavailable.
+
 - Added Rust-owned automatic terminal reconnect after confirmed network loss, with
   bounded backoff, fresh trust and credential preparation, a Stop reconnecting action,
   retained displayed output, and a new transport and Recent entry for every attempt.

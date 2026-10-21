@@ -14,14 +14,14 @@ import { useI18n } from "./i18n";
 import { languageChoices, useLanguage, type LanguageChoice } from "./language";
 import type { Status } from "./ipc/bindings";
 import { PassphraseSettings } from "./local-data";
+import { PersonalSettings } from "./personal-settings";
 import { TerminalSettings } from "./terminal-settings";
 
-export type SettingsSection = "appearance" | "terminal" | "data";
-const sections: SettingsSection[] = ["appearance", "terminal", "data"];
+export type SettingsSection = "appearance" | "terminal" | "data" | "personal";
+const sections: SettingsSection[] = ["appearance", "terminal", "data", "personal"];
 
 /**
- * Settings, in three places: how the interface looks, how the terminal
- * looks, and how this device's data is protected.
+ * Appearance, terminal, local protection, and optional Personal server access.
  */
 export function SettingsView({
   status,
@@ -41,25 +41,53 @@ export function SettingsView({
         <div
           role="tablist"
           aria-label={t("settings.title")}
-          className="mt-5 inline-flex gap-1 rounded-full bg-inset p-1"
+          className="mt-5 flex w-fit max-w-full flex-wrap gap-1 rounded-2xl bg-inset p-1"
         >
           {sections.map((id) => (
             <button
               key={id}
+              id={`settings-tab-${id}`}
               type="button"
               role="tab"
+              tabIndex={section === id ? 0 : -1}
               aria-selected={section === id}
+              aria-controls="settings-panel"
               onClick={() => setSection(id)}
+              onKeyDown={(event) => {
+                const index = sections.indexOf(id);
+                const next =
+                  event.key === "Home"
+                    ? sections[0]
+                    : event.key === "End"
+                      ? sections.at(-1)
+                      : event.key === "ArrowRight"
+                        ? sections[(index + 1) % sections.length]
+                        : event.key === "ArrowLeft"
+                          ? sections[(index + sections.length - 1) % sections.length]
+                          : undefined;
+                if (!next) return;
+                event.preventDefault();
+                setSection(next);
+                document.getElementById(`settings-tab-${next}`)?.focus();
+              }}
               className="rounded-full border-(length:--scoplen-border-width) border-transparent px-4 py-1.5 text-sm text-muted-foreground transition-[background-color,color,box-shadow] duration-(--duration-state) hover:text-foreground aria-selected:border-border aria-selected:bg-raised aria-selected:font-medium aria-selected:text-foreground aria-selected:shadow-(--scoplen-shadow-control)"
             >
               {t(`settings.section.${id}`)}
             </button>
           ))}
         </div>
-        <div className="scoplen-rise" key={section}>
+        <div
+          className="scoplen-rise"
+          key={section}
+          id="settings-panel"
+          role="tabpanel"
+          aria-labelledby={`settings-tab-${section}`}
+          tabIndex={0}
+        >
           {section === "appearance" ? <Appearance /> : null}
           {section === "terminal" ? <TerminalSettings /> : null}
           {section === "data" ? <PassphraseSettings status={status} onStatus={onStatus} /> : null}
+          {section === "personal" ? <PersonalSettings /> : null}
         </div>
       </div>
     </main>

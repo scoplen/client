@@ -101,6 +101,61 @@ export const en = {
   "settings.section.appearance": "Appearance",
   "settings.section.terminal": "Terminal",
   "settings.section.data": "Local data",
+  "settings.section.personal": "Personal account",
+  "settings.personal.title": "Connect a Personal account",
+  "settings.personal.body":
+    "Use an invitation from your own Scoplen server. Local SSH access stays available without an account.",
+  "settings.personal.loading": "Reading this device’s account…",
+  "settings.personal.reload": "Reload account status",
+  "settings.personal.error.storage":
+    "The encrypted local data could not be reached. Unlock it or reopen Scoplen, then reload the account status.",
+  "settings.personal.error.busy": "Another account operation is running. Wait for it to finish, then try again.",
+  "settings.personal.error.invitation":
+    "This invitation link is not valid. Paste the complete HTTPS Personal invitation from your server operator.",
+  "settings.personal.error.deviceName":
+    "Enter a device name of up to 128 UTF-8 bytes, without control characters. Chinese characters use more than one byte.",
+  "settings.personal.error.alreadyConfigured":
+    "This device already has a prepared account. Reload its status to continue with the saved identity.",
+  "settings.personal.error.identity":
+    "The account identity could not be read or prepared. Existing keys were retained. Reopen Scoplen and try again.",
+  "settings.personal.error.recoveryRequired":
+    "Save your recovery file and confirm that you have kept it safely before joining.",
+  "settings.personal.error.recoverySave":
+    "The recovery file could not be saved. Choose a new filename in a private location and try again; existing files are not overwritten.",
+  "settings.personal.error.alreadyAttempted":
+    "Joining was already attempted. Authenticate this device with its saved identity to check the result.",
+  "settings.personal.error.notConfigured": "Prepare your Personal invitation before continuing.",
+  "settings.personal.error.network":
+    "The server exchange did not finish. Check your connection and authenticate this device to confirm access. Keep your recovery file.",
+  "settings.personal.error.connectionBeforeRequest":
+    "The server could not be reached before a request was sent. Check its address, certificate, and your connection, then try the action below.",
+  "settings.personal.error.authentication":
+    "The server did not authenticate this device. Ask your operator to check enrollment, then authenticate again with the saved identity.",
+  "settings.personal.error.invalidResponse":
+    "The server response could not be verified. No new credentials were accepted. Ask your operator to check this server, then authenticate again.",
+  "settings.personal.invitation": "Invitation link",
+  "settings.personal.invitationHint":
+    "Paste the complete link from your server operator. It is hidden and cleared when you continue.",
+  "settings.personal.deviceName": "Device name",
+  "settings.personal.prepare": "Prepare account",
+  "settings.personal.working": "Working…",
+  "settings.personal.server": "Server",
+  "settings.personal.recoveryTitle": "Save your recovery key",
+  "settings.personal.recoveryBody":
+    "Keep this file private and offline, separate from this device. Without another enrolled device or this key, you cannot recover your Personal data. No account request has been sent yet.",
+  "settings.personal.saveRecovery": "Save recovery file",
+  "settings.personal.saveAgain": "Save recovery file again",
+  "settings.personal.recoveryConfirm": "I have saved the recovery file somewhere safe, separate from this device.",
+  "settings.personal.continue": "Confirm recovery file",
+  "settings.personal.readyBody":
+    "Check that this is the server you intend to join. Joining sends your invitation, public device identity, and encrypted account material to this server.",
+  "settings.personal.join": "Join this server",
+  "settings.personal.unconfirmedBody":
+    "Enrollment has been attempted, but this device’s access is not confirmed. Authenticate with the saved identity to check it. Keep your recovery file.",
+  "settings.personal.authenticate": "Authenticate this device",
+  "settings.personal.authenticated": "This device is authenticated",
+  "settings.personal.authenticatedBody":
+    "Your account identity is ready. Inventory synchronization is not available in this build; hosts and credentials remain local.",
   "settings.terminal.title": "Terminal colors",
   "settings.terminal.body": "Used by every session. Change any color; your changes become your own scheme.",
   "settings.terminal.scheme": "Scheme",
