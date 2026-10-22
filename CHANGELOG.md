@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added a Rust-only Personal sync bootstrap using real TLS 1.3 / HTTP/2 session and key
+  requests with a fresh DPoP proof for each request. Verified account/device/token bindings,
+  certificates, revocations, account key wraps, recovery material, and the retained Personal
+  vault key must all agree before one SQLCipher transaction saves the snapshot. Restarts
+  reverify the saved artifacts offline. Account or vault rotation is reported separately
+  without replacing old keys; inventory transfer and frontend wiring remain later outcomes.
+
 - Added first-device Personal account setup in Settings, with Rust-owned invitation parsing,
   encrypted pending identity, native recovery-file export and explicit confirmation, bounded
   verified HTTPS, and fresh device authentication after uncertain enrollment. The interface

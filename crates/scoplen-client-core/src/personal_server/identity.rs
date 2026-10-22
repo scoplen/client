@@ -28,6 +28,21 @@ impl<'a> Secrets<'a> {
     pub fn signing(&self) -> &[u8] {
         &self.0[1..33]
     }
+    pub fn device_kem(&self) -> &[u8] {
+        &self.0[33..65]
+    }
+    pub fn ark(&self) -> &[u8] {
+        &self.0[65..97]
+    }
+    pub fn account_signing(&self) -> &[u8] {
+        &self.0[97..129]
+    }
+    pub fn account_kem(&self) -> &[u8] {
+        &self.0[129..161]
+    }
+    pub fn vault(&self) -> &[u8] {
+        &self.0[161..193]
+    }
     pub fn recovery(&self) -> &[u8] {
         &self.0[193..225]
     }

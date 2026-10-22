@@ -6,7 +6,10 @@
 //! the retained identity with a new challenge instead of replaying an invitation.
 
 mod identity;
+mod sync;
 mod transport;
+
+pub use sync::{PersonalSyncBootstrap, PersonalSyncError};
 
 use std::{fs::OpenOptions, io::Write as _, path::Path, sync::Arc};
 
@@ -445,19 +448,7 @@ async fn authenticate(
         .map_err(|_| PersonalServerError::InvalidResponse)?;
     let access = Zeroizing::new(tokens.access_token);
     let refresh = Zeroizing::new(tokens.refresh_token);
-    let jwks = transport.get(&pending.origin, "/.well-known/jwks.json", 4_096).await?;
-    if jwks.status != 200 {
-        return Err(PersonalServerError::InvalidResponse);
-    }
-    let jwks = AuthJwks::from_json(jwks.body.as_bytes())
-        .map_err(|_| PersonalServerError::InvalidResponse)?;
-    let mut trusted = TrustedDeviceAccessTokenKeys::new(&pending.origin)
-        .map_err(|_| PersonalServerError::Identity)?;
-    for key in jwks.keys() {
-        trusted
-            .insert(key.kid(), key.public_key())
-            .map_err(|_| PersonalServerError::InvalidResponse)?;
-    }
+    let trusted = trusted_token_keys(transport, &pending.origin).await?;
     let current_time = now()?;
     let verified = DeviceAccessToken::parse(&access)
         .and_then(|token| token.verify(&trusted, current_time))
@@ -482,6 +473,26 @@ async fn authenticate(
         )
         .map_err(storage)?;
     Ok(AuthenticationOutcome::Authenticated)
+}
+
+async fn trusted_token_keys(
+    transport: &Transport,
+    origin: &str,
+) -> Result<TrustedDeviceAccessTokenKeys, PersonalServerError> {
+    let jwks = transport.get(origin, "/.well-known/jwks.json", 4_096).await?;
+    if jwks.status != 200 {
+        return Err(PersonalServerError::InvalidResponse);
+    }
+    let jwks = AuthJwks::from_json(jwks.body.as_bytes())
+        .map_err(|_| PersonalServerError::InvalidResponse)?;
+    let mut trusted =
+        TrustedDeviceAccessTokenKeys::new(origin).map_err(|_| PersonalServerError::Identity)?;
+    for key in jwks.keys() {
+        trusted
+            .insert(key.kid(), key.public_key())
+            .map_err(|_| PersonalServerError::InvalidResponse)?;
+    }
+    Ok(trusted)
 }
 
 fn save_private_file(path: &Path, contents: &[u8]) -> Result<(), PersonalServerError> {

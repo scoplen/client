@@ -4275,6 +4275,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-util",
+ "h2",
  "http",
  "http-body",
  "http-body-util",
@@ -4752,6 +4753,9 @@ name = "scoplen-client-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
+ "h2",
+ "http",
  "rcgen",
  "reqwest",
  "rusqlite",

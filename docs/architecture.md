@@ -118,6 +118,30 @@ timeouts, verifies TLS, and has no redirect, proxy, cookie, or automatic POST re
 Inventory synchronization, pairing, refresh rotation, and hardware device signing remain separate
 outcomes.
 
+`PersonalServer::bootstrap_sync` is the Rust-only K-4 first-device boundary. It revalidates the
+retained access token against same-origin JWKS, its account/device ids and device thumbprint,
+expiry, and both `keys:read` and `sync:read` scopes. Its separate HTTP/2-only client requires
+TLS 1.3, verifies platform trust, and sends canonical CBOR with a fresh DPoP proof bound to
+each method, URI, token, and signing key. No redirects, cookies, proxies, or retries are used.
+Each complete response is independently capped at 4 MiB; server-announced quotas never
+change this budget. Session descriptors, including unknown kinds, are retained verbatim.
+
+The bootstrap reads `POST /sync/v1/session`, `GET /sync/v1/keys`, and the retained Personal
+vault's keys. It verifies the retained enrollment's account signature, signed device list and
+revocations, exact local certificate, device ARK wrap, encrypted account signing/KEM keys,
+recovery ARK, and Personal epoch key using shared `scoplen-crypto` constructions. Decrypted
+material must equal the retained private material. Only account revision 1 and Personal
+epoch 1 are supported here; a newer revision/epoch or pending rotation returns the distinct
+`RotationRequired` result and preserves the old snapshot. Other vaults are metadata only.
+
+Migration 5 adds a single encrypted `personal_sync` snapshot with the raw session/account/vault
+responses. A FULL-synchronous transaction publishes all three only while the original
+identity, enrollment request, device keys, unexpired access token, and prior snapshot generation
+still match. A competing authentication, invitation update, or bootstrap cannot publish a
+stale result. `load_sync_bootstrap` decodes and cryptographically revalidates all artifacts on
+restart without requiring network or an unexpired token. Its secret key handle stays in Rust;
+there is no IPC export or automatic inventory migration.
+
 ## Tier-0 inventory and OpenSSH onboarding
 
 Migration 3 adds `implicit_objects`, an encrypted, device-local visibility marker for tier-0 AccessProfiles and Credentials. Creating a host marks its login and credential implicit in the same transaction. Inspecting a host promotes its login; inspecting a private-key login promotes that credential, while password and agent credentials remain implicit. Using the same private key for a second host reuses and promotes the credential in the host creation transaction. The marker does not replicate and does not change the object format. `areas()` reports Keys only after a private-key credential becomes explicit.
