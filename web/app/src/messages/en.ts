@@ -153,6 +153,14 @@ export const en = {
   "settings.personal.unconfirmedBody":
     "Enrollment has been attempted, but this device’s access is not confirmed. Authenticate with the saved identity to check it. Keep your recovery file.",
   "settings.personal.authenticate": "Authenticate this device",
+  "settings.personal.replaceInvitation": "Use a new invitation",
+  "settings.personal.cancelReplacement": "Cancel new invitation",
+  "settings.personal.newInvitation": "New invitation link",
+  "settings.personal.newInvitationHint":
+    "Use an invitation for the server shown above. The link is hidden and cleared when you submit.",
+  "settings.personal.replacementBody":
+    "Scoplen first checks access with the saved identity. If access is confirmed, the new invitation is not used. A verified denial is required before saving it. Your identity and recovery file stay the same; joining is a separate action.",
+  "settings.personal.checkInvitation": "Check and use invitation",
   "settings.personal.authenticated": "This device is authenticated",
   "settings.personal.authenticatedBody":
     "Your account identity is ready. Inventory synchronization is not available in this build; hosts and credentials remain local.",
