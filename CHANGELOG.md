@@ -4,18 +4,28 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added a Rust-only first-device Personal inventory roundtrip with explicit object selection,
+  atomic immutable local adoption copies, a durable encrypted outbox, authenticated envelope
+  decryption and field merge, cursor/ack persistence, bounded CAS conflict retries, and safe
+  pull-before-write recovery after an uncertain commit. Restoring adoption copies creates new
+  local objects and remaps selected references without uploading them or copying device secrets.
+  The API remains separate from account setup and requires a future selection UI. Cursor expiry,
+  unsupported rotations, and unverified trust provenance preserve local data and stop explicitly.
+- Upgraded all shared Rust pins to `proto@b52ee266`, including complete K-1 object-reference
+  discovery for explicit adoption, and aligned UUID at 1.28.0.
+
 - Added a Rust-only Personal sync bootstrap using real TLS 1.3 / HTTP/2 session and key
   requests with a fresh DPoP proof for each request. Verified account/device/token bindings,
   certificates, revocations, account key wraps, recovery material, and the retained Personal
   vault key must all agree before one SQLCipher transaction saves the snapshot. Restarts
   reverify the saved artifacts offline. Account or vault rotation is reported separately
-  without replacing old keys; inventory transfer and frontend wiring remain later outcomes.
+  without replacing old keys; inventory frontend wiring remains a later outcome.
 
 - Added first-device Personal account setup in Settings, with Rust-owned invitation parsing,
   encrypted pending identity, native recovery-file export and explicit confirmation, bounded
   verified HTTPS, and fresh device authentication after uncertain enrollment. The interface
   uses localized typed errors and never receives recovery keys, private keys, or access tokens.
-  Inventory sync remains unavailable.
+  Inventory sync is available only through a separate explicit Rust intent.
 - Updated `rustls-webpki` to 0.103.16 to reject distrusted certificate intermediates
   covered by RUSTSEC-2026-0382.
 - Added the Rust/IPC path for explicit same-origin replacement of a pending Personal invitation.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Bounded HTTPS with platform trust, no redirects, cookies, proxies, or automatic retries.
 
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use reqwest::{Client, Method, header};
 use scoplen_crypto::{DpopProof, SecretVec, validate_server_origin};
@@ -19,6 +19,8 @@ pub(super) struct Response {
     pub status: u16,
     pub body: SecretVec,
     pub problem_json: bool,
+    pub problem_cbor: bool,
+    pub date: Option<(SystemTime, Instant)>,
 }
 
 impl Response {
@@ -128,8 +130,17 @@ impl Transport {
             return Err(PersonalServerError::InvalidResponse);
         }
         let status = response.status().as_u16();
+        let problem_cbor =
+            response.headers().get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok())
+                == Some("application/problem+cbor");
+        let date = response
+            .headers()
+            .get(header::DATE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| httpdate::parse_http_date(value).ok())
+            .map(|date| (date, Instant::now()));
         let body = read_body(response, limit).await?;
-        Ok(Response { status, body, problem_json: false })
+        Ok(Response { status, body, problem_json: false, problem_cbor, date })
     }
 
     async fn exchange(
@@ -186,7 +197,7 @@ impl Transport {
             return Err(PersonalServerError::InvalidResponse);
         }
         let body = read_body(response, limit).await?;
-        Ok(Response { status, body, problem_json })
+        Ok(Response { status, body, problem_json, problem_cbor: false, date: None })
     }
 }
 

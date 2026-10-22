@@ -18,16 +18,16 @@ repository = "https://github.com/scoplen/client"
 [workspace.dependencies]
 scoplen-client-core = { path = "crates/scoplen-client-core" }
 scoplen-client-platform = { path = "crates/scoplen-client-platform" }
-scoplen-ssh = { git = "https://github.com/scoplen/proto.git", rev = "f2b68f09a9429a9d813d7a7e3f3a46f0ccf533a2" }
-scoplen-api = { git = "https://github.com/scoplen/proto.git", rev = "f2b68f09a9429a9d813d7a7e3f3a46f0ccf533a2" }
+scoplen-ssh = { git = "https://github.com/scoplen/proto.git", rev = "b52ee266f1d37c655cbc16a87d18d441034137b1" }
+scoplen-api = { git = "https://github.com/scoplen/proto.git", rev = "b52ee266f1d37c655cbc16a87d18d441034137b1" }
 ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["ed25519", "encryption", "getrandom", "p256", "p384", "p521", "rsa", "std"] }
 base64 = "0.22.1"
 rcgen = { version = "0.14.7", default-features = false, features = ["ring", "crypto"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "http2"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl"] }
-scoplen-crypto = { git = "https://github.com/scoplen/proto.git", rev = "f2b68f09a9429a9d813d7a7e3f3a46f0ccf533a2" }
-scoplen-model = { git = "https://github.com/scoplen/proto.git", rev = "f2b68f09a9429a9d813d7a7e3f3a46f0ccf533a2" }
+scoplen-crypto = { git = "https://github.com/scoplen/proto.git", rev = "b52ee266f1d37c655cbc16a87d18d441034137b1" }
+scoplen-model = { git = "https://github.com/scoplen/proto.git", rev = "b52ee266f1d37c655cbc16a87d18d441034137b1" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10.9"
@@ -43,7 +43,7 @@ tempfile = "3.23.0"
 tracing = "0.1.41"
 tokio = { version = "1.17.0", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-uuid = { version = "=1.16.0", features = ["v7"] }
+uuid = { version = "=1.28.0", features = ["v7"] }
 zeroize = "1.8.1"
 
 [workspace.lints.rust]
@@ -54,4 +54,4 @@ missing_docs = "warn"
 all = { level = "warn", priority = -1 }
 
 [patch.crates-io]
-pageant = { git = "https://github.com/scoplen/proto.git", rev = "f2b68f09a9429a9d813d7a7e3f3a46f0ccf533a2" }
+pageant = { git = "https://github.com/scoplen/proto.git", rev = "b52ee266f1d37c655cbc16a87d18d441034137b1" }

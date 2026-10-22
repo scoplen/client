@@ -9,7 +9,9 @@ mod identity;
 mod sync;
 mod transport;
 
-pub use sync::{PersonalSyncBootstrap, PersonalSyncError};
+pub use sync::{
+    PersonalInventoryIntent, PersonalInventoryProgress, PersonalSyncBootstrap, PersonalSyncError,
+};
 
 use std::{fs::OpenOptions, io::Write as _, path::Path, sync::Arc};
 

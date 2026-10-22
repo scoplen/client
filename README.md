@@ -111,8 +111,8 @@ session-management outcome.
 
 Settings → Personal account can prepare a Personal invitation from a user-selected HTTPS
 Scoplen server, save and confirm a recovery file, join, and authenticate the first device.
-The same pending identity is retained across restarts and uncertain responses. This build
-does not yet synchronize inventory, pair another device, or rotate refresh credentials.
+The same pending identity is retained across restarts and uncertain responses. The desktop
+does not yet expose inventory synchronization, pair another device, or rotate refresh credentials.
 Existing local SSH data is not uploaded by account setup.
 
 When enrollment remains unconfirmed, Use a new invitation accepts a link for the same server.
@@ -127,6 +127,24 @@ and atomically saves the complete result in SQLCipher for offline restart. This 
 supports account revision 1 and Personal epoch 1. A pending or newer rotation returns a
 distinct unsupported-rotation error while keeping the existing keys. The bootstrap has no
 frontend command yet and does not pull or upload inventory.
+
+The Rust-only `sync_personal_inventory` API implements a bounded first-device Personal
+roundtrip. Its typed intent names the retained vault and exact local object ids to adopt;
+account setup never supplies this intent. Adoption atomically retains immutable encrypted
+local copies, moves only the selected objects, and queues their initial writes. Existing
+references must be selected explicitly; unselected and subsequently created objects stay
+local. Later edits and deletions of adopted objects remain queued across offline restarts.
+The core pulls authenticated encrypted pages, merges and saves their cursor before acknowledging,
+and encrypts queued K-1 objects with the verified Personal key before compare-and-swap writes.
+Device-bound private keys, secrets, and keystore handles never enter these envelopes.
+Conflicts merge and retry within a fixed budget. Unknown write outcomes retain the queue and
+require a fresh pull on the next explicit cycle. Immutable adoption copies can be restored as
+fresh local objects, preserving the original copies and leaving remote state unchanged.
+
+This API has no inventory IPC or selection UI yet. Cursor expiry returns an explicit
+reconciliation-required error; full reconciliation, automatic polling, pairing, key rotation,
+and the complete host-key trust replication policy remain later outcomes. Trust records with
+missing or unverified same-user provenance are retained locally and require review before sync.
 
 ## What it does not do
 
@@ -222,7 +240,7 @@ SPL_SMOKE_TEST=1 target/release/bundle/macos/Scoplen.app/Contents/MacOS/scoplen
 Scoplen keeps its local data in the application data directory (`~/Library/Application Support/com.scoplen.client` on macOS, `%APPDATA%\com.scoplen.client` on Windows). The store is a SQLCipher database encrypted with a random 256-bit key. That key is held in the macOS Keychain (only on this device, after the first unlock) or, on Windows, wrapped by a TPM-held key or by DPAPI for the current user. With a local passphrase, the key is additionally wrapped with a key derived from the passphrase by Argon2id; forgetting the passphrase makes the data unrecoverable. If the key is lost, Scoplen keeps the unreadable store under a new name and can start with empty data.
 
 Network access follows explicit SSH actions, Personal enrollment/authentication, or the explicit
-Rust sync bootstrap call. Personal
+Rust sync bootstrap or inventory intent. Personal
 setup sends the invitation token, public identity metadata, signed certificates, and encrypted
 account material only to the selected origin. Its HTTPS transport verifies certificates,
 rejects redirects, and bounds exchanges and response bodies. Device signing/KEM keys currently
@@ -230,7 +248,7 @@ use software implementations protected by SQLCipher; hardware device signing is 
 The recovery key is exported as a plaintext file only at the user's chosen location: Unix files
 are created with mode 0600, while Windows uses the destination directory's inherited ACLs.
 Keep that file private and offline. Access/refresh tokens and secret keys never cross IPC into the frontend. There is
-no inventory sync, background network activity, or telemetry in this build.
+no automatic inventory upload, background network activity, or telemetry in this build.
 
 ## Security
 
