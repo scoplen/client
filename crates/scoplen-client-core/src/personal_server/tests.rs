@@ -22,6 +22,8 @@ use tokio_rustls::TlsAcceptor;
 
 use super::*;
 
+mod reinvitation;
+
 const TOKEN: [u8; 32] = [42; 32];
 
 fn store(dir: &tempfile::TempDir) -> Arc<Store> {
@@ -241,6 +243,7 @@ struct FixtureState {
     enrolled: StdMutex<Option<PersonalEnrollmentRequest>>,
     enrollments: AtomicUsize,
     challenges: AtomicUsize,
+    device_exchanges: AtomicUsize,
     nonces: StdMutex<Vec<String>>,
     lose_enrollment_reply: AtomicBool,
     reject_auth: AtomicBool,
@@ -248,6 +251,11 @@ struct FixtureState {
     mismatch_enrollment: AtomicBool,
     stall_enrollment: AtomicBool,
     tamper_access_token: AtomicBool,
+    challenge_response: StdMutex<Option<String>>,
+    device_response: StdMutex<Option<String>>,
+    expected_device_key: StdMutex<Option<Vec<u8>>>,
+    expected_invitation: StdMutex<Option<[u8; 32]>>,
+    stall_device: AtomicBool,
 }
 
 struct Fixture {
@@ -334,6 +342,8 @@ impl Fixture {
                     let path = headers.lines().next().unwrap().split(' ').nth(1).unwrap();
                     if path == "/api/v1/auth/personal-enroll"
                         && state.stall_enrollment.load(Ordering::SeqCst)
+                        || path == "/api/v1/auth/device"
+                            && state.stall_device.load(Ordering::SeqCst)
                     {
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         return;
@@ -381,7 +391,8 @@ fn fixture_response(state: &FixtureState, origin: &str, path: &str, body: &[u8])
         "/api/v1/auth/personal-enroll" => {
             state.enrollments.fetch_add(1, Ordering::SeqCst);
             let request = PersonalEnrollmentRequest::from_json(body).unwrap();
-            assert_eq!(request.invitation_token, TOKEN);
+            let expected_token = state.expected_invitation.lock().unwrap().unwrap_or(TOKEN);
+            assert_eq!(request.invitation_token, expected_token);
             request.device_certificate.verify(&request.account_signing_public_key).unwrap();
             scoplen_crypto::ed25519_verify(
                 &request.account_signing_public_key,
@@ -391,7 +402,7 @@ fn fixture_response(state: &FixtureState, origin: &str, path: &str, body: &[u8])
             .unwrap();
             PersonalEnrollmentContext::new(
                 origin,
-                &TOKEN,
+                &expected_token,
                 request.account_id,
                 request.personal_vault_id,
                 PersonalEnrollmentArtifacts {
@@ -428,6 +439,9 @@ fn fixture_response(state: &FixtureState, origin: &str, path: &str, body: &[u8])
                 assert_eq!(request.device_id, enrolled.device_certificate.device_id);
             }
             let index = state.challenges.fetch_add(1, Ordering::SeqCst) + 1;
+            if let Some(response) = &*state.challenge_response.lock().unwrap() {
+                return Some(response.clone());
+            }
             let nonce = format!("{index:064x}");
             state.nonces.lock().unwrap().push(nonce.clone());
             Some(json_response(
@@ -441,24 +455,33 @@ fn fixture_response(state: &FixtureState, origin: &str, path: &str, body: &[u8])
         }
         "/api/v1/auth/device" => {
             let request = AuthDeviceRequest::from_json(std::str::from_utf8(body).unwrap()).unwrap();
-            if state.reject_auth.load(Ordering::SeqCst) {
-                return Some(json_response(401, b"{}"));
-            }
-            let enrolled = state.enrolled.lock().unwrap();
-            let enrolled = enrolled.as_ref().unwrap();
+            state.device_exchanges.fetch_add(1, Ordering::SeqCst);
             assert_eq!(Some(&request.nonce), state.nonces.lock().unwrap().last());
             let signature: Vec<u8> = (0..128)
                 .step_by(2)
                 .map(|index| u8::from_str_radix(&request.signature[index..index + 2], 16).unwrap())
                 .collect();
-            p256_verify(
-                &enrolled.device_certificate.signing_public_key,
-                &DeviceAuthContext::new(origin, &request.nonce, request.device_id)
-                    .unwrap()
-                    .signature_input(),
-                &signature,
-            )
-            .unwrap();
+            let enrolled = state.enrolled.lock().unwrap();
+            let expected_key = state.expected_device_key.lock().unwrap();
+            if let Some(key) = expected_key.as_ref().or_else(|| {
+                enrolled.as_ref().map(|record| &record.device_certificate.signing_public_key)
+            }) {
+                p256_verify(
+                    key,
+                    &DeviceAuthContext::new(origin, &request.nonce, request.device_id)
+                        .unwrap()
+                        .signature_input(),
+                    &signature,
+                )
+                .unwrap();
+            }
+            if let Some(response) = &*state.device_response.lock().unwrap() {
+                return Some(response.clone());
+            }
+            if state.reject_auth.load(Ordering::SeqCst) {
+                return Some(json_response(401, b"{}"));
+            }
+            let enrolled = enrolled.as_ref().unwrap();
             let mut trusted = TrustedDeviceAccessTokenKeys::new(origin).unwrap();
             trusted.insert("fixture", &signing.public_key()).unwrap();
             let issued_at = now().unwrap();

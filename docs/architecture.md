@@ -84,6 +84,40 @@ After every committed change the shell sends the frontend a `storeChanged` event
 
 `SQLCipher` is built with a vendored, statically linked OpenSSL on both platforms, so a build never links a system OpenSSL by accident.
 
+## Personal account identity
+
+Migration 4 retains the chosen canonical HTTPS origin, generated account/device/vault identity,
+software private keys, recovery key, and exact signed enrollment artifacts inside SQLCipher before
+network access. Recovery export writes directly from Rust through a native picker; joining requires
+a separate explicit confirmation that the recovery file is safe. The frontend receives only public
+status and typed errors. Account setup does not move or upload existing local inventory.
+
+An enrollment request is durably claimed before sending. A connector failure known to precede
+HTTP transmission restores readiness; a timeout, denial, or uncertain response retains the claim
+and requires fresh challenge/device authentication. Authentication verifies the exact selected
+issuer's JWKS, account/device identity, device-key binding, and access-token expiry. The original
+certificate, K-4 update, and wraps remain stored after authentication; none is regenerated as a
+recovery shortcut.
+
+`update_personal_invitation` implements D-109. It first rejects malformed or different-origin
+links, then obtains a fresh challenge and signs a device request with the retained key. Verified
+authentication ends recovery without changing or redeeming the replacement invitation. Only a
+noncached, no-store `401 application/problem+json` response to that device request, parsed as
+the complete shared RFC 9457 problem with `status: 401`, exact `auth.authentication_required`,
+and `retryable: false`, allows replacement. A challenge denial, catch-all authentication error,
+explicit revocation, unknown code, malformed or oversized body, redirect, transport failure,
+or invalid token leaves the old request pending. Neither value of `changed` proves enrollment
+success or failure.
+
+Replacement changes only the token and its D-101 device possession signature, retains all ids,
+keys, recovery confirmation, certificate, bundle, and wraps, and atomically restores Join readiness
+only if the saved request still matches and no verified credentials have appeared. Import sends
+no invitation token; a separate explicit Join submits the new request. Missing or inconsistent
+saved artifacts fail closed rather than recreating identity. The transport bounds responses and
+timeouts, verifies TLS, and has no redirect, proxy, cookie, or automatic POST retry behavior.
+Inventory synchronization, pairing, refresh rotation, and hardware device signing remain separate
+outcomes.
+
 ## Tier-0 inventory and OpenSSH onboarding
 
 Migration 3 adds `implicit_objects`, an encrypted, device-local visibility marker for tier-0 AccessProfiles and Credentials. Creating a host marks its login and credential implicit in the same transaction. Inspecting a host promotes its login; inspecting a private-key login promotes that credential, while password and agent credentials remain implicit. Using the same private key for a second host reuses and promotes the credential in the host creation transaction. The marker does not replicate and does not change the object format. `areas()` reports Keys only after a private-key credential becomes explicit.

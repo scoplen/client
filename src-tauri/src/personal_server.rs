@@ -95,3 +95,15 @@ pub async fn authenticate_personal_server(
 ) -> Result<PersonalServerStatus, PersonalServerError> {
     personal.authenticate(store(&local)?).await
 }
+
+/// Import a same-origin invitation after fresh authentication, retaining the existing identity.
+#[tauri::command]
+#[specta::specta]
+pub async fn update_personal_invitation(
+    invitation_url: String,
+    local: tauri::State<'_, LocalDataState>,
+    personal: tauri::State<'_, PersonalServer>,
+) -> Result<PersonalServerStatus, PersonalServerError> {
+    let invitation_url = Zeroizing::new(invitation_url);
+    personal.update_invitation(store(&local)?, invitation_url).await
+}

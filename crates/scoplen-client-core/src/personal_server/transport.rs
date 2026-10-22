@@ -17,6 +17,7 @@ pub(super) struct Transport {
 pub(super) struct Response {
     pub status: u16,
     pub body: SecretVec,
+    pub problem_json: bool,
 }
 
 impl Response {
@@ -106,27 +107,31 @@ impl Transport {
         if response.content_length().is_some_and(|length| length > limit as u64) {
             return Err(PersonalServerError::InvalidResponse);
         }
-        if response.status().is_success() {
-            if !response
-                .headers()
-                .get(header::CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| {
-                    value.split(',').any(|part| part.trim().eq_ignore_ascii_case("no-store"))
-                })
-            {
-                return Err(PersonalServerError::InvalidResponse);
-            }
-            let content_type = response
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
-                .ok_or(PersonalServerError::InvalidResponse)?;
-            if content_type != "application/json"
-                && content_type != "application/json; charset=utf-8"
-            {
-                return Err(PersonalServerError::InvalidResponse);
-            }
+        let no_store = response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value.split(',').any(|part| part.trim().eq_ignore_ascii_case("no-store"))
+            });
+        let cached = response.headers().contains_key(header::AGE);
+        let content_type =
+            response.headers().get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok());
+        let problem_json = no_store
+            && !cached
+            && matches!(
+                content_type,
+                Some("application/problem+json" | "application/problem+json; charset=utf-8")
+            );
+        if response.status().is_success()
+            && (!no_store
+                || cached
+                || !matches!(
+                    content_type,
+                    Some("application/json" | "application/json; charset=utf-8")
+                ))
+        {
+            return Err(PersonalServerError::InvalidResponse);
         }
         let mut bytes = zeroize::Zeroizing::new(Vec::new());
         while let Some(chunk) = response.chunk().await.map_err(|_| PersonalServerError::Network)? {
@@ -135,6 +140,6 @@ impl Transport {
             }
             bytes.extend_from_slice(&chunk);
         }
-        Ok(Response { status, body: SecretVec::new(bytes.to_vec()) })
+        Ok(Response { status, body: SecretVec::new(bytes.to_vec()), problem_json })
     }
 }

@@ -9,6 +9,14 @@ All notable changes to the Scoplen desktop client are recorded here.
   verified HTTPS, and fresh device authentication after uncertain enrollment. The interface
   uses localized typed errors and never receives recovery keys, private keys, or access tokens.
   Inventory sync remains unavailable.
+- Updated `rustls-webpki` to 0.103.16 to reject distrusted certificate intermediates
+  covered by RUSTSEC-2026-0382.
+- Added the Rust/IPC path for explicit same-origin replacement of a pending Personal invitation.
+  A fresh signed device exchange must first either authenticate the retained identity or return
+  the exact parsed D-109 denial. Replacement preserves every id, key, certificate, wrap, and
+  recovery confirmation, changes only the invitation and its possession proof, and waits for
+  a separate Join. Malformed, cached, revoked, unknown, transport, and token failures cannot
+  enable replacement. Frontend wiring is a separate outcome.
 
 - Added Rust-owned automatic terminal reconnect after confirmed network loss, with
   bounded backoff, fresh trust and credential preparation, a Stop reconnecting action,
