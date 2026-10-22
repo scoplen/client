@@ -23,7 +23,7 @@ scoplen-api = { git = "https://github.com/scoplen/proto.git", rev = "f2b68f09a94
 ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["ed25519", "encryption", "getrandom", "p256", "p384", "p521", "rsa", "std"] }
 base64 = "0.22.1"
 rcgen = { version = "0.14.7", default-features = false, features = ["ring", "crypto"] }
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "http2"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl"] }
 scoplen-crypto = { git = "https://github.com/scoplen/proto.git", rev = "f2b68f09a9429a9d813d7a7e3f3a46f0ccf533a2" }

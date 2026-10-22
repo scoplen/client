@@ -2,7 +2,7 @@
 //! Durable pending identity and credentials, inside the SQLCipher boundary.
 
 use rusqlite::{OptionalExtension, params};
-use scoplen_crypto::SecretVec;
+use scoplen_crypto::{MAX_DEVICE_ACCESS_TOKEN_BYTES, SecretVec};
 use uuid::Uuid;
 
 use super::{Store, StoreError, uuid_from};
@@ -21,7 +21,98 @@ pub(crate) struct PersonalRecord {
     pub access_expires_at: Option<u64>,
 }
 
+pub(crate) struct PersonalSyncRecord {
+    pub generation: i64,
+    pub session: SecretVec,
+    pub account_keys: SecretVec,
+    pub vault_keys: SecretVec,
+}
+
 impl Store {
+    pub(crate) fn personal_access_token(&self, now: u64) -> Result<Option<SecretVec>, StoreError> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT access_token FROM personal_server WHERE singleton = 1
+             AND enrollment_attempted = 1 AND access_expires_at > ?1
+             AND length(access_token) BETWEEN 1 AND ?2",
+                params![now.min(i64::MAX as u64) as i64, MAX_DEVICE_ACCESS_TOKEN_BYTES as i64],
+                |row| Ok(SecretVec::new(row.get(0)?)),
+            )
+            .optional()?)
+    }
+
+    pub(crate) fn personal_sync_record(&self) -> Result<Option<PersonalSyncRecord>, StoreError> {
+        Ok(self.conn().query_row(
+            "SELECT generation, session, account_keys, vault_keys FROM personal_sync WHERE singleton = 1",
+            [],
+            |row| Ok(PersonalSyncRecord {
+                generation: row.get(0)?,
+                session: SecretVec::new(row.get(1)?),
+                account_keys: SecretVec::new(row.get(2)?),
+                vault_keys: SecretVec::new(row.get(3)?),
+            }),
+        ).optional()?)
+    }
+
+    pub(crate) fn save_personal_sync(
+        &self,
+        identity: &PersonalRecord,
+        access: &SecretVec,
+        expected_generation: Option<i64>,
+        snapshot: &PersonalSyncRecord,
+        now: u64,
+    ) -> Result<bool, StoreError> {
+        let material = identity.private_material.as_bytes();
+        if material.len() != 225 || material[0] != 1 {
+            return Err(StoreError::InvalidIdentifier);
+        }
+        let mut conn = self.conn();
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        let tx = conn.transaction()?;
+        let matches: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM personal_server WHERE singleton = 1
+                AND origin = ?1 AND account_id = ?2 AND personal_vault_id = ?3
+                AND private_material = ?4 AND enrollment_request = ?5
+                AND access_token = ?6 AND access_expires_at > ?7 AND enrollment_attempted = 1)
+                AND EXISTS (SELECT 1 FROM device_key_pair WHERE singleton = 1
+                    AND signing = ?8 AND kem = ?9)",
+            params![
+                identity.origin,
+                identity.account_id.as_bytes().as_slice(),
+                identity.personal_vault_id.as_bytes().as_slice(),
+                identity.private_material.as_bytes(),
+                identity.enrollment_request.as_ref().map(SecretVec::as_bytes),
+                access.as_bytes(),
+                now.min(i64::MAX as u64) as i64,
+                &material[1..33],
+                &material[33..65]
+            ],
+            |row| row.get(0),
+        )?;
+        let generation: Option<i64> = tx
+            .query_row("SELECT generation FROM personal_sync WHERE singleton = 1", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        if !matches || generation != expected_generation {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO personal_sync (singleton, generation, session, account_keys, vault_keys)
+             VALUES (1, 1, ?1, ?2, ?3) ON CONFLICT (singleton) DO UPDATE SET
+             generation = personal_sync.generation + 1, session = excluded.session,
+             account_keys = excluded.account_keys, vault_keys = excluded.vault_keys",
+            params![
+                snapshot.session.as_bytes(),
+                snapshot.account_keys.as_bytes(),
+                snapshot.vault_keys.as_bytes()
+            ],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub(crate) fn personal_record(&self) -> Result<Option<PersonalRecord>, StoreError> {
         let row = self
             .conn()
@@ -173,3 +264,6 @@ impl Store {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

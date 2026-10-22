@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use reqwest::{Client, Method, header};
-use scoplen_crypto::{SecretVec, validate_server_origin};
+use scoplen_crypto::{DpopProof, SecretVec, validate_server_origin};
 
 use super::PersonalServerError;
 
@@ -12,6 +12,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(super) struct Transport {
     client: Client,
+    sync_client: Client,
 }
 
 pub(super) struct Response {
@@ -30,31 +31,38 @@ impl Transport {
     pub fn new() -> Result<Self, PersonalServerError> {
         // All Rustls consumers use the already installed provider, or the existing ring stack.
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = Client::builder()
-            .https_only(true)
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .map_err(|_| PersonalServerError::Network)?;
-        Ok(Self { client })
+        let builder = || {
+            Client::builder()
+                .https_only(true)
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .tls_version_min(reqwest::tls::Version::TLS_1_3)
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(REQUEST_TIMEOUT)
+        };
+        let client = builder().build().map_err(|_| PersonalServerError::Network)?;
+        let sync_client =
+            builder().http2_prior_knowledge().build().map_err(|_| PersonalServerError::Network)?;
+        Ok(Self { client, sync_client })
     }
 
     #[cfg(test)]
     pub fn fixture(certificate: reqwest::Certificate, timeout: Duration) -> Self {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        Self {
-            client: Client::builder()
+        let builder = || {
+            Client::builder()
                 .https_only(true)
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .retry(reqwest::retry::never())
-                .tls_certs_merge([certificate])
+                .tls_version_min(reqwest::tls::Version::TLS_1_3)
+                .tls_certs_merge([certificate.clone()])
                 .timeout(timeout)
-                .build()
-                .unwrap(),
+        };
+        Self {
+            client: builder().build().unwrap(),
+            sync_client: builder().http2_prior_knowledge().build().unwrap(),
         }
     }
 
@@ -77,6 +85,53 @@ impl Transport {
         self.exchange(Method::GET, origin, path, None, limit).await
     }
 
+    pub async fn protected(
+        &self,
+        origin: &str,
+        path: &str,
+        body: Option<&[u8]>,
+        access_token: &str,
+        proof: &DpopProof,
+        limit: usize,
+    ) -> Result<Response, PersonalServerError> {
+        validate_server_origin(origin).map_err(|_| PersonalServerError::Invitation)?;
+        let authorization = zeroize::Zeroizing::new(format!("DPoP {access_token}"));
+        let mut authorization = header::HeaderValue::from_str(&authorization)
+            .map_err(|_| PersonalServerError::Identity)?;
+        authorization.set_sensitive(true);
+        let mut dpop = header::HeaderValue::from_str(proof.as_str())
+            .map_err(|_| PersonalServerError::Identity)?;
+        dpop.set_sensitive(true);
+        let mut request = self
+            .sync_client
+            .request(
+                if body.is_some() { Method::POST } else { Method::GET },
+                format!("{origin}{path}"),
+            )
+            .version(reqwest::Version::HTTP_2)
+            .header(header::AUTHORIZATION, authorization)
+            .header("DPoP", dpop)
+            .header(header::ACCEPT, "application/cbor")
+            .header(header::ACCEPT_ENCODING, "identity");
+        if let Some(body) = body {
+            request = request.header(header::CONTENT_TYPE, "application/cbor").body(body.to_vec());
+        }
+        let response = request.send().await.map_err(|_| PersonalServerError::Network)?;
+        if response.version() != reqwest::Version::HTTP_2
+            || response.status().is_redirection()
+            || response.headers().contains_key(header::AGE)
+            || response.headers().contains_key(header::CONTENT_ENCODING)
+            || response.status().is_success()
+                && response.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok())
+                    != Some("application/cbor")
+        {
+            return Err(PersonalServerError::InvalidResponse);
+        }
+        let status = response.status().as_u16();
+        let body = read_body(response, limit).await?;
+        Ok(Response { status, body, problem_json: false })
+    }
+
     async fn exchange(
         &self,
         method: Method,
@@ -93,7 +148,7 @@ impl Transport {
         if let Some(body) = body {
             request = request.header(header::CONTENT_TYPE, "application/json").body(body.to_vec());
         }
-        let mut response = request.send().await.map_err(|error| {
+        let response = request.send().await.map_err(|error| {
             if error.is_connect() && !error.is_timeout() {
                 PersonalServerError::ConnectionBeforeRequest
             } else {
@@ -104,9 +159,6 @@ impl Transport {
             return Err(PersonalServerError::InvalidResponse);
         }
         let status = response.status().as_u16();
-        if response.content_length().is_some_and(|length| length > limit as u64) {
-            return Err(PersonalServerError::InvalidResponse);
-        }
         let no_store = response
             .headers()
             .get(header::CACHE_CONTROL)
@@ -133,13 +185,24 @@ impl Transport {
         {
             return Err(PersonalServerError::InvalidResponse);
         }
-        let mut bytes = zeroize::Zeroizing::new(Vec::new());
-        while let Some(chunk) = response.chunk().await.map_err(|_| PersonalServerError::Network)? {
-            if chunk.len() > limit.saturating_sub(bytes.len()) {
-                return Err(PersonalServerError::InvalidResponse);
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        Ok(Response { status, body: SecretVec::new(bytes.to_vec()), problem_json })
+        let body = read_body(response, limit).await?;
+        Ok(Response { status, body, problem_json })
     }
+}
+
+async fn read_body(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<SecretVec, PersonalServerError> {
+    if response.content_length().is_some_and(|length| length > limit as u64) {
+        return Err(PersonalServerError::InvalidResponse);
+    }
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    while let Some(chunk) = response.chunk().await.map_err(|_| PersonalServerError::Network)? {
+        if chunk.len() > limit.saturating_sub(bytes.len()) {
+            return Err(PersonalServerError::InvalidResponse);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(SecretVec::new(bytes.to_vec()))
 }

@@ -106,4 +106,14 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         CHECK (recovery_confirmed = 0 OR recovery_saved = 1)
     ) STRICT;
     "#,
+    // 5: publish a complete, verified Personal bootstrap as one encrypted snapshot.
+    r#"
+    CREATE TABLE personal_sync (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        session BLOB NOT NULL CHECK (length(session) BETWEEN 1 AND 4194304),
+        account_keys BLOB NOT NULL CHECK (length(account_keys) BETWEEN 1 AND 4194304),
+        vault_keys BLOB NOT NULL CHECK (length(vault_keys) BETWEEN 1 AND 4194304)
+    ) STRICT;
+    "#,
 ];

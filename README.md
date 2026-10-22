@@ -120,6 +120,14 @@ Rust first authenticates the saved identity: success ends recovery without using
 only the specified verified device denial allows saving the new invitation. The same keys and
 recovery file are retained, and Join remains a separate explicit action.
 
+The Rust core can bootstrap that retained first device through the real sync session,
+account-key, and Personal vault-key endpoints. It requires a verified DPoP-bound access token,
+TLS 1.3, and HTTP/2; verifies certificates and every key wrap against the retained enrollment;
+and atomically saves the complete result in SQLCipher for offline restart. This currently
+supports account revision 1 and Personal epoch 1. A pending or newer rotation returns a
+distinct unsupported-rotation error while keeping the existing keys. The bootstrap has no
+frontend command yet and does not pull or upload inventory.
+
 ## What it does not do
 
 - It sends nothing to the vendor: no telemetry, update server, or crash-report endpoint in Phase 1.
@@ -213,7 +221,8 @@ SPL_SMOKE_TEST=1 target/release/bundle/macos/Scoplen.app/Contents/MacOS/scoplen
 
 Scoplen keeps its local data in the application data directory (`~/Library/Application Support/com.scoplen.client` on macOS, `%APPDATA%\com.scoplen.client` on Windows). The store is a SQLCipher database encrypted with a random 256-bit key. That key is held in the macOS Keychain (only on this device, after the first unlock) or, on Windows, wrapped by a TPM-held key or by DPAPI for the current user. With a local passphrase, the key is additionally wrapped with a key derived from the passphrase by Argon2id; forgetting the passphrase makes the data unrecoverable. If the key is lost, Scoplen keeps the unreadable store under a new name and can start with empty data.
 
-Network access follows explicit SSH actions or Personal enrollment/authentication. Personal
+Network access follows explicit SSH actions, Personal enrollment/authentication, or the explicit
+Rust sync bootstrap call. Personal
 setup sends the invitation token, public identity metadata, signed certificates, and encrypted
 account material only to the selected origin. Its HTTPS transport verifies certificates,
 rejects redirects, and bounds exchanges and response bodies. Device signing/KEM keys currently
