@@ -4,7 +4,7 @@ import { AppearanceProvider } from "@scoplen/ui";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "../src/i18n";
-import type { PersonalServerStatus } from "../src/ipc/bindings";
+import type { PersonalServerError, PersonalServerStatus } from "../src/ipc/bindings";
 import { PersonalSettings } from "../src/personal-settings";
 import { SettingsView } from "../src/settings";
 import { TerminalColorsProvider } from "../src/terminal-colors";
@@ -30,6 +30,12 @@ const prepared: PersonalServerStatus = {
   deviceId: "device",
   personalVaultId: "vault",
   deviceName: "Work laptop",
+};
+const unconfirmed: PersonalServerStatus = {
+  ...prepared,
+  phase: "enrollment_unconfirmed",
+  recoveryKeySaved: true,
+  recoveryKeyConfirmed: true,
 };
 
 function fixture(initial = empty) {
@@ -176,6 +182,120 @@ it("does not enroll or authenticate automatically when a saved pending identity 
   expect(await screen.findByRole("button", { name: "Authenticate this device" })).toBeTruthy();
   expect(f.calls.map((call) => call.command)).toEqual(["personal_server_status"]);
   expect(screen.queryByLabelText("Invitation link")).toBeNull();
+});
+
+it("imports a replacement only through Rust, clears its secret, and requires a separate Join", async () => {
+  const f = fixture(unconfirmed);
+  f.handlers.set("update_personal_invitation", () => ({ ...unconfirmed, phase: "ready_to_enroll" }));
+  const { container } = render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Use a new invitation" }));
+  const input = screen.getByLabelText("New invitation link") as HTMLInputElement;
+  expect(input.type).toBe("password");
+  expect(document.activeElement).toBe(input);
+  const link = "https://ssh.example.test/invite#token=replacement-secret";
+  await userEvent.type(input, link);
+  expect(f.matching("update_personal_invitation")).toHaveLength(0);
+  await userEvent.click(screen.getByRole("button", { name: "Check and use invitation" }));
+  const join = await screen.findByRole("button", { name: "Join this server" });
+  expect(input.value).toBe("");
+  expect(f.matching("update_personal_invitation")[0]?.args).toEqual({ invitationUrl: link });
+  expect(f.matching("authenticate_personal_server")).toHaveLength(0);
+  expect(f.matching("prepare_personal_enrollment")).toHaveLength(0);
+  expect(f.matching("submit_personal_enrollment")).toHaveLength(0);
+  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Join this server" }));
+  expect(container.textContent).not.toContain("replacement-secret");
+  expect(screen.queryByRole("button", { name: "Use a new invitation" })).toBeNull();
+  expect(await violations(container)).toEqual([]);
+  await userEvent.click(join);
+  expect(await screen.findByRole("heading", { name: "This device is authenticated" })).toBeTruthy();
+  expect(f.matching("submit_personal_enrollment")).toHaveLength(1);
+});
+
+it("ends recovery when replacement authentication succeeds without joining again", async () => {
+  const f = fixture(unconfirmed);
+  f.handlers.set("update_personal_invitation", () => ({ ...unconfirmed, phase: "authenticated" }));
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Use a new invitation" }));
+  const input = screen.getByLabelText("New invitation link") as HTMLInputElement;
+  await userEvent.type(input, "https://ssh.example.test/invite#token=unused-secret");
+  await userEvent.click(screen.getByRole("button", { name: "Check and use invitation" }));
+  expect(await screen.findByRole("heading", { name: "This device is authenticated" })).toBeTruthy();
+  expect(input.value).toBe("");
+  expect(screen.queryByRole("button", { name: "Join this server" })).toBeNull();
+  expect(screen.queryByLabelText("New invitation link")).toBeNull();
+  expect(f.matching("update_personal_invitation")).toHaveLength(1);
+  expect(f.matching("submit_personal_enrollment")).toHaveLength(0);
+});
+
+it.each<PersonalServerError>(["authentication", "network", "invalidResponse", "invitation"])(
+  "keeps a rejected replacement pending on %s without offering Join",
+  async (error) => {
+    const f = fixture(unconfirmed);
+    f.handlers.set("update_personal_invitation", () => Promise.reject(error));
+    render(view());
+    await userEvent.click(await screen.findByRole("button", { name: "Use a new invitation" }));
+    const input = screen.getByLabelText("New invitation link") as HTMLInputElement;
+    await userEvent.type(input, "https://ssh.example.test/invite#token=rejected-secret");
+    await userEvent.click(screen.getByRole("button", { name: "Check and use invitation" }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    await waitFor(() => expect(input.disabled).toBe(false));
+    expect(input.value).toBe("");
+    expect(screen.getByRole("button", { name: "Authenticate this device" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Join this server" })).toBeNull();
+    expect(document.body.textContent).not.toContain("rejected-secret");
+    expect(f.matching("submit_personal_enrollment")).toHaveLength(0);
+    expect(f.matching("update_personal_invitation")).toHaveLength(1);
+  },
+);
+
+it("blocks repeated replacement and authentication while the core checks a new invitation", async () => {
+  const f = fixture(unconfirmed);
+  let finish!: (value: PersonalServerStatus) => void;
+  f.handlers.set(
+    "update_personal_invitation",
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Use a new invitation" }));
+  const input = screen.getByLabelText("New invitation link") as HTMLInputElement;
+  await userEvent.type(input, "https://ssh.example.test/invite#token=secret");
+  await userEvent.dblClick(screen.getByRole("button", { name: "Check and use invitation" }));
+  expect(f.matching("update_personal_invitation")).toHaveLength(1);
+  expect(input.value).toBe("");
+  expect(input.disabled).toBe(true);
+  expect(screen.getByRole("button", { name: "Cancel new invitation" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getAllByRole("button", { name: "Working…" }).every((button) => button.hasAttribute("disabled"))).toBe(
+    true,
+  );
+  expect(f.matching("authenticate_personal_server")).toHaveLength(0);
+  await act(async () => finish({ ...unconfirmed, phase: "ready_to_enroll" }));
+  expect(await screen.findByRole("button", { name: "Join this server" })).toBeTruthy();
+});
+
+it("clears a cancelled replacement and localizes the pending recovery path", async () => {
+  const f = fixture(unconfirmed);
+  f.handlers.set("update_personal_invitation", () => Promise.reject("authentication"));
+  render(view("zh-Hans"));
+  const toggle = await screen.findByRole("button", { name: "使用新邀请" });
+  await userEvent.click(toggle);
+  const cancelled = screen.getByLabelText("新邀请链接") as HTMLInputElement;
+  await userEvent.type(cancelled, "cancelled-secret");
+  await userEvent.click(screen.getByRole("button", { name: "取消新邀请" }));
+  expect(cancelled.value).toBe("");
+  expect(document.activeElement).toBe(toggle);
+  expect(f.matching("update_personal_invitation")).toHaveLength(0);
+  await userEvent.click(toggle);
+  const input = screen.getByLabelText("新邀请链接") as HTMLInputElement;
+  expect(input.value).toBe("");
+  await userEvent.type(input, "rejected-secret");
+  await userEvent.click(screen.getByRole("button", { name: "检查并使用邀请" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("服务器未能认证此设备");
+  expect(input.value).toBe("");
+  expect(screen.queryByRole("button", { name: "加入此服务器" })).toBeNull();
+  expect(document.body.textContent).not.toContain("rejected-secret");
 });
 
 it("keeps enrollment disabled while the request is pending", async () => {

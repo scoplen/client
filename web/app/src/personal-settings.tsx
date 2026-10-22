@@ -12,7 +12,9 @@ export function PersonalSettings() {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<PersonalServerError | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const [replacementOpen, setReplacementOpen] = useState(false);
   const invitation = useRef<HTMLInputElement>(null);
+  const replacement = useRef<HTMLInputElement>(null);
   const device = useRef<HTMLInputElement>(null);
   const pending = useRef(false);
   const title = useRef<HTMLHeadingElement>(null);
@@ -42,8 +44,18 @@ export function PersonalSettings() {
     (stepTitle.current ?? title.current)?.focus();
   }, [status?.phase]);
 
+  useEffect(() => {
+    if (!replacementOpen || status?.phase !== "enrollment_unconfirmed") return;
+    const input = replacement.current;
+    input?.focus();
+    return () => {
+      if (input) input.value = "";
+    };
+  }, [replacementOpen, status?.phase]);
+
   const updateStatus = (next: PersonalServerStatus) => {
     if (status && next.phase !== status.phase) focusNextStep.current = true;
+    if (next.phase !== "enrollment_unconfirmed") setReplacementOpen(false);
     setStatus(next);
   };
 
@@ -81,6 +93,14 @@ export function PersonalSettings() {
     const deviceName = device.current.value;
     invitation.current.value = "";
     void run(() => commands.preparePersonalEnrollment(url, deviceName));
+  };
+
+  const replaceInvitation = (event: FormEvent) => {
+    event.preventDefault();
+    if (pending.current || !replacement.current) return;
+    const url = replacement.current.value;
+    replacement.current.value = "";
+    void run(() => commands.updatePersonalInvitation(url));
   };
 
   return (
@@ -197,6 +217,39 @@ export function PersonalSettings() {
               <Button className="mt-4" disabled={busy} onClick={() => void run(commands.authenticatePersonalServer)}>
                 {t(busy ? "settings.personal.working" : "settings.personal.authenticate")}
               </Button>
+              <div className="mt-4">
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  aria-expanded={replacementOpen}
+                  aria-controls={replacementOpen ? "personal-replacement" : undefined}
+                  onClick={() => setReplacementOpen(!replacementOpen)}
+                >
+                  {t(replacementOpen ? "settings.personal.cancelReplacement" : "settings.personal.replaceInvitation")}
+                </Button>
+              </div>
+              {replacementOpen ? (
+                <form id="personal-replacement" onSubmit={replaceInvitation} className="mt-4 flex flex-col gap-4">
+                  <p className="text-sm text-muted-foreground">{t("settings.personal.replacementBody")}</p>
+                  <Field
+                    ref={replacement}
+                    label={t("settings.personal.newInvitation")}
+                    hint={t("settings.personal.newInvitationHint")}
+                    type="password"
+                    required
+                    autoComplete="off"
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    maxLength={4096}
+                    disabled={busy}
+                  />
+                  <div>
+                    <Button type="submit" disabled={busy}>
+                      {t(busy ? "settings.personal.working" : "settings.personal.checkInvitation")}
+                    </Button>
+                  </div>
+                </form>
+              ) : null}
             </div>
           ) : (
             <div className="mt-6">

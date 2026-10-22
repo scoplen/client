@@ -16,7 +16,10 @@ All notable changes to the Scoplen desktop client are recorded here.
   the exact parsed D-109 denial. Replacement preserves every id, key, certificate, wrap, and
   recovery confirmation, changes only the invitation and its possession proof, and waits for
   a separate Join. Malformed, cached, revoked, unknown, transport, and token failures cannot
-  enable replacement. Frontend wiring is a separate outcome.
+  enable replacement. Settings now offers a hidden, write-only replacement field only while
+  enrollment is unconfirmed; it delegates the recovery check to Rust and requires a separate
+  Join after an accepted replacement. Successful authentication finishes recovery without
+  redeeming the supplied link. Errors are localized, and cancelling clears the input.
 
 - Added Rust-owned automatic terminal reconnect after confirmed network loss, with
   bounded backoff, fresh trust and credential preparation, a Stop reconnecting action,

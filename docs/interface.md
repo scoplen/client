@@ -38,6 +38,16 @@ identity. Timeouts, lost responses, and unknown outcomes retain the pending iden
 Authenticate this device, which uses a fresh challenge without replaying the invitation.
 Errors use typed localized codes; arbitrary IPC or server diagnostics are not rendered.
 
+Only the unconfirmed phase offers Use a new invitation. It reveals a hidden, uncontrolled
+field for a link from the displayed server, focuses it, and clears it before calling the
+generated `updatePersonalInvitation` command. Cancel also clears the field. Rust handles
+the same-origin check, fresh authentication, and exact D-109 device-denial rules; the frontend
+does not infer permission from a general authentication error. Authentication success ends
+recovery without using the new link. A replacement accepted by Rust returns to Join readiness
+with the original identity and recovery confirmation; another explicit Join is required.
+A rejected replacement retains the pending phase and offers no Join. Busy state blocks duplicate replacement
+and authentication intents, and no invitation appears in localized errors or public status.
+
 Authenticated status means Rust verified the unexpired device access token against the exact
 chosen HTTPS origin's JWKS and the saved account/device/key identity. It does not mean inventory
 has synchronized. Existing hosts and credentials remain local. Pairing, refresh rotation,

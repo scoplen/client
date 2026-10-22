@@ -129,6 +129,13 @@ export const zhHans: Messages = {
   "settings.personal.unconfirmedBody":
     "已尝试加入，但尚未确认本机能否访问账号。请使用已保存的身份进行设备认证，确认结果，并保留恢复文件。",
   "settings.personal.authenticate": "认证此设备",
+  "settings.personal.replaceInvitation": "使用新邀请",
+  "settings.personal.cancelReplacement": "取消新邀请",
+  "settings.personal.newInvitation": "新邀请链接",
+  "settings.personal.newInvitationHint": "请使用上方服务器发出的邀请。链接会隐藏显示，并在提交时清空。",
+  "settings.personal.replacementBody":
+    "Scoplen 会先使用已保存的身份检查访问权限。若认证成功，就不会使用新邀请；只有验证过的拒绝响应才允许保存新邀请。身份与恢复文件保持不变，之后仍需单独选择加入。",
+  "settings.personal.checkInvitation": "检查并使用邀请",
   "settings.personal.authenticated": "此设备已通过认证",
   "settings.personal.authenticatedBody": "账号身份已就绪。此版本尚未提供库存同步，主机与凭据仍保存在本机。",
   "settings.terminal.title": "终端配色",

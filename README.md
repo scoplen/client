@@ -115,6 +115,11 @@ The same pending identity is retained across restarts and uncertain responses. T
 does not yet synchronize inventory, pair another device, or rotate refresh credentials.
 Existing local SSH data is not uploaded by account setup.
 
+When enrollment remains unconfirmed, Use a new invitation accepts a link for the same server.
+Rust first authenticates the saved identity: success ends recovery without using the link;
+only the specified verified device denial allows saving the new invitation. The same keys and
+recovery file are retained, and Join remains a separate explicit action.
+
 ## What it does not do
 
 - It sends nothing to the vendor: no telemetry, update server, or crash-report endpoint in Phase 1.
