@@ -13,7 +13,7 @@ use scoplen_api::{
 use scoplen_crypto::{
     AccountKemKeyWrap, AccountSigningKeyWrap, DeviceAccessToken, DeviceArkWrap, DeviceCertificate,
     DeviceKemKeyPair, DpopProof, DpopTarget, DpopToken, P256SigningKey, PersonalVaultKeyWrap,
-    RecoveryBlob, RecoveryKey, RevocationStatement, SymmetricKey, dpop_jwk_thumbprint,
+    RecoveryBlob, RecoveryKey, RevocationStatement, SecretVec, SymmetricKey, dpop_jwk_thumbprint,
     ed25519_verify, verify_device_list,
 };
 use zeroize::Zeroize as _;
@@ -27,6 +27,9 @@ use crate::store::{
 };
 
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
+
+mod inventory;
+pub use inventory::{PersonalInventoryIntent, PersonalInventoryProgress};
 
 /// Failures preserve both retained identity and the previous verified bootstrap.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -45,6 +48,32 @@ pub enum PersonalSyncError {
         "This account or vault requires key rotation support. The existing keys were retained."
     )]
     RotationRequired,
+    /// The server's retained tombstones no longer cover the applied cursor.
+    #[error("Personal sync needs full reconciliation. Local changes were retained.")]
+    ReconciliationRequired,
+    /// A write may have committed; a later cycle must pull before writing again.
+    #[error("The server may have saved these changes. Synchronize again to check their result.")]
+    WriteOutcomeUnknown,
+    /// Objects are durable locally, but their server acknowledgement is unconfirmed.
+    #[error(
+        "Changes are saved on this device. Synchronize again to confirm the server acknowledgement."
+    )]
+    AcknowledgementUnknown,
+    /// Concurrent changes exceeded this cycle's bounded conflict retries.
+    #[error("Personal sync is receiving concurrent changes. Synchronize again.")]
+    ConcurrentChanges,
+    /// The wall clock or server Date is unsuitable for a safe object write.
+    #[error("Check this device's clock and the server's Date header before synchronizing changes.")]
+    Clock,
+    /// Selected local objects require a complete, explicit dependency selection.
+    #[error("Review the selected objects and their referenced local objects before synchronizing.")]
+    Selection,
+    /// One bounded request cannot carry this object or response safely.
+    #[error("The inventory exceeds this client's synchronization limits. Local data was retained.")]
+    ResourceLimit,
+    /// A trust record has no verified same-user provenance for automatic replication.
+    #[error("Confirm the source of these host keys before synchronizing their trust records.")]
+    TrustReviewRequired,
 }
 
 /// Verified session metadata and an unwrapped Personal key, kept entirely inside Rust.
@@ -52,6 +81,16 @@ pub enum PersonalSyncError {
 pub struct PersonalSyncBootstrap {
     session: SyncSessionResponse,
     personal_vault_key: SymmetricKey,
+    active_devices: Vec<DeviceCertificate>,
+}
+
+struct SyncContext {
+    bootstrap: PersonalSyncBootstrap,
+    identity: PersonalRecord,
+    access: SecretVec,
+    signing: P256SigningKey,
+    expires_at: u64,
+    device_id: uuid::Uuid,
 }
 
 impl PersonalSyncBootstrap {
@@ -75,7 +114,15 @@ impl PersonalServer {
         store: Arc<Store>,
     ) -> Result<PersonalSyncBootstrap, PersonalSyncError> {
         let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
-        let pending = record(&store)?;
+        Ok(self.bootstrap_inner(&store, false).await?.bootstrap)
+    }
+
+    async fn bootstrap_inner(
+        &self,
+        store: &Store,
+        write: bool,
+    ) -> Result<SyncContext, PersonalSyncError> {
+        let pending = record(store)?;
         let previous = store.personal_sync_record().map_err(storage)?;
         let access = store
             .personal_access_token(now()?)
@@ -98,6 +145,7 @@ impl PersonalServer {
             || !["keys:read", "sync:read"]
                 .iter()
                 .all(|required| claims.scope.split(' ').any(|scope| scope == *required))
+            || write && !claims.scope.split(' ').any(|scope| scope == "sync:write")
         {
             return Err(PersonalSyncError::AuthenticationRequired);
         }
@@ -145,7 +193,7 @@ impl PersonalServer {
             account_keys: bodies.next().ok_or(PersonalSyncError::InvalidResponse)?,
             vault_keys: bodies.next().ok_or(PersonalSyncError::InvalidResponse)?,
         };
-        let bootstrap = validate(&store, &pending, &snapshot)?;
+        let bootstrap = validate(store, &pending, &snapshot)?;
         if verified.expires_at() <= now()? {
             return Err(PersonalSyncError::AuthenticationRequired);
         }
@@ -161,7 +209,15 @@ impl PersonalServer {
         {
             return Err(PersonalServerError::Storage.into());
         }
-        Ok(bootstrap)
+        let expires_at = verified.expires_at();
+        Ok(SyncContext {
+            bootstrap,
+            identity: pending,
+            access,
+            signing,
+            expires_at,
+            device_id: store.device_id(),
+        })
     }
 
     /// Restore and cryptographically revalidate the encrypted bootstrap without network I/O.
@@ -297,7 +353,7 @@ fn validate(
     {
         return Err(PersonalSyncError::InvalidResponse);
     }
-    Ok(PersonalSyncBootstrap { session, personal_vault_key })
+    Ok(PersonalSyncBootstrap { session, personal_vault_key, active_devices: active })
 }
 
 #[cfg(test)]

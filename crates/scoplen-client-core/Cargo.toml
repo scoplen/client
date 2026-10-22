@@ -28,6 +28,7 @@ thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
+httpdate = "1.0.3"
 
 [lints]
 workspace = true

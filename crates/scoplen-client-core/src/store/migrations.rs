@@ -116,4 +116,26 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         vault_keys BLOB NOT NULL CHECK (length(vault_keys) BETWEEN 1 AND 4194304)
     ) STRICT;
     "#,
+    // 6: explicit Personal adoption, durable merge bases, and the applied cursor.
+    // Sequences are big-endian bytes so the complete K-4 u64 range is retained.
+    r#"
+    CREATE TABLE personal_sync_progress (
+        vault BLOB PRIMARY KEY CHECK (length(vault) = 16),
+        cursor BLOB NOT NULL CHECK (length(cursor) = 8),
+        acknowledged BLOB NOT NULL CHECK (length(acknowledged) = 8)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE personal_sync_objects (
+        object_id BLOB PRIMARY KEY REFERENCES objects(id) CHECK (length(object_id) = 16),
+        vault BLOB NOT NULL REFERENCES personal_sync_progress(vault),
+        base BLOB CHECK (base IS NULL OR length(base) = 8),
+        dirty INTEGER NOT NULL CHECK (dirty IN (0, 1))
+    ) STRICT, WITHOUT ROWID;
+    CREATE INDEX personal_sync_pending ON personal_sync_objects(vault, dirty);
+    CREATE TABLE personal_sync_backups (
+        object_id BLOB PRIMARY KEY CHECK (length(object_id) = 16),
+        vault BLOB NOT NULL CHECK (length(vault) = 16),
+        envelope BLOB NOT NULL,
+        adopted_at INTEGER NOT NULL
+    ) STRICT, WITHOUT ROWID;
+    "#,
 ];

@@ -115,7 +115,7 @@ only if the saved request still matches and no verified credentials have appeare
 no invitation token; a separate explicit Join submits the new request. Missing or inconsistent
 saved artifacts fail closed rather than recreating identity. The transport bounds responses and
 timeouts, verifies TLS, and has no redirect, proxy, cookie, or automatic POST retry behavior.
-Inventory synchronization, pairing, refresh rotation, and hardware device signing remain separate
+Inventory selection UI, full reconciliation, pairing, refresh rotation, and hardware device signing remain separate
 outcomes.
 
 `PersonalServer::bootstrap_sync` is the Rust-only K-4 first-device boundary. It revalidates the
@@ -141,6 +141,49 @@ still match. A competing authentication, invitation update, or bootstrap cannot 
 stale result. `load_sync_bootstrap` decodes and cryptographically revalidates all artifacts on
 restart without requiring network or an unexpired token. Its secret key handle stays in Rust;
 there is no IPC export or automatic inventory migration.
+
+`sync_personal_inventory` is a separate Rust-only one-shot action (D-112). The caller names the
+retained vault and exact object ids whose upload was confirmed. Existing local object references
+must already belong to that vault or be explicitly selected; references never expand selection.
+Migration 6 adds immutable K-1 adoption copies, per-object base sequences and dirty markers,
+and separate applied/confirmed-ack cursors. Adoption, copies, ownership and queuing commit together
+with FULL synchronous durability. Every subsequent local write, tombstone and restoration marks
+an adopted object dirty inside its normal transaction. New objects stay local until selected.
+The immutable copies restore as new local ids; references within the restored selection are
+remapped at known K-1 reference fields only. Opaque secrets, unknown fields, device ids, and
+account ids are preserved. Device-local credential secrets and handles are not duplicated.
+
+Each cycle requires `keys:read`, `sync:read` and `sync:write` and refreshes the verified bootstrap.
+It pulls before writing, separates canonical query parameters from the DPoP target, checks the
+Personal envelope's epoch and certified signer against its response metadata, verifies signatures
+and AEAD, and checks the decoded object's id/type/schema and tombstone. All objects on a page
+must validate before one immediate transaction merges fields, advances the local HLC, queues
+unpublished local differences, updates bases, and advances the applied cursor. Notifications
+follow commit. Cursor compare-and-swap prevents another store from publishing stale progress.
+Unknown object types and fields retain their K-1 representation.
+
+Only after the page is durable does the client acknowledge its applied cursor. A larger server
+ack maximum cannot move either local cursor. An uncertain acknowledgement retains the applied
+cursor and earlier confirmed ack; the next explicit cycle rechecks the feed before acknowledging.
+The complete response budget is 9 MiB, individual envelopes at most 1 MiB, change pages at most
+eight objects, and writes at most eight objects / 4 MiB further limited by session announcements.
+Each cycle bounds pages, batches and conflict retries. `more` reports a safe continuation point.
+The HTTP Date header must be present and the device wall clock within the specified forward-skew
+limit before writes. No background task or automatic retry is started.
+
+Writes contain only encrypted signed K-1 objects. Confirmed assignments update bases and clear
+only the exact sent version; a concurrent local edit stays dirty. Write assignments never advance
+the applied cursor. Complete request-bound 409 conflicts decrypt and merge before a bounded
+retry. A transport failure, malformed success, or uncertain commit preserves the queue; every
+subsequent attempt pulls and merges instead of replaying the old batch. Cursor expiry stops with
+`ReconciliationRequired` rather than resetting the cursor or uploading missing objects. This path
+still supports only account revision 1 / Personal epoch 1. Full snapshot reconciliation,
+rotation, pairing, and desktop selection/restore IPC remain incomplete.
+
+Personal TrustRecords currently require manual/imported provenance naming this account and a
+verified active device. Missing/cross-account/revoked-device provenance and CA/policy records
+stop with `TrustReviewRequired` before adoption or page application; the complete trust-replication
+and reconfirmation UI is a separate outcome. Organization-only inventory is not adopted here.
 
 ## Tier-0 inventory and OpenSSH onboarding
 

@@ -41,6 +41,7 @@ struct Expected {
     token: Zeroizing<String>,
     jkt: String,
     device: uuid::Uuid,
+    signing_public: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -50,6 +51,7 @@ struct PeerState {
     paths: Vec<String>,
     proofs: HashSet<String>,
     errors: Vec<String>,
+    inventory: Option<InventoryPeer>,
 }
 
 struct Peer {
@@ -260,6 +262,7 @@ impl Peer {
             token: Zeroizing::new(token.as_str().into()),
             jkt: dpop_jwk_thumbprint(&signing.public_key_sec1()).unwrap(),
             device: store.device_id(),
+            signing_public: signing.public_key_sec1(),
         });
     }
 
@@ -277,7 +280,7 @@ async fn answer(
     let mut body = Vec::new();
     while let Some(chunk) = request.body_mut().data().await {
         let chunk = chunk.map_err(|_| "request body")?;
-        if body.len() + chunk.len() > 4096 {
+        if body.len() + chunk.len() > 4 * 1024 * 1024 {
             return Err("oversized request".into());
         }
         request.body_mut().flow_control().release_capacity(chunk.len()).unwrap();
@@ -331,7 +334,9 @@ async fn answer(
                 {
                     return Err("wrong session identity".into());
                 }
-            } else if request.method() != http::Method::GET || !body.is_empty() {
+            } else if state.inventory.is_none()
+                && (request.method() != http::Method::GET || !body.is_empty())
+            {
                 return Err("wrong protected request".into());
             }
             if !state.proofs.insert(verified.jti) {
@@ -342,7 +347,16 @@ async fn answer(
         {
             return Err("credentials leaked to JWKS".into());
         }
-        state.replies.get(path).cloned().ok_or("unknown path")?
+        if state.inventory.is_some()
+            && matches!(path.rsplit('/').next(), Some("changes" | "objects" | "ack"))
+        {
+            let expected = state.expected.as_ref().ok_or("missing identity")?;
+            let signing = expected.signing_public.clone();
+            let device = expected.device;
+            state.inventory.as_mut().unwrap().answer(&request, &body, &signing, device)?
+        } else {
+            state.replies.get(path).cloned().ok_or("unknown path")?
+        }
     };
     if reply.stall {
         tokio::time::sleep(Duration::from_secs(3)).await;
@@ -683,3 +697,6 @@ fn retained_identity_and_cached_snapshot_are_revalidated() {
         Err(PersonalSyncError::Personal(PersonalServerError::Identity))
     ));
 }
+
+mod inventory;
+use inventory::InventoryPeer;

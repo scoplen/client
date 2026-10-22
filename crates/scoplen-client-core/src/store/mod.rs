@@ -11,6 +11,7 @@
 pub mod device;
 mod migrations;
 pub(crate) mod personal;
+pub(crate) mod sync;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -62,6 +63,12 @@ pub enum StoreError {
     /// An onboarding import raced with another host creation.
     #[error("the inventory already contains hosts")]
     InventoryNotEmpty,
+    /// A concurrent sync or a different vault invalidated the requested transaction.
+    #[error("the Personal sync state changed; synchronize again")]
+    SyncChanged,
+    /// The explicit adoption selection leaves local references outside its vault.
+    #[error("select the referenced local objects before synchronizing this inventory")]
+    SyncSelection,
     /// A stored object could not be decoded.
     #[error("stored object {id} is unreadable")]
     Corrupt {
@@ -938,6 +945,10 @@ fn store_object(conn: &Connection, object: &Object, vault: Option<Uuid>) -> Resu
             object.is_tombstoned(),
             now as i64
         ],
+    )?;
+    conn.execute(
+        "UPDATE personal_sync_objects SET dirty = 1 WHERE object_id = ?1",
+        params![object.id.as_bytes().as_slice()],
     )?;
     Ok(())
 }
