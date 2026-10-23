@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Extended the opt-in disposable HTTPS integration scenario to pair an independent second
+  device with explicit approval and real native authentication/K-4 verification, query both
+  signed device lists, synchronize encrypted hosts and edits in both directions, and reopen
+  both encrypted stores offline. Account setup leaves pre-existing local inventory unshared.
+
 - Added Rust-owned second-device pairing using a public locator and separate transient
   eight-character password. CPace, confirmation, authenticated device review, seven immutable
   relay slots, conservative deadlines and minimum poll spacing run in the core. Durable

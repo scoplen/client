@@ -39,7 +39,7 @@ The first launch rebuilds the Rust dependencies. A fresh checkout does not need 
 ## Disposable Personal server integration
 
 The opt-in `live-server-integration` feature checks the production Personal enrollment,
-device authentication, sync-key verification and reviewed inventory APIs against an
+device authentication, second-device pairing, sync-key verification and reviewed inventory APIs against an
 independently running server. It does not read server source or seed its database.
 
 Prepare a fresh disposable server on `https://localhost:<port>` with a trusted test CA.
@@ -67,10 +67,20 @@ after reopening SQLCipher. It checks durable session generation, a changed acces
 the retained refresh-family deadline ceiling; server clocks and signed JWTs are unchanged.
 The remaining whole seconds and JWT issuance time can be sampled independently. Rotation
 uses their lifetime estimate conservatively and never extends the retained ceiling.
-Repeating
-it requires a fresh disposable deployment and invitation. Remove the private descriptor,
-test server and its temporary data after verification. This does not establish native
-desktop UI, physical passkey, macOS or multi-device acceptance.
+
+The same test then creates a second independent SQLCipher store and HTTPS client. It pairs
+through a public link and separate password, verifies the old device's authenticated review,
+explicitly approves admission, and requires the new device's real native authentication and
+complete K-4 bootstrap. Both devices query the signed two-device list. A pre-existing local
+host stays local throughout setup and the first explicit download; only a later preview and
+confirmation uploads it. Both devices create or edit synchronized hosts, decrypt each other's
+changes, acknowledge their durable cursors, and revalidate retained keys, account statements
+and objects after offline store reopen. No server database or private test control is accessed.
+
+The deployment must expose the production pairing endpoints. Repeating the test requires a
+fresh disposable deployment and invitation. Run it separately for SQLite and PostgreSQL.
+Remove the private descriptor, test server and its temporary data after verification. This
+does not establish native desktop UI, physical passkey, QR scanning or macOS acceptance.
 
 ## Membership-only Personal key revisions
 

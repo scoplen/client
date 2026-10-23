@@ -10,6 +10,8 @@ use serde::Deserialize;
 use super::*;
 use crate::{personal_inventory::PersonalInventorySettings, store::LocalWrite};
 
+mod pairing;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Deployment {
@@ -188,4 +190,16 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
         1
     );
     assert_eq!(reopened.list(ObjectType::HOST).expect("local host copies").len(), 2);
+    let paired_account = pairing::verify(&deployment, &manager, reopened.clone(), object.id).await;
+    let paired_host = reopened.get(object.id).expect("original-device synchronized host");
+    drop(reopened);
+    let reopened = Store::open(&path, &key).expect("reopen original paired-account device");
+    assert!(
+        offline.load_sync_bootstrap(&reopened).expect("original-device offline keys").is_some()
+    );
+    assert_eq!(
+        offline.account_snapshot(&reopened).expect("original-device offline account"),
+        Some(paired_account)
+    );
+    assert_eq!(reopened.get(object.id).expect("original-device offline host"), paired_host);
 }
