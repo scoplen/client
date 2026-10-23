@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Fixed first-session pairing failures trapping a mistyped server address or device name.
+  Before any valid session checkpoint exists, an explicit correction preserves the durable
+  device keys and creation time. Atomic metadata and checkpoint guards reject competing edits;
+  a saved session retains its original binding.
+
 - Added Rust-owned second-device pairing using a public locator and separate transient
   eight-character password. CPace, confirmation, authenticated device review, seven immutable
   relay slots, conservative deadlines and minimum poll spacing run in the core. Durable

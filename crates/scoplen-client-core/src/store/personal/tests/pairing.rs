@@ -28,6 +28,51 @@ fn open(dir: &tempfile::TempDir) -> Store {
 }
 
 #[test]
+fn unbound_metadata_corrections_preserve_keys_and_cannot_replace_a_concurrent_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = open(&dir);
+    let second = open(&dir);
+    let original = PairingDeviceRecord {
+        origin: "https://mistyped.example".into(),
+        device_name: "Mistyped name".into(),
+        signing: SecretVec::new(vec![3; 32]),
+        kem: SecretVec::new(vec![4; 32]),
+        created_at: 100,
+    };
+    assert!(first.insert_pairing_device(&original).unwrap());
+    assert!(
+        first
+            .correct_unbound_pairing_device(&original, "https://sync.example", "New desktop")
+            .unwrap()
+    );
+    assert!(
+        !second
+            .correct_unbound_pairing_device(&original, "https://stale.example", "Stale name")
+            .unwrap()
+    );
+    let corrected = second.pairing_device().unwrap().unwrap();
+    assert_eq!(corrected.origin, "https://sync.example");
+    assert_eq!(corrected.device_name, "New desktop");
+    assert!(corrected.signing.as_bytes() == original.signing.as_bytes());
+    assert!(corrected.kem.as_bytes() == original.kem.as_bytes());
+    assert_eq!(corrected.created_at, original.created_at);
+    let session = pending(scoplen_model::new_uuid_v7().unwrap());
+    assert!(!first.save_pairing_for_device(None, &session, &original).unwrap());
+    assert!(first.save_pairing_for_device(None, &session, &corrected).unwrap());
+    assert!(
+        !second
+            .correct_unbound_pairing_device(&corrected, "https://other.example", "Other")
+            .unwrap()
+    );
+    let retained = second.pairing_device().unwrap().unwrap();
+    assert_eq!(retained.origin, corrected.origin);
+    assert_eq!(retained.device_name, corrected.device_name);
+    assert!(retained.signing.as_bytes() == original.signing.as_bytes());
+    assert!(retained.kem.as_bytes() == original.kem.as_bytes());
+    assert_eq!(retained.created_at, original.created_at);
+}
+
+#[test]
 fn one_attempt_survives_competing_connections_restart_and_switching_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let first = open(&dir);

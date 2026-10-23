@@ -162,10 +162,54 @@ impl Store {
         .transpose()
     }
 
+    pub(crate) fn correct_unbound_pairing_device(
+        &self,
+        expected: &PairingDeviceRecord,
+        origin: &str,
+        device_name: &str,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn();
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        Ok(conn.execute(
+            "UPDATE personal_pairing_device SET origin=?1, device_name=?2
+             WHERE singleton=1 AND origin=?3 AND device_name=?4 AND signing=?5 AND kem=?6
+                AND created_at=?7 AND NOT EXISTS (SELECT 1 FROM personal_pairing)
+                AND NOT EXISTS (SELECT 1 FROM personal_server)
+                AND NOT EXISTS (SELECT 1 FROM device_key_pair)",
+            params![
+                origin,
+                device_name,
+                expected.origin,
+                expected.device_name,
+                expected.signing.as_bytes(),
+                expected.kem.as_bytes(),
+                i64::try_from(expected.created_at).map_err(|_| StoreError::InvalidIdentifier)?
+            ],
+        )? == 1)
+    }
+
     pub(crate) fn save_pairing(
         &self,
         expected: Option<i64>,
         record: &PairingRecord,
+    ) -> Result<bool, StoreError> {
+        self.save_pairing_inner(expected, record, None)
+    }
+
+    pub(crate) fn save_pairing_for_device(
+        &self,
+        expected: Option<i64>,
+        record: &PairingRecord,
+        device: &PairingDeviceRecord,
+    ) -> Result<bool, StoreError> {
+        self.save_pairing_inner(expected, record, Some(device))
+    }
+
+    fn save_pairing_inner(
+        &self,
+        expected: Option<i64>,
+        record: &PairingRecord,
+        device: Option<&PairingDeviceRecord>,
     ) -> Result<bool, StoreError> {
         let mut conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
@@ -177,6 +221,24 @@ impl Store {
             .optional()?;
         if current != expected {
             return Ok(false);
+        }
+        if let Some(device) = device {
+            let matches: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM personal_pairing_device WHERE singleton=1
+                    AND origin=?1 AND device_name=?2 AND signing=?3 AND kem=?4 AND created_at=?5)
+                 AND NOT EXISTS (SELECT 1 FROM personal_server)",
+                params![
+                    record.origin,
+                    device.device_name,
+                    device.signing.as_bytes(),
+                    device.kem.as_bytes(),
+                    i64::try_from(device.created_at).map_err(|_| StoreError::InvalidIdentifier)?
+                ],
+                |row| row.get(0),
+            )?;
+            if record.side != 2 || record.origin != device.origin || !matches {
+                return Ok(false);
+            }
         }
         let next = current.unwrap_or(0).checked_add(1).ok_or(StoreError::InvalidIdentifier)?;
         tx.execute(
