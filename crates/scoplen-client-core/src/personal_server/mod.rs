@@ -513,3 +513,6 @@ fn save_private_file(path: &Path, contents: &[u8]) -> Result<(), PersonalServerE
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, feature = "live-server-integration"))]
+mod live_server;

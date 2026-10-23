@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added an explicit opt-in Personal integration check against a disposable HTTPS server,
+  covering public enrollment, retained-device authentication, encrypted inventory round trips,
+  durable acknowledgements, encrypted-store reopen and offline original-copy restoration.
+
 - Added bounded full reconciliation after cursor expiry: complete authenticated snapshots are
   validated before one atomic SQLCipher merge, removal and cursor update. Missing local edits
   become immutable encrypted recovery copies instead of being uploaded automatically. Settings
