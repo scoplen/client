@@ -135,9 +135,13 @@ recovery file are retained, and Join remains a separate explicit action.
 The Rust core can bootstrap that retained first device through the real sync session,
 account-key, and Personal vault-key endpoints. It requires a verified DPoP-bound access token,
 TLS 1.3, and HTTP/2; verifies certificates and every key wrap against the retained enrollment;
-and atomically saves the complete result in SQLCipher for offline restart. This currently
-supports account revision 1 and Personal epoch 1. A pending or newer rotation returns a
-distinct unsupported-rotation error while keeping the existing keys. In Settings → Personal
+and atomically saves the complete result in SQLCipher for offline restart. Membership-only
+account revisions can advance while the account key ciphertexts, recovery blob and Personal
+epoch-1 wrapping remain exactly those in the signed enrollment. A newer revision may rewrap
+this device's unchanged ARK. The saved revision prevents later rollback, including after
+restart; at the same revision only independently verified device statements may change.
+A pending or newer key rotation returns a distinct unsupported-rotation error while keeping
+the existing keys. In Settings → Personal
 account, Verify sync keys explicitly runs that bootstrap. Reopening the page revalidates saved
 keys locally, including when device authentication has expired; server access requires fresh
 device authentication. The interface receives only a verified/not-connected state and safe,

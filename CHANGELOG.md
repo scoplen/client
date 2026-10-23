@@ -4,6 +4,14 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Allowed the retained first device to synchronize after membership-only account-key
+  revision advances, including skipped revisions and a randomized wrap of the same ARK.
+  Account roots, private keys, account ciphertexts, recovery material, Personal epoch-1
+  wrapping and this device's exact signed certificate stay pinned. The encrypted snapshot
+  rejects revision rollback and changed key projections at the same revision across restarts;
+  independently signed device statements remain refreshable. Competing operations retain
+  the newer snapshot. Device pairing and key rotation remain separate work.
+
 - Fixed successful native refresh being rejected when independently sampled JWT issuance
   and remaining whole seconds cross a clock boundary. Positive returned lifetimes schedule
   conservatively without extending the retained family deadline, including overflowing sums.

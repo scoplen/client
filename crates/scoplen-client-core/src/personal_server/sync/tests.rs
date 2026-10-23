@@ -53,6 +53,7 @@ struct PeerState {
     errors: Vec<String>,
     inventory: Option<InventoryPeer>,
     refresh: Option<RefreshPeer>,
+    pause: Option<(String, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
 
 struct Peer {
@@ -374,6 +375,18 @@ async fn answer(
             state.replies.get(path).cloned().ok_or("unknown path")?
         }
     };
+    let pause = {
+        let mut state = state.lock().unwrap();
+        if state.pause.as_ref().is_some_and(|(path, ..)| path == request.uri().path()) {
+            state.pause.take()
+        } else {
+            None
+        }
+    };
+    if let Some((_, reached, resume)) = pause {
+        reached.notify_one();
+        resume.notified().await;
+    }
     if reply.stall {
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
@@ -394,6 +407,7 @@ fn local(dir: &tempfile::TempDir) -> Arc<Store> {
 }
 
 mod account;
+mod membership;
 
 #[tokio::test]
 async fn tls13_h2_bootstrap_verifies_real_proofs_and_restores_offline() {
@@ -525,15 +539,6 @@ async fn rotation_is_distinct_from_invalid_identity_and_preserves_snapshot() {
         );
     }
     peer.reply("/sync/v1/session", base);
-    let mut bundle =
-        SyncAccountKeyBundle::from_cbor(&peer.state.lock().unwrap().replies["/sync/v1/keys"].body)
-            .unwrap();
-    bundle.revision = 2;
-    peer.reply("/sync/v1/keys", Reply::cbor(bundle.to_cbor().unwrap()));
-    assert!(matches!(
-        manager.bootstrap_sync(store.clone()).await,
-        Err(PersonalSyncError::RotationRequired)
-    ));
     peer.assert_healthy();
 }
 
@@ -701,7 +706,7 @@ fn retained_identity_and_cached_snapshot_are_revalidated() {
         vault_keys: SecretVec::new(vec![0xff]),
     };
     assert!(matches!(
-        validate(&store, &pending, &snapshot),
+        validate(&store, &pending, &snapshot, None),
         Err(PersonalSyncError::InvalidResponse)
     ));
     store
@@ -711,7 +716,7 @@ fn retained_identity_and_cached_snapshot_are_revalidated() {
         })
         .unwrap();
     assert!(matches!(
-        validate(&store, &pending, &snapshot),
+        validate(&store, &pending, &snapshot, None),
         Err(PersonalSyncError::Personal(PersonalServerError::Identity))
     ));
 }
