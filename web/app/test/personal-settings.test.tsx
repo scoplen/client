@@ -47,6 +47,16 @@ function fixture(initial = empty) {
     if (handlers.has(command)) return handlers.get(command)!();
     if (command === "personal_sync_key_status") return "notConnected";
     if (command === "personal_account_snapshot") return null;
+    if (command === "personal_pairing_status")
+      return {
+        phase: "idle",
+        side: null,
+        origin: null,
+        publicLink: null,
+        deviceName: null,
+        peerName: null,
+        peerPlatform: null,
+      };
     if (command === "personal_server_status") return status;
     if (command === "prepare_personal_enrollment") status = prepared;
     else if (command === "save_personal_recovery_key") status = { ...status, recoveryKeySaved: true };
@@ -186,6 +196,7 @@ it("does not enroll or authenticate automatically when a saved pending identity 
     "personal_server_status",
     "personal_account_snapshot",
     "personal_sync_key_status",
+    "personal_pairing_status",
   ]);
   expect(screen.queryByLabelText("Invitation link")).toBeNull();
 });

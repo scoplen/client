@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added Personal account settings for creating a public pairing link, entering its separate
+  password on an existing device, explicitly approving authenticated device claims and
+  recovering saved admission. Dedicated native commands keep cryptography and progress in Rust;
+  only the one-time password display crosses the transient boundary. Local checkpoint reloads,
+  retained setup metadata and registered observer lifetimes keep failure, cancellation and
+  navigation paths recoverable. English/Chinese copy and generated bindings/fonts are included.
+
 - Fixed first-session pairing failures trapping a mistyped server address or device name.
   Before any valid session checkpoint exists, an explicit correction preserves the durable
   device keys and creation time. Atomic metadata and checkpoint guards reject competing edits;

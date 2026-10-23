@@ -154,6 +154,24 @@ export const commands = {
 	personalSyncKeyStatus: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("personal_sync_key_status")),
 	/**  Verify and save the retained account's sync keys without uploading local inventory. */
 	connectPersonalSync: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("connect_personal_sync")),
+	/**  Inspect the encrypted local pairing checkpoint without network access. */
+	personalPairingStatus: () => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("personal_pairing_status")),
+	/**  Explicitly create a new-device session and display its password once. */
+	createPersonalPairing: (origin: string, deviceName: string) => typedError<PairingPasswordDisplay, PairingError>(__TAURI_INVOKE("create_personal_pairing", { origin, deviceName })),
+	/**  Submit the separate password through this write-only pairing boundary. */
+	joinPersonalPairing: (publicLink: string, password: string) => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("join_personal_pairing", { publicLink, password })),
+	/**  Register before scheduling an observer so an earlier detach cannot be undone. */
+	preparePersonalPairingWatch: () => typedError<string, PairingError>(__TAURI_INVOKE("prepare_personal_pairing_watch")),
+	/**  Drive bounded Rust progress only while this explicitly started observer is attached. */
+	watchPersonalPairing: (watchId: string, messages: Channel<PairingStatus>) => typedError<null, PairingError>(__TAURI_INVOKE("watch_personal_pairing", { watchId, messages })),
+	/**  Stop this observer without cancelling or replacing the durable pairing checkpoint. */
+	stopPersonalPairingWatch: (watchId: string) => typedError<null, PairingError>(__TAURI_INVOKE("stop_personal_pairing_watch", { watchId })),
+	/**  Approve the authenticated peer metadata and prepare the exact membership handoff. */
+	confirmPersonalPairing: () => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("confirm_personal_pairing")),
+	/**  Explicitly recover the saved ceremony without creating another identity or CPace attempt. */
+	recoverPersonalPairing: () => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("recover_personal_pairing")),
+	/**  Explicitly cancel the session while retaining any authenticated pending identity. */
+	cancelPersonalPairing: () => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("cancel_personal_pairing")),
 	/**  Read public inventory metadata and durable sync progress without network access. */
 	personalInventoryStatus: () => typedError<PersonalInventoryStatus, PersonalInventoryError>(__TAURI_INVOKE("personal_inventory_status")),
 	/**  Preview exact ids and missing references; keys and object content remain in Rust. */
@@ -758,6 +776,79 @@ export type OpenSshUnsupportedDirective = {
 	line: number,
 	/**  The directive name as written. */
 	directive: string,
+};
+
+/**  Localized, non-sensitive failures preserve retained device identity and checkpoints. */
+export type PairingError =
+/**  Existing account/transport/store boundary failure. */
+{ personal: PersonalServerError } |
+/**  Origin, public locator, name or eight-character password was invalid. */
+"invalid_input" |
+/**  The response, transcript, key material or cryptographic binding was invalid. */
+"invalid_response" |
+/**  The earlier local/session five-minute deadline has passed. */
+"expired" |
+/**  Volatile state was lost before a recoverable checkpoint. */
+"restart_required" |
+/**  No pending ceremony accepts this operation. */
+"not_active" |
+/**  A competing state change prevents replaying this retained plan. */
+"conflict" |
+/**  The selected existing device needs a valid native device session. */
+"authentication_required";
+
+/**  The D-114 one-time display exception. Never used by the general status command. */
+export type PairingPasswordDisplay = {
+	/**  Public local ceremony state. */
+	status: PairingStatus,
+	/**  Display once on the new device; never save or automatically copy this value. */
+	password: string,
+};
+
+/**  Safe local ceremony progress; no phase alone establishes an authenticated account. */
+export type PairingPhase =
+/**  No retained ceremony. */
+"idle" |
+/**  New device is waiting for an existing device to claim the public locator. */
+"waiting" |
+/**  The single password-authenticated attempt is running. */
+"exchanging" |
+/**  Confirm the authenticated new-device claims before issuing its certificate. */
+"confirm_device" |
+/**  The exact old-device plan is retained while waiting for possession acceptance. */
+"waiting_acceptance" |
+/**  Admission may have committed; recover with the retained identity and exact plan. */
+"admission_unconfirmed" |
+/**  New side verified authentication/keys; old side confirmed its exact admission receipt. */
+"completed" |
+/**  A fresh explicitly requested ceremony and password are required. */
+"restart_required" |
+/**  This installation terminated the ceremony. */
+"cancelled";
+
+/**  This installation's fixed role in a ceremony. */
+export type PairingSide =
+/**  Existing authenticated account device. */
+"old_device" |
+/**  New device receiving the existing account. */
+"new_device";
+
+/**  Public pairing metadata; never carries a password, capability, key, or decrypted package. */
+export type PairingStatus = {
+	/**  Current safe next action. */
+	phase: PairingPhase,
+	/**  Retained role, if a session exists. */
+	side: PairingSide | null,
+	/**  Exact selected canonical HTTPS origin. */
+	origin: string | null,
+	/**  Public-only session locator, suitable for an explicit Copy action. */
+	publicLink: string | null,
+	/**  Local installation's selected name. */
+	deviceName: string | null,
+	/**  Authenticated new device name, only for old-device confirmation. */
+	peerName: string | null,
+	/**  Authenticated new device platform claim, only for old-device confirmation. */
+	peerPlatform: string | null,
 };
 
 /**  Public signed claims only; no certificate or key material crosses IPC. */

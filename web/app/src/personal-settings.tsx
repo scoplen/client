@@ -5,6 +5,7 @@ import { useI18n } from "./i18n";
 import { commands, type PersonalServerError, type PersonalServerStatus } from "./ipc/bindings";
 import { PersonalSyncSettings } from "./personal-sync-settings";
 import { PersonalAccountSettings } from "./personal-account-settings";
+import { PersonalPairingSettings } from "./personal-pairing-settings";
 
 type Outcome = { status: "ok"; data: PersonalServerStatus } | { status: "error"; error: PersonalServerError };
 
@@ -312,6 +313,14 @@ export function PersonalSettings() {
           ) : null}
         </div>
       )}
+      {status ? (
+        <PersonalPairingSettings
+          configured={status.phase !== "not_configured"}
+          authenticated={status.phase === "authenticated"}
+          disabled={busy}
+          onBusyChange={onChildBusyChange}
+        />
+      ) : null}
     </section>
   );
 }
