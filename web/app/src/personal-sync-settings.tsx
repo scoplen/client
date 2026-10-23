@@ -3,6 +3,7 @@ import { Button } from "@scoplen/ui";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
 import { commands, type PersonalSyncCommandError, type PersonalSyncKeyStatus } from "./ipc/bindings";
+import { PersonalInventorySettings } from "./personal-inventory-settings";
 
 export function PersonalSyncSettings({
   authenticated,
@@ -89,6 +90,13 @@ export function PersonalSyncSettings({
       <Button className="mt-4" disabled={busy || disabled || !authenticated || loading} onClick={() => void connect()}>
         {t(busy ? "settings.personal.working" : "settings.personal.sync.connect")}
       </Button>
+      {status === "verified" ? (
+        <PersonalInventorySettings
+          authenticated={authenticated}
+          disabled={busy || disabled}
+          onBusyChange={onBusyChange}
+        />
+      ) : null}
     </section>
   );
 }

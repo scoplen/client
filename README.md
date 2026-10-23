@@ -112,7 +112,8 @@ session-management outcome.
 Settings → Personal account can prepare a Personal invitation from a user-selected HTTPS
 Scoplen server, save and confirm a recovery file, join, and authenticate the first device.
 The same pending identity is retained across restarts and uncertain responses. The desktop
-does not yet expose inventory synchronization, pair another device, or rotate refresh credentials.
+can explicitly synchronize selected inventory after key verification. Pairing another device
+and refresh credential rotation remain incomplete.
 Existing local SSH data is not uploaded by account setup.
 
 When enrollment remains unconfirmed, Use a new invitation accepts a link for the same server.
@@ -131,7 +132,7 @@ keys locally, including when device authentication has expired; server access re
 device authentication. The interface receives only a verified/not-connected state and safe,
 localized errors. This step does not pull or upload inventory.
 
-The Rust-only `sync_personal_inventory` API implements a bounded first-device Personal
+The Rust-owned `sync_personal_inventory` API implements a bounded first-device Personal
 roundtrip. Its typed intent names the retained vault and exact local object ids to adopt;
 account setup never supplies this intent. Adoption atomically retains immutable encrypted
 local copies, moves only the selected objects, and queues their initial writes. Existing
@@ -144,7 +145,17 @@ Conflicts merge and retry within a fixed budget. Unknown write outcomes retain t
 require a fresh pull on the next explicit cycle. Immutable adoption copies can be restored as
 fresh local objects, preserving the original copies and leaving remote state unchanged.
 
-This API has no inventory IPC or selection UI yet. Cursor expiry returns an explicit
+After Verify sync keys succeeds, Inventory sync exposes local status, exact object selection,
+a shared-secret preview, and a separate confirmation before enabling upload. Referenced objects
+are listed when missing; they are never silently selected. A one-use five-minute review ticket
+stays bound to the store and selected object versions in Rust. Adoption compares those versions
+inside its SQL transaction, so an edit after preview requires another review. Sync now pulls and
+uploads only the existing Personal objects; it does not adopt any newly created local object.
+Applied and acknowledged positions are displayed separately without JavaScript integer loss.
+Original local copies can be selected and restored while offline; this creates new local
+objects and does not undo server changes or restore device-only secrets and handles.
+
+Cursor expiry returns an explicit
 reconciliation-required error; full reconciliation, automatic polling, pairing, key rotation,
 and the complete host-key trust replication policy remain later outcomes. Trust records with
 missing or unverified same-user provenance are retained locally and require review before sync.

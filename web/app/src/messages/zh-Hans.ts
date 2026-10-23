@@ -146,7 +146,7 @@ export const zhHans: Messages = {
   "settings.personal.sync.loading": "正在检查本机已保存的同步密钥…",
   "settings.personal.sync.body": "连接后将验证账号与保险库密钥，主机与凭据仍保存在本机。",
   "settings.personal.sync.connecting": "正在连接服务器并验证同步密钥…",
-  "settings.personal.sync.verified": "本机同步密钥已验证。此版本尚未提供清单同步，主机与凭据仍保存在本机。",
+  "settings.personal.sync.verified": "本机同步密钥已验证。请在下方检查并选择本地对象，再启用上传。",
   "settings.personal.sync.unavailable": "无法检查已保存的同步密钥，已有账号数据仍被保留。",
   "settings.personal.sync.authenticate": "请先在上方认证此设备，再连接服务器。",
   "settings.personal.sync.connect": "验证同步密钥",
@@ -543,4 +543,83 @@ export const zhHans: Messages = {
   "import.error.noHosts": "没有可导入的 Host 区块，请选择其他文件。",
   "import.error.inventoryNotEmpty": "只有还没有添加主机时才能导入。",
   "import.error.identityNotFound": "无法读取密钥文件：{path}。请检查配置中的路径后重试。",
+  "settings.personal.inventory.title": "清单同步",
+  "settings.personal.inventory.body": "只有点击这里的操作才会同步。未选中和之后新建的本地对象仍留在本机。",
+  "settings.personal.inventory.content":
+    "选中对象会加密后同步到你的个人保险库。共享凭据包含密码或私钥；仅限本机的秘密、密钥库句柄和会话历史不会上传。",
+  "settings.personal.inventory.loading": "正在读取本地清单与同步进度…",
+  "settings.personal.inventory.pending": "待同步改动",
+  "settings.personal.inventory.applied": "本机已应用位置",
+  "settings.personal.inventory.acknowledged": "已确认的回执位置",
+  "settings.personal.inventory.vault": "个人保险库：{id}",
+  "settings.personal.inventory.sync": "立即同步",
+  "settings.personal.inventory.reload": "刷新本地状态",
+  "settings.personal.inventory.authenticate": "请先在上方认证此设备再同步。离线时仍可恢复本地副本。",
+  "settings.personal.inventory.local": "本地对象",
+  "settings.personal.inventory.selectBody": "逐项选择要同步的对象。引用的登录、路由和凭据需要单独选择。",
+  "settings.personal.inventory.empty": "没有待选择的本地对象。新建的主机和凭据会显示在这里。",
+  "settings.personal.inventory.review": "检查所选对象（{count, number}）",
+  "settings.personal.inventory.adopted": "已加入个人同步的对象",
+  "settings.personal.inventory.backups": "原始本地副本",
+  "settings.personal.inventory.backupBody":
+    "启用上传前，系统会保存选中对象的原始加密本地副本。之后的编辑不会覆盖这些副本。",
+  "settings.personal.inventory.restoreBody":
+    "恢复会从原始副本创建新的本地对象，可离线进行，不会撤销服务器上的任何改动或删除。所选副本之间的引用会一并恢复；仅限本机的秘密和密钥库句柄不会复制。",
+  "settings.personal.inventory.noBackups": "还没有原始副本。选中对象加入个人同步时会自动保存。",
+  "settings.personal.inventory.restore": "恢复所选副本（{count, number}）",
+  "settings.personal.inventory.reviewTitle": "检查清单上传内容",
+  "settings.personal.inventory.reviewBody": "只有这里列出的对象会加入个人同步。继续前请检查共享凭据。",
+  "settings.personal.inventory.missing":
+    "所选对象引用了以下未选中的本地对象。请关闭预览并逐项选择，或先修改引用。已删除和仅限组织的对象无法选中。当前操作尚未改变归属或上传。",
+  "settings.personal.inventory.confirm": "我已检查这些对象及其共享秘密，并同意启用加密上传。",
+  "settings.personal.inventory.adopt": "启用并同步所选对象",
+  "settings.personal.inventory.restoreTitle": "恢复原始本地副本？",
+  "settings.personal.inventory.restoreConfirm": "创建本地副本",
+  "settings.personal.inventory.close": "关闭预览",
+  "settings.personal.inventory.cancel": "取消",
+  "settings.personal.inventory.secret": "包含共享秘密",
+  "settings.personal.inventory.dirty": "待同步改动",
+  "settings.personal.inventory.deleted": "已删除",
+  "settings.personal.inventory.excluded": "仅限组织",
+  "settings.personal.inventory.result": "已下载 {downloaded, number} 项，已上传 {uploaded, number} 项。",
+  "settings.personal.inventory.more": "仍有待处理内容，请点击立即同步以继续。",
+  "settings.personal.inventory.done": "本轮同步已完成。之后的编辑会等待你再次同步。",
+  "settings.personal.inventory.restored": "已创建 {count, number} 个本地副本。服务器数据未改动，原始快照仍可再次恢复。",
+  "settings.personal.inventory.category.host": "主机",
+  "settings.personal.inventory.category.login": "登录",
+  "settings.personal.inventory.category.credential": "凭据",
+  "settings.personal.inventory.category.route": "路由",
+  "settings.personal.inventory.category.group": "分组",
+  "settings.personal.inventory.category.trust": "主机密钥信任",
+  "settings.personal.inventory.category.snippet": "代码片段与默认值",
+  "settings.personal.inventory.category.forward": "隧道",
+  "settings.personal.inventory.category.workspace": "工作区",
+  "settings.personal.inventory.category.other": "其他对象",
+  "settings.personal.inventory.error.storage": "无法读取或保存本地同步数据。请解锁本地数据，刷新状态后重试。",
+  "settings.personal.inventory.error.busy": "其他账号或同步操作正在运行。请等待完成后重试。",
+  "settings.personal.inventory.error.notConfigured": "个人设备注册尚未就绪。请先完成上方的账号设置。",
+  "settings.personal.inventory.error.authenticationRequired":
+    "设备认证已过期或被拒绝，本地数据已保留。请在上方重新认证此设备后再同步。",
+  "settings.personal.inventory.error.network":
+    "与服务器的通信未完成，本地改动已保留。请检查网络与服务器证书后再次同步。",
+  "settings.personal.inventory.error.invalidSyncResponse":
+    "无法验证同步响应，本地数据已保留。请检查服务器配置后再同步。",
+  "settings.personal.inventory.error.rotationRequired":
+    "此账号或保险库需要密钥轮换支持，本地数据已保留。请使用支持当前密钥的客户端。",
+  "settings.personal.inventory.error.reconciliationRequired":
+    "服务器要求完整对账，此版本尚不支持。本地改动与原始副本仍可使用，必要时可恢复本地副本。",
+  "settings.personal.inventory.error.writeOutcomeUnknown":
+    "服务器可能已保存改动，持久队列仍被保留。请点击立即同步，先拉取并确认结果，再继续写入。",
+  "settings.personal.inventory.error.acknowledgementUnknown":
+    "改动已保存在本机，但回执尚未确认。请点击立即同步以确认。",
+  "settings.personal.inventory.error.concurrentChanges":
+    "并发改动超过本轮同步的重试上限，本地队列已保留。请点击立即同步以继续。",
+  "settings.personal.inventory.error.clock": "时钟检查阻止了上传，本地改动已保留。请校正本机与服务器时间后再同步。",
+  "settings.personal.inventory.error.selection":
+    "选中对象或引用已变化，原始本地数据已保留。请刷新本地状态，再次检查具体对象。",
+  "settings.personal.inventory.error.resourceLimit": "同步达到资源上限，本地改动已保留。请检查选中对象的大小后重试。",
+  "settings.personal.inventory.error.trustReviewRequired":
+    "某条主机密钥信任记录缺少可验证的同账号来源，未接受未经验证的信任。请检查该记录后重试。",
+  "settings.personal.inventory.error.previewExpired":
+    "预览已过期或与本地数据不再一致，此次操作未改变对象归属。请重新检查所选对象。",
 };

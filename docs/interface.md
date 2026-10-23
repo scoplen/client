@@ -51,10 +51,28 @@ and authentication intents, and no invitation appears in localized errors or pub
 Authenticated status means Rust verified the unexpired device access token against the exact
 chosen HTTPS origin's JWKS and the saved account/device/key identity. It does not mean inventory
 has synchronized. Existing hosts and credentials remain local. Pairing, refresh rotation,
-profile display, and inventory pull/push remain separate outcomes. Settings navigation supports
+profile display, and complete multi-device reconciliation remain separate outcomes. Settings navigation supports
 arrow keys, Home/End, visible focus, and wrapping at narrow widths. An explicit action that
 advances to another phase focuses its heading; initial status reads and same-phase actions
 retain keyboard focus.
+
+Verify sync keys reads locally on mount and connects only on explicit activation. A verified
+snapshot reveals Inventory sync. Its initial status read and Refresh local status stay offline.
+Local object checkboxes select exact ids, show category and shared-secret presence, and do not
+follow references. Review selected opens a modal listing the selection, immutable-copy behavior,
+and missing references. Upload remains disabled until references are resolved and the user
+separately agrees to upload the selected content. The native preview ticket expires after five
+minutes and is consumed once; an object edit between review and adoption requires review again.
+Sync now sends no adoption ticket and never includes new local objects automatically.
+
+The panel shows pending changes and separate applied/confirmed-ack positions. Every completed
+or failed intent reloads durable local status without starting another network cycle. Typed
+uncertainty, reconciliation, rotation, trust, clock, authentication, and selection failures are
+localized; arbitrary native diagnostics are replaced with a safe local-data failure. A bounded
+cycle with more work offers the same explicit Sync now action. Original local copies have a
+separate exact selection and confirmation. Restore works with expired authentication and no
+network, creates new local objects, and explicitly says it does not undo remote data or copy
+device-only secrets/handles. Cancelling either confirmation performs no mutation.
 
 ## Inventory (roadmap C3)
 

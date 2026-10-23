@@ -21,6 +21,9 @@ const sample = {
   color: "Red",
   attempt: 2,
   seconds: 2,
+  id: "019a0123-4567-7890-8123-456789abcdef",
+  downloaded: 2,
+  uploaded: 3,
 };
 
 describe("message catalogs", () => {

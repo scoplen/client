@@ -174,7 +174,7 @@ export const en = {
   "settings.personal.sync.body": "Connect to verify your account and vault keys. Hosts and credentials remain local.",
   "settings.personal.sync.connecting": "Connecting to your server and verifying sync keys…",
   "settings.personal.sync.verified":
-    "Sync keys are verified on this device. Inventory synchronization is not available in this build; hosts and credentials remain local.",
+    "Sync keys are verified on this device. Review and select local objects below before enabling their upload.",
   "settings.personal.sync.unavailable": "Saved sync keys could not be checked. Existing account data was retained.",
   "settings.personal.sync.authenticate": "Authenticate this device above before connecting to the server.",
   "settings.personal.sync.connect": "Verify sync keys",
@@ -585,6 +585,98 @@ export const en = {
   "import.error.inventoryNotEmpty": "Import is available only before the first host is added.",
   "import.error.identityNotFound":
     "The identity file could not be read: {path}. Check the path in the config and try again.",
+  "settings.personal.inventory.title": "Inventory sync",
+  "settings.personal.inventory.body":
+    "Sync runs only when you choose an action here. Unselected and newly created local objects stay on this device.",
+  "settings.personal.inventory.content":
+    "Selected objects are encrypted for your Personal vault. Shared credentials include their passwords or private keys; device-only secrets, keystore handles, and session history are never uploaded.",
+  "settings.personal.inventory.loading": "Reading local inventory and sync progress…",
+  "settings.personal.inventory.pending": "Pending changes",
+  "settings.personal.inventory.applied": "Applied position",
+  "settings.personal.inventory.acknowledged": "Confirmed acknowledgement",
+  "settings.personal.inventory.vault": "Personal vault: {id}",
+  "settings.personal.inventory.sync": "Sync now",
+  "settings.personal.inventory.reload": "Refresh local status",
+  "settings.personal.inventory.authenticate":
+    "Authenticate this device above to sync. You can still restore local copies while offline.",
+  "settings.personal.inventory.local": "Local objects",
+  "settings.personal.inventory.selectBody":
+    "Select each object you want to sync. Referenced logins, routes, and credentials must be selected separately.",
+  "settings.personal.inventory.empty":
+    "No local objects are waiting for selection. New hosts and credentials will appear here.",
+  "settings.personal.inventory.review": "Review selected ({count, number})",
+  "settings.personal.inventory.adopted": "Objects in Personal sync",
+  "settings.personal.inventory.backups": "Original local copies",
+  "settings.personal.inventory.backupBody":
+    "Before upload is enabled, the original selected objects are saved as immutable encrypted local copies. Later edits cannot replace these copies.",
+  "settings.personal.inventory.restoreBody":
+    "Restore creates new local objects from the original copies. It works offline and does not undo any server change or deletion. References between selected copies are restored together; device-only secrets and keystore handles are not copied.",
+  "settings.personal.inventory.noBackups":
+    "No original copies yet. They are saved when selected objects enter Personal sync.",
+  "settings.personal.inventory.restore": "Restore selected copies ({count, number})",
+  "settings.personal.inventory.reviewTitle": "Review inventory upload",
+  "settings.personal.inventory.reviewBody":
+    "Only the exact objects listed here will enter Personal sync. Review shared credentials before continuing.",
+  "settings.personal.inventory.missing":
+    "These referenced local objects are missing from your selection. Close this review and select them explicitly, or change the references first. Deleted and organization-only objects cannot be selected. Nothing has been adopted or uploaded.",
+  "settings.personal.inventory.confirm":
+    "I have reviewed these objects and any shared secrets, and agree to enable their encrypted upload.",
+  "settings.personal.inventory.adopt": "Enable and sync selected",
+  "settings.personal.inventory.restoreTitle": "Restore original local copies?",
+  "settings.personal.inventory.restoreConfirm": "Create local copies",
+  "settings.personal.inventory.close": "Close review",
+  "settings.personal.inventory.cancel": "Cancel",
+  "settings.personal.inventory.secret": "Includes shared secret",
+  "settings.personal.inventory.dirty": "Pending change",
+  "settings.personal.inventory.deleted": "Deleted",
+  "settings.personal.inventory.excluded": "Organization only",
+  "settings.personal.inventory.result": "Downloaded {downloaded, number}; uploaded {uploaded, number}.",
+  "settings.personal.inventory.more": "More work remains. Choose Sync now to continue.",
+  "settings.personal.inventory.done": "This cycle is complete. Future edits wait for your next sync.",
+  "settings.personal.inventory.restored":
+    "Created {count, number} local copies. Server data was not changed; the original snapshots remain available.",
+  "settings.personal.inventory.category.host": "Host",
+  "settings.personal.inventory.category.login": "Login",
+  "settings.personal.inventory.category.credential": "Credential",
+  "settings.personal.inventory.category.route": "Route",
+  "settings.personal.inventory.category.group": "Group",
+  "settings.personal.inventory.category.trust": "Host-key trust",
+  "settings.personal.inventory.category.snippet": "Snippet and defaults",
+  "settings.personal.inventory.category.forward": "Tunnel",
+  "settings.personal.inventory.category.workspace": "Workspace",
+  "settings.personal.inventory.category.other": "Other object",
+  "settings.personal.inventory.error.storage":
+    "Local sync data could not be read or saved. Unlock your local data, then refresh its status before retrying.",
+  "settings.personal.inventory.error.busy":
+    "Another account or sync action is running. Wait for it to finish, then try again.",
+  "settings.personal.inventory.error.notConfigured":
+    "Personal enrollment is not ready. Complete account setup above before syncing.",
+  "settings.personal.inventory.error.authenticationRequired":
+    "Device authentication expired or was denied. Local data was retained. Authenticate this device above, then sync again.",
+  "settings.personal.inventory.error.network":
+    "The server exchange did not finish. Local changes were retained. Check your connection and server certificate, then sync again.",
+  "settings.personal.inventory.error.invalidSyncResponse":
+    "The sync response could not be verified. Local data was retained. Check the server configuration before syncing again.",
+  "settings.personal.inventory.error.rotationRequired":
+    "This account or vault requires key rotation support. Local data was retained. Use a client that supports the current keys.",
+  "settings.personal.inventory.error.reconciliationRequired":
+    "The server requires full reconciliation, which this build cannot perform. Local changes and original copies remain available; restore copies locally if needed.",
+  "settings.personal.inventory.error.writeOutcomeUnknown":
+    "The server may have saved these changes. The durable queue was retained. Choose Sync now to pull and check the result before another write.",
+  "settings.personal.inventory.error.acknowledgementUnknown":
+    "Changes are saved on this device, but their acknowledgement is unconfirmed. Choose Sync now to confirm it.",
+  "settings.personal.inventory.error.concurrentChanges":
+    "Concurrent changes exceeded this sync cycle. Your local queue was retained. Choose Sync now to continue.",
+  "settings.personal.inventory.error.clock":
+    "A clock check stopped upload. Local changes were retained. Correct the device and server clocks, then sync again.",
+  "settings.personal.inventory.error.selection":
+    "The selection or its references changed. Local originals were retained. Refresh local status and review the exact objects again.",
+  "settings.personal.inventory.error.resourceLimit":
+    "A sync resource limit was reached. Local changes were retained. Review the size of selected objects before retrying.",
+  "settings.personal.inventory.error.trustReviewRequired":
+    "A host-key trust record lacks verified same-account provenance. No unverified trust was accepted. Review that record before retrying.",
+  "settings.personal.inventory.error.previewExpired":
+    "This review expired or no longer matches local data. Nothing was adopted by this attempt. Review the selected objects again.",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };

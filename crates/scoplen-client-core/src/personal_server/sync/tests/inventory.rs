@@ -267,6 +267,219 @@ async fn cycle(
 }
 
 #[tokio::test]
+async fn settings_facade_reviews_exact_ids_redacts_secrets_and_restores_offline() {
+    use crate::personal_inventory::PersonalInventorySettings;
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    peer.state.lock().unwrap().inventory = Some(InventoryPeer::default());
+    let settings = PersonalInventorySettings::default();
+    let host = make_host(&store);
+    let shared = store
+        .write(LocalWrite {
+            id: None,
+            object_type: ObjectType::CREDENTIAL,
+            fields: vec![
+                (FieldPath::Field(1), Value::Text("Shared password".into())),
+                (FieldPath::Field(2), Value::UInt(1)),
+                (FieldPath::Field(3), Value::UInt(1)),
+                (FieldPath::Field(4), Value::Bytes(b"secret-must-not-cross-ipc".to_vec())),
+            ],
+        })
+        .unwrap();
+    let device = store
+        .write_with_device_credential(
+            LocalWrite {
+                id: None,
+                object_type: ObjectType::CREDENTIAL,
+                fields: vec![
+                    (FieldPath::Field(2), Value::UInt(1)),
+                    (FieldPath::Field(3), Value::UInt(2)),
+                ],
+            },
+            Some(b"device-secret-must-not-cross-ipc"),
+            false,
+        )
+        .unwrap();
+    let login = store
+        .write(LocalWrite {
+            id: None,
+            object_type: ObjectType::ACCESS_PROFILE,
+            fields: vec![
+                (FieldPath::Field(1), Value::Bytes(host.id.as_bytes().to_vec())),
+                (FieldPath::Field(3), Value::Text("operator".into())),
+                (FieldPath::Field(4), Value::Bytes(shared.id.as_bytes().to_vec())),
+            ],
+        })
+        .unwrap();
+    let before = peer.state.lock().unwrap().paths.len();
+    let incomplete = settings.preview(&store, vec![login.id.to_string()]).unwrap();
+    assert!(incomplete.token.is_none());
+    assert_eq!(incomplete.objects.len(), 1);
+    assert_eq!(incomplete.missing.len(), 2);
+    let ids = [host.id, shared.id, login.id, device.id].map(|id| id.to_string()).to_vec();
+    let preview = settings.preview(&store, ids.clone()).unwrap();
+    assert_eq!(preview.objects.len(), 4);
+    assert!(
+        preview
+            .objects
+            .iter()
+            .find(|object| object.id == shared.id.to_string())
+            .unwrap()
+            .shared_secret
+    );
+    assert!(
+        !preview
+            .objects
+            .iter()
+            .find(|object| object.id == device.id.to_string())
+            .unwrap()
+            .shared_secret
+    );
+    let json = serde_json::to_string(&preview).unwrap();
+    assert!(!json.contains("secret-must-not-cross-ipc"));
+    assert!(!json.contains("operator"));
+    assert_eq!(peer.state.lock().unwrap().paths.len(), before);
+    let result = settings.synchronize(&manager, store.clone(), preview.token).await.unwrap();
+    assert_eq!(result.uploaded, 4);
+    let status = settings.status(&store).unwrap();
+    assert_eq!(status.pending, 0);
+    assert_eq!(status.backups.len(), 4);
+    assert_eq!(status.applied_cursor, "11");
+    assert_eq!(status.acknowledged_cursor, "11");
+    assert!(status.objects.iter().all(|object| object.personal));
+    store
+        .write(LocalWrite {
+            id: Some(host.id),
+            object_type: ObjectType::HOST,
+            fields: vec![(FieldPath::Field(1), Value::Text("Offline edit".into()))],
+        })
+        .unwrap();
+    let future = make_host(&store);
+    let unknown = store
+        .write(LocalWrite {
+            id: None,
+            object_type: ObjectType::from_wire(50_000).unwrap(),
+            fields: vec![(
+                FieldPath::Field(1),
+                Value::Text("future-sensitive-content-must-not-cross-ipc".into()),
+            )],
+        })
+        .unwrap();
+    assert_eq!(settings.status(&store).unwrap().pending, 1);
+    let metadata = settings.status(&store).unwrap();
+    assert!(
+        metadata
+            .objects
+            .iter()
+            .find(|object| object.id == unknown.id.to_string())
+            .unwrap()
+            .name
+            .is_none()
+    );
+    assert!(!serde_json::to_string(&metadata).unwrap().contains("future-sensitive-content"));
+    peer.assert_healthy();
+    drop(peer);
+    assert_eq!(settings.restore(&manager, &store, ids).unwrap(), 4);
+    let status = settings.status(&store).unwrap();
+    assert_eq!(status.pending, 1);
+    assert_eq!(status.backups.len(), 4);
+    assert_eq!(status.objects.iter().filter(|object| !object.personal).count(), 6);
+    assert!(
+        status
+            .objects
+            .iter()
+            .find(|object| object.id == future.id.to_string())
+            .is_some_and(|object| !object.personal)
+    );
+    assert_eq!(
+        store.device_credential(device.id).unwrap().unwrap().secret.unwrap().as_bytes(),
+        b"device-secret-must-not-cross-ipc"
+    );
+    drop(store);
+    let reopened = local(&dir);
+    let status = PersonalInventorySettings::default().status(&reopened).unwrap();
+    assert_eq!(status.pending, 1);
+    assert_eq!(status.applied_cursor, "11");
+    assert_eq!(status.backups.len(), 4);
+}
+
+#[tokio::test]
+async fn settings_facade_rejects_stale_reviews_atomically_and_consumes_them_once() {
+    use crate::personal_inventory::{PersonalInventoryError, PersonalInventorySettings};
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    peer.state.lock().unwrap().inventory = Some(InventoryPeer::default());
+    let first = make_host(&store);
+    let second = make_host(&store);
+    let settings = PersonalInventorySettings::default();
+    let ids = vec![first.id.to_string(), second.id.to_string()];
+    assert_eq!(
+        settings.preview(&store, vec!["bad id".into()]).unwrap_err(),
+        PersonalInventoryError::Selection
+    );
+    assert_eq!(
+        settings.preview(&store, vec![first.id.to_string(); 2]).unwrap_err(),
+        PersonalInventoryError::Selection
+    );
+    let review = settings.preview(&store, ids).unwrap();
+    store
+        .write(LocalWrite {
+            id: Some(second.id),
+            object_type: ObjectType::HOST,
+            fields: vec![(FieldPath::Field(7), Value::Text("Changed after review".into()))],
+        })
+        .unwrap();
+    assert_eq!(
+        settings.synchronize(&manager, store.clone(), review.token.clone()).await.unwrap_err(),
+        PersonalInventoryError::Selection
+    );
+    let status = settings.status(&store).unwrap();
+    assert!(status.backups.is_empty());
+    assert!(status.objects.iter().all(|object| !object.personal));
+    assert_eq!(status.pending, 0);
+    assert_eq!(
+        settings.synchronize(&manager, store.clone(), review.token).await.unwrap_err(),
+        PersonalInventoryError::PreviewExpired
+    );
+    assert_eq!(settings.synchronize(&manager, store.clone(), None).await.unwrap().uploaded, 0);
+    assert!(settings.status(&store).unwrap().backups.is_empty());
+    assert_eq!(peer.state.lock().unwrap().inventory.as_ref().unwrap().writes, 0);
+    peer.assert_healthy();
+}
+
+#[tokio::test]
+async fn settings_facade_reports_uncertain_commits_and_keeps_durable_progress_for_manual_recovery()
+{
+    use crate::personal_inventory::{PersonalInventoryError, PersonalInventorySettings};
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    peer.state.lock().unwrap().inventory =
+        Some(InventoryPeer { uncertain_once: true, ..InventoryPeer::default() });
+    let object = make_host(&store);
+    let settings = PersonalInventorySettings::default();
+    let preview = settings.preview(&store, vec![object.id.to_string()]).unwrap();
+    assert_eq!(
+        settings.synchronize(&manager, store.clone(), preview.token).await.unwrap_err(),
+        PersonalInventoryError::WriteOutcomeUnknown
+    );
+    let status = settings.status(&store).unwrap();
+    assert_eq!(status.pending, 1);
+    assert_eq!(status.backups.len(), 1);
+    assert_eq!(status.applied_cursor, "7");
+    assert_eq!(status.acknowledged_cursor, "7");
+    settings.synchronize(&manager, store.clone(), None).await.unwrap();
+    assert_eq!(settings.status(&store).unwrap().pending, 0);
+    assert_eq!(peer.state.lock().unwrap().inventory.as_ref().unwrap().writes, 1);
+    peer.assert_healthy();
+}
+
+#[tokio::test]
 async fn explicit_inventory_roundtrip_encrypts_secrets_and_survives_restart_and_offline_edits() {
     let peer = Peer::new().await;
     let dir = tempfile::tempdir().unwrap();

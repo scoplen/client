@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Personal synchronization metadata and objects commit in the same SQLCipher transaction.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use scoplen_api::sync::SyncWriteBatchResponse;
 use scoplen_model::{FieldPath, Hlc, MapKey, Object, ObjectType, cbor::Value};
+use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 use super::{Store, StoreError, grouped_changes, read_object, store_object};
@@ -20,12 +21,29 @@ pub(crate) struct RemoteObject {
     pub seq: u64,
 }
 
+pub(crate) struct InventorySnapshot {
+    pub objects: Vec<(Object, bool, bool)>,
+    pub backups: Vec<Object>,
+    pub pending: u32,
+    pub applied: u64,
+    pub acknowledged: u64,
+}
+
 impl Store {
     /// Adopt only the confirmed selection. New local objects remain local until selected.
     pub(crate) fn adopt_personal_objects(
         &self,
         vault: Uuid,
         selected: &[Uuid],
+    ) -> Result<(), StoreError> {
+        self.adopt_personal_objects_reviewed(vault, selected, None)
+    }
+
+    pub(crate) fn adopt_personal_objects_reviewed(
+        &self,
+        vault: Uuid,
+        selected: &[Uuid],
+        reviewed: Option<&HashMap<Uuid, [u8; 32]>>,
     ) -> Result<(), StoreError> {
         if selected.len() > super::MAX_OBJECTS_PER_VAULT as usize {
             return Err(StoreError::SyncSelection);
@@ -46,6 +64,12 @@ impl Store {
         for id in selected {
             let object = read_object(&tx, *id)?.ok_or(StoreError::NotFound(*id))?;
             let current = object_vault(&tx, *id)?;
+            if let Some(reviewed) = reviewed
+                && (current.is_some()
+                    || reviewed.get(id) != Some(&Sha256::digest(object.encode()?).into()))
+            {
+                return Err(StoreError::SyncSelection);
+            }
             if current.is_some_and(|current| current != vault) {
                 return Err(StoreError::SyncSelection);
             }
@@ -83,6 +107,61 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    pub(crate) fn personal_inventory_snapshot(
+        &self,
+        vault: Uuid,
+    ) -> Result<InventorySnapshot, StoreError> {
+        let conn = self.conn();
+        let conn = conn.unchecked_transaction()?;
+        let mut query = conn.prepare_cached(
+            "SELECT objects.id, objects.envelope, objects.vault, coalesce(personal_sync_objects.dirty, 0)
+             FROM objects LEFT JOIN personal_sync_objects ON objects.id = personal_sync_objects.object_id
+             WHERE objects.vault IS NULL OR objects.vault = ?1 ORDER BY objects.id",
+        )?;
+        let rows = query.query_map(params![vault.as_bytes().as_slice()], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Option<Vec<u8>>>(2)?,
+                row.get::<_, bool>(3)?,
+            ))
+        })?;
+        let objects = rows
+            .map(|row| {
+                let (id, envelope, owner, dirty) = row?;
+                Ok((super::decode(&id, &envelope)?, owner.is_some(), dirty))
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let mut query = conn.prepare_cached("SELECT object_id, envelope FROM personal_sync_backups WHERE vault = ?1 ORDER BY object_id")?;
+        let rows = query.query_map(params![vault.as_bytes().as_slice()], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        let backups = rows
+            .map(|row| {
+                let (id, envelope) = row?;
+                super::decode(&id, &envelope)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let progress = conn
+            .query_row(
+                "SELECT cursor, acknowledged FROM personal_sync_progress WHERE vault = ?1",
+                params![vault.as_bytes().as_slice()],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        let (applied, acknowledged) = match progress {
+            Some((applied, acknowledged)) => (sequence(&applied)?, sequence(&acknowledged)?),
+            None => (0, 0),
+        };
+        Ok(InventorySnapshot {
+            pending: objects.iter().filter(|(_, _, dirty)| *dirty).count() as u32,
+            objects,
+            backups,
+            applied,
+            acknowledged,
+        })
     }
 
     #[cfg(test)]
