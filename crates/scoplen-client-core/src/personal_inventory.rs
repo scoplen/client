@@ -136,6 +136,10 @@ pub enum PersonalInventoryError {
     NotConfigured,
     /// Renew device authentication.
     AuthenticationRequired,
+    /// The server confirmed no refresh change; a later explicit attempt is safe.
+    RefreshDeferred,
+    /// A narrowed session lacks the required operation scope.
+    PermissionDenied,
     /// An HTTPS exchange failed.
     Network,
     /// Untrusted or mismatched sync artifacts were rejected.
@@ -171,7 +175,17 @@ impl From<PersonalSyncError> for PersonalInventoryError {
                 PersonalServerError::Network | PersonalServerError::ConnectionBeforeRequest,
             ) => Self::Network,
             PersonalSyncError::Personal(PersonalServerError::Authentication)
+            | PersonalSyncError::Personal(PersonalServerError::AuthenticationRequired)
             | PersonalSyncError::AuthenticationRequired => Self::AuthenticationRequired,
+            PersonalSyncError::Personal(PersonalServerError::RefreshDeferred) => {
+                Self::RefreshDeferred
+            }
+            PersonalSyncError::Personal(PersonalServerError::PermissionDenied) => {
+                Self::PermissionDenied
+            }
+            PersonalSyncError::Personal(PersonalServerError::InvalidResponse) => {
+                Self::InvalidSyncResponse
+            }
             PersonalSyncError::Personal(_) => Self::Storage,
             PersonalSyncError::InvalidResponse => Self::InvalidSyncResponse,
             PersonalSyncError::RotationRequired => Self::RotationRequired,

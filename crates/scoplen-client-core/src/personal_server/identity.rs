@@ -201,5 +201,11 @@ pub(super) fn prepare(
         recovery_confirmed: false,
         enrollment_attempted: false,
         access_expires_at: None,
+        refresh_expires_at: None,
+        auth_generation: 0,
+        auth_scope: None,
+        refresh_available: false,
+        session_established: false,
+        refresh_retry_at: None,
     })
 }

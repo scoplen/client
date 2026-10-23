@@ -723,7 +723,7 @@ async fn cursor_expiry_ack_failure_clock_and_scope_boundaries_never_upload() {
             match mode {
                 0 => PersonalSyncError::InvalidResponse,
                 1 => PersonalSyncError::AcknowledgementUnknown,
-                4 => PersonalSyncError::AuthenticationRequired,
+                4 => PersonalServerError::PermissionDenied.into(),
                 _ => PersonalSyncError::Clock,
             }
         );

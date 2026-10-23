@@ -52,6 +52,7 @@ struct PeerState {
     proofs: HashSet<String>,
     errors: Vec<String>,
     inventory: Option<InventoryPeer>,
+    refresh: Option<RefreshPeer>,
 }
 
 struct Peer {
@@ -342,12 +343,23 @@ async fn answer(
             if !state.proofs.insert(verified.jti) {
                 return Err("reused proof".into());
             }
+        } else if path == "/api/v1/auth/refresh" {
+            // This endpoint has a proof but deliberately no access-token header.
         } else if request.headers().contains_key("authorization")
             || request.headers().contains_key("dpop")
         {
             return Err("credentials leaked to JWKS".into());
         }
-        if state.inventory.is_some()
+        if path.starts_with("/api/v1/auth/") && state.refresh.is_some() {
+            let PeerState { refresh, expected, proofs, .. } = &mut *state;
+            refresh.as_mut().unwrap().answer(
+                &request,
+                &body,
+                expected.as_mut().unwrap(),
+                proofs,
+                origin,
+            )?
+        } else if state.inventory.is_some()
             && matches!(path.rsplit('/').next(), Some("changes" | "snapshot" | "objects" | "ack"))
         {
             let expected = state.expected.as_ref().ok_or("missing identity")?;
@@ -563,13 +575,13 @@ async fn invalid_tokens_and_scopes_send_no_protected_request() {
                 )
                 .unwrap();
         }
-        assert!(
-            matches!(
-                manager.bootstrap_sync(store.clone()).await,
-                Err(PersonalSyncError::AuthenticationRequired)
-            ),
-            "field {field}"
-        );
+        let error = manager.bootstrap_sync(store.clone()).await.err().unwrap();
+        let expected = if field == 2 || field == 3 {
+            PersonalServerError::PermissionDenied.into()
+        } else {
+            PersonalSyncError::AuthenticationRequired
+        };
+        assert_eq!(error, expected, "field {field}");
         assert_eq!(peer.state.lock().unwrap().proofs.len(), protected);
         assert!(manager.load_sync_bootstrap(&store).unwrap().is_some());
     }
@@ -699,4 +711,6 @@ fn retained_identity_and_cached_snapshot_are_revalidated() {
 }
 
 mod inventory;
+mod refresh;
 use inventory::InventoryPeer;
+use refresh::RefreshPeer;

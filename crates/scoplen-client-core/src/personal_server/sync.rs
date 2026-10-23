@@ -85,6 +85,7 @@ pub struct PersonalSyncBootstrap {
 }
 
 struct SyncContext {
+    store: Arc<Store>,
     bootstrap: PersonalSyncBootstrap,
     identity: PersonalRecord,
     access: SecretVec,
@@ -119,9 +120,15 @@ impl PersonalServer {
 
     async fn bootstrap_inner(
         &self,
-        store: &Store,
+        store: &Arc<Store>,
         write: bool,
     ) -> Result<SyncContext, PersonalSyncError> {
+        self.refresh_for_operation(store).await.map_err(|error| match error {
+            PersonalServerError::AuthenticationRequired => {
+                PersonalSyncError::AuthenticationRequired
+            }
+            _ => error.into(),
+        })?;
         let pending = record(store)?;
         let previous = store.personal_sync_record().map_err(storage)?;
         let access = store
@@ -135,19 +142,29 @@ impl PersonalServer {
         let transport = self.transport.as_ref().map_err(|error| *error)?;
         let trusted = trusted_token_keys(transport, &pending.origin).await?;
         let current_time = now()?;
-        let verified = DeviceAccessToken::parse(token)
+        let verified = match DeviceAccessToken::parse(token)
             .and_then(|token| token.verify(&trusted, current_time))
-            .map_err(|_| PersonalSyncError::AuthenticationRequired)?;
+        {
+            Ok(verified) => verified,
+            Err(_) => {
+                store.invalidate_personal_session(&pending, &access).map_err(storage)?;
+                return Err(PersonalSyncError::AuthenticationRequired);
+            }
+        };
         let claims = verified.claims();
         if claims.sub != pending.account_id
             || claims.did != store.device_id()
             || claims.cnf_jkt != dpop_jwk_thumbprint(&signing.public_key_sec1()).map_err(invalid)?
-            || !["keys:read", "sync:read"]
-                .iter()
-                .all(|required| claims.scope.split(' ').any(|scope| scope == *required))
+        {
+            store.invalidate_personal_session(&pending, &access).map_err(storage)?;
+            return Err(PersonalSyncError::AuthenticationRequired);
+        }
+        if !["keys:read", "sync:read"]
+            .iter()
+            .all(|required| claims.scope.split(' ').any(|scope| scope == *required))
             || write && !claims.scope.split(' ').any(|scope| scope == "sync:write")
         {
-            return Err(PersonalSyncError::AuthenticationRequired);
+            return Err(PersonalServerError::PermissionDenied.into());
         }
         let request = SyncSessionRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -163,7 +180,9 @@ impl PersonalServer {
             ("/sync/v1/keys", None),
             (vault_path.as_str(), None),
         ] {
-            if verified.expires_at() <= now()? {
+            if verified.expires_at() <= now()?
+                || !store.personal_session_current(&pending, &access, now()?).map_err(storage)?
+            {
                 return Err(PersonalSyncError::AuthenticationRequired);
             }
             let target =
@@ -182,7 +201,10 @@ impl PersonalServer {
                 transport.protected(&pending.origin, path, body, token, &proof, BODY_LIMIT).await?;
             match response.status {
                 200 => bodies.push(response.body),
-                401 | 403 => return Err(PersonalSyncError::AuthenticationRequired),
+                401 | 403 => {
+                    store.invalidate_personal_session(&pending, &access).map_err(storage)?;
+                    return Err(PersonalSyncError::AuthenticationRequired);
+                }
                 _ => return Err(PersonalSyncError::InvalidResponse),
             }
         }
@@ -211,6 +233,7 @@ impl PersonalServer {
         }
         let expires_at = verified.expires_at();
         Ok(SyncContext {
+            store: store.clone(),
             bootstrap,
             identity: pending,
             access,

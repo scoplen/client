@@ -4,6 +4,8 @@ use scoplen_crypto::SymmetricKey;
 
 use super::*;
 
+mod auth;
+
 fn fixture() -> (tempfile::TempDir, Store, PersonalRecord, SecretVec, PersonalSyncRecord) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("sync.db"), &SymmetricKey::new([32; 32])).unwrap();
@@ -18,6 +20,12 @@ fn fixture() -> (tempfile::TempDir, Store, PersonalRecord, SecretVec, PersonalSy
         recovery_confirmed: false,
         enrollment_attempted: false,
         access_expires_at: None,
+        refresh_expires_at: None,
+        auth_generation: 0,
+        auth_scope: None,
+        refresh_available: false,
+        session_established: false,
+        refresh_retry_at: None,
     };
     store.insert_personal_record(&identity).unwrap();
     store.save_personal_recovery().unwrap();

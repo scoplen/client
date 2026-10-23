@@ -378,3 +378,55 @@ it("localizes a typed invalid-invitation error without displaying the rejected s
   expect((input as HTMLInputElement).value).toBe("");
   expect(document.body.textContent).not.toContain("rejected-secret");
 });
+
+it.each(["en", "zh-Hans"] as const)(
+  "keeps offline keys and exposes fresh authentication after session loss (%s)",
+  async (locale) => {
+    const f = fixture({ ...unconfirmed, phase: "authentication_required" });
+    f.handlers.set("personal_sync_key_status", () => "verified");
+    f.handlers.set("personal_inventory_status", () => ({
+      vaultId: "vault",
+      objects: [],
+      backups: [],
+      recovery: [],
+      pending: 0,
+      appliedCursor: "0",
+      acknowledgedCursor: "0",
+    }));
+    const { container } = render(view(locale));
+    const authenticate = await screen.findByRole("button", {
+      name: locale === "en" ? "Authenticate this device" : "认证此设备",
+    });
+    const connect = await screen.findByRole("button", { name: locale === "en" ? "Verify sync keys" : "验证同步密钥" });
+    expect(connect.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByText(
+        locale === "en"
+          ? /Your local inventory, recovery copies, and sync keys are retained/
+          : /本地清单、恢复副本和同步密钥均已保留/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: locale === "en" ? "Use a new invitation" : "使用新邀请" })).toBeNull();
+    expect(f.matching("authenticate_personal_server")).toHaveLength(0);
+    expect(await violations(container)).toEqual([]);
+    authenticate.focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(connect.hasAttribute("disabled")).toBe(false));
+    expect(f.matching("authenticate_personal_server")).toHaveLength(1);
+    expect(f.matching("submit_personal_enrollment")).toHaveLength(0);
+  },
+);
+
+it("updates the safe account phase after an uncertain refresh without automatically authenticating", async () => {
+  const f = fixture({ ...unconfirmed, phase: "authenticated" });
+  f.handlers.set("connect_personal_sync", () => {
+    f.set({ ...unconfirmed, phase: "authentication_required" });
+    return Promise.reject("authenticationRequired");
+  });
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Verify sync keys" }));
+  expect(await screen.findByText(/This session expired or could not be safely renewed/)).toBeTruthy();
+  expect(f.matching("connect_personal_sync")).toHaveLength(1);
+  expect(f.matching("authenticate_personal_server")).toHaveLength(0);
+  expect(f.matching("submit_personal_enrollment")).toHaveLength(0);
+});

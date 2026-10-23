@@ -112,8 +112,9 @@ session-management outcome.
 Settings → Personal account can prepare a Personal invitation from a user-selected HTTPS
 Scoplen server, save and confirm a recovery file, join, and authenticate the first device.
 The same pending identity is retained across restarts and uncertain responses. The desktop
-can explicitly synchronize selected inventory after key verification. Pairing another device
-and refresh credential rotation remain incomplete.
+can explicitly synchronize selected inventory after key verification. Rust rotates its native
+device session when needed by an explicit sync or key-verification action. Pairing another device
+remains incomplete.
 Existing local SSH data is not uploaded by account setup.
 
 When enrollment remains unconfirmed, Use a new invitation accepts a link for the same server.
@@ -131,6 +132,15 @@ account, Verify sync keys explicitly runs that bootstrap. Reopening the page rev
 keys locally, including when device authentication has expired; server access requires fresh
 device authentication. The interface receives only a verified/not-connected state and safe,
 localized errors. This step does not pull or upload inventory.
+
+Native session refresh is single-use and claimed durably in SQLCipher before sending. It
+verifies the new token's issuer, signature, account, device, signing-key binding and non-expanding
+scope, and cannot extend the original refresh family's absolute expiry. There is no background
+refresh or automatic replay after a missing response or uncertain commit. Authenticate this
+device uses a fresh challenge with the retained identity when required; saved keys, inventory
+and recovery copies remain available offline. A verified unchanged rate-limit response retains
+the credential and its Retry-After deadline for a later explicit action. Older saved sessions
+without a verified scope ceiling require fresh authentication after this update.
 
 The Rust-owned `sync_personal_inventory` API implements a bounded first-device Personal
 roundtrip. Its typed intent names the retained vault and exact local object ids to adopt;

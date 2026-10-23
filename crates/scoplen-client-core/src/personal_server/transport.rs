@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant, SystemTime};
 
 use reqwest::{Client, Method, header};
+use scoplen_api::auth::AuthRateLimitHeaders;
 use scoplen_crypto::{DpopProof, SecretVec, validate_server_origin};
 
 use super::PersonalServerError;
@@ -21,6 +22,9 @@ pub(super) struct Response {
     pub problem_json: bool,
     pub problem_cbor: bool,
     pub date: Option<(SystemTime, Instant)>,
+    pub refresh_protocol: bool,
+    pub nonce: Option<String>,
+    pub retry_after: Option<u64>,
 }
 
 impl Response {
@@ -75,7 +79,7 @@ impl Transport {
         body: &[u8],
         limit: usize,
     ) -> Result<Response, PersonalServerError> {
-        self.exchange(Method::POST, origin, path, Some(body), limit).await
+        self.exchange(Method::POST, origin, path, Some(body), None, limit).await
     }
 
     pub async fn get(
@@ -84,7 +88,17 @@ impl Transport {
         path: &str,
         limit: usize,
     ) -> Result<Response, PersonalServerError> {
-        self.exchange(Method::GET, origin, path, None, limit).await
+        self.exchange(Method::GET, origin, path, None, None, limit).await
+    }
+
+    pub async fn refresh(
+        &self,
+        origin: &str,
+        body: &[u8],
+        proof: &DpopProof,
+    ) -> Result<Response, PersonalServerError> {
+        self.exchange(Method::POST, origin, "/api/v1/auth/refresh", Some(body), Some(proof), 16_384)
+            .await
     }
 
     pub async fn protected(
@@ -140,7 +154,16 @@ impl Transport {
             .and_then(|value| httpdate::parse_http_date(value).ok())
             .map(|date| (date, Instant::now()));
         let body = read_body(response, limit).await?;
-        Ok(Response { status, body, problem_json: false, problem_cbor, date })
+        Ok(Response {
+            status,
+            body,
+            problem_json: false,
+            problem_cbor,
+            date,
+            refresh_protocol: false,
+            nonce: None,
+            retry_after: None,
+        })
     }
 
     async fn exchange(
@@ -149,13 +172,21 @@ impl Transport {
         origin: &str,
         path: &str,
         body: Option<&[u8]>,
+        proof: Option<&DpopProof>,
         limit: usize,
     ) -> Result<Response, PersonalServerError> {
         validate_server_origin(origin).map_err(|_| PersonalServerError::Invitation)?;
         let mut request = self
             .client
             .request(method, format!("{origin}{path}"))
-            .header(header::ACCEPT, "application/json");
+            .header(header::ACCEPT, "application/json")
+            .header(header::ACCEPT_ENCODING, "identity");
+        if let Some(proof) = proof {
+            let mut header = header::HeaderValue::from_str(proof.as_str())
+                .map_err(|_| PersonalServerError::Identity)?;
+            header.set_sensitive(true);
+            request = request.header("DPoP", header);
+        }
         if let Some(body) = body {
             request = request.header(header::CONTENT_TYPE, "application/json").body(body.to_vec());
         }
@@ -186,6 +217,30 @@ impl Transport {
                 content_type,
                 Some("application/problem+json" | "application/problem+json; charset=utf-8")
             );
+        let single_header = |name: &str| {
+            let mut values = response.headers().get_all(name).iter();
+            let first = values.next()?.to_str().ok()?;
+            if values.next().is_some() {
+                return None;
+            }
+            Some(first)
+        };
+        let refresh_protocol = no_store
+            && !cached
+            && !response.headers().contains_key(header::CONTENT_ENCODING)
+            && single_header("content-type").is_some()
+            && single_header("cache-control").is_some()
+            && single_header("pragma").is_some_and(|value| value.eq_ignore_ascii_case("no-cache"));
+        let nonce = single_header("dpop-nonce").map(str::to_owned);
+        let retry_after = single_header("retry-after").and_then(|value| {
+            let seconds = value.parse::<u16>().ok()?;
+            if value != seconds.to_string() {
+                return None;
+            }
+            AuthRateLimitHeaders::new(seconds)
+                .ok()
+                .map(|headers| u64::from(headers.retry_after_seconds()))
+        });
         if response.status().is_success()
             && (!no_store
                 || cached
@@ -197,7 +252,16 @@ impl Transport {
             return Err(PersonalServerError::InvalidResponse);
         }
         let body = read_body(response, limit).await?;
-        Ok(Response { status, body, problem_json, problem_cbor: false, date: None })
+        Ok(Response {
+            status,
+            body,
+            problem_json,
+            problem_cbor: false,
+            date: None,
+            refresh_protocol,
+            nonce,
+            retry_after,
+        })
     }
 }
 

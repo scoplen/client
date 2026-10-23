@@ -48,13 +48,20 @@ with the original identity and recovery confirmation; another explicit Join is r
 A rejected replacement retains the pending phase and offers no Join. Busy state blocks duplicate replacement
 and authentication intents, and no invitation appears in localized errors or public status.
 
-Authenticated status means Rust verified the unexpired device access token against the exact
-chosen HTTPS origin's JWKS and the saved account/device/key identity. It does not mean inventory
-has synchronized. Existing hosts and credentials remain local. Pairing, refresh rotation,
-profile display, and complete multi-device reconciliation remain separate outcomes. Settings navigation supports
+Authenticated status means Rust retains a verified usable device session, which can refresh
+on an explicit network action when its access token approaches expiry. It does not mean inventory
+has synchronized. Existing hosts and credentials remain local. Pairing and profile display remain
+separate outcomes. Settings navigation supports
 arrow keys, Home/End, visible focus, and wrapping at narrow widths. An explicit action that
 advances to another phase focuses its heading; initial status reads and same-phase actions
 retain keyboard focus.
+
+An expired refresh family or uncertain renewal shows Authenticate this device with an explanation
+that local inventory, recovery copies and sync keys were retained. That action obtains a fresh
+challenge using the saved identity. No invitation replacement is offered for this established
+session state. Finishing a sync action reloads account status locally, so renewal failure updates
+the recovery action without another network request. Retry-After and narrowed-permission failures
+have separate localized messages. Mounting settings and offline recovery never renew a session.
 
 Verify sync keys reads locally on mount and connects only on explicit activation. A verified
 snapshot reveals Inventory sync. Its initial status read and Refresh local status stay offline.

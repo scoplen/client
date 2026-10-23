@@ -252,6 +252,18 @@ export function PersonalSettings() {
                 </form>
               ) : null}
             </div>
+          ) : status.phase === "authentication_required" ? (
+            <div className="mt-6">
+              <h3 ref={stepTitle} tabIndex={-1} className="text-sm font-medium">
+                {t("settings.personal.authenticate")}
+              </h3>
+              <p role="status" className="mt-2 text-sm text-muted-foreground">
+                {t("settings.personal.authenticationRequiredBody")}
+              </p>
+              <Button className="mt-4" disabled={busy} onClick={() => void run(commands.authenticatePersonalServer)}>
+                {t(busy ? "settings.personal.working" : "settings.personal.authenticate")}
+              </Button>
+            </div>
           ) : (
             <div className="mt-6">
               <h3 ref={stepTitle} tabIndex={-1} className="text-sm font-medium">
@@ -268,11 +280,24 @@ export function PersonalSettings() {
               </Button>
             </div>
           )}
-          {status.phase === "authenticated" || status.phase === "enrollment_unconfirmed" ? (
+          {status.phase === "authenticated" ||
+          status.phase === "enrollment_unconfirmed" ||
+          status.phase === "authentication_required" ? (
             <PersonalSyncSettings
               authenticated={status.phase === "authenticated"}
               disabled={busy}
-              onBusyChange={setBusy}
+              onBusyChange={(next) => {
+                setBusy(next);
+                if (!next)
+                  void commands
+                    .personalServerStatus()
+                    .then((latest) => {
+                      if (latest.status === "ok") updateStatus(latest.data);
+                    })
+                    .catch(() => {
+                      /* Keep the visible state until the encrypted store is available. */
+                    });
+              }}
             />
           ) : null}
         </div>

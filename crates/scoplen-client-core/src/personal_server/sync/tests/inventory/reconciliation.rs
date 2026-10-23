@@ -233,6 +233,14 @@ async fn a_later_invalid_or_moving_snapshot_never_changes_inventory_copies_or_pr
         peer.state.lock().unwrap().inventory =
             Some(InventoryPeer { seq, objects, purge_horizon: 10, ..InventoryPeer::default() });
         announce(&peer, seq);
+        if mode == 5 {
+            assert_eq!(
+                cycle(&peer, &store, vec![]).await.unwrap_err(),
+                PersonalSyncError::AuthenticationRequired
+            );
+            // A server authentication rejection requires a newly authenticated session.
+            peer.install_token(&store, |_| {}, None);
+        }
         cycle(&peer, &store, vec![]).await.unwrap();
         assert_eq!(PersonalInventorySettings::default().status(&store).unwrap().recovery.len(), 1);
         peer.assert_healthy();
