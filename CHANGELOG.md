@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added bounded full reconciliation after cursor expiry: complete authenticated snapshots are
+  validated before one atomic SQLCipher merge, removal and cursor update. Missing local edits
+  become immutable encrypted recovery copies instead of being uploaded automatically. Settings
+  exposes exact offline recovery separately from original adoption copies; restored objects
+  need fresh upload consent. Concurrent snapshots, invalid later pages, resource limits and
+  unconfirmed acknowledgements retain safe durable state across restarts.
+
 - Updated `ctutils` to 0.4.4 for RUSTSEC-2026-0385, restoring constant-time mask
   generation and integer comparison in the shared cryptographic dependency graph.
 
@@ -19,8 +26,8 @@ All notable changes to the Scoplen desktop client are recorded here.
   decryption and field merge, cursor/ack persistence, bounded CAS conflict retries, and safe
   pull-before-write recovery after an uncertain commit. Restoring adoption copies creates new
   local objects and remaps selected references without uploading them or copying device secrets.
-  The API remains separate from account setup and is exposed through the explicit settings flow. Cursor expiry,
-  unsupported rotations, and unverified trust provenance preserve local data and stop explicitly.
+  The API remains separate from account setup and is exposed through the explicit settings flow.
+  Unsupported rotations and unverified trust provenance preserve local data and stop explicitly.
 - Upgraded all shared Rust pins to `proto@b52ee266`, including complete K-1 object-reference
   discovery for explicit adoption, and aligned UUID at 1.28.0.
 

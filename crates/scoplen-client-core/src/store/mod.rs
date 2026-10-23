@@ -51,6 +51,9 @@ pub enum StoreError {
     /// Creating an object would exceed the objects-per-vault limit.
     #[error("a vault holds at most {MAX_OBJECTS_PER_VAULT} objects")]
     VaultFull,
+    /// Reading recovery history would exceed this client's bounded inventory snapshot.
+    #[error("Personal recovery history exceeds the safe inventory read limit")]
+    RecoveryLimit,
     /// The object to change does not exist.
     #[error("object {0} does not exist")]
     NotFound(Uuid),

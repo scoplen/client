@@ -48,7 +48,7 @@ pub enum PersonalSyncError {
         "This account or vault requires key rotation support. The existing keys were retained."
     )]
     RotationRequired,
-    /// The server's retained tombstones no longer cover the applied cursor.
+    /// A write conflict has no current object because the server already purged it.
     #[error("Personal sync needs full reconciliation. Local changes were retained.")]
     ReconciliationRequired,
     /// A write may have committed; a later cycle must pull before writing again.

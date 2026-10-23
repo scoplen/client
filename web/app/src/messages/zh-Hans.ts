@@ -560,6 +560,14 @@ export const zhHans: Messages = {
   "settings.personal.inventory.empty": "没有待选择的本地对象。新建的主机和凭据会显示在这里。",
   "settings.personal.inventory.review": "检查所选对象（{count, number}）",
   "settings.personal.inventory.adopted": "已加入个人同步的对象",
+  "settings.personal.inventory.recovery": "本地编辑需要处理（{count, number}）",
+  "settings.personal.inventory.recoveryBody":
+    "服务器的完整清单中已没有这些对象。本地编辑已保存为加密恢复副本，不会上传。每个原对象可选择一个副本恢复到本地；要启用同步，需要单独检查并确认新对象。",
+  "settings.personal.inventory.copy": "恢复副本：{id}",
+  "settings.personal.inventory.recover": "恢复所选编辑（{count, number}）",
+  "settings.personal.inventory.recoverTitle": "恢复本地编辑？",
+  "settings.personal.inventory.recoverBody":
+    "从这些确切的恢复副本创建新本地对象，包括尚未同步的编辑。可离线进行，不会撤销服务器改动。所选副本之间的引用会一并恢复；仅限本机的秘密和密钥库句柄不会复制。新对象需要单独检查并确认后才会上传。",
   "settings.personal.inventory.backups": "原始本地副本",
   "settings.personal.inventory.backupBody":
     "启用上传前，系统会保存选中对象的原始加密本地副本。之后的编辑不会覆盖这些副本。",
@@ -607,17 +615,18 @@ export const zhHans: Messages = {
   "settings.personal.inventory.error.rotationRequired":
     "此账号或保险库需要密钥轮换支持，本地数据已保留。请使用支持当前密钥的客户端。",
   "settings.personal.inventory.error.reconciliationRequired":
-    "服务器要求完整对账，此版本尚不支持。本地改动与原始副本仍可使用，必要时可恢复本地副本。",
+    "写入与服务器已清除的对象冲突，本地改动与副本已保留。请点击立即同步以刷新清单；若仍有冲突，可恢复本地副本。",
   "settings.personal.inventory.error.writeOutcomeUnknown":
     "服务器可能已保存改动，持久队列仍被保留。请点击立即同步，先拉取并确认结果，再继续写入。",
   "settings.personal.inventory.error.acknowledgementUnknown":
     "改动已保存在本机，但回执尚未确认。请点击立即同步以确认。",
   "settings.personal.inventory.error.concurrentChanges":
-    "并发改动超过本轮同步的重试上限，本地队列已保留。请点击立即同步以继续。",
+    "本轮同步期间清单发生了变化，本地改动已保留。请点击立即同步，以新的服务器会话重试。",
   "settings.personal.inventory.error.clock": "时钟检查阻止了上传，本地改动已保留。请校正本机与服务器时间后再同步。",
   "settings.personal.inventory.error.selection":
     "选中对象或引用已变化，原始本地数据已保留。请刷新本地状态，再次检查具体对象。",
-  "settings.personal.inventory.error.resourceLimit": "同步达到资源上限，本地改动已保留。请检查选中对象的大小后重试。",
+  "settings.personal.inventory.error.resourceLimit":
+    "清单、所选对象或恢复历史超过此客户端的安全上限，本地改动与副本已保留。请检查所选内容大小，或使用支持此清单规模的客户端。",
   "settings.personal.inventory.error.trustReviewRequired":
     "某条主机密钥信任记录缺少可验证的同账号来源，未接受未经验证的信任。请检查该记录后重试。",
   "settings.personal.inventory.error.previewExpired":

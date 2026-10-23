@@ -606,6 +606,14 @@ export const en = {
     "No local objects are waiting for selection. New hosts and credentials will appear here.",
   "settings.personal.inventory.review": "Review selected ({count, number})",
   "settings.personal.inventory.adopted": "Objects in Personal sync",
+  "settings.personal.inventory.recovery": "Local edits need attention ({count, number})",
+  "settings.personal.inventory.recoveryBody":
+    "These objects were missing from the complete server inventory. Their local edits were saved as encrypted recovery copies and will not upload. Select one copy per original object to restore locally, then review the new objects separately before enabling sync.",
+  "settings.personal.inventory.copy": "Recovery copy: {id}",
+  "settings.personal.inventory.recover": "Recover selected edits ({count, number})",
+  "settings.personal.inventory.recoverTitle": "Recover local edits?",
+  "settings.personal.inventory.recoverBody":
+    "Create new local objects from these exact recovery copies, including edits that had not yet synced. This works offline and does not undo server changes. References between selected copies are restored together; device-only secrets and keystore handles are not copied. The new objects need a separate upload review and confirmation.",
   "settings.personal.inventory.backups": "Original local copies",
   "settings.personal.inventory.backupBody":
     "Before upload is enabled, the original selected objects are saved as immutable encrypted local copies. Later edits cannot replace these copies.",
@@ -660,19 +668,19 @@ export const en = {
   "settings.personal.inventory.error.rotationRequired":
     "This account or vault requires key rotation support. Local data was retained. Use a client that supports the current keys.",
   "settings.personal.inventory.error.reconciliationRequired":
-    "The server requires full reconciliation, which this build cannot perform. Local changes and original copies remain available; restore copies locally if needed.",
+    "A write conflicts with a purged server object. Local changes and copies were retained. Choose Sync now to refresh inventory; restore a local copy if the conflict remains.",
   "settings.personal.inventory.error.writeOutcomeUnknown":
     "The server may have saved these changes. The durable queue was retained. Choose Sync now to pull and check the result before another write.",
   "settings.personal.inventory.error.acknowledgementUnknown":
     "Changes are saved on this device, but their acknowledgement is unconfirmed. Choose Sync now to confirm it.",
   "settings.personal.inventory.error.concurrentChanges":
-    "Concurrent changes exceeded this sync cycle. Your local queue was retained. Choose Sync now to continue.",
+    "The inventory changed during this sync cycle. Your local changes were retained. Choose Sync now to retry with a fresh server session.",
   "settings.personal.inventory.error.clock":
     "A clock check stopped upload. Local changes were retained. Correct the device and server clocks, then sync again.",
   "settings.personal.inventory.error.selection":
     "The selection or its references changed. Local originals were retained. Refresh local status and review the exact objects again.",
   "settings.personal.inventory.error.resourceLimit":
-    "A sync resource limit was reached. Local changes were retained. Review the size of selected objects before retrying.",
+    "The inventory, selected objects, or recovery history exceeded this client's safe limits. Local changes and copies were retained. Review the selection size, or use a client with support for this inventory size.",
   "settings.personal.inventory.error.trustReviewRequired":
     "A host-key trust record lacks verified same-account provenance. No unverified trust was accepted. Review that record before retrying.",
   "settings.personal.inventory.error.previewExpired":

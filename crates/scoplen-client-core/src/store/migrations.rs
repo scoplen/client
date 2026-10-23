@@ -138,4 +138,15 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         adopted_at INTEGER NOT NULL
     ) STRICT, WITHOUT ROWID;
     "#,
+    // 7: immutable edits whose server objects disappeared beyond the purge horizon.
+    r#"
+    CREATE TABLE personal_sync_recovery (
+        id BLOB PRIMARY KEY CHECK (length(id) = 16),
+        vault BLOB NOT NULL CHECK (length(vault) = 16),
+        object_id BLOB NOT NULL CHECK (length(object_id) = 16),
+        envelope BLOB NOT NULL,
+        recovered_at INTEGER NOT NULL
+    ) STRICT, WITHOUT ROWID;
+    CREATE INDEX personal_sync_recovery_by_vault ON personal_sync_recovery(vault);
+    "#,
 ];

@@ -5,8 +5,8 @@ use scoplen_api::{
     ErrorCode, ProblemDetails,
     sync::{
         SyncAckRequest, SyncAckResponse, SyncChange, SyncChangesQuery, SyncChangesResponse,
-        SyncConflictEntry, SyncConflictProblem, SyncWriteAssignment, SyncWriteBatch,
-        SyncWriteBatchResponse,
+        SyncConflictEntry, SyncConflictProblem, SyncSnapshotResponse, SyncWriteAssignment,
+        SyncWriteBatch, SyncWriteBatchResponse,
     },
 };
 use scoplen_crypto::ObjectEnvelope;
@@ -18,6 +18,8 @@ use crate::{
     personal_server::{PersonalInventoryIntent, PersonalInventoryProgress},
     store::LocalWrite,
 };
+
+mod reconciliation;
 
 pub(super) struct InventoryPeer {
     seq: u64,
@@ -33,6 +35,11 @@ pub(super) struct InventoryPeer {
     reject_ack: bool,
     date: Option<String>,
     ack_reported_cursor: Option<u64>,
+    purge_horizon: u64,
+    snapshot_queries: Vec<u64>,
+    snapshot_replies: BTreeMap<usize, Reply>,
+    snapshot_mutation: Option<SyncChange>,
+    snapshot_local_edit: Option<(Arc<Store>, LocalWrite)>,
 }
 
 impl Default for InventoryPeer {
@@ -51,6 +58,11 @@ impl Default for InventoryPeer {
             reject_ack: false,
             date: Some(httpdate::fmt_http_date(std::time::SystemTime::now())),
             ack_reported_cursor: None,
+            purge_horizon: 0,
+            snapshot_queries: vec![],
+            snapshot_replies: BTreeMap::new(),
+            snapshot_mutation: None,
+            snapshot_local_edit: None,
         }
     }
 }
@@ -96,7 +108,8 @@ impl InventoryPeer {
                 let query = SyncChangesQuery::from_query(request.uri().query().ok_or("query")?)
                     .map_err(|_| "change query")?;
                 self.queries.push(query.after);
-                if self.expire_cursor {
+                if self.expire_cursor || query.after < self.purge_horizon || query.after > self.seq
+                {
                     problem_reply(&problem(410, "sync.cursor_expired", false))
                 } else {
                     let mut changes = self
@@ -111,6 +124,40 @@ impl InventoryPeer {
                     let next_cursor = if more { changes.last().unwrap().seq } else { self.seq };
                     Reply::cbor(
                         SyncChangesResponse { changes, next_cursor, more }.to_cbor().unwrap(),
+                    )
+                }
+            }
+            "snapshot" => {
+                if request.method() != http::Method::GET || !body.is_empty() {
+                    return Err("snapshot method".into());
+                }
+                let query = SyncChangesQuery::from_query(request.uri().query().ok_or("query")?)
+                    .map_err(|_| "snapshot query")?;
+                self.snapshot_queries.push(query.after);
+                if query.after > 0 {
+                    if let Some(change) = self.snapshot_mutation.take() {
+                        self.seq = self.seq.max(change.seq);
+                        self.objects.insert(change.object_id, change);
+                    }
+                    if let Some((store, write)) = self.snapshot_local_edit.take() {
+                        store.write(write).map_err(|_| "concurrent local edit")?;
+                    }
+                }
+                if let Some(reply) = self.snapshot_replies.get(&self.snapshot_queries.len()) {
+                    reply.clone()
+                } else {
+                    let mut objects = self
+                        .objects
+                        .values()
+                        .filter(|change| change.seq > query.after)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    objects.sort_by_key(|change| change.seq);
+                    let more = objects.len() > usize::from(query.limit);
+                    objects.truncate(usize::from(query.limit));
+                    let next_cursor = if more { objects.last().unwrap().seq } else { self.seq };
+                    Reply::cbor(
+                        SyncSnapshotResponse { objects, next_cursor, more }.to_cbor().unwrap(),
                     )
                 }
             }
@@ -652,6 +699,11 @@ async fn cursor_expiry_ack_failure_clock_and_scope_boundaries_never_upload() {
         let object = make_host(&store);
         peer.state.lock().unwrap().inventory = Some(InventoryPeer {
             expire_cursor: mode == 0,
+            snapshot_replies: if mode == 0 {
+                [(1, Reply::cbor(vec![0xff]))].into_iter().collect()
+            } else {
+                BTreeMap::new()
+            },
             reject_ack: mode == 1,
             date: match mode {
                 2 => None,
@@ -669,7 +721,7 @@ async fn cursor_expiry_ack_failure_clock_and_scope_boundaries_never_upload() {
         assert_eq!(
             error,
             match mode {
-                0 => PersonalSyncError::ReconciliationRequired,
+                0 => PersonalSyncError::InvalidResponse,
                 1 => PersonalSyncError::AcknowledgementUnknown,
                 4 => PersonalSyncError::AuthenticationRequired,
                 _ => PersonalSyncError::Clock,

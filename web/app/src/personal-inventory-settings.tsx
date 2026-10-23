@@ -35,9 +35,11 @@ export function PersonalInventorySettings({
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [backupSelected, setBackupSelected] = useState<Set<string>>(new Set());
+  const [recoverySelected, setRecoverySelected] = useState<Set<string>>(new Set());
   const [preview, setPreview] = useState<PersonalInventoryPreview | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [restoreSource, setRestoreSource] = useState<"original" | "recovery">("original");
   const [result, setResult] = useState<PersonalInventoryResult | null>(null);
   const [restored, setRestored] = useState<number | null>(null);
   const pending = useRef(false);
@@ -116,8 +118,9 @@ export function PersonalInventorySettings({
     setConfirmed(false);
     void run(() => commands.synchronizePersonalInventory(reviewToken), setResult);
   };
-  const toggle = (id: string, backup = false) => {
-    const update = backup ? setBackupSelected : setSelected;
+  const toggle = (id: string, source: "local" | "original" | "recovery" = "local") => {
+    const update =
+      source === "original" ? setBackupSelected : source === "recovery" ? setRecoverySelected : setSelected;
     update((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -128,6 +131,9 @@ export function PersonalInventorySettings({
     setConfirmed(false);
   };
   const label = (object: PersonalInventoryObject) => object.name ?? object.id;
+  const selectedRecoveryObjects = new Set(
+    status?.recovery.filter((copy) => recoverySelected.has(copy.id)).map((copy) => copy.object.id),
+  );
   const describe = (object: PersonalInventoryObject) => (
     <>
       <span className="block break-words font-medium">{label(object)}</span>
@@ -186,6 +192,45 @@ export function PersonalInventorySettings({
           </div>
           {!authenticated ? (
             <p className="mt-2 text-sm text-muted-foreground">{t("settings.personal.inventory.authenticate")}</p>
+          ) : null}
+          {status.recovery.length > 0 ? (
+            <fieldset className="mt-6 min-w-0 border-l-2 border-attention pl-4" disabled={blocked}>
+              <legend className="text-sm font-medium text-attention">
+                {t("settings.personal.inventory.recovery", { count: status.recovery.length })}
+              </legend>
+              <p className="mt-2 text-sm text-muted-foreground">{t("settings.personal.inventory.recoveryBody")}</p>
+              <ul className="mt-3 max-h-64 list-none space-y-3 overflow-y-auto p-0">
+                {status.recovery.map((copy) => (
+                  <li key={copy.id}>
+                    <label className="flex min-w-0 items-start gap-3 text-sm">
+                      <input
+                        type="checkbox"
+                        className="mt-1 shrink-0 accent-primary"
+                        checked={recoverySelected.has(copy.id)}
+                        disabled={!recoverySelected.has(copy.id) && selectedRecoveryObjects.has(copy.object.id)}
+                        onChange={() => toggle(copy.id, "recovery")}
+                      />
+                      <span className="min-w-0">
+                        {describe(copy.object)}
+                        <span className="block break-all text-xs text-muted-foreground">
+                          {t("settings.personal.inventory.copy", { id: copy.id })}
+                        </span>
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              <Button
+                className="mt-4"
+                disabled={blocked || recoverySelected.size === 0}
+                onClick={() => {
+                  setRestoreSource("recovery");
+                  setRestoring(true);
+                }}
+              >
+                {t("settings.personal.inventory.recover", { count: recoverySelected.size })}
+              </Button>
+            </fieldset>
           ) : null}
           <fieldset className="mt-6 min-w-0" disabled={blocked}>
             <legend className="text-sm font-medium">{t("settings.personal.inventory.local")}</legend>
@@ -250,7 +295,7 @@ export function PersonalInventorySettings({
                       type="checkbox"
                       className="mt-1 shrink-0 accent-primary"
                       checked={backupSelected.has(object.id)}
-                      onChange={() => toggle(object.id, true)}
+                      onChange={() => toggle(object.id, "original")}
                     />
                     <span className="min-w-0">{describe(object)}</span>
                   </label>
@@ -260,7 +305,14 @@ export function PersonalInventorySettings({
             {status.backups.length === 0 ? (
               <p className="mt-2 text-sm text-muted-foreground">{t("settings.personal.inventory.noBackups")}</p>
             ) : null}
-            <Button className="mt-4" disabled={blocked || backupSelected.size === 0} onClick={() => setRestoring(true)}>
+            <Button
+              className="mt-4"
+              disabled={blocked || backupSelected.size === 0}
+              onClick={() => {
+                setRestoreSource("original");
+                setRestoring(true);
+              }}
+            >
               {t("settings.personal.inventory.restore", { count: backupSelected.size })}
             </Button>
           </fieldset>
@@ -341,16 +393,28 @@ export function PersonalInventorySettings({
         onOpenChange={(open) => {
           if (!pending.current) setRestoring(open);
         }}
-        title={t("settings.personal.inventory.restoreTitle")}
+        title={t(
+          restoreSource === "recovery"
+            ? "settings.personal.inventory.recoverTitle"
+            : "settings.personal.inventory.restoreTitle",
+        )}
         body={
           <>
-            <p>{t("settings.personal.inventory.restoreBody")}</p>
+            <p>
+              {t(
+                restoreSource === "recovery"
+                  ? "settings.personal.inventory.recoverBody"
+                  : "settings.personal.inventory.restoreBody",
+              )}
+            </p>
             <ul className="mt-3 max-h-48 list-none space-y-2 overflow-y-auto p-0">
-              {status?.backups
-                .filter((object) => backupSelected.has(object.id))
-                .map((object) => (
-                  <li key={object.id}>{describe(object)}</li>
-                ))}
+              {restoreSource === "recovery"
+                ? status?.recovery
+                    .filter((copy) => recoverySelected.has(copy.id))
+                    .map((copy) => <li key={copy.id}>{describe(copy.object)}</li>)
+                : status?.backups
+                    .filter((object) => backupSelected.has(object.id))
+                    .map((object) => <li key={object.id}>{describe(object)}</li>)}
             </ul>
           </>
         }
@@ -358,12 +422,17 @@ export function PersonalInventorySettings({
         cancelLabel={t("settings.personal.inventory.cancel")}
         busy={busy}
         onConfirm={() => {
+          const recovery = restoreSource === "recovery";
           setRestoring(false);
           void run(
-            () => commands.restorePersonalInventory([...backupSelected]),
+            () =>
+              recovery
+                ? commands.restorePersonalInventoryRecovery([...recoverySelected])
+                : commands.restorePersonalInventory([...backupSelected]),
             (count) => {
               setRestored(count);
               setBackupSelected(new Set());
+              setRecoverySelected(new Set());
             },
           );
         }}

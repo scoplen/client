@@ -36,6 +36,7 @@ function fixture({
     vaultId: "019a0123-4567-7890-8123-456789abcddd",
     objects: [host, credential],
     backups: backups ? [host] : [],
+    recovery: [],
     pending: 0,
     appliedCursor: "9007199254740993",
     acknowledgedCursor: "9007199254740992",
@@ -68,7 +69,8 @@ function fixture({
         };
       return { downloaded: 2, uploaded: 2, more: false };
     }
-    if (command === "restore_personal_inventory") return (args.ids as string[]).length;
+    if (command === "restore_personal_inventory" || command === "restore_personal_inventory_recovery")
+      return (args.ids as string[]).length;
     throw new Error("Unexpected command");
   });
   return {
@@ -179,6 +181,57 @@ it("restores exact immutable copies offline after confirmation without any sync 
   expect(await screen.findByText(/Created 1 local copies/)).toBeTruthy();
   expect(f.calls.find((call) => call.command === "restore_personal_inventory")?.args).toEqual({ ids: [host.id] });
   expect(f.calls.some((call) => call.command === "synchronize_personal_inventory")).toBe(false);
+});
+
+it("separates quarantined edits from originals and restores only exact recovery copies offline", async () => {
+  const f = fixture({ authenticated: false, backups: true });
+  const copy = { id: "019a0123-4567-7890-8123-456789abce01", object: { ...host, name: "Unsynced edit" } };
+  const older = { id: "019a0123-4567-7890-8123-456789abce02", object: { ...host, name: "Older edit" } };
+  f.set({ ...f.status(), objects: [], recovery: [copy, older] });
+  const { container } = render(f.view());
+  const edits = await screen.findByRole("group", { name: "Local edits need attention (2)" });
+  expect(within(edits).getByText(/will not upload/)).toBeTruthy();
+  await userEvent.click(within(edits).getByRole("checkbox", { name: /Unsynced edit/ }));
+  expect((within(edits).getByRole("checkbox", { name: /Older edit/ }) as HTMLInputElement).disabled).toBe(true);
+  expect((screen.getByRole("checkbox", { name: /Production/ }) as HTMLInputElement).checked).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: "Recover selected edits (1)" }));
+  let confirmation = await screen.findByRole("alertdialog");
+  expect(within(confirmation).getByText(/had not yet synced/)).toBeTruthy();
+  expect(within(confirmation).getByText(/separate upload review/)).toBeTruthy();
+  expect(within(confirmation).queryByText("Older edit")).toBeNull();
+  await userEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
+  expect(f.calls.some((call) => call.command === "restore_personal_inventory_recovery")).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: "Recover selected edits (1)" }));
+  confirmation = await screen.findByRole("alertdialog");
+  expect(await violations(confirmation)).toEqual([]);
+  await userEvent.click(within(confirmation).getByRole("button", { name: "Create local copies" }));
+  expect(await screen.findByText(/Created 1 local copies/)).toBeTruthy();
+  expect(f.calls.find((call) => call.command === "restore_personal_inventory_recovery")?.args).toEqual({
+    ids: [copy.id],
+  });
+  expect(
+    f.calls.some((call) =>
+      ["restore_personal_inventory", "synchronize_personal_inventory", "preview_personal_inventory"].includes(
+        call.command,
+      ),
+    ),
+  ).toBe(false);
+  expect(f.status().recovery).toEqual([copy, older]);
+  expect(await violations(container)).toEqual([]);
+});
+
+it("reveals new recovery copies after an uncertain acknowledgement without retrying sync", async () => {
+  const f = fixture({ locale: "zh-Hans" });
+  f.handlers.set("synchronize_personal_inventory", () => {
+    f.set({ ...f.status(), objects: [], recovery: [{ id: "recovery-copy", object: host }] });
+    return Promise.reject("acknowledgementUnknown");
+  });
+  render(f.view());
+  await userEvent.click(await screen.findByRole("button", { name: "立即同步" }));
+  expect(await screen.findByRole("group", { name: "本地编辑需要处理（1）" })).toBeTruthy();
+  expect((await screen.findByRole("alert")).textContent).toContain("回执尚未确认");
+  expect(f.calls.filter((call) => call.command === "synchronize_personal_inventory")).toHaveLength(1);
+  expect((screen.getByRole("checkbox", { name: /Production/ }) as HTMLInputElement).checked).toBe(false);
 });
 
 it.each<PersonalInventoryError>([

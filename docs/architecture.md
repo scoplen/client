@@ -115,7 +115,7 @@ only if the saved request still matches and no verified credentials have appeare
 no invitation token; a separate explicit Join submits the new request. Missing or inconsistent
 saved artifacts fail closed rather than recreating identity. The transport bounds responses and
 timeouts, verifies TLS, and has no redirect, proxy, cookie, or automatic POST retry behavior.
-Full reconciliation, pairing, refresh rotation, and hardware device signing remain separate
+Pairing, refresh rotation, and hardware device signing remain separate
 outcomes.
 
 `PersonalServer::bootstrap_sync` is the Rust-only K-4 first-device boundary. It revalidates the
@@ -175,10 +175,43 @@ Writes contain only encrypted signed K-1 objects. Confirmed assignments update b
 only the exact sent version; a concurrent local edit stays dirty. Write assignments never advance
 the applied cursor. Complete request-bound 409 conflicts decrypt and merge before a bounded
 retry. A transport failure, malformed success, or uncertain commit preserves the queue; every
-subsequent attempt pulls and merges instead of replaying the old batch. Cursor expiry stops with
-`ReconciliationRequired` rather than resetting the cursor or uploading missing objects. This path
-still supports only account revision 1 / Personal epoch 1. Full snapshot reconciliation,
-rotation and pairing remain incomplete.
+subsequent attempt pulls and merges instead of replaying the old batch. This path still supports
+only account revision 1 / Personal epoch 1; rotation and pairing remain incomplete.
+
+An exact unchanged `410 sync.cursor_expired` triggers full snapshot reconciliation. Snapshot
+pages contain at most 32 objects, each HTTP response at most 9 MiB, and the entire pass at most
+32 MiB of response bodies, 100,000 objects, and 60 seconds. Body accounting includes ignored
+extensions. Query-bound cursors, unique ids across pages, signer/epoch bindings, signatures,
+AEAD, tombstones and K-1 validation must all succeed before any inventory mutation. The session's
+announced vault sequence is the fixed baseline: the final snapshot cursor must equal it. A
+newer sequence safely aborts as concurrent activity; another explicit Sync now obtains a fresh
+session. There is no unbounded automatic retry and no cross-page snapshot token in this contract.
+
+Migration 7 adds append-only encrypted recovery copies, each with its own id. A single FULL
+synchronous immediate transaction compares the old applied cursor, re-reads current local
+objects, merges every present remote object with concurrent local edits, removes missing clean
+objects, preserves missing dirty objects as recovery copies, and adopts the final snapshot
+cursor. A missing object with no confirmed base or a base beyond the last confirmed ACK is
+also preserved conservatively. This includes newly adopted objects that have never uploaded;
+they are not silently re-created on the server. The complete transaction rolls back on any
+validation, ownership, capacity, or cursor failure, with no notifications before commit.
+After server restore, a snapshot can lower the expired cursor; confirmed ACK evidence is clamped
+to that snapshot position in the same transaction. Only then is the snapshot acknowledged.
+An unknown ACK result retains the committed inventory, recovery copies and earlier confirmation.
+
+Recovery copies are distinct from original adoption copies and remain immutable across restarts
+and restores. Restoring exact copy ids creates fresh local ids, remaps known references between
+the selection, and clears tombstones without creating sync entries. Multiple historical copies
+of one original cannot be restored in one selection. Device secrets and keystore handles remain
+at their original device-local ids and are never copied to restored ids. The new objects require
+a fresh D-112 review and confirmation before upload.
+Recovery-history reads are independently bounded to 100,000 copies and 32 MiB of stored K-1
+envelopes. A bounded SQL length/count check runs before decoding; exceeding either limit returns
+the explicit resource-limit state without silently truncating the history or deleting copies.
+The reconciliation transaction checks that same budget before committing new copies. If the
+new history would exceed it, the complete pass rolls back, preserving the old inventory,
+cursor and previously readable copies for local restoration. History pagination and management
+are separate future work.
 
 `PersonalInventorySettings` is the secret-free desktop facade. A single local read transaction
 returns object names/categories, shared-secret presence, immutable-copy metadata, dirty counts,

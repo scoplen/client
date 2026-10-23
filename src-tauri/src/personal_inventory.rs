@@ -75,3 +75,21 @@ pub async fn restore_personal_inventory(
     .await
     .map_err(|_| PersonalInventoryError::Storage)?
 }
+
+/// Restore explicit copies of edits quarantined by a complete server reconciliation.
+#[tauri::command]
+#[specta::specta]
+pub async fn restore_personal_inventory_recovery(
+    app: tauri::AppHandle,
+    local: tauri::State<'_, LocalDataState>,
+    settings: tauri::State<'_, Arc<PersonalInventorySettings>>,
+    ids: Vec<String>,
+) -> Result<u32, PersonalInventoryError> {
+    let store = store(&local)?;
+    let settings = settings.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        settings.restore_recovery(&app.state::<PersonalServer>(), &store, ids)
+    })
+    .await
+    .map_err(|_| PersonalInventoryError::Storage)?
+}
