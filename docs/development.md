@@ -72,6 +72,34 @@ it requires a fresh disposable deployment and invitation. Remove the private des
 test server and its temporary data after verification. This does not establish native
 desktop UI, physical passkey, macOS or multi-device acceptance.
 
+## Membership-only Personal key revisions
+
+The retained first device accepts later K-4 account-key revisions without replacing its
+trusted enrollment roots or private keys. Account signing/KEM ciphertexts, the recovery
+blob and the Personal epoch-1 wrapping must remain byte-identical to the signed enrollment.
+The device ARK wrap can be randomized again only at a higher revision and must open to the
+same retained ARK. Pending rotation, a different epoch or different keys still stops sync.
+
+The encrypted `personal_sync` snapshot also holds the highest verified revision. Lower
+revisions fail; an equal revision must retain the exact key projection (`wrapped_ark`,
+account signing/KEM ciphertexts and recovery blob). Certificates and revocations can change
+independently, so they are fully verified on every read rather than frozen into that
+projection. This device must keep its exact original, unrevoked certificate. The existing
+snapshot-generation, identity and credential transaction fences prevent a competing process
+from saving an older result after another process advances the floor. No schema change is
+needed, and offline reopening revalidates the saved roots and artifacts.
+
+The GET response has no enclosing account signature. This local floor rejects rollback
+after this device has observed a revision; it does not prove that the server has disclosed
+every update or revocation. It does not implement device pairing or key rotation.
+
+The focused public-API fixture uses genuine TLS 1.3/HTTP2, signed distinct-device certificates,
+DPoP proofs and SQLCipher stores, including competing bootstrap operations:
+
+```text
+cargo test -p scoplen-client-core --lib personal_server::sync::tests::membership
+```
+
 ## Generated files
 
 | File | Regenerate with | When |

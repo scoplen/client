@@ -215,7 +215,7 @@ impl PersonalServer {
             account_keys: bodies.next().ok_or(PersonalSyncError::InvalidResponse)?,
             vault_keys: bodies.next().ok_or(PersonalSyncError::InvalidResponse)?,
         };
-        let bootstrap = validate(store, &pending, &snapshot)?;
+        let bootstrap = validate(store, &pending, &snapshot, previous.as_ref())?;
         if verified.expires_at() <= now()? {
             return Err(PersonalSyncError::AuthenticationRequired);
         }
@@ -253,7 +253,7 @@ impl PersonalServer {
         let Some(snapshot) = store.personal_sync_record().map_err(storage)? else {
             return Ok(None);
         };
-        validate(store, &record(store)?, &snapshot).map(Some)
+        validate(store, &record(store)?, &snapshot, None).map(Some)
     }
 }
 
@@ -265,6 +265,7 @@ fn validate(
     store: &Store,
     pending: &PersonalRecord,
     snapshot: &PersonalSyncRecord,
+    previous: Option<&PersonalSyncRecord>,
 ) -> Result<PersonalSyncBootstrap, PersonalSyncError> {
     let secrets = identity::Secrets::parse(&pending.private_material)?;
     let device = store.device_key_pair().map_err(storage)?.ok_or(PersonalServerError::Identity)?;
@@ -309,8 +310,7 @@ fn validate(
         SyncAccountKeyBundle::from_cbor(snapshot.account_keys.as_bytes()).map_err(invalid)?;
     let vault_keys =
         SyncVaultKeysResponse::from_cbor(snapshot.vault_keys.as_bytes()).map_err(invalid)?;
-    if bundle.revision != 1
-        || vault.key_epoch != 1
+    if vault.key_epoch != 1
         || vault.rotation_pending
         || vault_keys.keys.iter().any(|key| key.epoch != 1)
     {
@@ -375,6 +375,40 @@ fn validate(
         || personal_vault_key.as_bytes() != secrets.vault()
     {
         return Err(PersonalSyncError::InvalidResponse);
+    }
+    // Membership updates do not authorize account or vault key rotation.
+    let initial = &enrollment.key_bundle_update;
+    if bundle.account_signing_key != initial.account_signing_key
+        || bundle.account_kem_key != initial.account_kem_key
+        || bundle.recovery_blob != initial.recovery_blob
+        || key.wrapped_vault_key != enrollment.wrapped_personal_vault_key
+    {
+        return Err(PersonalSyncError::RotationRequired);
+    }
+    let initial_wrap = initial
+        .device_wraps
+        .iter()
+        .find(|wrap| wrap.device_id == store.device_id())
+        .ok_or(PersonalSyncError::InvalidResponse)?;
+    if bundle.revision < initial.revision
+        || bundle.revision == initial.revision && bundle.wrapped_ark != initial_wrap.wrapped_ark
+    {
+        return Err(PersonalSyncError::InvalidResponse);
+    }
+    if let Some(previous) = previous {
+        let retained =
+            SyncAccountKeyBundle::from_cbor(previous.account_keys.as_bytes()).map_err(invalid)?;
+        // Statements can change independently of a bundle revision. Only the key projection
+        // is immutable at a retained revision; every statement above is still verified.
+        if bundle.revision < retained.revision
+            || bundle.revision == retained.revision
+                && (bundle.wrapped_ark != retained.wrapped_ark
+                    || bundle.account_signing_key != retained.account_signing_key
+                    || bundle.account_kem_key != retained.account_kem_key
+                    || bundle.recovery_blob != retained.recovery_blob)
+        {
+            return Err(PersonalSyncError::InvalidResponse);
+        }
     }
     Ok(PersonalSyncBootstrap { session, personal_vault_key, active_devices: active })
 }
