@@ -5,6 +5,7 @@ use scoplen_crypto::SymmetricKey;
 use super::*;
 
 mod auth;
+mod pairing;
 
 fn fixture() -> (tempfile::TempDir, Store, PersonalRecord, SecretVec, PersonalSyncRecord) {
     let dir = tempfile::tempdir().unwrap();
@@ -16,6 +17,7 @@ fn fixture() -> (tempfile::TempDir, Store, PersonalRecord, SecretVec, PersonalSy
         device_name: "Desktop".into(),
         private_material: SecretVec::new(vec![1; 225]),
         enrollment_request: Some(SecretVec::new(vec![2; 16])),
+        paired_handoff: None,
         recovery_saved: false,
         recovery_confirmed: false,
         enrollment_attempted: false,

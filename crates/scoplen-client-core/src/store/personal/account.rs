@@ -51,10 +51,7 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let queried_at =
             i64::try_from(snapshot.queried_at).map_err(|_| StoreError::InvalidIdentifier)?;
-        let material = identity.private_material.as_bytes();
-        if material.len() != 225 || material[0] != 1 {
-            return Err(StoreError::InvalidIdentifier);
-        }
+        let (signing, kem) = identity.device_secrets()?;
         let conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
         Ok(conn.execute(
@@ -63,14 +60,15 @@ impl Store {
              WHERE singleton = 1 AND auth_generation = ?4 AND access_token = ?5
                 AND access_expires_at > ?6 AND refresh_claimed = 0
                 AND origin = ?7 AND account_id = ?8 AND private_material = ?9
-                AND enrollment_request = ?10
+                AND enrollment_request IS ?10 AND paired_handoff IS ?13
                 AND EXISTS (SELECT 1 FROM device_key_pair WHERE singleton = 1 AND signing = ?11 AND kem = ?12)
              ON CONFLICT (singleton) DO UPDATE SET origin = excluded.origin, account_id = excluded.account_id,
                 queried_at = excluded.queried_at, profile = excluded.profile, devices = excluded.devices",
             params![queried_at, snapshot.profile.as_bytes(), snapshot.devices.as_bytes(),
                 identity.auth_generation, access.as_bytes(), now.min(i64::MAX as u64) as i64,
                 identity.origin, identity.account_id.as_bytes().as_slice(), identity.private_material.as_bytes(),
-                identity.enrollment_request.as_ref().map(SecretVec::as_bytes), &material[1..33], &material[33..65]],
+                identity.enrollment_request.as_ref().map(SecretVec::as_bytes), signing, kem,
+                identity.paired_handoff.as_ref().map(SecretVec::as_bytes)],
         )? == 1)
     }
 }

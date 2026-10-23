@@ -96,6 +96,7 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
     let manager = PersonalServer {
         operation: Mutex::new(()),
         transport: Ok(Transport::fixture(certificate, Duration::from_secs(15))),
+        pairing: Default::default(),
     };
     let directory = tempfile::tempdir().expect("private local store directory");
     let path = directory.path().join("personal.sqlite");

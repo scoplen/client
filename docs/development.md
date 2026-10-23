@@ -74,9 +74,11 @@ desktop UI, physical passkey, macOS or multi-device acceptance.
 
 ## Membership-only Personal key revisions
 
-The retained first device accepts later K-4 account-key revisions without replacing its
-trusted enrollment roots or private keys. Account signing/KEM ciphertexts, the recovery
-blob and the Personal epoch-1 wrapping must remain byte-identical to the signed enrollment.
+Retained first and paired devices accept later K-4 account-key revisions without replacing
+their trusted account roots or private keys. Account signing/KEM ciphertexts and the recovery
+blob remain byte-identical to the retained enrollment or authenticated handoff. The first
+device retains its exact epoch-1 wrapping; a paired device opens every handoff epoch and
+requires the unchanged epoch/key set.
 The device ARK wrap can be randomized again only at a higher revision and must open to the
 same retained ARK. Pending rotation, a different epoch or different keys still stops sync.
 
@@ -85,13 +87,14 @@ revisions fail; an equal revision must retain the exact key projection (`wrapped
 account signing/KEM ciphertexts and recovery blob). Certificates and revocations can change
 independently, so they are fully verified on every read rather than frozen into that
 projection. This device must keep its exact original, unrevoked certificate. The existing
-snapshot-generation, identity and credential transaction fences prevent a competing process
-from saving an older result after another process advances the floor. No schema change is
-needed, and offline reopening revalidates the saved roots and artifacts.
+snapshot-generation, provenance, identity and credential transaction fences prevent a competing
+process from saving an older result after another process advances the floor. A paired identity
+also retains its initial floor/projection before the first `personal_sync` snapshot exists.
+Offline reopening revalidates the saved roots and artifacts.
 
 The GET response has no enclosing account signature. This local floor rejects rollback
 after this device has observed a revision; it does not prove that the server has disclosed
-every update or revocation. It does not implement device pairing or key rotation.
+every update or revocation. It does not implement key rotation.
 
 The focused public-API fixture uses genuine TLS 1.3/HTTP2, signed distinct-device certificates,
 DPoP proofs and SQLCipher stores, including competing bootstrap operations:
@@ -99,6 +102,39 @@ DPoP proofs and SQLCipher stores, including competing bootstrap operations:
 ```text
 cargo test -p scoplen-client-core --lib personal_server::sync::tests::membership
 ```
+
+## Second-device pairing
+
+The native core implements D-114 public-link plus separate-password pairing. Create on the
+new device and join on an authenticated existing device are explicit actions against the exact
+selected HTTPS origin. Rust owns the CPace state, one-attempt ledger, monotonic five-minute
+ceiling, at least two seconds between polls, device confirmation, immutable slot replay and
+strict shared crypto/API codecs. A canonical public link contains only origin and UUID; the
+password crosses only the dedicated transient display/input boundary.
+
+Migration 10 stores pending device keys, exact transcripts/plans and an authenticated handoff
+as distinct Personal provenance. New identity and exact acceptance commit atomically before
+slot 7; the old device verifies possession and saves complete approval JSON before `complete`.
+Lost replies keep these checkpoints. Explicit recovery reads the receipt or authenticates the
+retained device before replaying the saved bytes. No CPace state or password is serialized.
+A restart before handoff requires a fresh session while retaining device keys. A paired
+installation has no enrollment request, no invented recovery key and no enrollment-attempt
+flag; it becomes complete only after native authentication and full K-4 verification.
+
+The independent TLS 1.3/H2 peer drives both public Client managers and verifies checkpoints
+before receiving messages. Focused coverage includes wrong passwords, changed duplicates,
+strict cache headers, restart before/after handoff and acceptance, uncertain complete with
+and without admission, exact replay, first-response rollback/projection rejection, higher
+membership revisions, account queries, explicit encrypted inventory sync and offline reopen:
+
+```text
+cargo test -p scoplen-client-core --lib pairing
+```
+
+This fixture does not establish a released Server deployment or two physical desktop
+installations. QR display/scanning is not connected to desktop IPC/UI; key rotation remains
+unsupported. The public-link/password path retains every Personal epoch supplied by the
+verified handoff and never uploads pre-existing local inventory during account setup.
 
 ## Generated files
 

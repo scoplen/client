@@ -7,16 +7,13 @@ use scoplen_api::{
     account_devices::{AccountDeviceStatements, MAX_ACCOUNT_DEVICE_STATEMENTS_BYTES},
     account_profile::{AccountProfile, MAX_ACCOUNT_PROFILE_BYTES},
     auth::DeviceAccessOperation,
-    personal_enrollment::PersonalEnrollmentRequest,
 };
 use scoplen_crypto::{
-    DeviceAccessToken, DeviceCertificate, DeviceKemKeyPair, DpopProof, DpopTarget, DpopToken,
-    Ed25519SigningKey, P256SigningKey, RevocationStatement, dpop_jwk_thumbprint,
-    verify_device_list,
+    DeviceAccessToken, DeviceCertificate, DpopProof, DpopTarget, DpopToken, P256SigningKey,
+    RevocationStatement, dpop_jwk_thumbprint, verify_device_list,
 };
 use serde::Serialize;
 use specta::Type;
-use zeroize::Zeroize as _;
 
 use super::{
     PersonalServer, PersonalServerError, identity, now, record, storage, trusted_token_keys,
@@ -218,31 +215,9 @@ fn validate(
     if profile.id != identity.account_id || statements.account_id != identity.account_id {
         return Err(PersonalServerError::InvalidAccountResponse);
     }
-    let secrets = identity::Secrets::parse(&identity.private_material)?;
-    let account_key =
-        Ed25519SigningKey::from_bytes(secrets.account_signing()).map_err(invalid)?.public_key();
-    let mut enrollment = PersonalEnrollmentRequest::from_json(
-        identity.enrollment_request.as_ref().ok_or(PersonalServerError::Identity)?.as_bytes(),
-    )
-    .map_err(invalid)?;
-    enrollment.invitation_token.zeroize();
-    let current = &enrollment.device_certificate;
-    let signing = P256SigningKey::from_bytes(secrets.signing()).map_err(invalid)?;
-    let kem = DeviceKemKeyPair::from_private_bytes(secrets.device_kem()).map_err(invalid)?;
-    let device_keys =
-        store.device_key_pair().map_err(storage)?.ok_or(PersonalServerError::Identity)?;
-    if enrollment.account_id != identity.account_id
-        || enrollment.account_signing_public_key != account_key
-        || current.account_id != identity.account_id
-        || current.device_id != store.device_id()
-        || current.signing_public_key != signing.public_key_sec1()
-        || current.kem_public_key != kem.public_key()
-        || device_keys.signing.as_bytes() != secrets.signing()
-        || device_keys.kem.as_bytes() != secrets.device_kem()
-    {
-        return Err(PersonalServerError::Identity);
-    }
-    current.verify(&account_key).map_err(invalid)?;
+    let retained = super::retained::RetainedAccount::load(store, identity)?;
+    let account_key = retained.signing_public;
+    let current = &retained.certificate;
     let certificates = statements
         .certificates
         .iter()

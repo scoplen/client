@@ -413,7 +413,7 @@ fn vault(store: &Store) -> Result<Uuid, PersonalInventoryError> {
     store
         .personal_record()
         .map_err(storage)?
-        .filter(|record| record.enrollment_attempted)
+        .filter(|record| record.authentication_allowed())
         .map(|record| record.personal_vault_id)
         .ok_or(PersonalInventoryError::NotConfigured)
 }

@@ -102,7 +102,7 @@ async fn prepare_and_recovery_survive_restart_without_replacing_identity() {
     .unwrap();
     assert_eq!(
         exported.as_bytes(),
-        identity::Secrets::parse(&pending.private_material).unwrap().recovery()
+        identity::Secrets::parse(&pending.private_material).unwrap().recovery().unwrap()
     );
     let body = pending.enrollment_request.as_ref().unwrap();
     let request = PersonalEnrollmentRequest::from_json(body.as_bytes()).unwrap();
@@ -373,7 +373,11 @@ impl Fixture {
     }
 
     fn manager(&self) -> PersonalServer {
-        PersonalServer { operation: Mutex::new(()), transport: Ok(self.transport()) }
+        PersonalServer {
+            operation: Mutex::new(()),
+            transport: Ok(self.transport()),
+            pairing: Default::default(),
+        }
     }
 }
 

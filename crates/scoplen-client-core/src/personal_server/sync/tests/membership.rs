@@ -252,7 +252,7 @@ async fn later_membership_cannot_replace_keys_or_the_retained_device_certificate
                 ];
             }
             4 => {
-                let recovery = RecoveryKey::from_bytes(secrets.recovery()).unwrap();
+                let recovery = RecoveryKey::from_bytes(secrets.recovery().unwrap()).unwrap();
                 update.recovery_blob = RecoveryBlob::wrap(&recovery, pending.account_id, &ark)
                     .unwrap()
                     .encode()
@@ -314,6 +314,7 @@ async fn competing_public_bootstrap_cannot_lower_a_revision_after_validation() {
     let delayed = PersonalServer {
         operation: tokio::sync::Mutex::new(()),
         transport: Ok(Transport::fixture(peer.certificate.clone(), Duration::from_secs(5))),
+        pairing: Default::default(),
     };
     let concurrent_store = store.clone();
     let task = tokio::spawn(async move { delayed.bootstrap_sync(concurrent_store).await });

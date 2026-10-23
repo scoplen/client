@@ -19,7 +19,8 @@ pub(super) struct Secrets<'a>(&'a [u8]);
 
 impl<'a> Secrets<'a> {
     pub fn parse(material: &'a SecretVec) -> Result<Self, PersonalServerError> {
-        if material.len() != 1 + 7 * 32 || material.as_bytes()[0] != 1 {
+        if !matches!((material.as_bytes().first(), material.len()), (Some(1), 225) | (Some(2), 193))
+        {
             return Err(PersonalServerError::Identity);
         }
         Ok(Self(material.as_bytes()))
@@ -43,8 +44,8 @@ impl<'a> Secrets<'a> {
     pub fn vault(&self) -> &[u8] {
         &self.0[161..193]
     }
-    pub fn recovery(&self) -> &[u8] {
-        &self.0[193..225]
+    pub fn recovery(&self) -> Option<&[u8]> {
+        self.0.get(193..225)
     }
 }
 
@@ -197,6 +198,7 @@ pub(super) fn prepare(
         device_name,
         private_material: SecretVec::new(material.to_vec()),
         enrollment_request: Some(encoded),
+        paired_handoff: None,
         recovery_saved: false,
         recovery_confirmed: false,
         enrollment_attempted: false,

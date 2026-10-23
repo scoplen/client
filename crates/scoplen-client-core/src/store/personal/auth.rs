@@ -64,7 +64,8 @@ impl Store {
                 access_token = NULL, refresh_token = NULL, access_expires_at = NULL,
                 refresh_expires_at = NULL, auth_scope = NULL, refresh_claimed = 0, refresh_retry_at = NULL
              WHERE singleton = 1 AND auth_generation = ?1 AND origin = ?2
-                AND account_id = ?3 AND private_material = ?4 AND enrollment_attempted = 1
+                AND account_id = ?3 AND private_material = ?4
+                AND (enrollment_attempted = 1 OR paired_handoff IS NOT NULL)
              RETURNING auth_generation",
             params![identity.auth_generation, identity.origin, identity.account_id.as_bytes().as_slice(),
                 identity.private_material.as_bytes()],
@@ -84,7 +85,7 @@ impl Store {
             "SELECT access_token, refresh_token, access_expires_at, refresh_expires_at, auth_scope
              FROM personal_server WHERE singleton = 1 AND auth_generation = ?1
                 AND origin = ?2 AND account_id = ?3 AND private_material = ?4
-                AND enrollment_attempted = 1 AND refresh_claimed = 0
+                AND (enrollment_attempted = 1 OR paired_handoff IS NOT NULL) AND refresh_claimed = 0
                 AND refresh_expires_at > ?5 AND length(refresh_token) BETWEEN 1 AND 2048
                 AND length(access_token) BETWEEN 1 AND 4096 AND auth_scope IS NOT NULL
                 AND (refresh_retry_at IS NULL OR refresh_retry_at <= ?5)",
@@ -119,9 +120,7 @@ impl Store {
         retry_at: Option<u64>,
     ) -> Result<bool, StoreError> {
         let material = identity.private_material.as_bytes();
-        if material.len() != 225 || material[0] != 1 {
-            return Err(StoreError::InvalidIdentifier);
-        }
+        let (signing, kem) = identity.device_secrets()?;
         let conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
         Ok(conn.execute(
@@ -131,15 +130,17 @@ impl Store {
                 refresh_retry_at = ?15
              WHERE singleton = 1 AND auth_generation = ?6 AND refresh_claimed = ?7
                 AND origin = ?8 AND account_id = ?9 AND personal_vault_id = ?10
-                AND private_material = ?11 AND enrollment_request = ?12 AND enrollment_attempted = 1
+                AND private_material = ?11 AND enrollment_request IS ?12 AND paired_handoff IS ?16
+                AND (enrollment_attempted = 1 OR paired_handoff IS NOT NULL)
                 AND EXISTS (SELECT 1 FROM device_key_pair WHERE singleton = 1 AND signing = ?13 AND kem = ?14)",
             params![tokens.access.as_bytes(), tokens.refresh.as_bytes(),
                 tokens.access_expires_at.min(i64::MAX as u64) as i64,
                 tokens.refresh_expires_at.min(i64::MAX as u64) as i64, tokens.scope,
                 generation, refresh_claimed, identity.origin, identity.account_id.as_bytes().as_slice(),
                 identity.personal_vault_id.as_bytes().as_slice(), material,
-                identity.enrollment_request.as_ref().map(SecretVec::as_bytes), &material[1..33], &material[33..65],
-                retry_at.map(|value| value.min(i64::MAX as u64) as i64)],
+                identity.enrollment_request.as_ref().map(SecretVec::as_bytes), signing, kem,
+                retry_at.map(|value| value.min(i64::MAX as u64) as i64),
+                identity.paired_handoff.as_ref().map(SecretVec::as_bytes)],
         )? == 1)
     }
 }

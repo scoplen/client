@@ -170,4 +170,41 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         devices BLOB NOT NULL CHECK (length(devices) BETWEEN 1 AND 6291456)
     ) STRICT;
     "#,
+    // 10: an authenticated pairing handoff is its own account trust provenance.
+    r#"
+    ALTER TABLE personal_server ADD COLUMN paired_handoff BLOB
+        CHECK (paired_handoff IS NULL OR length(paired_handoff) BETWEEN 1 AND 4456408);
+    CREATE TABLE personal_pairing_device (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        origin TEXT NOT NULL CHECK (length(origin) BETWEEN 1 AND 2048),
+        device_name TEXT NOT NULL CHECK (length(device_name) BETWEEN 1 AND 128),
+        signing BLOB NOT NULL CHECK (length(signing) = 32),
+        kem BLOB NOT NULL CHECK (length(kem) = 32),
+        created_at INTEGER NOT NULL CHECK (created_at >= 0)
+    ) STRICT;
+    CREATE TABLE personal_pairing (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        side INTEGER NOT NULL CHECK (side IN (1, 2)),
+        origin TEXT NOT NULL CHECK (length(origin) BETWEEN 1 AND 2048),
+        pairing_id BLOB NOT NULL CHECK (length(pairing_id) = 16),
+        peer_id BLOB CHECK (peer_id IS NULL OR length(peer_id) = 16),
+        expires_at INTEGER NOT NULL CHECK (expires_at > 0),
+        local_expires_at INTEGER NOT NULL CHECK (local_expires_at > 0 AND local_expires_at <= expires_at),
+        attempt_started INTEGER NOT NULL CHECK (attempt_started IN (0, 1)),
+        phase TEXT NOT NULL,
+        capability BLOB CHECK (capability IS NULL OR length(capability) = 32),
+        transcript BLOB NOT NULL CHECK (length(transcript) BETWEEN 1 AND 8388608),
+        certificate BLOB CHECK (certificate IS NULL OR length(certificate) BETWEEN 1 AND 65536),
+        key_update BLOB CHECK (key_update IS NULL OR length(key_update) BETWEEN 1 AND 4194304),
+        handoff BLOB CHECK (handoff IS NULL OR length(handoff) BETWEEN 41 AND 4456448),
+        acceptance BLOB CHECK (acceptance IS NULL OR length(acceptance) = 64),
+        approval_request BLOB CHECK (approval_request IS NULL OR length(approval_request) BETWEEN 1 AND 6291456)
+    ) STRICT;
+    CREATE TABLE personal_pairing_attempts (
+        pairing_id BLOB PRIMARY KEY CHECK (length(pairing_id) = 16),
+        origin TEXT NOT NULL,
+        side INTEGER NOT NULL CHECK (side IN (1, 2))
+    ) STRICT, WITHOUT ROWID;
+    "#,
 ];
