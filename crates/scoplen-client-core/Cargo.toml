@@ -9,6 +9,9 @@ authors.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+live-server-integration = []
+
 [dependencies]
 base64.workspace = true
 reqwest.workspace = true

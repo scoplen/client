@@ -36,6 +36,33 @@ pnpm dev
 
 The first launch rebuilds the Rust dependencies. A fresh checkout does not need this cleanup.
 
+## Disposable Personal server integration
+
+The opt-in `live-server-integration` feature checks the production Personal enrollment,
+device authentication, sync-key verification and reviewed inventory APIs against an
+independently running server. It does not read server source or seed its database.
+
+Prepare a fresh disposable server on `https://localhost:<port>` with a trusted test CA.
+Complete public Operator setup and login, then issue an unused Personal invitation. Put a
+JSON descriptor in a private file with exactly `disposable: true`, `origin`,
+`invitation_url` and `ca_certificate` (the PEM certificate's absolute path). Keep the
+descriptor and server output private; the invitation is a one-use credential.
+
+In PowerShell, point to that existing private descriptor and run:
+
+```powershell
+$env:SCOPLEN_LIVE_PERSONAL_DEPLOYMENT = 'C:/private/disposable-personal.json'
+cargo test -p scoplen-client-core --lib --features live-server-integration live_server:: -- --test-threads=1
+```
+
+The test rejects a non-loopback origin, bounds descriptor and certificate reads, and adds
+the test CA only to its own HTTPS client. It consumes the invitation, creates and reopens
+an isolated SQLCipher store, uploads and downloads a signed encrypted host and its edit,
+checks durable acknowledgements, and restores the original local copy offline. Repeating
+it requires a fresh disposable deployment and invitation. Remove the private descriptor,
+test server and its temporary data after verification. This does not establish native
+desktop UI, physical passkey, macOS or multi-device acceptance.
+
 ## Generated files
 
 | File | Regenerate with | When |
