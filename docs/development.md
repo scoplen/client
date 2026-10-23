@@ -62,7 +62,9 @@ checks durable acknowledgements, and restores the original local copy offline. B
 first transfer and again after reopening the store, it expires only the client's cached
 access lifetime and exercises the production refresh path using the genuine server-issued
 refresh credential. It checks durable session generation, a changed access credential and
-the original absolute refresh-family deadline; server clocks and signed JWTs are unchanged.
+the retained refresh-family deadline ceiling; server clocks and signed JWTs are unchanged.
+The remaining whole seconds and JWT issuance time can be sampled independently. Rotation
+uses their lifetime estimate conservatively and never extends the retained ceiling.
 Repeating
 it requires a fresh disposable deployment and invitation. Remove the private descriptor,
 test server and its temporary data after verification. This does not establish native
