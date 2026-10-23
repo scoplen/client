@@ -30,7 +30,10 @@ fn bounded_file(path: &Path, limit: u64) -> Vec<u8> {
     bytes
 }
 
-async fn rotate_live_session(manager: &PersonalServer, store: &Arc<Store>) {
+async fn rotate_live_session(
+    manager: &PersonalServer,
+    store: &Arc<Store>,
+) -> PersonalAccountSnapshot {
     let mut before = record(store).expect("retained authenticated identity");
     let access = store
         .personal_access_token(now().expect("current time"))
@@ -42,11 +45,16 @@ async fn rotate_live_session(manager: &PersonalServer, store: &Arc<Store>) {
     store
         .set_personal_session_metadata_for_test(&before)
         .expect("conservatively expire the cached access lifetime");
-    let bootstrap = manager
-        .bootstrap_sync(store.clone())
+    let account = manager
+        .query_account(store.clone())
         .await
-        .expect("rotate the real native session before explicit key verification");
-    assert_eq!(bootstrap.session().vaults.len(), 1);
+        .expect("rotate the real native session before an explicit account query");
+    assert_eq!(account.account_id, before.account_id.to_string());
+    assert_eq!(account.email, None);
+    assert_eq!(account.devices.len(), 1);
+    assert_eq!(account.devices[0].id, store.device_id().to_string());
+    assert_eq!(account.devices[0].name, "Live integration device");
+    assert!(account.devices[0].current);
     let after = record(store).expect("durable rotated session");
     assert_eq!(after.account_id, before.account_id);
     assert_eq!(after.personal_vault_id, before.personal_vault_id);
@@ -63,6 +71,7 @@ async fn rotate_live_session(manager: &PersonalServer, store: &Arc<Store>) {
         .expect("read rotated access credential")
         .expect("usable rotated access credential");
     assert!(rotated.as_bytes() != access.as_bytes(), "the access credential must rotate");
+    account
 }
 
 #[tokio::test]
@@ -114,7 +123,7 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
         .await
         .expect("verify server K-4 bundle and unwrap the real account and Personal keys");
     assert_eq!(bootstrap.session().vaults.len(), 1);
-    rotate_live_session(&manager, &store).await;
+    let account = rotate_live_session(&manager, &store).await;
 
     let object = store
         .write(LocalWrite {
@@ -162,6 +171,10 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
     let reopened = Arc::new(Store::open(&path, &key).expect("reopen encrypted local store"));
     let offline = PersonalServer::default();
     assert!(offline.load_sync_bootstrap(&reopened).expect("offline key revalidation").is_some());
+    assert_eq!(
+        offline.account_snapshot(&reopened).expect("offline signed account revalidation"),
+        Some(account)
+    );
     rotate_live_session(&manager, &reopened).await;
     assert_eq!(
         settings.status(&reopened).expect("offline durable progress").applied_cursor,

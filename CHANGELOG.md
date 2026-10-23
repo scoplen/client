@@ -12,7 +12,8 @@ All notable changes to the Scoplen desktop client are recorded here.
   covering public enrollment, retained-device authentication, encrypted inventory round trips,
   durable acknowledgements, encrypted-store reopen and offline original-copy restoration.
   It also exercises real native session rotation before sync and after reopening the store,
-  retaining the original absolute refresh-family deadline.
+  retaining the refresh-family deadline ceiling. Explicit real account/device queries verify
+  the retained account and current signed device, with offline snapshot revalidation after restart.
 
 - Raised the Tokio minimum and lock to 1.53.3 for RUSTSEC-2026-0386, addressing
   Unix `AsyncFd` I/O safety without suppressing dependency policy checks.
