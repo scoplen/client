@@ -115,7 +115,7 @@ only if the saved request still matches and no verified credentials have appeare
 no invitation token; a separate explicit Join submits the new request. Missing or inconsistent
 saved artifacts fail closed rather than recreating identity. The transport bounds responses and
 timeouts, verifies TLS, and has no redirect, proxy, cookie, or automatic POST retry behavior.
-Inventory selection UI, full reconciliation, pairing, refresh rotation, and hardware device signing remain separate
+Full reconciliation, pairing, refresh rotation, and hardware device signing remain separate
 outcomes.
 
 `PersonalServer::bootstrap_sync` is the Rust-only K-4 first-device boundary. It revalidates the
@@ -142,7 +142,7 @@ stale result. `load_sync_bootstrap` decodes and cryptographically revalidates al
 restart without requiring network or an unexpired token. Its secret key handle stays in Rust;
 there is no IPC export or automatic inventory migration.
 
-`sync_personal_inventory` is a separate Rust-only one-shot action (D-112). The caller names the
+`sync_personal_inventory` is a separate Rust-owned one-shot action (D-112). The caller names the
 retained vault and exact object ids whose upload was confirmed. Existing local object references
 must already belong to that vault or be explicitly selected; references never expand selection.
 Migration 6 adds immutable K-1 adoption copies, per-object base sequences and dirty markers,
@@ -178,7 +178,21 @@ retry. A transport failure, malformed success, or uncertain commit preserves the
 subsequent attempt pulls and merges instead of replaying the old batch. Cursor expiry stops with
 `ReconciliationRequired` rather than resetting the cursor or uploading missing objects. This path
 still supports only account revision 1 / Personal epoch 1. Full snapshot reconciliation,
-rotation, pairing, and desktop selection/restore IPC remain incomplete.
+rotation and pairing remain incomplete.
+
+`PersonalInventorySettings` is the secret-free desktop facade. A single local read transaction
+returns object names/categories, shared-secret presence, immutable-copy metadata, dirty counts,
+and separate applied/acknowledged decimal-string positions. Preview names exact local ids and
+missing existing references; it never expands the selection or opens a connection. A valid
+preview retains only object digests, the store path/device/vault, and a random one-use ticket
+in Rust for at most five minutes. The ticket, not any object bytes or secrets, crosses IPC.
+The adoption transaction compares every selected object's current bytes and ownership to that
+review before committing any copy, ownership change, or queue entry. Competing edits therefore
+require another review. Manual sync without a ticket can only synchronize existing Personal
+objects. Native restore runs the same core local transaction on the blocking pool, retains
+original snapshots, creates new local ids, and emits normal store notifications after commit.
+The UI makes no network request and never retries an uncertain network intent automatically;
+it reloads only local metadata after any result, including an unknown write outcome.
 
 Personal TrustRecords currently require manual/imported provenance naming this account and a
 verified active device. Missing/cross-account/revoked-device provenance and CA/policy records

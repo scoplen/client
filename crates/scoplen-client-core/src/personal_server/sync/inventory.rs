@@ -2,6 +2,7 @@
 //! Explicit, bounded first-device Personal inventory synchronization.
 
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{Instant, UNIX_EPOCH},
 };
@@ -82,6 +83,15 @@ impl PersonalServer {
         store: Arc<Store>,
         intent: PersonalInventoryIntent,
     ) -> Result<PersonalInventoryProgress, PersonalSyncError> {
+        self.sync_personal_inventory_expected(store, intent, None).await
+    }
+
+    pub(crate) async fn sync_personal_inventory_expected(
+        &self,
+        store: Arc<Store>,
+        intent: PersonalInventoryIntent,
+        reviewed: Option<HashMap<Uuid, [u8; 32]>>,
+    ) -> Result<PersonalInventoryProgress, PersonalSyncError> {
         let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
         if record(&store)?.personal_vault_id != intent.vault_id {
             return Err(PersonalSyncError::Selection);
@@ -94,7 +104,13 @@ impl PersonalServer {
             let object = store.get(*id).map_err(local)?.ok_or(PersonalSyncError::Selection)?;
             context.validate_inventory(&object)?;
         }
-        store.adopt_personal_objects(intent.vault_id, &intent.adopt).map_err(local)?;
+        if let Some(reviewed) = reviewed.as_ref() {
+            store
+                .adopt_personal_objects_reviewed(intent.vault_id, &intent.adopt, Some(reviewed))
+                .map_err(local)?;
+        } else {
+            store.adopt_personal_objects(intent.vault_id, &intent.adopt).map_err(local)?;
+        }
         let mut progress = PersonalInventoryProgress {
             applied_cursor: store.personal_sync_cursor(intent.vault_id).map_err(local)?,
             acknowledged_cursor: store

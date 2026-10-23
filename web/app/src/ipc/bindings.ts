@@ -141,6 +141,14 @@ export const commands = {
 	personalSyncKeyStatus: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("personal_sync_key_status")),
 	/**  Verify and save the retained account's sync keys without uploading local inventory. */
 	connectPersonalSync: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("connect_personal_sync")),
+	/**  Read public inventory metadata and durable sync progress without network access. */
+	personalInventoryStatus: () => typedError<PersonalInventoryStatus, PersonalInventoryError>(__TAURI_INVOKE("personal_inventory_status")),
+	/**  Preview exact ids and missing references; keys and object content remain in Rust. */
+	previewPersonalInventory: (ids: string[]) => typedError<PersonalInventoryPreview, PersonalInventoryError>(__TAURI_INVOKE("preview_personal_inventory", { ids })),
+	/**  Synchronize existing Personal objects, optionally consuming one explicitly confirmed review. */
+	synchronizePersonalInventory: (reviewToken: string | null) => typedError<PersonalInventoryResult, PersonalInventoryError>(__TAURI_INVOKE("synchronize_personal_inventory", { reviewToken })),
+	/**  Restore immutable adoption copies as new local objects without changing the server. */
+	restorePersonalInventory: (ids: string[]) => typedError<number, PersonalInventoryError>(__TAURI_INVOKE("restore_personal_inventory", { ids })),
 };
 
 /** Events */
@@ -735,6 +743,120 @@ export type OpenSshUnsupportedDirective = {
 	line: number,
 	/**  The directive name as written. */
 	directive: string,
+};
+
+/**  Display categories, never object fields or credential content. */
+export type PersonalInventoryCategory =
+/**  A saved machine. */
+"host" |
+/**  A saved login. */
+"login" |
+/**  A credential description and any shared secret. */
+"credential" |
+/**  A saved network route. */
+"route" |
+/**  A host group. */
+"group" |
+/**  A saved host-key trust decision. */
+"trust" |
+/**  A snippet, including its template and defaults. */
+"snippet" |
+/**  A saved tunnel. */
+"forward" |
+/**  A saved workspace. */
+"workspace" |
+/**  A future object category. */
+"other";
+
+/**  Safe, localizable failures. No server body or underlying diagnostic crosses IPC. */
+export type PersonalInventoryError =
+/**  Unlock or reopen local data. */
+"storage" |
+/**  Wait for the current account or sync action. */
+"busy" |
+/**  Complete Personal setup first. */
+"notConfigured" |
+/**  Renew device authentication. */
+"authenticationRequired" |
+/**  An HTTPS exchange failed. */
+"network" |
+/**  Untrusted or mismatched sync artifacts were rejected. */
+"invalidSyncResponse" |
+/**  This build cannot rotate the keys. */
+"rotationRequired" |
+/**  This build cannot perform the required full reconciliation. */
+"reconciliationRequired" |
+/**  A write may have committed; the next cycle checks by pulling. */
+"writeOutcomeUnknown" |
+/**  Local changes are applied but acknowledgement is unconfirmed. */
+"acknowledgementUnknown" |
+/**  Bounded conflict retries were exhausted. */
+"concurrentChanges" |
+/**  Check the device and server clock. */
+"clock" |
+/**  Review exact object ids and references again. */
+"selection" |
+/**  A bounded sync resource limit was reached. */
+"resourceLimit" |
+/**  Trust provenance requires review. */
+"trustReviewRequired" |
+/**  The review expired or local objects changed after it. */
+"previewExpired";
+
+/**  Public metadata safe to expose over IPC. */
+export type PersonalInventoryObject = {
+	/**  Exact object identifier. */
+	id: string,
+	/**  Optional display name only, never a template, address, username, or secret. */
+	name: string | null,
+	/**  The content category the user is selecting. */
+	category: PersonalInventoryCategory,
+	/**  The K-1 credential contains synchronized secret bytes. */
+	sharedSecret: boolean,
+	/**  Already belongs to this Personal vault. */
+	personal: boolean,
+	/**  A local change awaits confirmed synchronization. */
+	dirty: boolean,
+	/**  A deletion waiting in the same durable queue. */
+	deleted: boolean,
+	/**  Organization content cannot enter a Personal vault. */
+	excluded: boolean,
+};
+
+/**  A preview grants no network or adoption permission by itself. */
+export type PersonalInventoryPreview = {
+	/**  One-use, short-lived Rust-held review ticket; absent until references are selected. */
+	token: string | null,
+	/**  Exact selected objects and their content categories. */
+	objects: PersonalInventoryObject[],
+	/**  Existing referenced objects that must be selected explicitly. */
+	missing: PersonalInventoryObject[],
+};
+
+/**  Counts from one explicit bounded sync cycle. */
+export type PersonalInventoryResult = {
+	/**  Number of encrypted entries applied. */
+	downloaded: number,
+	/**  Number of writes with confirmed assignments. */
+	uploaded: number,
+	/**  Another explicit cycle is needed; nothing is scheduled automatically. */
+	more: boolean,
+};
+
+/**  Locally persisted status; reading it never connects to the server. */
+export type PersonalInventoryStatus = {
+	/**  Retained Personal vault. */
+	vaultId: string,
+	/**  Local and already adopted objects, with public metadata only. */
+	objects: PersonalInventoryObject[],
+	/**  Immutable original adoption copies available for local restoration. */
+	backups: PersonalInventoryObject[],
+	/**  Number of dirty objects, including deletions. */
+	pending: number,
+	/**  Applied sequence as decimal text, avoiding JavaScript integer truncation. */
+	appliedCursor: string,
+	/**  Confirmed acknowledgement as decimal text. */
+	acknowledgedCursor: string,
 };
 
 /**  Safe failures contain no source body, URL fragment, token, or underlying network diagnostic. */

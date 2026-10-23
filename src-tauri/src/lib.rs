@@ -9,6 +9,7 @@ pub mod events;
 pub mod frames;
 pub mod inventory;
 pub mod local_data;
+pub mod personal_inventory;
 pub mod personal_server;
 mod smoke;
 pub mod ssh;
@@ -86,6 +87,10 @@ pub fn ipc() -> Builder<tauri::Wry> {
             personal_server::update_personal_invitation,
             personal_server::personal_sync_key_status,
             personal_server::connect_personal_sync,
+            personal_inventory::personal_inventory_status,
+            personal_inventory::preview_personal_inventory,
+            personal_inventory::synchronize_personal_inventory,
+            personal_inventory::restore_personal_inventory,
         ])
         .events(collect_events![events::StoreChanged, events::SessionChanged])
 }
@@ -134,6 +139,9 @@ pub fn run() {
             app.manage(ssh::SessionManager::default());
             app.manage(inventory::InventoryState::default());
             app.manage(scoplen_client_core::personal_server::PersonalServer::default());
+            app.manage(std::sync::Arc::new(
+                scoplen_client_core::personal_inventory::PersonalInventorySettings::default(),
+            ));
             Ok(())
         })
         .on_window_event(|window, event| {

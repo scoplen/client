@@ -18,6 +18,8 @@ function fixture(saved: PersonalSyncKeyStatus = "notConnected", authenticated = 
     if (handlers.has(command)) return handlers.get(command)!();
     if (command === "personal_sync_key_status") return saved;
     if (command === "connect_personal_sync") return "verified";
+    if (command === "personal_inventory_status")
+      return { vaultId: "vault", objects: [], backups: [], pending: 0, appliedCursor: "0", acknowledgedCursor: "0" };
     throw new Error("Unexpected IPC command");
   });
   const view = () => (
@@ -38,7 +40,7 @@ it("checks saved keys locally and connects only after an explicit action", async
   connect.focus();
   await userEvent.keyboard("{Enter}");
   expect(await screen.findByText(/Sync keys are verified on this device/)).toBeTruthy();
-  expect(f.calls).toEqual(["personal_sync_key_status", "connect_personal_sync"]);
+  expect(f.calls).toEqual(["personal_sync_key_status", "connect_personal_sync", "personal_inventory_status"]);
   expect(f.busy.mock.calls).toEqual([[true], [false]]);
   expect(await violations(container)).toEqual([]);
 });
@@ -51,7 +53,7 @@ it("keeps saved keys visible offline while requiring authentication before serve
   expect(connect.disabled).toBe(true);
   expect(screen.getByText("请先在上方认证此设备，再连接服务器。")).toBeTruthy();
   await userEvent.click(connect);
-  expect(f.calls).toEqual(["personal_sync_key_status"]);
+  expect(f.calls).toEqual(["personal_sync_key_status", "personal_inventory_status"]);
 });
 
 it("prevents repeated requests and retains verified keys after a rejected recheck", async () => {

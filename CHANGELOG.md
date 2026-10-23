@@ -7,12 +7,19 @@ All notable changes to the Scoplen desktop client are recorded here.
 - Updated `ctutils` to 0.4.4 for RUSTSEC-2026-0385, restoring constant-time mask
   generation and integer comparison in the shared cryptographic dependency graph.
 
+- Added the Inventory sync settings workflow after key verification: exact object selection,
+  content-category and shared-secret review, missing-reference guidance, explicit upload consent,
+  manual bounded sync, dirty/applied/ack status, and offline restoration of immutable original
+  copies as new local objects. Five-minute one-use Rust preview tickets and transactional object
+  version checks reject stale consent. Secrets and object content stay outside IPC; failures are
+  localized and never cause an automatic network retry.
+
 - Added a Rust-only first-device Personal inventory roundtrip with explicit object selection,
   atomic immutable local adoption copies, a durable encrypted outbox, authenticated envelope
   decryption and field merge, cursor/ack persistence, bounded CAS conflict retries, and safe
   pull-before-write recovery after an uncertain commit. Restoring adoption copies creates new
   local objects and remaps selected references without uploading them or copying device secrets.
-  The API remains separate from account setup and requires a future selection UI. Cursor expiry,
+  The API remains separate from account setup and is exposed through the explicit settings flow. Cursor expiry,
   unsupported rotations, and unverified trust provenance preserve local data and stop explicitly.
 - Upgraded all shared Rust pins to `proto@b52ee266`, including complete K-1 object-reference
   discovery for explicit adoption, and aligned UUID at 1.28.0.
