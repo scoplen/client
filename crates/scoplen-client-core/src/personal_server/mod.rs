@@ -7,11 +7,14 @@
 
 mod account;
 mod identity;
+mod pairing;
 mod refresh;
+mod retained;
 mod sync;
 mod transport;
 
 pub use account::{PersonalAccountDevice, PersonalAccountSnapshot};
+pub use pairing::{PairingError, PairingPhase, PairingSide, PairingStarted, PairingStatus};
 pub use sync::{
     PersonalInventoryIntent, PersonalInventoryProgress, PersonalSyncBootstrap, PersonalSyncError,
 };
@@ -163,11 +166,16 @@ pub enum PersonalServerError {
 pub struct PersonalServer {
     operation: Mutex<()>,
     transport: Result<Transport, PersonalServerError>,
+    pairing: std::sync::Mutex<Option<pairing::ActivePairing>>,
 }
 
 impl Default for PersonalServer {
     fn default() -> Self {
-        Self { operation: Mutex::new(()), transport: Transport::new() }
+        Self {
+            operation: Mutex::new(()),
+            transport: Transport::new(),
+            pairing: std::sync::Mutex::new(None),
+        }
     }
 }
 
@@ -214,7 +222,7 @@ impl PersonalServer {
         tokio::task::spawn_blocking(move || {
             let record = record(&store)?;
             let secrets = identity::Secrets::parse(&record.private_material)?;
-            let recovery = RecoveryKey::from_bytes(secrets.recovery())
+            let recovery = RecoveryKey::from_bytes(secrets.recovery().ok_or(PersonalServerError::RecoveryRequired)?)
                 .map_err(|_| PersonalServerError::Identity)?;
             let display = Zeroizing::new(recovery.encode_display());
             let contents = Zeroizing::new(format!("Scoplen Personal recovery key\nServer: {}\nAccount: {}\n\n{}\n\nKeep this file private and offline. Anyone with this key can recover the account.\n",
@@ -295,7 +303,7 @@ impl PersonalServer {
     ) -> Result<PersonalServerStatus, PersonalServerError> {
         let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
         let pending = record(&store)?;
-        if !pending.enrollment_attempted {
+        if !pending.authentication_allowed() {
             return Err(PersonalServerError::RecoveryRequired);
         }
         let transport = self.transport.as_ref().map_err(|error| *error)?;
@@ -363,7 +371,7 @@ fn status(store: &Store) -> Result<PersonalServerStatus, PersonalServerError> {
                 && record.refresh_expires_at.is_some_and(|expires| expires > current))
     {
         PersonalServerPhase::Authenticated
-    } else if record.session_established {
+    } else if record.session_established || record.paired_handoff.is_some() {
         PersonalServerPhase::AuthenticationRequired
     } else if record.enrollment_attempted {
         PersonalServerPhase::EnrollmentUnconfirmed

@@ -4,13 +4,25 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added Rust-owned second-device pairing using a public locator and separate transient
+  eight-character password. CPace, confirmation, authenticated device review, seven immutable
+  relay slots, conservative deadlines and minimum poll spacing run in the core. Durable
+  one-attempt records prevent restarting an old session after switching to another one.
+  Exact handoff plans and acceptance/approval bytes are saved before transmission; restarted
+  devices recover through receipts and retained-device authentication without changing keys.
+  Paired identities have their own authenticated provenance, no fabricated enrollment or
+  recovery key, and must finish D-100 authentication and K-4 verification before completion.
+  Account queries and explicit inventory sync support that provenance and all retained Personal
+  epochs. First-response floors, equal-revision projection checks, strict response bounds/cache
+  headers and membership-only key invariants fail closed. Desktop QR workflows remain incomplete.
+
 - Allowed the retained first device to synchronize after membership-only account-key
   revision advances, including skipped revisions and a randomized wrap of the same ARK.
   Account roots, private keys, account ciphertexts, recovery material, Personal epoch-1
   wrapping and this device's exact signed certificate stay pinned. The encrypted snapshot
   rejects revision rollback and changed key projections at the same revision across restarts;
   independently signed device statements remain refreshable. Competing operations retain
-  the newer snapshot. Device pairing and key rotation remain separate work.
+  the newer snapshot. Key rotation remains separate work.
 
 - Fixed successful native refresh being rejected when independently sampled JWT issuance
   and remaining whole seconds cross a clock boundary. Positive returned lifetimes schedule

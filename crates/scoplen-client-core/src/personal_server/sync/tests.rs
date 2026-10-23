@@ -10,6 +10,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use scoplen_api::{
     auth::{AuthJwk, AuthJwks},
+    personal_enrollment::PersonalEnrollmentRequest,
     sync::{SessionVault, SyncLimits, SyncVaultKey},
 };
 use scoplen_crypto::{
@@ -53,6 +54,7 @@ struct PeerState {
     errors: Vec<String>,
     inventory: Option<InventoryPeer>,
     refresh: Option<RefreshPeer>,
+    pairing: Option<pairing::PairingPeer>,
     pause: Option<(String, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
 
@@ -125,6 +127,7 @@ impl Peer {
         PersonalServer {
             operation: tokio::sync::Mutex::new(()),
             transport: Ok(Transport::fixture(self.certificate.clone(), Duration::from_millis(700))),
+            pairing: Default::default(),
         }
     }
 
@@ -297,82 +300,101 @@ async fn answer(
         {
             return Err("unexpected credential transport".into());
         }
-        if path.starts_with("/sync/") || path.starts_with("/api/v1/accounts/me") {
-            let expected = state.expected.as_ref().ok_or("missing fixture identity")?;
-            let token = request
-                .headers()
-                .get("authorization")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.strip_prefix("DPoP "))
-                .ok_or("missing DPoP authorization")?;
-            if token != expected.token.as_str() {
-                return Err("wrong token".into());
-            }
-            if request.headers().get("accept").and_then(|value| value.to_str().ok())
-                != Some(if path.starts_with("/sync/") {
-                    "application/cbor"
-                } else {
-                    "application/json"
-                })
-            {
-                return Err("wrong accept".into());
-            }
-            let proof = DpopProof::parse(
-                request
-                    .headers()
-                    .get("dpop")
-                    .and_then(|value| value.to_str().ok())
-                    .ok_or("missing proof")?,
-            )
-            .map_err(|_| "invalid proof")?;
-            let target = DpopTarget::new(request.method().as_str(), origin, path).unwrap();
-            let verified = proof
-                .verify(&target, DpopToken::Protected(token), &expected.jkt, now().unwrap(), None)
-                .map_err(|_| "mismatched proof")?;
-            if path == "/sync/v1/session" {
-                if request.method() != http::Method::POST {
-                    return Err("wrong session method".into());
-                }
-                let session =
-                    SyncSessionRequest::from_cbor(&body).map_err(|_| "invalid session request")?;
-                if session.device_id != expected.device
-                    || session.model_version != scoplen_model::CURRENT_SCHEMA_VERSION
-                {
-                    return Err("wrong session identity".into());
-                }
-            } else if state.inventory.is_none()
-                && (request.method() != http::Method::GET || !body.is_empty())
-            {
-                return Err("wrong protected request".into());
-            }
-            if !state.proofs.insert(verified.jti) {
-                return Err("reused proof".into());
-            }
-        } else if path == "/api/v1/auth/refresh" {
-            // This endpoint has a proof but deliberately no access-token header.
-        } else if request.headers().contains_key("authorization")
-            || request.headers().contains_key("dpop")
+        if state.pairing.is_some()
+            && (path.starts_with("/api/v1/auth/pairings")
+                || matches!(path, "/api/v1/auth/challenge" | "/api/v1/auth/device"))
         {
-            return Err("credentials leaked to JWKS".into());
-        }
-        if path.starts_with("/api/v1/auth/") && state.refresh.is_some() {
-            let PeerState { refresh, expected, proofs, .. } = &mut *state;
-            refresh.as_mut().unwrap().answer(
-                &request,
-                &body,
-                expected.as_mut().unwrap(),
-                proofs,
-                origin,
-            )?
-        } else if state.inventory.is_some()
-            && matches!(path.rsplit('/').next(), Some("changes" | "snapshot" | "objects" | "ack"))
-        {
-            let expected = state.expected.as_ref().ok_or("missing identity")?;
-            let signing = expected.signing_public.clone();
-            let device = expected.device;
-            state.inventory.as_mut().unwrap().answer(&request, &body, &signing, device)?
+            let mut pairing = state.pairing.take().unwrap();
+            let reply = pairing.answer(&request, &body, &mut state, origin);
+            state.pairing = Some(pairing);
+            reply?
         } else {
-            state.replies.get(path).cloned().ok_or("unknown path")?
+            if path.starts_with("/sync/") || path.starts_with("/api/v1/accounts/me") {
+                let expected = state.expected.as_ref().ok_or("missing fixture identity")?;
+                let token = request
+                    .headers()
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.strip_prefix("DPoP "))
+                    .ok_or("missing DPoP authorization")?;
+                if token != expected.token.as_str() {
+                    return Err("wrong token".into());
+                }
+                if request.headers().get("accept").and_then(|value| value.to_str().ok())
+                    != Some(if path.starts_with("/sync/") {
+                        "application/cbor"
+                    } else {
+                        "application/json"
+                    })
+                {
+                    return Err("wrong accept".into());
+                }
+                let proof = DpopProof::parse(
+                    request
+                        .headers()
+                        .get("dpop")
+                        .and_then(|value| value.to_str().ok())
+                        .ok_or("missing proof")?,
+                )
+                .map_err(|_| "invalid proof")?;
+                let target = DpopTarget::new(request.method().as_str(), origin, path).unwrap();
+                let verified = proof
+                    .verify(
+                        &target,
+                        DpopToken::Protected(token),
+                        &expected.jkt,
+                        now().unwrap(),
+                        None,
+                    )
+                    .map_err(|_| "mismatched proof")?;
+                if path == "/sync/v1/session" {
+                    if request.method() != http::Method::POST {
+                        return Err("wrong session method".into());
+                    }
+                    let session = SyncSessionRequest::from_cbor(&body)
+                        .map_err(|_| "invalid session request")?;
+                    if session.device_id != expected.device
+                        || session.model_version != scoplen_model::CURRENT_SCHEMA_VERSION
+                    {
+                        return Err("wrong session identity".into());
+                    }
+                } else if state.inventory.is_none()
+                    && (request.method() != http::Method::GET || !body.is_empty())
+                {
+                    return Err("wrong protected request".into());
+                }
+                if !state.proofs.insert(verified.jti) {
+                    return Err("reused proof".into());
+                }
+            } else if path == "/api/v1/auth/refresh" {
+                // This endpoint has a proof but deliberately no access-token header.
+            } else if request.headers().contains_key("authorization")
+                || request.headers().contains_key("dpop")
+            {
+                return Err("credentials leaked to JWKS".into());
+            }
+            if path.starts_with("/api/v1/auth/") && state.refresh.is_some() {
+                let PeerState { refresh, expected, proofs, .. } = &mut *state;
+                refresh.as_mut().unwrap().answer(
+                    &request,
+                    &body,
+                    expected.as_mut().unwrap(),
+                    proofs,
+                    origin,
+                )?
+            } else if state.inventory.is_some()
+                && matches!(
+                    path.rsplit('/').next(),
+                    Some("changes" | "snapshot" | "objects" | "ack")
+                )
+            {
+                let expected = state.expected.as_ref().ok_or("missing identity")?;
+                let signing = expected.signing_public.clone();
+                let device = expected.device;
+                state.inventory.as_mut().unwrap().answer(&request, &body, &signing, device)?
+            } else {
+                state.replies.get(path).cloned().ok_or("unknown path")?
+            }
         }
     };
     let pause = {
@@ -390,8 +412,10 @@ async fn answer(
     if reply.stall {
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
-    let mut response =
-        http::Response::builder().status(reply.status).header("content-type", reply.content_type);
+    let mut response = http::Response::builder().status(reply.status);
+    if !reply.content_type.is_empty() {
+        response = response.header("content-type", reply.content_type);
+    }
     for (name, value) in reply.headers {
         response = response.header(name, value);
     }
@@ -722,6 +746,7 @@ fn retained_identity_and_cached_snapshot_are_revalidated() {
 }
 
 mod inventory;
+mod pairing;
 mod refresh;
 use inventory::InventoryPeer;
 use refresh::RefreshPeer;

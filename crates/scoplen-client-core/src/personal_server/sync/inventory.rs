@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Explicit, bounded first-device Personal inventory synchronization.
+//! Explicit, bounded Personal inventory synchronization.
 
 use std::{
     collections::HashMap,
@@ -384,7 +384,7 @@ impl SyncContext {
 
     fn decrypt(&self, change: &SyncChange) -> Result<RemoteObject, PersonalSyncError> {
         let envelope = ObjectEnvelope::decode(&change.payload).map_err(invalid)?;
-        if envelope.key_epoch != 1 || change.signer_device_id != Some(envelope.signer_device_id) {
+        if change.signer_device_id != Some(envelope.signer_device_id) {
             return Err(PersonalSyncError::InvalidResponse);
         }
         let certificate = self
@@ -397,7 +397,10 @@ impl SyncContext {
             .decrypt(
                 self.identity.personal_vault_id,
                 change.object_id,
-                &self.bootstrap.personal_vault_key,
+                self.bootstrap
+                    .personal_keys
+                    .get(&envelope.key_epoch)
+                    .ok_or(PersonalSyncError::InvalidResponse)?,
                 &certificate.signing_public_key,
             )
             .map_err(invalid)?;
@@ -456,7 +459,7 @@ fn encrypted_batch(
         context.validate_inventory(&object.object)?;
         let payload = ObjectEnvelope::encrypt(
             context.identity.personal_vault_id,
-            1,
+            context.bootstrap.personal_epoch,
             &object.object,
             &context.bootstrap.personal_vault_key,
             context.device_id,

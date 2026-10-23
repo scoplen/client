@@ -113,9 +113,24 @@ Settings → Personal account can prepare a Personal invitation from a user-sele
 Scoplen server, save and confirm a recovery file, join, and authenticate the first device.
 The same pending identity is retained across restarts and uncertain responses. The desktop
 can explicitly synchronize selected inventory after key verification. Rust rotates its native
-device session when needed by an explicit account query, sync or key-verification action. Pairing another device
-remains incomplete.
+device session when needed by an explicit account query, sync or key-verification action.
 Existing local SSH data is not uploaded by account setup.
+
+Second-device pairing joins the existing Personal account using a public pairing link and a
+separate eight-character password. The new installation retains its device keys before requesting
+a five-minute session; the password is shown once in a dedicated transient dialog and is never
+part of the link or saved status. The existing device enters both values and confirms the
+authenticated device name and platform before approving admission. Rust owns CPace, the seven
+immutable relay slots, deadline and polling decisions. Only an explicitly started ceremony runs
+the foreground progress watcher; opening Settings reads local status.
+
+Both sides save their exact recovery checkpoints before sending. A restart before handoff needs
+a fresh session and password while retaining the new device keys. After handoff, Check admission
+uses the saved identity, frame, acceptance and exact approval request; an uncertain commit is
+queried before replay. The new device must authenticate and verify every retained Personal key
+epoch before pairing completes. It receives no fabricated enrollment request or recovery key,
+and account setup never adopts local inventory. QR display/scanning and key rotation are not
+connected to the desktop workflow yet.
 
 Account and devices reads its saved results locally when Settings opens. Refresh account and
 devices explicitly queries the authenticated account profile and complete signed device statement
@@ -124,20 +139,23 @@ account signing key, applies revocations, and requires this device's exact saved
 atomically saving a new offline snapshot. The panel shows the optional email, signed device names
 and platform claims, this device, and the last manual query time. Failed queries retain the previous
 results; opening the page never starts a query. These results do not prove recent activity,
-hardware protection, current server admission, or statements a server has withheld. Pairing,
-revocation publication and key rotation remain separate work.
+hardware protection, current server admission, or statements a server has withheld. Revocation
+publication and key rotation remain separate work.
 
 When enrollment remains unconfirmed, Use a new invitation accepts a link for the same server.
 Rust first authenticates the saved identity: success ends recovery without using the link;
 only the specified verified device denial allows saving the new invitation. The same keys and
 recovery file are retained, and Join remains a separate explicit action.
 
-The Rust core can bootstrap that retained first device through the real sync session,
+The Rust core can bootstrap retained first or paired devices through the real sync session,
 account-key, and Personal vault-key endpoints. It requires a verified DPoP-bound access token,
-TLS 1.3, and HTTP/2; verifies certificates and every key wrap against the retained enrollment;
+TLS 1.3, and HTTP/2; verifies certificates and every key wrap against the retained enrollment
+or authenticated handoff;
 and atomically saves the complete result in SQLCipher for offline restart. Membership-only
 account revisions can advance while the account key ciphertexts, recovery blob and Personal
-epoch-1 wrapping remain exactly those in the signed enrollment. A newer revision may rewrap
+epoch-1 wrapping remain exactly those in the signed enrollment. A paired device retains all
+Personal epochs from its handoff, checks the first response against its admission revision and
+key projection, and keeps the same verified epoch/key set at later membership revisions. A newer revision may rewrap
 this device's unchanged ARK. The saved revision prevents later rollback, including after
 restart; at the same revision only independently verified device statements may change.
 A pending or newer key rotation returns a distinct unsupported-rotation error while keeping
@@ -158,7 +176,7 @@ and recovery copies remain available offline. A verified unchanged rate-limit re
 the credential and its Retry-After deadline for a later explicit action. Older saved sessions
 without a verified scope ceiling require fresh authentication after this update.
 
-The Rust-owned `sync_personal_inventory` API implements a bounded first-device Personal
+The Rust-owned `sync_personal_inventory` API implements a bounded Personal
 roundtrip. Its typed intent names the retained vault and exact local object ids to adopt;
 account setup never supplies this intent. Adoption atomically retains immutable encrypted
 local copies, moves only the selected objects, and queues their initial writes. Existing
@@ -187,7 +205,7 @@ that never uploaded, become immutable encrypted recovery copies requiring attent
 upload automatically. Recover selected edits works offline and creates fresh local objects that
 need a separate upload preview and confirmation. Original adoption copies remain separate.
 Failed snapshot downloads leave inventory and cursors unchanged. Concurrent server writes stop
-the pass safely; Sync now retries with a fresh session. Automatic polling, pairing, key rotation,
+the pass safely; Sync now retries with a fresh session. Automatic inventory polling, key rotation,
 and the complete host-key trust replication policy remain later outcomes. Trust records with
 missing or unverified same-user provenance are retained locally and require review before sync.
 

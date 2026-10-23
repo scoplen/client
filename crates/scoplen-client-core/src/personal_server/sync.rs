@@ -1,22 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! First-device K-4 bootstrap. No inventory is uploaded or moved by this operation.
+//! Retained-device K-4 bootstrap. No inventory is uploaded or moved by this operation.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
-use scoplen_api::{
-    personal_enrollment::PersonalEnrollmentRequest,
-    sync::{
-        SyncAccountKeyBundle, SyncSessionRequest, SyncSessionResponse, SyncVaultKeysResponse,
-        VaultKind,
-    },
+use scoplen_api::sync::{
+    SyncAccountKeyBundle, SyncSessionRequest, SyncSessionResponse, SyncVaultKeysResponse, VaultKind,
 };
 use scoplen_crypto::{
     AccountKemKeyWrap, AccountSigningKeyWrap, DeviceAccessToken, DeviceArkWrap, DeviceCertificate,
-    DeviceKemKeyPair, DpopProof, DpopTarget, DpopToken, P256SigningKey, PersonalVaultKeyWrap,
-    RecoveryBlob, RecoveryKey, RevocationStatement, SecretVec, SymmetricKey, dpop_jwk_thumbprint,
-    ed25519_verify, verify_device_list,
+    DeviceKemKeyPair, DpopProof, DpopTarget, DpopToken, P256SigningKey, PairingKeyProjection,
+    PersonalVaultKeyWrap, RecoveryBlob, RecoveryKey, RevocationStatement, SecretVec, SymmetricKey,
+    dpop_jwk_thumbprint, pairing_key_anchor, verify_device_list,
 };
-use zeroize::Zeroize as _;
 
 use super::{
     PersonalServer, PersonalServerError, identity, now, record, storage, trusted_token_keys,
@@ -43,7 +38,7 @@ pub enum PersonalSyncError {
     /// A response did not match the retained account, device, or cryptographic material.
     #[error("The Personal sync response was invalid. The existing keys were retained.")]
     InvalidResponse,
-    /// This first-device path cannot accept rotated account or vault keys.
+    /// The retained-device path cannot accept rotated account or vault keys.
     #[error(
         "This account or vault requires key rotation support. The existing keys were retained."
     )]
@@ -81,6 +76,8 @@ pub enum PersonalSyncError {
 pub struct PersonalSyncBootstrap {
     session: SyncSessionResponse,
     personal_vault_key: SymmetricKey,
+    personal_epoch: u32,
+    personal_keys: BTreeMap<u32, SymmetricKey>,
     active_devices: Vec<DeviceCertificate>,
 }
 
@@ -92,6 +89,15 @@ struct SyncContext {
     signing: P256SigningKey,
     expires_at: u64,
     device_id: uuid::Uuid,
+    account_keys: SecretVec,
+    vault_keys: SecretVec,
+}
+
+pub(super) struct PairingSource {
+    pub identity: PersonalRecord,
+    pub certificates: Vec<DeviceCertificate>,
+    pub bundle: SyncAccountKeyBundle,
+    pub vault_keys: SyncVaultKeysResponse,
 }
 
 impl PersonalSyncBootstrap {
@@ -100,14 +106,28 @@ impl PersonalSyncBootstrap {
         &self.session
     }
 
-    /// The verified epoch-1 key for the retained Personal vault.
+    /// The verified current-epoch key for the retained Personal vault.
     pub fn personal_vault_key(&self) -> &SymmetricKey {
         &self.personal_vault_key
     }
 }
 
 impl PersonalServer {
-    /// Connect the retained first device to K-4 and atomically save its verified bootstrap.
+    pub(super) async fn pairing_source(
+        &self,
+        store: &Arc<Store>,
+    ) -> Result<PairingSource, PersonalSyncError> {
+        let context = self.bootstrap_inner(store, false).await?;
+        Ok(PairingSource {
+            identity: context.identity,
+            certificates: context.bootstrap.active_devices,
+            bundle: SyncAccountKeyBundle::from_cbor(context.account_keys.as_bytes())
+                .map_err(invalid)?,
+            vault_keys: SyncVaultKeysResponse::from_cbor(context.vault_keys.as_bytes())
+                .map_err(invalid)?,
+        })
+    }
+    /// Connect the retained device to K-4 and atomically save its verified bootstrap.
     /// Every protected request has a fresh proof and uses TLS 1.3 and HTTP/2.
     /// Existing local objects remain local; no inventory write is performed.
     pub async fn bootstrap_sync(
@@ -240,6 +260,8 @@ impl PersonalServer {
             signing,
             expires_at,
             device_id: store.device_id(),
+            account_keys: snapshot.account_keys,
+            vault_keys: snapshot.vault_keys,
         })
     }
 
@@ -274,27 +296,7 @@ fn validate(
     {
         return Err(PersonalServerError::Identity.into());
     }
-    let mut enrollment = PersonalEnrollmentRequest::from_json(
-        pending.enrollment_request.as_ref().ok_or(PersonalServerError::Identity)?.as_bytes(),
-    )
-    .map_err(invalid)?;
-    enrollment.invitation_token.zeroize();
-    if enrollment.account_id != pending.account_id
-        || enrollment.personal_vault_id != pending.personal_vault_id
-        || enrollment.device_certificate.device_id != store.device_id()
-    {
-        return Err(PersonalServerError::Identity.into());
-    }
-    enrollment
-        .device_certificate
-        .verify(&enrollment.account_signing_public_key)
-        .map_err(invalid)?;
-    ed25519_verify(
-        &enrollment.account_signing_public_key,
-        &enrollment.key_bundle_update.signature_input().map_err(invalid)?,
-        &enrollment.key_bundle_update.signature,
-    )
-    .map_err(invalid)?;
+    let retained = super::retained::RetainedAccount::load(store, pending)?;
     let session =
         SyncSessionResponse::from_cbor_with_body_limit(snapshot.session.as_bytes(), BODY_LIMIT)
             .map_err(invalid)?;
@@ -310,9 +312,13 @@ fn validate(
         SyncAccountKeyBundle::from_cbor(snapshot.account_keys.as_bytes()).map_err(invalid)?;
     let vault_keys =
         SyncVaultKeysResponse::from_cbor(snapshot.vault_keys.as_bytes()).map_err(invalid)?;
-    if vault.key_epoch != 1
-        || vault.rotation_pending
-        || vault_keys.keys.iter().any(|key| key.epoch != 1)
+    if vault.rotation_pending
+        || vault_keys.keys.last().map(|key| key.epoch) != Some(vault.key_epoch)
+        || vault_keys.keys.iter().map(|key| key.epoch).ne(retained
+            .vault_keys
+            .keys
+            .iter()
+            .map(|key| key.epoch))
     {
         return Err(PersonalSyncError::RotationRequired);
     }
@@ -331,16 +337,15 @@ fn validate(
     if certificates.iter().any(|certificate| certificate.account_id != pending.account_id) {
         return Err(PersonalSyncError::InvalidResponse);
     }
-    let active =
-        verify_device_list(&certificates, &revocations, &enrollment.account_signing_public_key)
-            .map_err(invalid)?;
+    let active = verify_device_list(&certificates, &revocations, &retained.signing_public)
+        .map_err(invalid)?;
     let certificate = active
         .iter()
         .find(|certificate| certificate.device_id == store.device_id())
         .ok_or(PersonalSyncError::InvalidResponse)?;
     let signing = P256SigningKey::from_bytes(secrets.signing()).map_err(invalid)?;
     let kem = DeviceKemKeyPair::from_private_bytes(secrets.device_kem()).map_err(invalid)?;
-    if certificate != &enrollment.device_certificate
+    if certificate != &retained.certificate
         || certificate.signing_public_key != signing.public_key_sec1()
         || certificate.kem_public_key != kem.public_key()
     {
@@ -352,24 +357,43 @@ fn validate(
         .map_err(invalid)?;
     let account_signing = AccountSigningKeyWrap::decode(&bundle.account_signing_key)
         .map_err(invalid)?
-        .open(pending.account_id, &ark, &enrollment.account_signing_public_key)
+        .open(pending.account_id, &ark, &retained.signing_public)
         .map_err(invalid)?;
     let account_kem = AccountKemKeyWrap::decode(&bundle.account_kem_key)
         .map_err(invalid)?
-        .open(pending.account_id, &ark, &enrollment.account_kem_public_key)
+        .open(pending.account_id, &ark, &retained.kem_public)
         .map_err(invalid)?;
-    let recovery = RecoveryKey::from_bytes(secrets.recovery()).map_err(invalid)?;
-    let recovered = RecoveryBlob::decode(&bundle.recovery_blob)
-        .map_err(invalid)?
-        .open(&recovery, pending.account_id)
-        .map_err(invalid)?;
-    let key = vault_keys.keys.first().ok_or(PersonalSyncError::InvalidResponse)?;
-    let personal_vault_key = PersonalVaultKeyWrap::decode(&key.wrapped_vault_key)
-        .map_err(invalid)?
-        .open(pending.account_id, pending.personal_vault_id, 1, &ark)
-        .map_err(invalid)?;
+    if let Some(recovery) = secrets.recovery() {
+        let recovery = RecoveryKey::from_bytes(recovery).map_err(invalid)?;
+        if RecoveryBlob::decode(&bundle.recovery_blob)
+            .map_err(invalid)?
+            .open(&recovery, pending.account_id)
+            .map_err(invalid)?
+            != ark
+        {
+            return Err(PersonalSyncError::InvalidResponse);
+        }
+    }
+    let initial_keys = retained.open_vault_keys(pending, &ark)?;
+    let personal_keys = vault_keys
+        .keys
+        .iter()
+        .map(|key| {
+            let epoch = u32::try_from(key.epoch).map_err(invalid)?;
+            let opened = PersonalVaultKeyWrap::decode(&key.wrapped_vault_key)
+                .map_err(invalid)?
+                .open(pending.account_id, pending.personal_vault_id, epoch, &ark)
+                .map_err(invalid)?;
+            if initial_keys.get(&epoch) != Some(&opened) {
+                return Err(PersonalSyncError::InvalidResponse);
+            }
+            Ok((epoch, opened))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let personal_epoch = u32::try_from(vault.key_epoch).map_err(invalid)?;
+    let personal_vault_key =
+        personal_keys.get(&personal_epoch).ok_or(PersonalSyncError::InvalidResponse)?.clone();
     if ark.as_bytes() != secrets.ark()
-        || recovered != ark
         || account_signing.private_key_bytes().as_bytes() != secrets.account_signing()
         || account_kem.private_key_bytes().as_bytes() != secrets.account_kem()
         || personal_vault_key.as_bytes() != secrets.vault()
@@ -377,21 +401,23 @@ fn validate(
         return Err(PersonalSyncError::InvalidResponse);
     }
     // Membership updates do not authorize account or vault key rotation.
-    let initial = &enrollment.key_bundle_update;
-    if bundle.account_signing_key != initial.account_signing_key
-        || bundle.account_kem_key != initial.account_kem_key
-        || bundle.recovery_blob != initial.recovery_blob
-        || key.wrapped_vault_key != enrollment.wrapped_personal_vault_key
+    if bundle.account_signing_key != retained.account_signing_key
+        || bundle.account_kem_key != retained.account_kem_key
+        || bundle.recovery_blob != retained.recovery_blob
+        || retained.invitation && vault_keys != retained.vault_keys
     {
         return Err(PersonalSyncError::RotationRequired);
     }
-    let initial_wrap = initial
-        .device_wraps
-        .iter()
-        .find(|wrap| wrap.device_id == store.device_id())
-        .ok_or(PersonalSyncError::InvalidResponse)?;
-    if bundle.revision < initial.revision
-        || bundle.revision == initial.revision && bundle.wrapped_ark != initial_wrap.wrapped_ark
+    let anchor = pairing_key_anchor(PairingKeyProjection {
+        revision: bundle.revision,
+        wrapped_ark: &bundle.wrapped_ark,
+        account_signing_key: &bundle.account_signing_key,
+        account_kem_key: &bundle.account_kem_key,
+        recovery_blob: &bundle.recovery_blob,
+    })
+    .map_err(invalid)?;
+    if bundle.revision < retained.revision
+        || bundle.revision == retained.revision && anchor != retained.anchor
     {
         return Err(PersonalSyncError::InvalidResponse);
     }
@@ -410,7 +436,13 @@ fn validate(
             return Err(PersonalSyncError::InvalidResponse);
         }
     }
-    Ok(PersonalSyncBootstrap { session, personal_vault_key, active_devices: active })
+    Ok(PersonalSyncBootstrap {
+        session,
+        personal_vault_key,
+        personal_epoch,
+        personal_keys,
+        active_devices: active,
+    })
 }
 
 #[cfg(test)]

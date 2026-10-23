@@ -3455,7 +3455,7 @@ dependencies = [
 [[package]]
 name = "pageant"
 version = "0.2.2"
-source = "git+https://github.com/scoplen/proto.git?rev=1e9e720b4935849cd81ac6068821d469ee3577ac#1e9e720b4935849cd81ac6068821d469ee3577ac"
+source = "git+https://github.com/scoplen/proto.git?rev=30f88360d6f24d370b59e3f5e6ffbfd9dad40057#30f88360d6f24d370b59e3f5e6ffbfd9dad40057"
 dependencies = [
  "base16ct 1.0.0",
  "byteorder",
@@ -4708,7 +4708,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scoplen-api"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=1e9e720b4935849cd81ac6068821d469ee3577ac#1e9e720b4935849cd81ac6068821d469ee3577ac"
+source = "git+https://github.com/scoplen/proto.git?rev=30f88360d6f24d370b59e3f5e6ffbfd9dad40057#30f88360d6f24d370b59e3f5e6ffbfd9dad40057"
 dependencies = [
  "base64 0.22.1",
  "prost",
@@ -4800,7 +4800,7 @@ dependencies = [
 [[package]]
 name = "scoplen-crypto"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=1e9e720b4935849cd81ac6068821d469ee3577ac#1e9e720b4935849cd81ac6068821d469ee3577ac"
+source = "git+https://github.com/scoplen/proto.git?rev=30f88360d6f24d370b59e3f5e6ffbfd9dad40057#30f88360d6f24d370b59e3f5e6ffbfd9dad40057"
 dependencies = [
  "argon2 0.5.3",
  "base64 0.22.1",
@@ -4829,7 +4829,7 @@ dependencies = [
 [[package]]
 name = "scoplen-model"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=1e9e720b4935849cd81ac6068821d469ee3577ac#1e9e720b4935849cd81ac6068821d469ee3577ac"
+source = "git+https://github.com/scoplen/proto.git?rev=30f88360d6f24d370b59e3f5e6ffbfd9dad40057#30f88360d6f24d370b59e3f5e6ffbfd9dad40057"
 dependencies = [
  "thiserror 2.0.21",
  "unicode-normalization",
@@ -4843,7 +4843,7 @@ version = "0.1.0"
 [[package]]
 name = "scoplen-ssh"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=1e9e720b4935849cd81ac6068821d469ee3577ac#1e9e720b4935849cd81ac6068821d469ee3577ac"
+source = "git+https://github.com/scoplen/proto.git?rev=30f88360d6f24d370b59e3f5e6ffbfd9dad40057#30f88360d6f24d370b59e3f5e6ffbfd9dad40057"
 dependencies = [
  "pageant",
  "russh",
