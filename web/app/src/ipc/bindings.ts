@@ -137,6 +137,10 @@ export const commands = {
 	authenticatePersonalServer: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("authenticate_personal_server")),
 	/**  Import a same-origin invitation after fresh authentication, retaining the existing identity. */
 	updatePersonalInvitation: (invitationUrl: string) => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("update_personal_invitation", { invitationUrl })),
+	/**  Revalidate saved Personal sync keys locally without making a server request. */
+	personalSyncKeyStatus: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("personal_sync_key_status")),
+	/**  Verify and save the retained account's sync keys without uploading local inventory. */
+	connectPersonalSync: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("connect_personal_sync")),
 };
 
 /** Events */
@@ -796,6 +800,29 @@ export type PersonalServerStatus = {
 	/**  The user explicitly confirmed keeping the recovery key safely. */
 	recoveryKeyConfirmed: boolean,
 };
+
+/**  Reuses the safe account failures and adds actionable sync failures. */
+export type PersonalSyncCommandError =
+/**  Existing redacted account or local-store failure. */
+PersonalServerError |
+/**  A failure specific to verifying sync keys. */
+PersonalSyncFailure;
+
+/**  Sync-specific failures contain no server body or key material. */
+export type PersonalSyncFailure =
+/**  Renew device authentication before requesting sync keys. */
+"authenticationRequired" |
+/**  Server artifacts did not match the retained identity or key material. */
+"invalidSyncResponse" |
+/**  This client cannot yet accept rotated account or vault keys. */
+"rotationRequired";
+
+/**  Locally reverified key availability; never contains wrapped or unwrapped key material. */
+export type PersonalSyncKeyStatus =
+/**  No verified bootstrap has been saved on this device. */
+"notConnected" |
+/**  The saved account, device and vault keys passed local cryptographic verification. */
+"verified";
 
 /**  The desktop platform the application runs on. */
 export type Platform =
