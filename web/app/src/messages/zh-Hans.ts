@@ -680,7 +680,7 @@ export const zhHans: Messages = {
   "settings.personal.pairing.error.invalid_response": "配对验证失败，未接受未经验证的账号。请重新创建配对会话。",
   "settings.personal.pairing.error.qr_image":
     "未能读取一个配对二维码。请选择不超过 8 MiB、419 万像素且每边不超过 4096 像素的静态 PNG。未发送配对请求。",
-  "settings.personal.pairing.error.qr_unavailable": "未能显示二维码。请使用下方配对链接和单独的秘密码。",
+  "settings.personal.pairing.error.qr_unavailable": "未能显示二维码。请使用配对链接和单独的秘密码。",
   "settings.personal.pairing.error.expired": "配对已过期。请创建新会话并使用新的秘密码。",
   "settings.personal.pairing.error.restart_required": "此次尝试无法恢复。请重新配对，现有设备密钥会保留。",
   "settings.personal.pairing.error.not_active": "当前没有可继续的配对。请先在新设备上创建会话。",

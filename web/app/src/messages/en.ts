@@ -744,7 +744,7 @@ export const en = {
   "settings.personal.pairing.error.qr_image":
     "Could not read one pairing QR. Choose a static PNG up to 8 MiB and 4 megapixels, with each side no larger than 4096 pixels. No pairing request was sent.",
   "settings.personal.pairing.error.qr_unavailable":
-    "The QR could not be displayed. Use the pairing link and separate password below.",
+    "The QR could not be displayed. Use the pairing link and separate password.",
   "settings.personal.pairing.error.invalid_response":
     "Pairing verification failed. No unverified account was accepted. Start a fresh pairing session.",
   "settings.personal.pairing.error.expired": "Pairing expired. Create a fresh session and use its new password.",
