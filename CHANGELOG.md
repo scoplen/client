@@ -4,6 +4,9 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Updated `ctutils` to 0.4.4 for RUSTSEC-2026-0385, restoring constant-time mask
+  generation and integer comparison in the shared cryptographic dependency graph.
+
 - Added a Rust-only first-device Personal inventory roundtrip with explicit object selection,
   atomic immutable local adoption copies, a durable encrypted outbox, authenticated envelope
   decryption and field merge, cursor/ack persistence, bounded CAS conflict retries, and safe
