@@ -8,6 +8,9 @@ All notable changes to the Scoplen desktop client are recorded here.
   covering public enrollment, retained-device authentication, encrypted inventory round trips,
   durable acknowledgements, encrypted-store reopen and offline original-copy restoration.
 
+- Raised the Tokio minimum and lock to 1.53.3 for RUSTSEC-2026-0386, addressing
+  Unix `AsyncFd` I/O safety without suppressing dependency policy checks.
+
 - Added bounded full reconciliation after cursor expiry: complete authenticated snapshots are
   validated before one atomic SQLCipher merge, removal and cursor update. Missing local edits
   become immutable encrypted recovery copies instead of being uploaded automatically. Settings

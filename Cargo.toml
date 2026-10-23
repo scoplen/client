@@ -41,7 +41,7 @@ tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 thiserror = "2.0.17"
 tempfile = "3.23.0"
 tracing = "0.1.41"
-tokio = { version = "1.17.0", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.53.3", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 uuid = { version = "=1.28.0", features = ["v7"] }
 zeroize = "1.8.1"
