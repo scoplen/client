@@ -61,7 +61,9 @@ an isolated SQLCipher store, uploads and downloads a signed encrypted host and i
 checks durable acknowledgements, and restores the original local copy offline. Before the
 first transfer and again after reopening the store, it expires only the client's cached
 access lifetime and exercises the production refresh path using the genuine server-issued
-refresh credential. It checks durable session generation, a changed access credential and
+refresh credential through explicit account queries. The real profile and complete signed
+device list must bind to the retained account and current device, then revalidate offline
+after reopening SQLCipher. It checks durable session generation, a changed access credential and
 the retained refresh-family deadline ceiling; server clocks and signed JWTs are unchanged.
 The remaining whole seconds and JWT issuance time can be sampled independently. Rotation
 uses their lifetime estimate conservatively and never extends the retained ceiling.
