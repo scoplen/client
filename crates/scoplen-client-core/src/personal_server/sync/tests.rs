@@ -348,7 +348,7 @@ async fn answer(
             return Err("credentials leaked to JWKS".into());
         }
         if state.inventory.is_some()
-            && matches!(path.rsplit('/').next(), Some("changes" | "objects" | "ack"))
+            && matches!(path.rsplit('/').next(), Some("changes" | "snapshot" | "objects" | "ack"))
         {
             let expected = state.expected.as_ref().ok_or("missing identity")?;
             let signing = expected.signing_public.clone();

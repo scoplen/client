@@ -149,6 +149,8 @@ export const commands = {
 	synchronizePersonalInventory: (reviewToken: string | null) => typedError<PersonalInventoryResult, PersonalInventoryError>(__TAURI_INVOKE("synchronize_personal_inventory", { reviewToken })),
 	/**  Restore immutable adoption copies as new local objects without changing the server. */
 	restorePersonalInventory: (ids: string[]) => typedError<number, PersonalInventoryError>(__TAURI_INVOKE("restore_personal_inventory", { ids })),
+	/**  Restore explicit copies of edits quarantined by a complete server reconciliation. */
+	restorePersonalInventoryRecovery: (ids: string[]) => typedError<number, PersonalInventoryError>(__TAURI_INVOKE("restore_personal_inventory_recovery", { ids })),
 };
 
 /** Events */
@@ -784,13 +786,13 @@ export type PersonalInventoryError =
 "invalidSyncResponse" |
 /**  This build cannot rotate the keys. */
 "rotationRequired" |
-/**  This build cannot perform the required full reconciliation. */
+/**  A write encountered a purged current object; pull again or restore a local copy. */
 "reconciliationRequired" |
 /**  A write may have committed; the next cycle checks by pulling. */
 "writeOutcomeUnknown" |
 /**  Local changes are applied but acknowledgement is unconfirmed. */
 "acknowledgementUnknown" |
-/**  Bounded conflict retries were exhausted. */
+/**  Conflict retries were exhausted or the complete snapshot changed during download. */
 "concurrentChanges" |
 /**  Check the device and server clock. */
 "clock" |
@@ -833,6 +835,14 @@ export type PersonalInventoryPreview = {
 	missing: PersonalInventoryObject[],
 };
 
+/**  Public metadata for one immutable reconciliation copy. Its id names the copy, not an object. */
+export type PersonalInventoryRecoveryCopy = {
+	/**  Exact local recovery-copy identifier. */
+	id: string,
+	/**  Metadata for the original object, with no content or device-local secrets. */
+	object: PersonalInventoryObject,
+};
+
 /**  Counts from one explicit bounded sync cycle. */
 export type PersonalInventoryResult = {
 	/**  Number of encrypted entries applied. */
@@ -851,6 +861,8 @@ export type PersonalInventoryStatus = {
 	objects: PersonalInventoryObject[],
 	/**  Immutable original adoption copies available for local restoration. */
 	backups: PersonalInventoryObject[],
+	/**  Modified objects missing from a complete server snapshot, awaiting explicit restoration. */
+	recovery: PersonalInventoryRecoveryCopy[],
 	/**  Number of dirty objects, including deletions. */
 	pending: number,
 	/**  Applied sequence as decimal text, avoiding JavaScript integer truncation. */

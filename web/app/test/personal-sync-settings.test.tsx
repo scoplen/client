@@ -19,7 +19,15 @@ function fixture(saved: PersonalSyncKeyStatus = "notConnected", authenticated = 
     if (command === "personal_sync_key_status") return saved;
     if (command === "connect_personal_sync") return "verified";
     if (command === "personal_inventory_status")
-      return { vaultId: "vault", objects: [], backups: [], pending: 0, appliedCursor: "0", acknowledgedCursor: "0" };
+      return {
+        vaultId: "vault",
+        objects: [],
+        backups: [],
+        recovery: [],
+        pending: 0,
+        appliedCursor: "0",
+        acknowledgedCursor: "0",
+      };
     throw new Error("Unexpected IPC command");
   });
   const view = () => (

@@ -79,12 +79,24 @@ pub struct PersonalInventoryStatus {
     pub objects: Vec<PersonalInventoryObject>,
     /// Immutable original adoption copies available for local restoration.
     pub backups: Vec<PersonalInventoryObject>,
+    /// Modified objects missing from a complete server snapshot, awaiting explicit restoration.
+    pub recovery: Vec<PersonalInventoryRecoveryCopy>,
     /// Number of dirty objects, including deletions.
     pub pending: u32,
     /// Applied sequence as decimal text, avoiding JavaScript integer truncation.
     pub applied_cursor: String,
     /// Confirmed acknowledgement as decimal text.
     pub acknowledged_cursor: String,
+}
+
+/// Public metadata for one immutable reconciliation copy. Its id names the copy, not an object.
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalInventoryRecoveryCopy {
+    /// Exact local recovery-copy identifier.
+    pub id: String,
+    /// Metadata for the original object, with no content or device-local secrets.
+    pub object: PersonalInventoryObject,
 }
 
 /// A preview grants no network or adoption permission by itself.
@@ -130,13 +142,13 @@ pub enum PersonalInventoryError {
     InvalidSyncResponse,
     /// This build cannot rotate the keys.
     RotationRequired,
-    /// This build cannot perform the required full reconciliation.
+    /// A write encountered a purged current object; pull again or restore a local copy.
     ReconciliationRequired,
     /// A write may have committed; the next cycle checks by pulling.
     WriteOutcomeUnknown,
     /// Local changes are applied but acknowledgement is unconfirmed.
     AcknowledgementUnknown,
-    /// Bounded conflict retries were exhausted.
+    /// Conflict retries were exhausted or the complete snapshot changed during download.
     ConcurrentChanges,
     /// Check the device and server clock.
     Clock,
@@ -175,8 +187,11 @@ impl From<PersonalSyncError> for PersonalInventoryError {
     }
 }
 
-fn storage(_: StoreError) -> PersonalInventoryError {
-    PersonalInventoryError::Storage
+fn storage(error: StoreError) -> PersonalInventoryError {
+    match error {
+        StoreError::RecoveryLimit => PersonalInventoryError::ResourceLimit,
+        _ => PersonalInventoryError::Storage,
+    }
 }
 
 struct Review {
@@ -207,6 +222,14 @@ impl PersonalInventorySettings {
                 .map(|(object, personal, dirty)| summary(object, *personal, *dirty))
                 .collect(),
             backups: snapshot.backups.iter().map(|object| summary(object, false, false)).collect(),
+            recovery: snapshot
+                .recovery
+                .iter()
+                .map(|(id, object)| PersonalInventoryRecoveryCopy {
+                    id: id.to_string(),
+                    object: summary(object, false, false),
+                })
+                .collect(),
             pending: snapshot.pending,
             applied_cursor: snapshot.applied.to_string(),
             acknowledged_cursor: snapshot.acknowledged.to_string(),
@@ -334,6 +357,21 @@ impl PersonalInventorySettings {
             return Err(PersonalInventoryError::Selection);
         }
         Ok(personal.restore_personal_inventory_copies(store, vault(store)?, &selected)?.len()
+            as u32)
+    }
+
+    /// Restore selected reconciliation copies locally. They require fresh D-112 consent to upload.
+    pub fn restore_recovery(
+        &self,
+        personal: &PersonalServer,
+        store: &Store,
+        selected: Vec<String>,
+    ) -> Result<u32, PersonalInventoryError> {
+        let selected = selection(&selected)?;
+        if selected.is_empty() {
+            return Err(PersonalInventoryError::Selection);
+        }
+        Ok(personal.restore_personal_reconciliation_copies(store, vault(store)?, &selected)?.len()
             as u32)
     }
 }

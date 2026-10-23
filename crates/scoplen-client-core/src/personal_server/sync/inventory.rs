@@ -38,6 +38,8 @@ const MAX_CONFLICTS: usize = 3;
 const READ_LIMITS: SyncReadLimits =
     SyncReadLimits { max_envelope_bytes: MAX_ENVELOPE, max_body_bytes: RESPONSE_LIMIT };
 
+mod reconciliation;
+
 /// An explicit intent for the retained Personal vault. Empty `adopt` only synchronizes
 /// previously adopted objects; it never selects local inventory automatically.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -76,8 +78,19 @@ impl PersonalServer {
         store.restore_personal_adoption(vault, selected).map_err(local)
     }
 
-    /// Pull and merge before every write attempt. This operation is Rust-only until the
-    /// desktop provides an explicit selection preview and confirmation (D-112).
+    /// Restore edits quarantined by full reconciliation as new, unsynchronized local objects.
+    pub fn restore_personal_reconciliation_copies(
+        &self,
+        store: &Store,
+        vault: Uuid,
+        selected: &[Uuid],
+    ) -> Result<Vec<(Uuid, Uuid)>, PersonalSyncError> {
+        let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
+        store.restore_personal_recovery(vault, selected).map_err(local)
+    }
+
+    /// Pull and merge before every write attempt. The desktop calls this Rust-owned path
+    /// after its explicit selection preview and confirmation (D-112).
     pub async fn sync_personal_inventory(
         &self,
         store: Arc<Store>,
@@ -228,7 +241,7 @@ impl PersonalServer {
                         && problem.code.as_str() == "sync.cursor_expired"
                         && !problem.changed
                     {
-                        return Err(PersonalSyncError::ReconciliationRequired);
+                        return self.reconcile_inventory(store, context, progress).await.map(Some);
                     }
                 }
                 return Err(remote_error(&response));
@@ -266,47 +279,57 @@ impl PersonalServer {
                 .map_err(local)?;
             progress.applied_cursor = page.next_cursor;
             progress.downloaded += objects.len() as u64;
-            // Acknowledging a larger value reported by the server never advances our cursor.
-            let request = SyncAckRequest { cursor: page.next_cursor };
-            let ack_path = format!("/sync/v1/vaults/{}/ack", context.identity.personal_vault_id);
-            let ack = context
-                .request(
-                    self,
-                    &ack_path,
-                    None,
-                    Some(&request.to_cbor().map_err(invalid)?),
-                    RESPONSE_LIMIT,
-                )
-                .await
-                .map_err(|error| {
-                    if error == PersonalSyncError::AuthenticationRequired {
-                        error
-                    } else {
-                        PersonalSyncError::AcknowledgementUnknown
-                    }
-                })?;
-            if ack.status != 200 {
-                return Err(if matches!(ack.status, 401 | 403) {
-                    PersonalSyncError::AuthenticationRequired
-                } else {
-                    PersonalSyncError::AcknowledgementUnknown
-                });
-            }
-            SyncAckResponse::from_cbor(ack.body.as_bytes())
-                .and_then(|response| response.validate_for_request(&request))
-                .map_err(|_| PersonalSyncError::AcknowledgementUnknown)?;
-            store
-                .save_personal_acknowledgement(context.identity.personal_vault_id, request.cursor)
-                .map_err(|_| PersonalSyncError::AcknowledgementUnknown)?;
-            progress.acknowledged_cursor = store
-                .personal_acknowledged_cursor(context.identity.personal_vault_id)
-                .map_err(local)?;
+            self.ack_inventory(store, context, progress).await?;
             if !page.more {
                 // A Date is needed only when a queued object is about to be written.
                 return Ok(Some(response.date.unwrap_or((UNIX_EPOCH, Instant::now()))));
             }
         }
         Ok(None)
+    }
+
+    async fn ack_inventory(
+        &self,
+        store: &Store,
+        context: &SyncContext,
+        progress: &mut PersonalInventoryProgress,
+    ) -> Result<(), PersonalSyncError> {
+        // Acknowledging a larger value reported by the server never advances our cursor.
+        let request = SyncAckRequest { cursor: progress.applied_cursor };
+        let ack_path = format!("/sync/v1/vaults/{}/ack", context.identity.personal_vault_id);
+        let ack = context
+            .request(
+                self,
+                &ack_path,
+                None,
+                Some(&request.to_cbor().map_err(invalid)?),
+                RESPONSE_LIMIT,
+            )
+            .await
+            .map_err(|error| {
+                if error == PersonalSyncError::AuthenticationRequired {
+                    error
+                } else {
+                    PersonalSyncError::AcknowledgementUnknown
+                }
+            })?;
+        if ack.status != 200 {
+            return Err(if matches!(ack.status, 401 | 403) {
+                PersonalSyncError::AuthenticationRequired
+            } else {
+                PersonalSyncError::AcknowledgementUnknown
+            });
+        }
+        SyncAckResponse::from_cbor(ack.body.as_bytes())
+            .and_then(|response| response.validate_for_request(&request))
+            .map_err(|_| PersonalSyncError::AcknowledgementUnknown)?;
+        store
+            .save_personal_acknowledgement(context.identity.personal_vault_id, request.cursor)
+            .map_err(|_| PersonalSyncError::AcknowledgementUnknown)?;
+        progress.acknowledged_cursor = store
+            .personal_acknowledged_cursor(context.identity.personal_vault_id)
+            .map_err(local)?;
+        Ok(())
     }
 }
 
@@ -473,6 +496,7 @@ fn local(error: StoreError) -> PersonalSyncError {
     match error {
         StoreError::SyncSelection | StoreError::NotFound(_) => PersonalSyncError::Selection,
         StoreError::SyncChanged => PersonalSyncError::ConcurrentChanges,
+        StoreError::RecoveryLimit => PersonalSyncError::ResourceLimit,
         _ => storage(error).into(),
     }
 }

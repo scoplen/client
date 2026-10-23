@@ -155,8 +155,13 @@ Applied and acknowledged positions are displayed separately without JavaScript i
 Original local copies can be selected and restored while offline; this creates new local
 objects and does not undo server changes or restore device-only secrets and handles.
 
-Cursor expiry returns an explicit
-reconciliation-required error; full reconciliation, automatic polling, pairing, key rotation,
+An expired cursor downloads and verifies a complete, bounded snapshot before one atomic local
+reconciliation. Missing clean objects are removed; missing local edits, including new selections
+that never uploaded, become immutable encrypted recovery copies requiring attention. They never
+upload automatically. Recover selected edits works offline and creates fresh local objects that
+need a separate upload preview and confirmation. Original adoption copies remain separate.
+Failed snapshot downloads leave inventory and cursors unchanged. Concurrent server writes stop
+the pass safely; Sync now retries with a fresh session. Automatic polling, pairing, key rotation,
 and the complete host-key trust replication policy remain later outcomes. Trust records with
 missing or unverified same-user provenance are retained locally and require review before sync.
 

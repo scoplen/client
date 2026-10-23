@@ -7,6 +7,9 @@ use scoplen_model::{FieldEntry, FieldPath, ObjectType, cbor::Value};
 use super::*;
 use crate::store::LocalWrite;
 
+mod reconciliation;
+mod recovery_limits;
+
 fn local() -> (tempfile::TempDir, Store, Uuid) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("sync.db"), &SymmetricKey::new([71; 32])).unwrap();

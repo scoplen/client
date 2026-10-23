@@ -74,6 +74,14 @@ separate exact selection and confirmation. Restore works with expired authentica
 network, creates new local objects, and explicitly says it does not undo remote data or copy
 device-only secrets/handles. Cancelling either confirmation performs no mutation.
 
+After complete reconciliation, missing objects with local edits appear in Local edits need
+attention, separately from original adoption copies. The panel identifies the original object
+and its immutable recovery copy, allows one historical copy per original in a selection, and
+never selects them for upload. Recover selected edits has its own exact selection and offline
+confirmation; it creates new local objects whose upload requires a fresh review and consent.
+Failed or unconfirmed sync actions reload this durable attention state without another network
+attempt. Concurrent server changes ask for an explicit retry with a fresh session.
+
 ## Inventory (roadmap C3)
 
 Contract: `web/app/src/inventory/api.ts` (`InventoryApi`). Screens: `inventory/home.tsx` (sidebar, list, details; the logins, keys, and routes editors open beside the sidebar, which stays), `inventory/host-details.tsx`, `inventory/add-host.tsx`.

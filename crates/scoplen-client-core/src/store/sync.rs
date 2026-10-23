@@ -11,6 +11,8 @@ use uuid::Uuid;
 
 use super::{Store, StoreError, grouped_changes, read_object, store_object};
 
+mod reconciliation;
+
 pub(crate) struct PendingObject {
     pub object: Object,
     pub base: Option<u64>,
@@ -24,6 +26,7 @@ pub(crate) struct RemoteObject {
 pub(crate) struct InventorySnapshot {
     pub objects: Vec<(Object, bool, bool)>,
     pub backups: Vec<Object>,
+    pub recovery: Vec<(Uuid, Object)>,
     pub pending: u32,
     pub applied: u64,
     pub acknowledged: u64,
@@ -159,6 +162,7 @@ impl Store {
             pending: objects.iter().filter(|(_, _, dirty)| *dirty).count() as u32,
             objects,
             backups,
+            recovery: reconciliation::read_recovery_copies(&conn, vault)?,
             applied,
             acknowledged,
         })
@@ -218,25 +222,53 @@ impl Store {
         vault: Uuid,
         selected: &[Uuid],
     ) -> Result<Vec<(Uuid, Uuid)>, StoreError> {
+        self.restore_personal_copies(vault, selected, false)
+    }
+
+    pub(crate) fn restore_personal_recovery(
+        &self,
+        vault: Uuid,
+        selected: &[Uuid],
+    ) -> Result<Vec<(Uuid, Uuid)>, StoreError> {
+        self.restore_personal_copies(vault, selected, true)
+    }
+
+    fn restore_personal_copies(
+        &self,
+        vault: Uuid,
+        selected: &[Uuid],
+        recovery: bool,
+    ) -> Result<Vec<(Uuid, Uuid)>, StoreError> {
         if selected.len() > super::MAX_OBJECTS_PER_VAULT as usize {
             return Err(StoreError::SyncSelection);
         }
-        let ids = selected
-            .iter()
-            .map(|id| Ok((*id, scoplen_model::new_uuid_v7()?)))
-            .collect::<Result<BTreeMap<_, _>, StoreError>>()?;
-        if ids.len() != selected.len() {
+        if selected.iter().collect::<HashSet<_>>().len() != selected.len() {
             return Err(StoreError::SyncSelection);
         }
+        let mut ids = BTreeMap::new();
         let changes = {
             let mut conn = self.conn();
             conn.pragma_update(None, "synchronous", "FULL")?;
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             require_identity(&tx, vault)?;
+            let originals = selected
+                .iter()
+                .map(|id| {
+                    let original = if recovery {
+                        reconciliation::read_recovery_copy(&tx, vault, *id)?
+                    } else {
+                        read_adoption_backup(&tx, vault, *id)?
+                    };
+                    original.ok_or(StoreError::NotFound(*id))
+                })
+                .collect::<Result<Vec<_>, StoreError>>()?;
+            for object in &originals {
+                if ids.insert(object.id, scoplen_model::new_uuid_v7()?).is_some() {
+                    return Err(StoreError::SyncSelection);
+                }
+            }
             let mut changed = Vec::with_capacity(selected.len());
-            for original_id in selected {
-                let mut object = read_adoption_backup(&tx, vault, *original_id)?
-                    .ok_or(StoreError::NotFound(*original_id))?;
+            for mut object in originals {
                 object.id = ids[&object.id];
                 object.tombstone = None;
                 let clock = super::next_clock(&tx)?;
