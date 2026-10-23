@@ -94,13 +94,15 @@ impl PersonalServer {
                     .and_then(|token| token.verify(&trusted, current))
                     .map_err(|_| PersonalServerError::InvalidResponse)?;
                 let claims = verified.claims();
+                // JWT issuance and remaining whole seconds need not share a clock sample.
+                // Use the lifetime for scheduling without extending the retained ceiling.
                 let expiry = claims
                     .iat
-                    .checked_add(tokens.refresh_expires_in)
-                    .filter(|expiry| {
-                        *expiry <= claim.previous.refresh_expires_at && *expiry > current
-                    })
-                    .ok_or(PersonalServerError::InvalidResponse)?;
+                    .saturating_add(tokens.refresh_expires_in)
+                    .min(claim.previous.refresh_expires_at);
+                if expiry <= current {
+                    return Err(PersonalServerError::InvalidResponse);
+                }
                 if claims.sub != identity.account_id
                     || claims.did != store.device_id()
                     || !claims.org.is_empty()

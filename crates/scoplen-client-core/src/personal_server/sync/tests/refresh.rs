@@ -27,7 +27,9 @@ enum Mode {
     ForeignIssuer,
     InvalidSignature,
     ExpiredAccess,
-    LongerFamily,
+    LongerLifetime,
+    ShorterLifetime,
+    MaximumLifetime,
     SameRefresh,
     OversizedRefresh,
     Lost,
@@ -211,8 +213,14 @@ impl RefreshPeer {
         self.current = format!("fixture-refresh-{}-{}", self.challenges, self.calls);
         let mut response = AuthTokenResponse::new(&token, &self.current).unwrap();
         response.refresh_expires_in = self.family_expires.saturating_sub(claims.iat).max(1);
-        if matches!(mode, Mode::LongerFamily) {
+        if matches!(mode, Mode::LongerLifetime) {
             response.refresh_expires_in += 2;
+        }
+        if matches!(mode, Mode::ShorterLifetime) {
+            response.refresh_expires_in -= 60;
+        }
+        if matches!(mode, Mode::MaximumLifetime) {
+            response.refresh_expires_in = u64::MAX;
         }
         if matches!(mode, Mode::SameRefresh) {
             response.refresh_token = previous;
@@ -327,6 +335,37 @@ async fn nonce_challenge_uses_one_new_proof_and_never_reuses_a_spent_credential(
 }
 
 #[tokio::test]
+async fn rounded_refresh_lifetimes_schedule_without_extending_the_retained_family() {
+    for mode in [Mode::Success, Mode::LongerLifetime, Mode::MaximumLifetime, Mode::ShorterLifetime]
+    {
+        let shorter = matches!(mode, Mode::ShorterLifetime);
+        let peer = Peer::new().await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = local(&dir);
+        let manager = peer.prepare(&store).await;
+        install(&peer, &store, vec![mode]);
+        let mut before = record(&store).unwrap();
+        let peer_deadline = before.refresh_expires_at.unwrap();
+        // Deterministically model an initial estimate one second before the server's
+        // deadline, without relying on wall-clock sleeps or changing the signed JWT.
+        before.refresh_expires_at = Some(peer_deadline - 1);
+        store.set_personal_session_metadata_for_test(&before).unwrap();
+        manager.bootstrap_sync(store.clone()).await.unwrap();
+        let after = record(&store).unwrap();
+        assert_eq!(
+            after.refresh_expires_at,
+            Some(if shorter { peer_deadline - 60 } else { peer_deadline - 1 })
+        );
+        assert!(after.auth_generation > before.auth_generation);
+        assert!(after.refresh_available);
+        assert!(store.personal_access_token(now().unwrap()).unwrap().is_some());
+        manager.bootstrap_sync(store.clone()).await.unwrap();
+        assert_eq!(calls(&peer), 1);
+        peer.assert_healthy();
+    }
+}
+
+#[tokio::test]
 async fn lost_reply_unknown_commit_and_revocation_require_fresh_challenge_without_replay() {
     for mode in [
         Mode::Lost,
@@ -377,7 +416,6 @@ async fn mismatched_or_invalid_rotated_credentials_are_never_accepted_or_replaye
         Mode::ForeignIssuer,
         Mode::InvalidSignature,
         Mode::ExpiredAccess,
-        Mode::LongerFamily,
         Mode::SameRefresh,
         Mode::OversizedRefresh,
         Mode::Reply(json(b"{}".to_vec())),

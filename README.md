@@ -135,7 +135,9 @@ localized errors. This step does not pull or upload inventory.
 
 Native session refresh is single-use and claimed durably in SQLCipher before sending. It
 verifies the new token's issuer, signature, account, device, signing-key binding and non-expanding
-scope, and cannot extend the original refresh family's absolute expiry. There is no background
+scope, and cannot extend the original refresh family's absolute expiry. JWT issuance and remaining
+whole seconds may cross a clock boundary; their lifetime estimate is capped by the retained
+deadline. There is no background
 refresh or automatic replay after a missing response or uncertain commit. Authenticate this
 device uses a fresh challenge with the retained identity when required; saved keys, inventory
 and recovery copies remain available offline. A verified unchanged rate-limit response retains

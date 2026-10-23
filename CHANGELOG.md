@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Fixed successful native refresh being rejected when independently sampled JWT issuance
+  and remaining whole seconds cross a clock boundary. Positive returned lifetimes schedule
+  conservatively without extending the retained family deadline, including overflowing sums.
+
 - Added an explicit opt-in Personal integration check against a disposable HTTPS server,
   covering public enrollment, retained-device authentication, encrypted inventory round trips,
   durable acknowledgements, encrypted-store reopen and offline original-copy restoration.
