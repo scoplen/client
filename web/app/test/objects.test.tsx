@@ -92,10 +92,21 @@ describe("independent inventory objects", () => {
 
   it("edits a proxy username with only password credentials and clears the pair", async () => {
     const api = sampleInventory(sampleHosts());
+    const routes = api.routes;
     const create = api.createRoute;
     const update = api.updateRoute;
     const created: RouteInput[] = [];
     const updated: RouteInput[] = [];
+    let holdReload = false;
+    let releaseReload!: () => void;
+    const reload = new Promise<void>((resolve) => {
+      releaseReload = resolve;
+    });
+    api.routes = async () => {
+      const result = await routes();
+      if (holdReload) await reload;
+      return result;
+    };
     api.createRoute = (input) => {
       created.push(input);
       return create(input);
@@ -121,6 +132,7 @@ describe("independent inventory objects", () => {
     expect(within(dialog).getByText(/plain TCP/)).toBeTruthy();
     await userEvent.type(within(dialog).getByLabelText("Proxy username"), "proxy-user");
     expect(await violations(dialog)).toEqual([]);
+    holdReload = true;
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(created).toHaveLength(1));
     expect(created[0]?.definition).toEqual({
@@ -130,7 +142,9 @@ describe("independent inventory objects", () => {
       username: "proxy-user",
     });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "New route" })).toBeNull());
-    await userEvent.click(screen.getByRole("button", { name: "Edit office proxy" }));
+    expect(screen.queryByRole("button", { name: "Edit office proxy" })).toBeNull();
+    releaseReload();
+    await userEvent.click(await screen.findByRole("button", { name: "Edit office proxy" }));
     const edit = await screen.findByRole("dialog", { name: "Edit office proxy" });
     expect((within(edit).getByLabelText("Proxy username") as HTMLInputElement).value).toBe("proxy-user");
     await userEvent.selectOptions(within(edit).getByLabelText("Proxy credential"), "");
