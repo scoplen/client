@@ -19,9 +19,9 @@ use scoplen_crypto::{
     DeviceKemKeyPair, DpopProof, DpopTarget, DpopToken, Ed25519SigningKey, P256SigningKey,
     PairingApplicationContext, PairingCode, PairingCompletionContext,
     PairingContext as CryptoContext, PairingHandoff, PairingInitiator, PairingKeyProjection,
-    PairingLink, PairingNewDevice, PairingResponder, PairingSession, PersonalVaultKeyWrap,
-    SymmetricKey, dpop_jwk_thumbprint, generate_device_keys, pairing_key_anchor,
-    validate_server_origin,
+    PairingLink, PairingNewDevice, PairingQrPayload, PairingResponder, PairingSession,
+    PersonalVaultKeyWrap, SymmetricKey, dpop_jwk_thumbprint, generate_device_keys,
+    pairing_key_anchor, validate_server_origin,
 };
 use scoplen_model::cbor::{self, Value};
 use serde::Serialize;
@@ -43,6 +43,9 @@ use crate::store::{
 };
 use scoplen_crypto::SecretVec;
 
+pub(super) mod qr;
+pub use qr::PairingQrDisplay;
+
 pub(super) struct ActivePairing {
     store_device: Uuid,
     pairing_id: Uuid,
@@ -52,6 +55,7 @@ pub(super) struct ActivePairing {
     initiator: Option<PairingInitiator>,
     channel: Option<PairingSession>,
     peer: Option<PairingNewDevice>,
+    qr: Option<PairingQrPayload>,
 }
 
 impl ActivePairing {
@@ -65,6 +69,7 @@ impl ActivePairing {
             code: None,
             initiator: None,
             channel: None,
+            qr: None,
             peer: self.peer.as_ref().map(|peer| PairingNewDevice {
                 context: peer.context.clone(),
                 signing_public_key: peer.signing_public_key.clone(),
@@ -138,6 +143,8 @@ pub struct PairingStarted {
     pub status: PairingStatus,
     /// Volatile eight-character secret, cleared when the dedicated UI closes.
     pub password: SecretVec,
+    /// One-time QR rendering, or `None` when manual link/password pairing remains available.
+    pub qr: Option<PairingQrDisplay>,
 }
 
 impl std::fmt::Debug for PairingStarted {
@@ -156,6 +163,12 @@ pub enum PairingError {
     /// Origin, public locator, name or eight-character password was invalid.
     #[error("Check the server, pairing link, device name and eight-character password.")]
     InvalidInput,
+    /// A selected file was not one bounded static PNG with exactly one valid pairing QR.
+    #[error("Choose a PNG screenshot containing one pairing QR. No pairing request was sent.")]
+    QrImage,
+    /// The QR could not be rendered; the existing public link and password remain usable.
+    #[error("The QR could not be displayed. Use the pairing link and separate password.")]
+    QrUnavailable,
     /// The response, transcript, key material or cryptographic binding was invalid.
     #[error("Pairing verification failed. Check the retained pairing state before continuing.")]
     InvalidResponse,
@@ -440,6 +453,21 @@ impl PersonalServer {
             return Err(PairingError::Conflict);
         }
         let password = SecretVec::new(code.as_ascii().to_vec());
+        let qr = (|| {
+            let signing = P256SigningKey::from_bytes(device.signing.as_bytes()).map_err(invalid)?;
+            let kem =
+                DeviceKemKeyPair::from_private_bytes(device.kem.as_bytes()).map_err(invalid)?;
+            let payload = PairingQrPayload::new(
+                &record.origin,
+                record.pairing_id,
+                kem.public_key(),
+                &signing.public_key_sec1(),
+                PairingCode::from_ascii(code.as_ascii()).map_err(invalid)?,
+            )
+            .map_err(invalid)?;
+            qr::display(&payload)
+        })()
+        .ok();
         *self.pairing.lock().map_err(invalid)? = Some(ActivePairing {
             store_device: store.device_id(),
             pairing_id: record.pairing_id,
@@ -449,8 +477,9 @@ impl PersonalServer {
             initiator: None,
             channel: None,
             peer: None,
+            qr: None,
         });
-        Ok(PairingStarted { status: self.pairing_status(&store)?, password })
+        Ok(PairingStarted { status: self.pairing_status(&store)?, password, qr })
     }
 
     /// Claim a public locator using the selected account and one write-only password.
@@ -460,10 +489,38 @@ impl PersonalServer {
         public_link: String,
         password: Zeroizing<String>,
     ) -> Result<PairingStatus, PairingError> {
-        let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
         let link = PairingLink::decode(&public_link).map_err(|_| PairingError::InvalidInput)?;
         let code =
             PairingCode::from_ascii(password.as_bytes()).map_err(|_| PairingError::InvalidInput)?;
+        self.pairing_claim(store, link, code, None, || true).await
+    }
+
+    /// Read one native-selected PNG locally and claim only its strict, same-origin QRv2.
+    pub async fn pairing_join_png(
+        &self,
+        store: Arc<Store>,
+        path: std::path::PathBuf,
+        current: impl FnOnce() -> bool,
+    ) -> Result<PairingStatus, PairingError> {
+        let payload = tokio::task::spawn_blocking(move || qr::read_png(&path))
+            .await
+            .map_err(|_| PairingError::QrImage)??;
+        let code = PairingCode::from_ascii(payload.code().as_ascii()).map_err(invalid)?;
+        self.pairing_claim(store, payload.link().clone(), code, Some(payload), current).await
+    }
+
+    async fn pairing_claim(
+        &self,
+        store: Arc<Store>,
+        link: PairingLink,
+        code: PairingCode,
+        qr: Option<PairingQrPayload>,
+        current: impl FnOnce() -> bool,
+    ) -> Result<PairingStatus, PairingError> {
+        let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
+        if !current() {
+            return Err(PairingError::Conflict);
+        }
         let identity = record(&store)?;
         if identity.origin != link.origin() {
             return Err(PairingError::InvalidInput);
@@ -547,6 +604,7 @@ impl PersonalServer {
             initiator: Some(initiator),
             channel: None,
             peer: None,
+            qr,
         });
         if let Err(error) =
             self.send_pairing_slot(&store, &pending, PairingStep::InitiatorShare, &share).await
@@ -902,14 +960,17 @@ impl PersonalServer {
             }
             (1, 5) => {
                 if active.peer.is_none() {
-                    active.peer = Some(
-                        PairingNewDevice::open(
-                            &context,
-                            active.channel.as_ref().ok_or(PairingError::RestartRequired)?,
-                            &values[4],
-                        )
-                        .map_err(invalid)?,
-                    );
+                    let peer = PairingNewDevice::open(
+                        &context,
+                        active.channel.as_ref().ok_or(PairingError::RestartRequired)?,
+                        &values[4],
+                    )
+                    .map_err(invalid)?;
+                    if let Some(qr) = active.qr.take() {
+                        qr.verify_public_keys(&peer.kem_public_key, &peer.signing_public_key)
+                            .map_err(invalid)?;
+                    }
+                    active.peer = Some(peer);
                 }
                 pending.phase = "confirm_device".into();
                 save(store, pending)?;
@@ -1263,6 +1324,7 @@ impl PersonalServer {
                 initiator: None,
                 channel: None,
                 peer: None,
+                qr: None,
             });
         }
         self.pairing_status(&store)

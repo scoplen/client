@@ -14,7 +14,9 @@ mod sync;
 mod transport;
 
 pub use account::{PersonalAccountDevice, PersonalAccountSnapshot};
-pub use pairing::{PairingError, PairingPhase, PairingSide, PairingStarted, PairingStatus};
+pub use pairing::{
+    PairingError, PairingPhase, PairingQrDisplay, PairingSide, PairingStarted, PairingStatus,
+};
 pub use sync::{
     PersonalInventoryIntent, PersonalInventoryProgress, PersonalSyncBootstrap, PersonalSyncError,
 };

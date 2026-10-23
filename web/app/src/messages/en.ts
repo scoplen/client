@@ -702,6 +702,12 @@ export const en = {
   "settings.personal.pairing.linkHint":
     "Paste the public pairing link shown on the new device. Its server must match this account.",
   "settings.personal.pairing.password": "8-character secret password",
+  "settings.personal.pairing.qr": "Secret pairing QR",
+  "settings.personal.pairing.qrHint":
+    "On your existing device, choose Read PNG and pair, then select a screenshot of this QR. The QR contains the password. Share it privately and delete the screenshot after pairing.",
+  "settings.personal.pairing.readImage": "Read PNG and pair",
+  "settings.personal.pairing.imageHint":
+    "Choose a PNG screenshot containing only the new device’s pairing QR. It is read on this device and never uploaded. Or enter the link and password below.",
   "settings.personal.pairing.passwordHint":
     "On your existing device, open Personal account → Pair another device. Send the link separately and type this password there. It expires in five minutes and is shown only during this session.",
   "settings.personal.pairing.inputHint":
@@ -735,6 +741,10 @@ export const en = {
     "Pairing cancelled. Any saved identity remains available for admission checks.",
   "settings.personal.pairing.error.invalid_input":
     "Check the HTTPS server, pairing link, device name, and eight-character password.",
+  "settings.personal.pairing.error.qr_image":
+    "Could not read one pairing QR. Choose a static PNG up to 8 MiB and 4 megapixels, with each side no larger than 4096 pixels. No pairing request was sent.",
+  "settings.personal.pairing.error.qr_unavailable":
+    "The QR could not be displayed. Use the pairing link and separate password below.",
   "settings.personal.pairing.error.invalid_response":
     "Pairing verification failed. No unverified account was accepted. Start a fresh pairing session.",
   "settings.personal.pairing.error.expired": "Pairing expired. Create a fresh session and use its new password.",

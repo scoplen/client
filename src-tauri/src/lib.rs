@@ -93,6 +93,7 @@ pub fn ipc() -> Builder<tauri::Wry> {
             personal_pairing::personal_pairing_status,
             personal_pairing::create_personal_pairing,
             personal_pairing::join_personal_pairing,
+            personal_pairing::join_personal_pairing_image,
             personal_pairing::prepare_personal_pairing_watch,
             personal_pairing::watch_personal_pairing,
             personal_pairing::stop_personal_pairing_watch,

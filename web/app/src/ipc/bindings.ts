@@ -160,6 +160,23 @@ export const commands = {
 	createPersonalPairing: (origin: string, deviceName: string) => typedError<PairingPasswordDisplay, PairingError>(__TAURI_INVOKE("create_personal_pairing", { origin, deviceName })),
 	/**  Submit the separate password through this write-only pairing boundary. */
 	joinPersonalPairing: (publicLink: string, password: string) => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("join_personal_pairing", { publicLink, password })),
+	/**  Choose and recognize a PNG locally; cancellation sends no pairing request. */
+	joinPersonalPairingImage: (watchId: string) => typedError<{
+	/**  Current safe next action. */
+	phase: PairingPhase,
+	/**  Retained role, if a session exists. */
+	side: PairingSide | null,
+	/**  Exact selected canonical HTTPS origin. */
+	origin: string | null,
+	/**  Public-only session locator, suitable for an explicit Copy action. */
+	publicLink: string | null,
+	/**  Local installation's selected name. */
+	deviceName: string | null,
+	/**  Authenticated new device name, only for old-device confirmation. */
+	peerName: string | null,
+	/**  Authenticated new device platform claim, only for old-device confirmation. */
+	peerPlatform: string | null,
+} | null, PairingError>(__TAURI_INVOKE("join_personal_pairing_image", { watchId })),
 	/**  Register before scheduling an observer so an earlier detach cannot be undone. */
 	preparePersonalPairingWatch: () => typedError<string, PairingError>(__TAURI_INVOKE("prepare_personal_pairing_watch")),
 	/**  Drive bounded Rust progress only while this explicitly started observer is attached. */
@@ -784,6 +801,10 @@ export type PairingError =
 { personal: PersonalServerError } |
 /**  Origin, public locator, name or eight-character password was invalid. */
 "invalid_input" |
+/**  A selected file was not one bounded static PNG with exactly one valid pairing QR. */
+"qr_image" |
+/**  The QR could not be rendered; the existing public link and password remain usable. */
+"qr_unavailable" |
 /**  The response, transcript, key material or cryptographic binding was invalid. */
 "invalid_response" |
 /**  The earlier local/session five-minute deadline has passed. */
@@ -803,6 +824,8 @@ export type PairingPasswordDisplay = {
 	status: PairingStatus,
 	/**  Display once on the new device; never save or automatically copy this value. */
 	password: string,
+	/**  Secret-bearing QR modules, limited to the same one-time foreground display. */
+	qr: PairingQrDisplay | null,
 };
 
 /**  Safe local ceremony progress; no phase alone establishes an authenticated account. */
@@ -825,6 +848,14 @@ export type PairingPhase =
 "restart_required" |
 /**  This installation terminated the ceremony. */
 "cancelled";
+
+/**  Secret-bearing module matrix, returned only with the one-time password display. */
+export type PairingQrDisplay = {
+	/**  Number of modules on each side, excluding the four-module quiet zone. */
+	size: number,
+	/**  Row-major monochrome modules: zero is white and one is black. */
+	modules: number[],
+};
 
 /**  This installation's fixed role in a ceremony. */
 export type PairingSide =
