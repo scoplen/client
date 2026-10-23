@@ -133,6 +133,11 @@ export const en = {
     "The server did not authenticate this device. Ask your operator to check enrollment, then authenticate again with the saved identity.",
   "settings.personal.error.invalidResponse":
     "The server response could not be verified. No new credentials were accepted. Ask your operator to check this server, then authenticate again.",
+  "settings.personal.error.authenticationRequired": "Authenticate this device above, then connect Personal sync again.",
+  "settings.personal.error.invalidSyncResponse":
+    "The sync response could not be verified. Existing keys were retained. Ask your operator to check this server, then try again.",
+  "settings.personal.error.rotationRequired":
+    "This account needs key rotation support that is not available in this build. Keep your recovery file and update Scoplen before trying again.",
   "settings.personal.invitation": "Invitation link",
   "settings.personal.invitationHint":
     "Paste the complete link from your server operator. It is hidden and cleared when you continue.",
@@ -163,7 +168,16 @@ export const en = {
   "settings.personal.checkInvitation": "Check and use invitation",
   "settings.personal.authenticated": "This device is authenticated",
   "settings.personal.authenticatedBody":
-    "Your account identity is ready. Inventory synchronization is not available in this build; hosts and credentials remain local.",
+    "Your account identity is ready. Connect Personal sync below to verify its keys. Local inventory is not uploaded.",
+  "settings.personal.sync.title": "Personal sync",
+  "settings.personal.sync.loading": "Checking saved sync keys on this device…",
+  "settings.personal.sync.body": "Connect to verify your account and vault keys. Hosts and credentials remain local.",
+  "settings.personal.sync.connecting": "Connecting to your server and verifying sync keys…",
+  "settings.personal.sync.verified":
+    "Sync keys are verified on this device. Inventory synchronization is not available in this build; hosts and credentials remain local.",
+  "settings.personal.sync.unavailable": "Saved sync keys could not be checked. Existing account data was retained.",
+  "settings.personal.sync.authenticate": "Authenticate this device above before connecting to the server.",
+  "settings.personal.sync.connect": "Verify sync keys",
   "settings.terminal.title": "Terminal colors",
   "settings.terminal.body": "Used by every session. Change any color; your changes become your own scheme.",
   "settings.terminal.scheme": "Scheme",

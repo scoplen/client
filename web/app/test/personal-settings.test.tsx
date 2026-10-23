@@ -45,6 +45,7 @@ function fixture(initial = empty) {
   mockIPC((command, args) => {
     calls.push({ command, args: (args ?? {}) as Record<string, unknown> });
     if (handlers.has(command)) return handlers.get(command)!();
+    if (command === "personal_sync_key_status") return "notConnected";
     if (command === "personal_server_status") return status;
     if (command === "prepare_personal_enrollment") status = prepared;
     else if (command === "save_personal_recovery_key") status = { ...status, recoveryKeySaved: true };
@@ -153,7 +154,7 @@ it("requires successful native recovery export and a separate explicit confirmat
   await userEvent.click(join);
   expect(await screen.findByText("This device is authenticated")).toBeTruthy();
   expect(f.matching("submit_personal_enrollment")).toHaveLength(1);
-  expect(screen.getByText(/Inventory synchronization is not available/)).toBeTruthy();
+  expect(screen.getByText(/Local inventory is not uploaded/)).toBeTruthy();
 });
 
 it("recovers an uncertain submission through fresh authentication without exposing the IPC error", async () => {
@@ -180,7 +181,7 @@ it("does not enroll or authenticate automatically when a saved pending identity 
   const f = fixture({ ...prepared, phase: "enrollment_unconfirmed" });
   render(view());
   expect(await screen.findByRole("button", { name: "Authenticate this device" })).toBeTruthy();
-  expect(f.calls.map((call) => call.command)).toEqual(["personal_server_status"]);
+  expect(f.calls.map((call) => call.command)).toEqual(["personal_server_status", "personal_sync_key_status"]);
   expect(screen.queryByLabelText("Invitation link")).toBeNull();
 });
 

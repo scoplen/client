@@ -14,6 +14,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 - Upgraded all shared Rust pins to `proto@b52ee266`, including complete K-1 object-reference
   discovery for explicit adoption, and aligned UUID at 1.28.0.
 
+- Added Verify sync keys to Personal account settings through typed native commands. Reopening
+  settings checks saved keys offline; only the explicit action connects to the server. Busy,
+  authentication, invalid-response and unsupported-rotation states are localized, and failed
+  rechecks preserve existing verified keys. The frontend receives only redacted status and
+  errors; inventory transfer remains a separate outcome.
 - Added a Rust-only Personal sync bootstrap using real TLS 1.3 / HTTP/2 session and key
   requests with a fresh DPoP proof for each request. Verified account/device/token bindings,
   certificates, revocations, account key wraps, recovery material, and the retained Personal

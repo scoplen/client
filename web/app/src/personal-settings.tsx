@@ -3,6 +3,7 @@ import { Button, Field } from "@scoplen/ui";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
 import { commands, type PersonalServerError, type PersonalServerStatus } from "./ipc/bindings";
+import { PersonalSyncSettings } from "./personal-sync-settings";
 
 type Outcome = { status: "ok"; data: PersonalServerStatus } | { status: "error"; error: PersonalServerError };
 
@@ -267,6 +268,13 @@ export function PersonalSettings() {
               </Button>
             </div>
           )}
+          {status.phase === "authenticated" || status.phase === "enrollment_unconfirmed" ? (
+            <PersonalSyncSettings
+              authenticated={status.phase === "authenticated"}
+              disabled={busy}
+              onBusyChange={setBusy}
+            />
+          ) : null}
         </div>
       )}
     </section>
