@@ -52,6 +52,7 @@ In PowerShell, point to that existing private descriptor and run:
 
 ```powershell
 $env:SCOPLEN_LIVE_PERSONAL_DEPLOYMENT = 'C:/private/disposable-personal.json'
+$env:SCOPLEN_LIVE_PAIRING_MODE = 'png' # omit for the manual link/password path
 cargo test -p scoplen-client-core --lib --features live-server-integration live_server:: -- --test-threads=1
 ```
 
@@ -69,7 +70,8 @@ The remaining whole seconds and JWT issuance time can be sampled independently. 
 uses their lifetime estimate conservatively and never extends the retained ceiling.
 
 The same test then creates a second independent SQLCipher store and HTTPS client. It pairs
-through a public link and separate password, verifies the old device's authenticated review,
+through a public link and separate password by default, or through real QR rendering and local
+PNG recognition when `SCOPLEN_LIVE_PAIRING_MODE=png`. It verifies the old device's authenticated review,
 explicitly approves admission, and requires the new device's real native authentication and
 complete K-4 bootstrap. Both devices query the signed two-device list. A pre-existing local
 host stays local throughout setup and the first explicit download; only a later preview and
@@ -80,7 +82,7 @@ and objects after offline store reopen. No server database or private test contr
 The deployment must expose the production pairing endpoints. Repeating the test requires a
 fresh disposable deployment and invitation. Run it separately for SQLite and PostgreSQL.
 Remove the private descriptor, test server and its temporary data after verification. This
-does not establish native desktop UI, physical passkey, QR scanning or macOS acceptance.
+does not establish native desktop picker interaction, camera capture, physical passkey or macOS acceptance.
 
 ## Membership-only Personal key revisions
 
@@ -115,12 +117,24 @@ cargo test -p scoplen-client-core --lib personal_server::sync::tests::membership
 
 ## Second-device pairing
 
-The native core implements D-114 public-link plus separate-password pairing. Create on the
+The native core implements D-114 QR screenshot and public-link plus separate-password pairing. Create on the
 new device and join on an authenticated existing device are explicit actions against the exact
 selected HTTPS origin. Rust owns the CPace state, one-attempt ledger, monotonic five-minute
 ceiling, at least two seconds between polls, device confirmation, immutable slot replay and
 strict shared crypto/API codecs. A canonical public link contains only origin and UUID; the
-password crosses only the dedicated transient display/input boundary.
+password and rendered QR matrix cross only the dedicated transient display/input boundary.
+
+The PNG entrance accepts a regular file up to 8 MiB, at most 4096 pixels on either side and
+4,194,304 total pixels. PNG decoder allocations and decoded output are each limited to 32 MiB;
+this is not a whole-process memory budget for the QR recognizer. Decoding validates the complete
+static PNG, including IEND and CRCs, rejects APNG and requires exactly one detected QR.
+Grayscale, grayscale-alpha, RGB and RGBA expand locally, with transparency composited on white.
+Recognition uses `rqrr`; shared `PairingQrPayload::decode` then rejects legacy or noncanonical
+text. Origin mismatch, malformed input and detached foreground intents fail before a claim.
+The QR digest is verified against authenticated CPace peer keys before device confirmation.
+Source bytes, decoded pixels and recognized output use zeroizing buffers; dependencies may
+retain temporary decoder/detector allocations until drop. Nothing is logged, uploaded, opened
+as a URL or saved to the application database. No camera permission is requested.
 
 Migration 10 stores pending device keys, exact transcripts/plans and an authenticated handoff
 as distinct Personal provenance. New identity and exact acceptance commit atomically before
@@ -148,7 +162,7 @@ cargo test -p scoplen-client-core --lib pairing
 ```
 
 This fixture does not establish a released Server deployment or two physical desktop
-installations. QR display/scanning is not connected to desktop IPC/UI; key rotation remains
+installations. Native QR display and PNG recognition are connected to desktop IPC/UI; key rotation remains
 unsupported. The public-link/password path retains every Personal epoch supplied by the
 verified handoff and never uploads pre-existing local inventory during account setup.
 

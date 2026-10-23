@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use scoplen_client_core::{
     personal_server::{
-        PairingError, PairingPhase, PairingStatus, PersonalServer, PersonalServerError,
+        PairingError, PairingPhase, PairingQrDisplay, PairingStatus, PersonalServer,
+        PersonalServerError,
     },
     store::Store,
 };
@@ -56,6 +57,8 @@ pub struct PairingPasswordDisplay {
     pub status: PairingStatus,
     /// Display once on the new device; never save or automatically copy this value.
     pub password: String,
+    /// Secret-bearing QR modules, limited to the same one-time foreground display.
+    pub qr: Option<PairingQrDisplay>,
 }
 
 impl Drop for PairingPasswordDisplay {
@@ -88,7 +91,7 @@ pub async fn create_personal_pairing(
     let password = std::str::from_utf8(started.password.as_bytes())
         .map_err(|_| PairingError::InvalidResponse)?
         .to_owned();
-    Ok(PairingPasswordDisplay { status: started.status, password })
+    Ok(PairingPasswordDisplay { status: started.status, password, qr: started.qr })
 }
 
 /// Submit the separate password through this write-only pairing boundary.
@@ -101,6 +104,41 @@ pub async fn join_personal_pairing(
     personal: tauri::State<'_, PersonalServer>,
 ) -> Result<PairingStatus, PairingError> {
     personal.pairing_join(store(&local)?, public_link, Zeroizing::new(password)).await
+}
+
+/// Choose and recognize a PNG locally; cancellation sends no pairing request.
+#[tauri::command]
+#[specta::specta]
+pub async fn join_personal_pairing_image(
+    app: tauri::AppHandle,
+    watch_id: String,
+    local: tauri::State<'_, LocalDataState>,
+    personal: tauri::State<'_, PersonalServer>,
+    watches: tauri::State<'_, PairingWatchState>,
+) -> Result<Option<PairingStatus>, PairingError> {
+    let store = store(&local)?;
+    if !watches.current(&watch_id)? {
+        return Ok(None);
+    }
+    let path = tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt as _;
+        app.dialog()
+            .file()
+            .set_title("Choose a pairing QR screenshot")
+            .add_filter("PNG screenshot", &["png"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|_| PairingError::QrImage)?;
+    let Some(path) = path else { return Ok(None) };
+    if !watches.current(&watch_id)? {
+        return Ok(None);
+    }
+    let path = path.into_path().map_err(|_| PairingError::QrImage)?;
+    personal
+        .pairing_join_png(store, path, || watches.current(&watch_id).unwrap_or(false))
+        .await
+        .map(Some)
 }
 
 /// Drive bounded Rust progress only while this explicitly started observer is attached.

@@ -4,7 +4,7 @@ The interface (`web/app`, `web/ui`) and the core (`crates/`, `src-tauri`) are bu
 
 The screens never read the store or decide business rules. Private keys, account material and
 tokens remain in Rust. Dedicated transient inputs accept SSH passphrases and the D-114 pairing
-password; the new-device pairing screen may display that password once. These exceptions never
+password; the new-device pairing screen may display that password and its secret QR once. These exceptions never
 enter ordinary state snapshots or clipboard automation. Anything the screens must not decide —
 validation beyond "is this field empty", what a deletion removes, which areas the user has
 reached — is the core's.
@@ -47,13 +47,21 @@ Errors use typed localized codes; arbitrary IPC or server diagnostics are not re
 
 In Personal account, a new installation chooses Join an existing account, supplies the same
 canonical HTTPS server and a device name, and creates a five-minute pairing session. Rust
-returns its public link and the one-time eight-character password through a dedicated command.
-Only the public link has a Copy action. The password stays in this transient view and clears
+returns its public link, one-time eight-character password and QR module matrix through a
+dedicated command. The QR is drawn locally with a four-module quiet zone on white. Rendering
+failure shows an explicit fallback while retaining the valid manual link/password session.
+Only the public link has a Copy action. The password and QR stay in this transient view and clear
 on termination, failure, cancellation or leaving the view. Reopening settings reads only the
 saved public checkpoint; it does not repeat the password or resume network activity.
 
-On the existing authenticated installation, Pair another device accepts the public link and
-the separately entered password. Submitting clears the password field immediately. Rust runs
+On the existing authenticated installation, Pair another device offers Read PNG and pair,
+which opens a native PNG picker. Rust recognizes one canonical QRv2 locally; no image or QR
+text crosses IPC or is uploaded. Closing the picker leaves the form unchanged. Leaving the
+view detaches its registration, fencing late picker/decoder results before a claim. Rust
+rejects a different origin before claiming and verifies the QR's key digest against authenticated
+device keys before review. Camera capture is not part of this entrance.
+The public link and separately entered password remain available. Submitting clears the
+password field immediately. Rust runs
 CPace and exposes only the authenticated device name and platform for explicit approval. The
 screen states that approval grants account and Personal sync-key access. All signing, handoff
 validation, durable checkpoints, admission and anchored sync verification stay in Rust.
@@ -67,7 +75,8 @@ the retained identity and exact checkpoint; Cancel pairing is a separate explici
 Neither action fabricates an invitation, recovery key or new account. Pairing never selects
 local inventory for upload. New-device completion confirms device authentication and sync-key
 verification; the existing device reports admission confirmed and directs verification to the
-new device. QR scanning/display is a separate interface outcome.
+new device. Screenshot guidance explains that the QR contains the password and should be
+shared privately and deleted after pairing.
 
 Failed operations reload the public local checkpoint without resuming network work, so fresh
 session and uncertain-admission actions follow the saved core phase. A fresh new-device session

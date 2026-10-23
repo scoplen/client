@@ -42,10 +42,23 @@ pub(super) async fn verify(
     assert_eq!(password.len(), 8);
     assert!(!public_link.contains(password));
     assert!(!serde_json::to_string(&started.status).unwrap().contains(password));
-    old_manager
-        .pairing_join(old.clone(), public_link.clone(), Zeroizing::new(password.into()))
-        .await
-        .expect("existing device claims with its genuine DPoP session");
+    if std::env::var("SCOPLEN_LIVE_PAIRING_MODE").as_deref() == Ok("png") {
+        let screenshot = directory.path().join("pairing.png");
+        crate::personal_server::pairing::qr::tests::write_png(
+            started.qr.as_ref().expect("native QR rendering"),
+            &screenshot,
+        );
+        old_manager
+            .pairing_join_png(old.clone(), screenshot.clone(), || true)
+            .await
+            .expect("existing device recognizes local PNG and claims through genuine DPoP");
+        std::fs::remove_file(screenshot).expect("remove transient screenshot");
+    } else {
+        old_manager
+            .pairing_join(old.clone(), public_link.clone(), Zeroizing::new(password.into()))
+            .await
+            .expect("existing device claims with its genuine DPoP session");
+    }
     drop(started);
 
     tokio::time::timeout(Duration::from_secs(90), async {

@@ -4,11 +4,18 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "../src/i18n";
-import type { PairingError, PairingStatus } from "../src/ipc/bindings";
+import type { PairingError, PairingQrDisplay, PairingStatus } from "../src/ipc/bindings";
 import { PersonalPairingSettings } from "../src/personal-pairing-settings";
 import { violations } from "../../ui/test/axe";
 
 afterEach(() => clearMocks());
+
+beforeEach(() => {
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    fillRect: vi.fn(),
+    clearRect: vi.fn(),
+  } as unknown as CanvasRenderingContext2D);
+});
 
 const idle: PairingStatus = {
   phase: "idle",
@@ -50,13 +57,15 @@ function fixture(initial = idle, configured = false, locale: "en" | "zh-Hans" = 
   const handlers = new Map<string, () => unknown>();
   const watchers: Array<{ messages: Channel<PairingStatus>; finish: ReturnType<typeof deferred<null>> }> = [];
   const busy = vi.fn();
+  const qr: PairingQrDisplay = { size: 21, modules: Array.from({ length: 441 }, (_, i) => i % 2) };
   mockIPC((command, args) => {
     const payload = (args ?? {}) as Record<string, unknown>;
     calls.push({ command, args: payload });
     if (handlers.has(command)) return handlers.get(command)!();
     if (command === "personal_pairing_status") return initial;
-    if (command === "create_personal_pairing") return { status: waiting, password: "AB12CD34" };
+    if (command === "create_personal_pairing") return { status: waiting, password: "AB12CD34", qr };
     if (command === "join_personal_pairing") return review;
+    if (command === "join_personal_pairing_image") return review;
     if (command === "prepare_personal_pairing_watch") return crypto.randomUUID();
     if (command === "watch_personal_pairing") {
       const finish = deferred<null>();
@@ -84,10 +93,76 @@ function fixture(initial = idle, configured = false, locale: "en" | "zh-Hans" = 
     handlers,
     watchers,
     busy,
+    qr,
     view,
     matching: (name: string) => calls.filter((call) => call.command === name),
   };
 }
+
+it("reads the native PNG through a registered intent and still requires explicit approval", async () => {
+  const f = fixture(idle, true);
+  render(f.view());
+  await userEvent.click(await screen.findByRole("button", { name: "Pair another device" }));
+  const secret = screen.getByLabelText("8-character secret password") as HTMLInputElement;
+  await userEvent.type(secret, "AB12CD34");
+  const picked = deferred<PairingStatus | null>();
+  f.handlers.set("join_personal_pairing_image", () => picked.promise);
+  await userEvent.dblClick(screen.getByRole("button", { name: "Read PNG and pair" }));
+  expect(secret.value).toBe("");
+  expect(f.matching("join_personal_pairing_image")).toHaveLength(1);
+  const intent = f.matching("join_personal_pairing_image")[0]!.args.watchId;
+  expect(typeof intent).toBe("string");
+  await act(() => picked.resolve(review));
+  expect(await screen.findByText("Travel laptop")).toBeTruthy();
+  expect(f.matching("stop_personal_pairing_watch")[0]!.args).toEqual({ watchId: intent });
+  expect(f.matching("confirm_personal_pairing")).toHaveLength(0);
+  expect(f.matching("join_personal_pairing")).toHaveLength(0);
+});
+
+it.each([false, true])("detaches the PNG intent and ignores a late picker result after leaving=%s", async (leaving) => {
+  const f = fixture(idle, true);
+  const picked = deferred<PairingStatus | null>();
+  f.handlers.set("join_personal_pairing_image", () => picked.promise);
+  const view = render(f.view());
+  await userEvent.click(await screen.findByRole("button", { name: "Pair another device" }));
+  await userEvent.click(screen.getByRole("button", { name: "Read PNG and pair" }));
+  if (leaving) view.unmount();
+  await act(() => picked.resolve(leaving ? review : null));
+  expect(f.matching("stop_personal_pairing_watch").length).toBeGreaterThan(0);
+  expect(f.watchers).toHaveLength(0);
+  expect(f.matching("confirm_personal_pairing")).toHaveLength(0);
+  if (!leaving) {
+    expect(screen.getByLabelText("Pairing link")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(f.busy).toHaveBeenLastCalledWith(false);
+  }
+});
+
+it.each([false, true])("preserves manual pairing when QR rendering is unavailable, leaving=%s", async (leaving) => {
+  const f = fixture();
+  const created = deferred<{ status: PairingStatus; password: string; qr: PairingQrDisplay | null }>();
+  f.handlers.set("create_personal_pairing", () => created.promise);
+  const view = render(f.view());
+  await userEvent.click(await screen.findByRole("button", { name: "Join an existing account" }));
+  await userEvent.type(screen.getByLabelText("Server address"), "https://ssh.example.test");
+  await userEvent.type(screen.getByLabelText("Device name"), "Travel laptop");
+  await userEvent.click(screen.getByRole("button", { name: "Create pairing session" }));
+  if (leaving) view.unmount();
+  const result = { status: waiting, password: "AB12CD34", qr: leaving ? f.qr : null };
+  await act(() => created.resolve(result));
+  expect(result.password).toBe("");
+  expect(result.qr).toBeNull();
+  if (leaving) {
+    expect(f.qr.modules.every((module) => module === 0)).toBe(true);
+    expect(f.watchers).toHaveLength(0);
+  } else {
+    expect(await screen.findByText("AB12CD34")).toBeTruthy();
+    expect(screen.getByText(/The QR could not be displayed/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy pairing link" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await act(() => f.watchers[0]!.finish.resolve(null));
+  }
+});
 
 it("reads only local status on mount and opens the new-device form with the keyboard", async () => {
   const f = fixture();
@@ -131,6 +206,8 @@ it("shows a password once, copies only the public link and clears the password a
   await userEvent.type(screen.getByLabelText("Device name"), "Travel laptop");
   await userEvent.click(screen.getByRole("button", { name: "Create pairing session" }));
   expect(await screen.findByText("AB12CD34")).toBeTruthy();
+  const qr = screen.getByRole("img", { name: "Secret pairing QR" }) as HTMLCanvasElement;
+  expect(qr.width).toBe(116);
   await waitFor(() => expect(f.watchers).toHaveLength(1));
   expect(f.matching("create_personal_pairing")[0]?.args).toEqual({
     origin: waiting.origin,
@@ -141,6 +218,9 @@ it("shows a password once, copies only the public link and clears the password a
   await act(() => f.watchers[0]!.messages.onmessage({ ...waiting, phase: "completed" }));
   await act(() => f.watchers[0]!.finish.resolve(null));
   expect(screen.queryByText("AB12CD34")).toBeNull();
+  expect(screen.queryByRole("img", { name: "Secret pairing QR" })).toBeNull();
+  expect(qr.width).toBe(1);
+  expect(f.qr.modules.every((module) => module === 0)).toBe(true);
   expect(screen.getByText(/Pairing complete/)).toBeTruthy();
   expect(f.busy).toHaveBeenLastCalledWith(false);
   expect(f.calls.some((call) => JSON.stringify(call.args).includes("AB12CD34"))).toBe(false);
@@ -283,6 +363,8 @@ it("reads the local uncertain-admission checkpoint after failed approval without
 
 it.each<PairingError>([
   "invalid_input",
+  "qr_image",
+  "qr_unavailable",
   "invalid_response",
   "expired",
   "restart_required",

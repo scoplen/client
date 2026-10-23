@@ -643,6 +643,12 @@ export const zhHans: Messages = {
   "settings.personal.pairing.link": "配对链接",
   "settings.personal.pairing.linkHint": "粘贴新设备上显示的公开配对链接。服务器必须与此账号一致。",
   "settings.personal.pairing.password": "8 位秘密码",
+  "settings.personal.pairing.qr": "私密配对二维码",
+  "settings.personal.pairing.qrHint":
+    "在已有设备上选择「读取 PNG 并配对」，再选择此二维码的截图。二维码包含秘密码，请私密传递，并在配对后删除截图。",
+  "settings.personal.pairing.readImage": "读取 PNG 并配对",
+  "settings.personal.pairing.imageHint":
+    "选择仅包含新设备配对二维码的 PNG 截图。图片仅在此设备读取，不会上传。也可以在下方输入链接和秘密码。",
   "settings.personal.pairing.passwordHint":
     "在已有设备上打开「Personal 账号 → 配对另一台设备」。单独传递链接，再在那里输入这个秘密码。它五分钟后失效，仅在本次会话中显示。",
   "settings.personal.pairing.inputHint": "输入新设备显示的八位大写字母和数字。提交后会立即清空输入框。",
@@ -672,6 +678,9 @@ export const zhHans: Messages = {
   "settings.personal.pairing.phase.cancelled": "配对已取消。已保存的身份仍可用于检查接入结果。",
   "settings.personal.pairing.error.invalid_input": "请检查 HTTPS 服务器、配对链接、设备名称和八位秘密码。",
   "settings.personal.pairing.error.invalid_response": "配对验证失败，未接受未经验证的账号。请重新创建配对会话。",
+  "settings.personal.pairing.error.qr_image":
+    "未能读取一个配对二维码。请选择不超过 8 MiB、419 万像素且每边不超过 4096 像素的静态 PNG。未发送配对请求。",
+  "settings.personal.pairing.error.qr_unavailable": "未能显示二维码。请使用配对链接和单独的秘密码。",
   "settings.personal.pairing.error.expired": "配对已过期。请创建新会话并使用新的秘密码。",
   "settings.personal.pairing.error.restart_required": "此次尝试无法恢复。请重新配对，现有设备密钥会保留。",
   "settings.personal.pairing.error.not_active": "当前没有可继续的配对。请先在新设备上创建会话。",

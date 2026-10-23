@@ -470,6 +470,17 @@ async fn to_confirmation(
     old_manager: &PersonalServer,
     new_manager: &PersonalServer,
 ) {
+    to_confirmation_mode(peer, old, new, old_manager, new_manager, false).await;
+}
+
+async fn to_confirmation_mode(
+    peer: &Peer,
+    old: &Arc<Store>,
+    new: &Arc<Store>,
+    old_manager: &PersonalServer,
+    new_manager: &PersonalServer,
+    qr: bool,
+) {
     let started = new_manager
         .pairing_create(new.clone(), peer.origin.clone(), "New desktop".into())
         .await
@@ -478,14 +489,23 @@ async fn to_confirmation(
     let password = std::str::from_utf8(started.password.as_bytes()).unwrap();
     assert!(!status.contains(password));
     assert!(!format!("{started:?}").contains(password));
-    old_manager
-        .pairing_join(
-            old.clone(),
-            started.status.public_link.unwrap(),
-            Zeroizing::new(password.into()),
-        )
-        .await
-        .unwrap();
+    if qr {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        crate::personal_server::pairing::qr::tests::write_png(
+            started.qr.as_ref().unwrap(),
+            file.path(),
+        );
+        old_manager.pairing_join_png(old.clone(), file.path().to_owned(), || true).await.unwrap();
+    } else {
+        old_manager
+            .pairing_join(
+                old.clone(),
+                started.status.public_link.unwrap(),
+                Zeroizing::new(password.into()),
+            )
+            .await
+            .unwrap();
+    }
     assert_eq!(
         new_manager.pairing_progress(new.clone()).await.unwrap().phase,
         PairingPhase::Exchanging
@@ -503,6 +523,15 @@ async fn to_confirmation(
 #[tokio::test]
 async fn both_public_managers_pair_existing_account_then_authenticate_bootstrap_and_reopen_offline()
 {
+    verify_complete_pairing(false).await;
+}
+
+#[tokio::test]
+async fn png_qr_pairs_authenticates_bootstraps_syncs_and_reopens_offline() {
+    verify_complete_pairing(true).await;
+}
+
+async fn verify_complete_pairing(qr: bool) {
     let (peer, _old_dir, new_dir, old, new, old_manager, new_manager) = setup().await;
     let host = new
         .write(crate::store::LocalWrite {
@@ -520,7 +549,7 @@ async fn both_public_managers_pair_existing_account_then_authenticate_bootstrap_
             ],
         })
         .unwrap();
-    to_confirmation(&peer, &old, &new, &old_manager, &new_manager).await;
+    to_confirmation_mode(&peer, &old, &new, &old_manager, &new_manager, qr).await;
     old_manager.pairing_confirm(old.clone()).await.unwrap();
     new_manager.pairing_progress(new.clone()).await.unwrap();
     let pending = record(&new).unwrap();
@@ -617,6 +646,86 @@ async fn both_public_managers_pair_existing_account_then_authenticate_bootstrap_
         PersonalServer::default().pairing_status(&reopened).unwrap().phase,
         PairingPhase::Completed
     );
+}
+
+#[tokio::test]
+async fn png_origin_and_detached_intent_are_rejected_before_any_claim() {
+    let (peer, _old_dir, _new_dir, old, new, old_manager, new_manager) = setup().await;
+    let started = new_manager
+        .pairing_create(new.clone(), peer.origin.clone(), "New desktop".into())
+        .await
+        .unwrap();
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let requests = peer.state.lock().unwrap().paths.len();
+    crate::personal_server::pairing::qr::tests::write_png(
+        started.qr.as_ref().unwrap(),
+        file.path(),
+    );
+    assert!(matches!(
+        old_manager.pairing_join_png(old.clone(), file.path().to_owned(), || false).await,
+        Err(PairingError::Conflict)
+    ));
+    let link =
+        scoplen_crypto::PairingLink::decode(started.status.public_link.as_ref().unwrap()).unwrap();
+    let keys = new.pairing_device().unwrap().unwrap();
+    let kem = DeviceKemKeyPair::from_private_bytes(keys.kem.as_bytes()).unwrap();
+    let signing = P256SigningKey::from_bytes(keys.signing.as_bytes()).unwrap();
+    let payload = scoplen_crypto::PairingQrPayload::new(
+        "https://other.example",
+        link.pairing_id(),
+        kem.public_key(),
+        &signing.public_key_sec1(),
+        scoplen_crypto::PairingCode::from_ascii(started.password.as_bytes()).unwrap(),
+    )
+    .unwrap();
+    crate::personal_server::pairing::qr::tests::write_payload(&payload, file.path());
+    assert!(matches!(
+        old_manager.pairing_join_png(old.clone(), file.path().to_owned(), || true).await,
+        Err(PairingError::InvalidInput)
+    ));
+    std::fs::write(file.path(), b"invalid").unwrap();
+    assert!(matches!(
+        old_manager.pairing_join_png(old.clone(), file.path().to_owned(), || true).await,
+        Err(PairingError::QrImage)
+    ));
+    assert_eq!(peer.state.lock().unwrap().paths.len(), requests);
+    assert!(old.pairing_record().unwrap().is_none());
+    peer.assert_healthy();
+}
+
+#[tokio::test]
+async fn correct_password_with_wrong_qr_key_digest_fails_before_device_confirmation() {
+    let (peer, _old_dir, _new_dir, old, new, old_manager, new_manager) = setup().await;
+    let started = new_manager
+        .pairing_create(new.clone(), peer.origin.clone(), "New desktop".into())
+        .await
+        .unwrap();
+    let link =
+        scoplen_crypto::PairingLink::decode(started.status.public_link.as_ref().unwrap()).unwrap();
+    let wrong = scoplen_crypto::PairingQrPayload::new(
+        &peer.origin,
+        link.pairing_id(),
+        DeviceKemKeyPair::from_private_bytes(&[7; 32]).unwrap().public_key(),
+        &P256SigningKey::from_bytes(&[2; 32]).unwrap().public_key_sec1(),
+        scoplen_crypto::PairingCode::from_ascii(started.password.as_bytes()).unwrap(),
+    )
+    .unwrap();
+    let file = tempfile::NamedTempFile::new().unwrap();
+    crate::personal_server::pairing::qr::tests::write_payload(&wrong, file.path());
+    old_manager.pairing_join_png(old.clone(), file.path().to_owned(), || true).await.unwrap();
+    new_manager.pairing_progress(new.clone()).await.unwrap();
+    new_manager.pairing_progress(new.clone()).await.unwrap();
+    old_manager.pairing_progress(old.clone()).await.unwrap();
+    new_manager.pairing_progress(new.clone()).await.unwrap();
+    assert!(matches!(
+        old_manager.pairing_progress(old.clone()).await,
+        Err(PairingError::InvalidResponse)
+    ));
+    assert_eq!(old_manager.pairing_status(&old).unwrap().phase, PairingPhase::RestartRequired);
+    assert!(new.personal_record().unwrap().is_none());
+    assert!(old.pairing_record().unwrap().unwrap().handoff.is_none());
+    assert_eq!(peer.state.lock().unwrap().pairing.as_ref().unwrap().messages.len(), 5);
+    peer.assert_healthy();
 }
 
 mod recovery;

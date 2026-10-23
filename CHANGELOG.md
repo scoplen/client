@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added transient pairing QR display and an explicit native PNG screenshot picker. Rust
+  bounds local decoding, accepts exactly one canonical QRv2, checks the selected account's
+  origin before claiming, and verifies the authenticated device-key digest before approval.
+  Images and QR text never enter IPC or network requests. QR modules and passwords clear
+  with the foreground view; failed rendering preserves manual link/password pairing.
+
 - Added Personal account settings for creating a public pairing link, entering its separate
   password on an existing device, explicitly approving authenticated device claims and
   recovering saved admission. Dedicated native commands keep cryptography and progress in Rust;

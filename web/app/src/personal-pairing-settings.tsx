@@ -3,12 +3,42 @@ import { Button, Field } from "@scoplen/ui";
 import { Channel } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
-import { commands, type PairingError, type PairingStatus } from "./ipc/bindings";
+import { commands, type PairingError, type PairingQrDisplay, type PairingStatus } from "./ipc/bindings";
 
-type Outcome = { status: "ok"; data: PairingStatus } | { status: "error"; error: PairingError };
+type Outcome = { status: "ok"; data: PairingStatus | null } | { status: "error"; error: PairingError };
 
 const progresses = (phase: PairingStatus["phase"]) =>
   phase === "waiting" || phase === "exchanging" || phase === "waiting_acceptance";
+
+function PairingQr({ qr, label }: { qr: PairingQrDisplay; label: string }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const element = canvas.current;
+    const context = element?.getContext("2d");
+    if (!element || !context) return;
+    const scale = 4;
+    element.width = element.height = (qr.size + 8) * scale;
+    context.fillStyle = "white";
+    context.fillRect(0, 0, element.width, element.height);
+    context.fillStyle = "black";
+    qr.modules.forEach((module, index) => {
+      if (module === 1)
+        context.fillRect(((index % qr.size) + 4) * scale, (Math.floor(index / qr.size) + 4) * scale, scale, scale);
+    });
+    return () => {
+      context.clearRect(0, 0, element.width, element.height);
+      element.width = element.height = 1;
+    };
+  }, [qr]);
+  return (
+    <canvas
+      ref={canvas}
+      role="img"
+      aria-label={label}
+      className="mt-3 block aspect-square w-72 max-w-full [image-rendering:pixelated]"
+    />
+  );
+}
 
 export function PersonalPairingSettings({
   configured,
@@ -24,6 +54,8 @@ export function PersonalPairingSettings({
   const { t } = useI18n();
   const [status, setStatus] = useState<PairingStatus | null>(null);
   const [password, setPassword] = useState<string | null>(null);
+  const [qr, setQr] = useState<PairingQrDisplay | null>(null);
+  const secretQr = useRef<PairingQrDisplay | null>(null);
   const [failed, setFailed] = useState<PairingError | "unavailable" | null>(null);
   const [mode, setMode] = useState<"new" | "old" | null>(null);
   const [working, setWorking] = useState(false);
@@ -59,6 +91,8 @@ export function PersonalPairingSettings({
     const passwordInput = inputPassword.current;
     return () => {
       mounted.current = false;
+      secretQr.current?.modules.fill(0);
+      secretQr.current = null;
       if (passwordInput) passwordInput.value = "";
       const id = nativeObserver.current;
       observer.current = null;
@@ -87,11 +121,18 @@ export function PersonalPairingSettings({
     };
   }, [mode]);
 
+  const clearDisplay = () => {
+    setPassword(null);
+    secretQr.current?.modules.fill(0);
+    secretQr.current = null;
+    setQr(null);
+  };
+
   const update = (next: PairingStatus) => {
     if (!mounted.current) return;
     if (next.phase !== status?.phase) focusStep.current = true;
     setStatus(next);
-    if (!progresses(next.phase)) setPassword(null);
+    if (!progresses(next.phase)) clearDisplay();
     setCopied(false);
   };
 
@@ -140,13 +181,13 @@ export function PersonalPairingSettings({
       if (!mounted.current || observer.current !== id) return;
       if (result.status === "error") {
         setFailed(result.error);
-        setPassword(null);
+        clearDisplay();
         await refreshLocal(() => observer.current === id);
       }
     } catch {
       if (mounted.current && observer.current === id) {
         setFailed("unavailable");
-        setPassword(null);
+        clearDisplay();
         await refreshLocal(() => observer.current === id);
       }
     } finally {
@@ -173,18 +214,19 @@ export function PersonalPairingSettings({
       const result = await operation();
       if (!mounted.current) return;
       if (result.status === "ok") {
+        if (!result.data) return;
         next = result.data;
         update(next);
         setMode(null);
       } else {
         setFailed(result.error);
-        setPassword(null);
+        clearDisplay();
         await refreshLocal(() => pending.current);
       }
     } catch {
       if (mounted.current) {
         setFailed("unavailable");
-        setPassword(null);
+        clearDisplay();
         await refreshLocal(() => pending.current);
       }
     } finally {
@@ -205,8 +247,14 @@ export function PersonalPairingSettings({
     void run(async () => {
       const result = await commands.createPersonalPairing(server, name);
       if (result.status === "error") return result;
-      if (mounted.current) setPassword(result.data.password);
+      if (mounted.current) {
+        secretQr.current?.modules.fill(0);
+        secretQr.current = result.data.qr;
+        setQr(result.data.qr);
+        setPassword(result.data.password);
+      } else result.data.qr?.modules.fill(0);
       result.data.password = "";
+      result.data.qr = null;
       return { status: "ok", data: result.data.status };
     });
   };
@@ -218,6 +266,26 @@ export function PersonalPairingSettings({
     const secret = inputPassword.current.value;
     inputPassword.current.value = "";
     void run(() => commands.joinPersonalPairing(publicLink, secret));
+  };
+
+  const joinImage = () => {
+    if (inputPassword.current) inputPassword.current.value = "";
+    void run(async () => {
+      const registration = await commands.preparePersonalPairingWatch();
+      if (registration.status === "error") return registration;
+      const id = registration.data;
+      if (!mounted.current) {
+        await commands.stopPersonalPairingWatch(id);
+        return { status: "ok", data: null };
+      }
+      nativeObserver.current = id;
+      try {
+        return await commands.joinPersonalPairingImage(id);
+      } finally {
+        await commands.stopPersonalPairingWatch(id);
+        if (nativeObserver.current === id) nativeObserver.current = null;
+      }
+    });
   };
 
   const copy = async () => {
@@ -277,7 +345,16 @@ export function PersonalPairingSettings({
           ) : null}
           {password ? (
             <div>
-              <p className="text-sm font-medium">{t("settings.personal.pairing.password")}</p>
+              <p className="text-sm font-medium">{t("settings.personal.pairing.qr")}</p>
+              {qr ? (
+                <PairingQr qr={qr} label={t("settings.personal.pairing.qr")} />
+              ) : (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {t("settings.personal.pairing.error.qr_unavailable")}
+                </p>
+              )}
+              <p className="mt-2 text-sm text-muted-foreground">{t("settings.personal.pairing.qrHint")}</p>
+              <p className="mt-4 text-sm font-medium">{t("settings.personal.pairing.password")}</p>
               <output
                 aria-label={t("settings.personal.pairing.password")}
                 className="mt-2 block select-text font-mono text-2xl"
@@ -351,6 +428,12 @@ export function PersonalPairingSettings({
             </>
           ) : (
             <>
+              <div>
+                <Button variant="secondary" disabled={blocked} onClick={joinImage}>
+                  {t("settings.personal.pairing.readImage")}
+                </Button>
+                <p className="mt-2 text-sm text-muted-foreground">{t("settings.personal.pairing.imageHint")}</p>
+              </div>
               <Field
                 ref={link}
                 label={t("settings.personal.pairing.link")}
@@ -413,7 +496,7 @@ export function PersonalPairingSettings({
             variant="secondary"
             disabled={working}
             onClick={() => {
-              setPassword(null);
+              clearDisplay();
               void run(commands.cancelPersonalPairing, false);
             }}
           >

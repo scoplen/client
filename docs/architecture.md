@@ -15,7 +15,7 @@ web/app (React)  ── typed commands, binary channels ──  src-tauri  ─�
 - `web/app` renders state and sends intents. It never performs cryptography or talks to the
   network. Private keys, decrypted account packages and tokens remain in Rust. Dedicated
   transient SSH/passphrase and D-114 pairing inputs are the narrow secret-input exception;
-  only the new-device pairing view may display its one-time password. Ordinary state never
+  only the new-device pairing view may display its one-time password and QR matrix. Ordinary state never
   carries these values.
 - `src-tauri` adapts commands to `scoplen-client-core` and owns windows. Its capability file (`src-tauri/capabilities/main.json`) grants the main window only Tauri's core defaults and the application's own commands. The content security policy in `tauri.conf.json` allows only the application's own resources and IPC.
 - `scoplen-client-core` holds every behavior, so it is the same on both platforms and testable without a window.
@@ -149,7 +149,16 @@ an earlier interrupted ceremony requires a fresh session/password while keeping 
 Unknown completion is checked through the retained receipt or fresh device authentication.
 New-device completion additionally requires verified D-100 authentication and full K-4 bootstrap.
 Old-device completion confirms admission only. Pairing creates no invitation or recovery key,
-and the paired identity cannot export a fabricated recovery file. QR UI remains separate work.
+and the paired identity cannot export a fabricated recovery file.
+
+The dedicated create command returns the secret QR as a monochrome module matrix beside
+the one-time password. The UI draws that matrix without interpreting the payload. The native
+PNG picker keeps file paths, image bytes and recognized text in Rust. A foreground registration
+fences abandoned picker/decoder results before a claim. Bounded PNG decoding precedes strict
+QRv2 decoding; the account origin is checked before network work, and the QR digest is checked
+against authenticated peer keys before `confirm_device`. The expected QR binding is volatile,
+so restart behavior and saved checkpoints remain the same. Rendering failure retains the
+valid manual session, public link and password.
 
 Migration 8 adds a monotonically increasing authentication generation, the verified scope ceiling,
 single-use refresh claim and an optional Retry-After deadline, alongside the saved absolute family

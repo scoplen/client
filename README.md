@@ -116,10 +116,14 @@ can explicitly synchronize selected inventory after key verification. Rust rotat
 device session when needed by an explicit account query, sync or key-verification action.
 Existing local SSH data is not uploaded by account setup.
 
-Second-device pairing joins the existing Personal account using a public pairing link and a
-separate eight-character password. The new installation retains its device keys before requesting
+Second-device pairing joins the existing Personal account using a QR screenshot or a public
+pairing link and separate eight-character password. The new installation retains its device keys before requesting
 a five-minute session; the password is shown once in a dedicated transient dialog and is never
-part of the link or saved status. The existing device enters both values and confirms the
+part of the link or saved status. The same transient view displays a secret QR. The existing
+device explicitly selects its PNG screenshot through a native picker; Rust reads it locally,
+rejects a different server before claiming, and checks the QR key digest against authenticated
+device keys before review. The image is never uploaded. The manual link/password path remains
+available if QR rendering fails. The existing device confirms the
 authenticated device name and platform before approving admission. Rust owns CPace, the seven
 immutable relay slots, deadline and polling decisions. Only an explicitly started ceremony runs
 the foreground progress watcher; opening Settings reads local status.
