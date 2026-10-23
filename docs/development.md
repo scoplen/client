@@ -58,7 +58,12 @@ cargo test -p scoplen-client-core --lib --features live-server-integration live_
 The test rejects a non-loopback origin, bounds descriptor and certificate reads, and adds
 the test CA only to its own HTTPS client. It consumes the invitation, creates and reopens
 an isolated SQLCipher store, uploads and downloads a signed encrypted host and its edit,
-checks durable acknowledgements, and restores the original local copy offline. Repeating
+checks durable acknowledgements, and restores the original local copy offline. Before the
+first transfer and again after reopening the store, it expires only the client's cached
+access lifetime and exercises the production refresh path using the genuine server-issued
+refresh credential. It checks durable session generation, a changed access credential and
+the original absolute refresh-family deadline; server clocks and signed JWTs are unchanged.
+Repeating
 it requires a fresh disposable deployment and invitation. Remove the private descriptor,
 test server and its temporary data after verification. This does not establish native
 desktop UI, physical passkey, macOS or multi-device acceptance.

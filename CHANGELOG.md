@@ -7,6 +7,8 @@ All notable changes to the Scoplen desktop client are recorded here.
 - Added an explicit opt-in Personal integration check against a disposable HTTPS server,
   covering public enrollment, retained-device authentication, encrypted inventory round trips,
   durable acknowledgements, encrypted-store reopen and offline original-copy restoration.
+  It also exercises real native session rotation before sync and after reopening the store,
+  retaining the original absolute refresh-family deadline.
 
 - Raised the Tokio minimum and lock to 1.53.3 for RUSTSEC-2026-0386, addressing
   Unix `AsyncFd` I/O safety without suppressing dependency policy checks.
