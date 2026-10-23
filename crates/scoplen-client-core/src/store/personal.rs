@@ -7,6 +7,9 @@ use uuid::Uuid;
 
 use super::{Store, StoreError, uuid_from};
 
+mod auth;
+pub(crate) use auth::{PersonalRefreshClaim, PersonalTokens};
+
 #[derive(Debug)]
 pub(crate) struct PersonalRecord {
     pub origin: String,
@@ -19,6 +22,12 @@ pub(crate) struct PersonalRecord {
     pub recovery_confirmed: bool,
     pub enrollment_attempted: bool,
     pub access_expires_at: Option<u64>,
+    pub refresh_expires_at: Option<u64>,
+    pub auth_generation: i64,
+    pub auth_scope: Option<String>,
+    pub refresh_available: bool,
+    pub session_established: bool,
+    pub refresh_retry_at: Option<u64>,
 }
 
 pub(crate) struct PersonalSyncRecord {
@@ -34,7 +43,7 @@ impl Store {
             .conn()
             .query_row(
                 "SELECT access_token FROM personal_server WHERE singleton = 1
-             AND enrollment_attempted = 1 AND access_expires_at > ?1
+             AND enrollment_attempted = 1 AND access_expires_at > ?1 AND refresh_claimed = 0
              AND length(access_token) BETWEEN 1 AND ?2",
                 params![now.min(i64::MAX as u64) as i64, MAX_DEVICE_ACCESS_TOKEN_BYTES as i64],
                 |row| Ok(SecretVec::new(row.get(0)?)),
@@ -119,7 +128,10 @@ impl Store {
             .query_row(
                 "SELECT origin, account_id, personal_vault_id, device_name, private_material,
                     enrollment_request, recovery_saved, recovery_confirmed,
-                    enrollment_attempted, access_expires_at
+                    enrollment_attempted, access_expires_at, refresh_expires_at,
+                    auth_generation, auth_scope,
+                    refresh_claimed = 0 AND length(refresh_token) BETWEEN 1 AND 2048,
+                    session_established, refresh_retry_at
              FROM personal_server WHERE singleton = 1",
                 [],
                 |row| {
@@ -134,6 +146,12 @@ impl Store {
                         row.get::<_, bool>(7)?,
                         row.get::<_, bool>(8)?,
                         row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
+                        row.get::<_, Option<i64>>(10)?.map(|value| value as u64),
+                        row.get::<_, i64>(11)?,
+                        row.get::<_, Option<String>>(12)?,
+                        row.get::<_, Option<bool>>(13)?.unwrap_or(false),
+                        row.get::<_, bool>(14)?,
+                        row.get::<_, Option<i64>>(15)?.map(|value| value as u64),
                     ))
                 },
             )
@@ -150,6 +168,12 @@ impl Store {
                 recovery_confirmed,
                 enrollment_attempted,
                 access_expires_at,
+                refresh_expires_at,
+                auth_generation,
+                auth_scope,
+                refresh_available,
+                session_established,
+                refresh_retry_at,
             )| {
                 Ok(PersonalRecord {
                     origin,
@@ -162,6 +186,12 @@ impl Store {
                     recovery_confirmed,
                     enrollment_attempted,
                     access_expires_at,
+                    refresh_expires_at,
+                    auth_generation,
+                    auth_scope,
+                    refresh_available,
+                    session_established,
+                    refresh_retry_at,
                 })
             },
         )
@@ -220,10 +250,14 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn clear_personal_tokens(&self) -> Result<(), StoreError> {
-        self.conn().execute(
+        let conn = self.conn();
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        conn.execute(
             "UPDATE personal_server SET access_token = NULL, refresh_token = NULL,
-            access_expires_at = NULL, refresh_expires_at = NULL WHERE singleton = 1",
+            access_expires_at = NULL, refresh_expires_at = NULL, auth_scope = NULL,
+            refresh_claimed = 0, auth_generation = auth_generation + 1 WHERE singleton = 1",
             [],
         )?;
         Ok(())
@@ -237,13 +271,33 @@ impl Store {
         let conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
         Ok(conn.execute(
-            "UPDATE personal_server SET enrollment_request = ?1, enrollment_attempted = 0
+            "UPDATE personal_server SET enrollment_request = ?1, enrollment_attempted = 0,
+                auth_generation = auth_generation + 1
              WHERE singleton = 1 AND enrollment_attempted = 1 AND recovery_confirmed = 1
              AND enrollment_request = ?2 AND access_token IS NULL",
             params![replacement.as_bytes(), expected.as_bytes()],
         )? == 1)
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_personal_session_metadata_for_test(
+        &self,
+        identity: &PersonalRecord,
+    ) -> Result<(), StoreError> {
+        self.conn().execute(
+            "UPDATE personal_server SET access_expires_at = ?1, refresh_expires_at = ?2,
+                auth_scope = ?3, refresh_retry_at = ?4 WHERE singleton = 1",
+            params![
+                identity.access_expires_at.map(|value| value as i64),
+                identity.refresh_expires_at.map(|value| value as i64),
+                identity.auth_scope,
+                identity.refresh_retry_at.map(|value| value as i64),
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(crate) fn save_personal_tokens(
         &self,
         access: &[u8],
@@ -253,12 +307,15 @@ impl Store {
     ) -> Result<(), StoreError> {
         self.conn().execute(
             "UPDATE personal_server SET access_token = ?1, refresh_token = ?2,
-                access_expires_at = ?3, refresh_expires_at = ?4 WHERE singleton = 1",
+                access_expires_at = ?3, refresh_expires_at = ?4, auth_scope = ?5,
+                refresh_claimed = 0, session_established = 1, auth_generation = auth_generation + 1
+                WHERE singleton = 1",
             params![
                 access,
                 refresh,
                 access_expires_at.min(i64::MAX as u64) as i64,
-                refresh_expires_at.min(i64::MAX as u64) as i64
+                refresh_expires_at.min(i64::MAX as u64) as i64,
+                scoplen_api::auth::INITIAL_DEVICE_ACCESS_SCOPE,
             ],
         )?;
         Ok(())

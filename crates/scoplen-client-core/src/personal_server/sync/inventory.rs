@@ -342,7 +342,12 @@ impl SyncContext {
         body: Option<&[u8]>,
         limit: usize,
     ) -> Result<Response, PersonalSyncError> {
-        if self.expires_at <= now()? {
+        if self.expires_at <= now()?
+            || !self
+                .store
+                .personal_session_current(&self.identity, &self.access, now()?)
+                .map_err(storage)?
+        {
             return Err(PersonalSyncError::AuthenticationRequired);
         }
         let token = std::str::from_utf8(self.access.as_bytes()).map_err(invalid)?;
@@ -362,13 +367,19 @@ impl SyncContext {
         )
         .map_err(invalid)?;
         let request_path = query.map_or_else(|| path.to_owned(), |query| format!("{path}?{query}"));
-        manager
+        let response = manager
             .transport
             .as_ref()
             .map_err(|error| *error)?
             .protected(&self.identity.origin, &request_path, body, token, &proof, limit)
             .await
-            .map_err(Into::into)
+            .map_err(PersonalSyncError::from)?;
+        if matches!(response.status, 401 | 403) {
+            self.store
+                .invalidate_personal_session(&self.identity, &self.access)
+                .map_err(storage)?;
+        }
+        Ok(response)
     }
 
     fn decrypt(&self, change: &SyncChange) -> Result<RemoteObject, PersonalSyncError> {

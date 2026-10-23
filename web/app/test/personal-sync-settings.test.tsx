@@ -114,3 +114,18 @@ it("redacts unexpected native errors and recovers from a failed local status che
   expect(await screen.findByText(/Sync keys are verified on this device/)).toBeTruthy();
   expect(screen.queryByRole("alert")).toBeNull();
 });
+
+it.each(["refreshDeferred", "permissionDenied"] as const)(
+  "localizes %s without making another network request",
+  async (error) => {
+    const f = fixture("verified", true, "zh-Hans");
+    f.handlers.set("connect_personal_sync", () => Promise.reject(error));
+    render(f.view());
+    await userEvent.click(await screen.findByRole("button", { name: "验证同步密钥" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      error === "refreshDeferred" ? "稍后再同步" : "访问权限",
+    );
+    expect(f.calls.filter((name) => name === "connect_personal_sync")).toHaveLength(1);
+    expect(screen.getByText(/本机同步密钥已验证/)).toBeTruthy();
+  },
+);

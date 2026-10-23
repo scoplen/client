@@ -149,4 +149,14 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     ) STRICT, WITHOUT ROWID;
     CREATE INDEX personal_sync_recovery_by_vault ON personal_sync_recovery(vault);
     "#,
+    // 8: fence native authentication and consume single-use refresh credentials before I/O.
+    // Older sessions lack a verified scope ceiling and must authenticate afresh.
+    r#"
+    ALTER TABLE personal_server ADD COLUMN auth_generation INTEGER NOT NULL DEFAULT 0 CHECK (auth_generation >= 0);
+    ALTER TABLE personal_server ADD COLUMN auth_scope TEXT CHECK (auth_scope IS NULL OR length(auth_scope) BETWEEN 1 AND 512);
+    ALTER TABLE personal_server ADD COLUMN refresh_claimed INTEGER NOT NULL DEFAULT 0 CHECK (refresh_claimed IN (0, 1));
+    ALTER TABLE personal_server ADD COLUMN session_established INTEGER NOT NULL DEFAULT 0 CHECK (session_established IN (0, 1));
+    ALTER TABLE personal_server ADD COLUMN refresh_retry_at INTEGER;
+    UPDATE personal_server SET session_established = 1 WHERE access_token IS NOT NULL;
+    "#,
 ];

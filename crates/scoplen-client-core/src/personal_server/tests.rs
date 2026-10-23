@@ -497,7 +497,7 @@ fn fixture_response(state: &FixtureState, origin: &str, path: &str, body: &[u8])
                 cnf_jkt: dpop_jwk_thumbprint(&enrolled.device_certificate.signing_public_key)
                     .unwrap(),
                 org: vec![],
-                scope: "account:read".into(),
+                scope: scoplen_api::auth::INITIAL_DEVICE_ACCESS_SCOPE.into(),
                 iat: issued_at,
                 exp: issued_at + 600,
             };
@@ -560,7 +560,7 @@ async fn real_https_enrollment_authenticates_and_retains_tokens_only_in_sqlciphe
     assert_eq!(server.state.challenges.load(Ordering::SeqCst), 2);
     server.state.reject_auth.store(true, Ordering::SeqCst);
     assert_eq!(manager.authenticate(local.clone()).await, Err(PersonalServerError::Authentication));
-    assert_eq!(manager.status(&local).unwrap().phase, PersonalServerPhase::EnrollmentUnconfirmed);
+    assert_eq!(manager.status(&local).unwrap().phase, PersonalServerPhase::AuthenticationRequired);
     let file = std::fs::read(dir.path().join("personal.db")).unwrap();
     assert!(
         !file

@@ -115,8 +115,33 @@ only if the saved request still matches and no verified credentials have appeare
 no invitation token; a separate explicit Join submits the new request. Missing or inconsistent
 saved artifacts fail closed rather than recreating identity. The transport bounds responses and
 timeouts, verifies TLS, and has no redirect, proxy, cookie, or automatic POST retry behavior.
-Pairing, refresh rotation, and hardware device signing remain separate
-outcomes.
+Pairing and hardware device signing remain separate outcomes.
+
+Migration 8 adds a monotonically increasing authentication generation, the verified scope ceiling,
+single-use refresh claim and an optional Retry-After deadline, alongside the saved absolute family
+expiry. Initial authentication accepts exactly D-107's initial scope set. An explicit
+key-verification or sync action refreshes when the access lifetime received from the server, capped by the verified JWT
+expiry, has at most 60 seconds remaining. Status, offline key reads, inventory reads and recovery
+never initiate refresh. There is no background renewal timer.
+
+A FULL-synchronous IMMEDIATE transaction captures the current credentials and consumes them
+locally before refresh I/O. Other processes cannot claim the same credential. Success verifies
+same-origin JWKS, signature, issuer/audience, account/device/JKT, Personal membership shape,
+scope subset and non-extending absolute refresh expiry before a generation/identity/device-key
+CAS atomically publishes both new tokens. A fresh signed-device exchange also has a durable
+generation fence; a late refresh or authentication response cannot overwrite a newer session.
+Protected requests recheck the local generation before sending, and a 401/403 invalidates the
+matching session without clearing offline keys or inventory.
+
+Cancellation, crash, malformed or unverifiable success, lost response and unknown commit leave
+the refresh claim spent. Recovery is an explicit fresh challenge, never an old-token replay.
+Only an exact noncached no-store/no-cache unchanged nonce problem allows one immediate retry
+with a fresh proof; an exact unchanged storage or rate-limit problem restores the claim for a
+later explicit attempt. A rate limit requires a canonical decimal Retry-After between 1 and
+300 seconds and persists its deadline. A connector failure proven to precede transmission also
+restores the claim. Rejected or unverifiable responses never
+restore it. Legacy sessions lacking a verified scope ceiling require fresh authentication;
+their identity, original artifacts and saved bootstrap are retained.
 
 `PersonalServer::bootstrap_sync` is the Rust-only K-4 first-device boundary. It revalidates the
 retained access token against same-origin JWKS, its account/device ids and device thumbprint,

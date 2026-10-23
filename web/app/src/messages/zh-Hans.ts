@@ -112,6 +112,10 @@ export const zhHans: Messages = {
     "服务器未能认证此设备。请让运营者检查加入结果，再使用已保存的身份重试认证。",
   "settings.personal.error.invalidResponse": "无法验证服务器响应，未接受新的访问凭据。请让运营者检查服务器后重试认证。",
   "settings.personal.error.authenticationRequired": "请先在上方认证此设备，再连接个人同步。",
+  "settings.personal.error.refreshDeferred": "服务器暂时无法续期此会话。请稍后再同步，或在上方重新认证此设备。",
+  "settings.personal.error.permissionDenied": "此设备会话不允许执行此操作，请让服务器运营者检查访问权限。",
+  "settings.personal.authenticationRequiredBody":
+    "会话已过期或无法安全续期。请使用已保存的设备身份重新认证。本地清单、恢复副本和同步密钥均已保留。",
   "settings.personal.error.invalidSyncResponse": "无法验证同步响应，已有密钥仍被保留。请让运营者检查服务器后重试。",
   "settings.personal.error.rotationRequired":
     "此账号需要当前版本尚未支持的密钥轮换。请保留恢复文件，更新 Scoplen 后重试。",
@@ -608,6 +612,10 @@ export const zhHans: Messages = {
   "settings.personal.inventory.error.notConfigured": "个人设备注册尚未就绪。请先完成上方的账号设置。",
   "settings.personal.inventory.error.authenticationRequired":
     "设备认证已过期或被拒绝，本地数据已保留。请在上方重新认证此设备后再同步。",
+  "settings.personal.inventory.error.refreshDeferred":
+    "服务器暂时无法续期此会话，本地数据已保留。请稍后再同步，或在上方重新认证此设备。",
+  "settings.personal.inventory.error.permissionDenied":
+    "此设备会话不允许同步清单，本地数据已保留。请让服务器运营者检查访问权限。",
   "settings.personal.inventory.error.network":
     "与服务器的通信未完成，本地改动已保留。请检查网络与服务器证书后再次同步。",
   "settings.personal.inventory.error.invalidSyncResponse":

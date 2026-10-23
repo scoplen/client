@@ -6,6 +6,7 @@
 //! the retained identity with a new challenge instead of replaying an invitation.
 
 mod identity;
+mod refresh;
 mod sync;
 mod transport;
 
@@ -28,7 +29,10 @@ use specta::Type;
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
-use crate::store::{Store, personal::PersonalRecord};
+use crate::store::{
+    Store,
+    personal::{PersonalRecord, PersonalTokens},
+};
 use transport::Transport;
 
 /// Redacted progress of this device's Personal server enrollment.
@@ -43,8 +47,10 @@ pub enum PersonalServerPhase {
     ReadyToEnroll,
     /// Enrollment may have committed; only fresh device authentication is safe.
     EnrollmentUnconfirmed,
-    /// This identity has an unexpired, verified device access token.
+    /// The verified session is usable, including refresh on an explicit network operation.
     Authenticated,
+    /// The established session needs a fresh signed-device challenge; local data is retained.
+    AuthenticationRequired,
 }
 
 /// Public metadata only. No token, invitation, recovery key, or private key crosses IPC.
@@ -129,6 +135,21 @@ pub enum PersonalServerError {
         "The server returned an invalid or mismatched authentication response. No credentials were accepted."
     )]
     InvalidResponse,
+    /// A spent, expired, uncertain, or mismatched session must not replay its refresh token.
+    #[error(
+        "Authenticate this device again with its saved identity. Local data and sync keys were retained."
+    )]
+    AuthenticationRequired,
+    /// A verified unchanged refresh response allows a later explicit retry.
+    #[error(
+        "The server could not refresh this session. Wait before trying sync again, or authenticate this device."
+    )]
+    RefreshDeferred,
+    /// A verified token no longer grants the operation's exact required scope.
+    #[error(
+        "This device session does not permit this operation. Ask your server operator to check its access."
+    )]
+    PermissionDenied,
 }
 
 /// Serializes mutating Personal operations while retaining no credentials in frontend state.
@@ -270,7 +291,6 @@ impl PersonalServer {
         if !pending.enrollment_attempted {
             return Err(PersonalServerError::RecoveryRequired);
         }
-        store.clear_personal_tokens().map_err(storage)?;
         let transport = self.transport.as_ref().map_err(|error| *error)?;
         authenticate(&store, &pending, transport).await?.require_authenticated()?;
         status(&store)
@@ -292,7 +312,6 @@ impl PersonalServer {
         if !pending.enrollment_attempted {
             return Err(PersonalServerError::AlreadyConfigured);
         }
-        store.clear_personal_tokens().map_err(storage)?;
         let transport = self.transport.as_ref().map_err(|error| *error)?;
         match authenticate(&store, &pending, transport).await? {
             AuthenticationOutcome::Authenticated => status(&store),
@@ -330,16 +349,22 @@ fn status(store: &Store) -> Result<PersonalServerStatus, PersonalServerError> {
             recovery_key_confirmed: false,
         });
     };
-    let phase =
-        if record.access_expires_at.is_some_and(|expires| expires > now().unwrap_or(u64::MAX)) {
-            PersonalServerPhase::Authenticated
-        } else if record.enrollment_attempted {
-            PersonalServerPhase::EnrollmentUnconfirmed
-        } else if record.recovery_confirmed {
-            PersonalServerPhase::ReadyToEnroll
-        } else {
-            PersonalServerPhase::RecoveryRequired
-        };
+    let current = now().unwrap_or(u64::MAX);
+    let phase = if record.auth_scope.is_some()
+        && (record.access_expires_at.is_some_and(|expires| expires > current)
+            || record.refresh_available
+                && record.refresh_expires_at.is_some_and(|expires| expires > current))
+    {
+        PersonalServerPhase::Authenticated
+    } else if record.session_established {
+        PersonalServerPhase::AuthenticationRequired
+    } else if record.enrollment_attempted {
+        PersonalServerPhase::EnrollmentUnconfirmed
+    } else if record.recovery_confirmed {
+        PersonalServerPhase::ReadyToEnroll
+    } else {
+        PersonalServerPhase::RecoveryRequired
+    };
     Ok(PersonalServerStatus {
         phase,
         origin: Some(record.origin),
@@ -401,6 +426,10 @@ async fn authenticate(
     pending: &PersonalRecord,
     transport: &Transport,
 ) -> Result<AuthenticationOutcome, PersonalServerError> {
+    let generation = store
+        .begin_personal_authentication(pending)
+        .map_err(storage)?
+        .ok_or(PersonalServerError::Busy)?;
     let request =
         AuthChallengeRequest::new(store.device_id()).map_err(|_| PersonalServerError::Identity)?;
     let response = transport
@@ -450,6 +479,9 @@ async fn authenticate(
         .map_err(|_| PersonalServerError::InvalidResponse)?;
     let access = Zeroizing::new(tokens.access_token);
     let refresh = Zeroizing::new(tokens.refresh_token);
+    if refresh.is_empty() || refresh.len() > scoplen_api::auth::MAX_REFRESH_TOKEN_BYTES {
+        return Err(PersonalServerError::InvalidResponse);
+    }
     let trusted = trusted_token_keys(transport, &pending.origin).await?;
     let current_time = now()?;
     let verified = DeviceAccessToken::parse(&access)
@@ -461,19 +493,35 @@ async fn authenticate(
         || claims.cnf_jkt
             != dpop_jwk_thumbprint(&signing.public_key_sec1())
                 .map_err(|_| PersonalServerError::Identity)?
+        || claims.scope != scoplen_api::auth::INITIAL_DEVICE_ACCESS_SCOPE
+        || !claims.org.is_empty()
     {
         return Err(PersonalServerError::InvalidResponse);
     }
     let access_expires = current_time.saturating_add(tokens.expires_in).min(verified.expires_at());
-    let refresh_expires = current_time.saturating_add(tokens.refresh_expires_in);
-    store
-        .save_personal_tokens(
-            access.as_bytes(),
-            refresh.as_bytes(),
-            access_expires,
-            refresh_expires,
+    let refresh_expires = claims
+        .iat
+        .checked_add(tokens.refresh_expires_in)
+        .filter(|expires| *expires <= i64::MAX as u64 && *expires > current_time)
+        .ok_or(PersonalServerError::InvalidResponse)?;
+    if !store
+        .finish_personal_session(
+            pending,
+            generation,
+            false,
+            &PersonalTokens {
+                access: SecretVec::new(access.as_bytes().to_vec()),
+                refresh: SecretVec::new(refresh.as_bytes().to_vec()),
+                access_expires_at: access_expires,
+                refresh_expires_at: refresh_expires,
+                scope: claims.scope.clone(),
+            },
+            None,
         )
-        .map_err(storage)?;
+        .map_err(storage)?
+    {
+        return Err(PersonalServerError::Busy);
+    }
     Ok(AuthenticationOutcome::Authenticated)
 }
 

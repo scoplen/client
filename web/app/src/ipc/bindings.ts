@@ -780,6 +780,10 @@ export type PersonalInventoryError =
 "notConfigured" |
 /**  Renew device authentication. */
 "authenticationRequired" |
+/**  The server confirmed no refresh change; a later explicit attempt is safe. */
+"refreshDeferred" |
+/**  A narrowed session lacks the required operation scope. */
+"permissionDenied" |
 /**  An HTTPS exchange failed. */
 "network" |
 /**  Untrusted or mismatched sync artifacts were rejected. */
@@ -900,7 +904,13 @@ export type PersonalServerError =
 /**  Authentication was denied without exposing arbitrary server content. */
 "authentication" |
 /**  A bounded response or its cryptographic binding was invalid. */
-"invalidResponse";
+"invalidResponse" |
+/**  A spent, expired, uncertain, or mismatched session must not replay its refresh token. */
+"authenticationRequired" |
+/**  A verified unchanged refresh response allows a later explicit retry. */
+"refreshDeferred" |
+/**  A verified token no longer grants the operation's exact required scope. */
+"permissionDenied";
 
 /**  Redacted progress of this device's Personal server enrollment. */
 export type PersonalServerPhase =
@@ -912,8 +922,10 @@ export type PersonalServerPhase =
 "ready_to_enroll" |
 /**  Enrollment may have committed; only fresh device authentication is safe. */
 "enrollment_unconfirmed" |
-/**  This identity has an unexpired, verified device access token. */
-"authenticated";
+/**  The verified session is usable, including refresh on an explicit network operation. */
+"authenticated" |
+/**  The established session needs a fresh signed-device challenge; local data is retained. */
+"authentication_required";
 
 /**  Public metadata only. No token, invitation, recovery key, or private key crosses IPC. */
 export type PersonalServerStatus = {

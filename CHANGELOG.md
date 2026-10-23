@@ -7,6 +7,14 @@ All notable changes to the Scoplen desktop client are recorded here.
 - Raised the Tokio minimum and lock to 1.53.3 for RUSTSEC-2026-0386, addressing
   Unix `AsyncFd` I/O safety without suppressing dependency policy checks.
 
+- Added Rust-owned single-use native device refresh during explicit sync and key-verification
+  actions. SQLCipher claims and generation CAS prevent cross-process reuse and stale response
+  overwrites. Verified tokens cannot change device/account/key identity, expand scopes or extend
+  the original refresh family. Lost or uncertain replies require a fresh challenge while retaining
+  offline keys and inventory; exact unchanged rate limits preserve their retry deadline. Settings
+  exposes the retained-identity recovery action and safe localized renewal/permission errors.
+  Older sessions without a verified scope ceiling require fresh authentication.
+
 - Added bounded full reconciliation after cursor expiry: complete authenticated snapshots are
   validated before one atomic SQLCipher merge, removal and cursor update. Missing local edits
   become immutable encrypted recovery copies instead of being uploaded automatically. Settings

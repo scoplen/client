@@ -134,6 +134,12 @@ export const en = {
   "settings.personal.error.invalidResponse":
     "The server response could not be verified. No new credentials were accepted. Ask your operator to check this server, then authenticate again.",
   "settings.personal.error.authenticationRequired": "Authenticate this device above, then connect Personal sync again.",
+  "settings.personal.error.refreshDeferred":
+    "The server could not refresh this session. Wait before trying sync again, or authenticate this device above.",
+  "settings.personal.error.permissionDenied":
+    "This device session does not permit this action. Ask your server operator to check its access.",
+  "settings.personal.authenticationRequiredBody":
+    "This session expired or could not be safely renewed. Authenticate with the saved device identity. Your local inventory, recovery copies, and sync keys are retained.",
   "settings.personal.error.invalidSyncResponse":
     "The sync response could not be verified. Existing keys were retained. Ask your operator to check this server, then try again.",
   "settings.personal.error.rotationRequired":
@@ -661,6 +667,10 @@ export const en = {
     "Personal enrollment is not ready. Complete account setup above before syncing.",
   "settings.personal.inventory.error.authenticationRequired":
     "Device authentication expired or was denied. Local data was retained. Authenticate this device above, then sync again.",
+  "settings.personal.inventory.error.refreshDeferred":
+    "The server could not refresh this session. Local data was retained. Wait before trying sync again, or authenticate this device above.",
+  "settings.personal.inventory.error.permissionDenied":
+    "This device session does not permit inventory sync. Local data was retained. Ask your server operator to check its access.",
   "settings.personal.inventory.error.network":
     "The server exchange did not finish. Local changes were retained. Check your connection and server certificate, then sync again.",
   "settings.personal.inventory.error.invalidSyncResponse":
