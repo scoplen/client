@@ -159,4 +159,15 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     ALTER TABLE personal_server ADD COLUMN refresh_retry_at INTEGER;
     UPDATE personal_server SET session_established = 1 WHERE access_token IS NOT NULL;
     "#,
+    // 9: the last completely verified, explicitly requested account/device snapshot.
+    r#"
+    CREATE TABLE personal_account_snapshot (
+        singleton INTEGER PRIMARY KEY REFERENCES personal_server(singleton) ON DELETE CASCADE CHECK (singleton = 1),
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK (length(account_id) = 16),
+        queried_at INTEGER NOT NULL CHECK (queried_at >= 0),
+        profile BLOB NOT NULL CHECK (length(profile) BETWEEN 1 AND 4096),
+        devices BLOB NOT NULL CHECK (length(devices) BETWEEN 1 AND 6291456)
+    ) STRICT;
+    "#,
 ];

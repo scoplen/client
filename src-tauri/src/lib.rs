@@ -79,6 +79,8 @@ pub fn ipc() -> Builder<tauri::Wry> {
             local_data::remove_local_passphrase,
             local_data::start_with_empty_local_data,
             personal_server::personal_server_status,
+            personal_server::personal_account_snapshot,
+            personal_server::query_personal_account,
             personal_server::prepare_personal_enrollment,
             personal_server::save_personal_recovery_key,
             personal_server::confirm_personal_recovery_key,

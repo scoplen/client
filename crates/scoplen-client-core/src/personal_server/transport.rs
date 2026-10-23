@@ -25,6 +25,9 @@ pub(super) struct Response {
     pub refresh_protocol: bool,
     pub nonce: Option<String>,
     pub retry_after: Option<u64>,
+    pub etag: Option<String>,
+    pub cache_control: Option<String>,
+    pub pragma: Option<String>,
 }
 
 impl Response {
@@ -79,7 +82,7 @@ impl Transport {
         body: &[u8],
         limit: usize,
     ) -> Result<Response, PersonalServerError> {
-        self.exchange(Method::POST, origin, path, Some(body), None, limit).await
+        self.exchange(Method::POST, origin, path, Some(body), None, None, limit).await
     }
 
     pub async fn get(
@@ -88,7 +91,7 @@ impl Transport {
         path: &str,
         limit: usize,
     ) -> Result<Response, PersonalServerError> {
-        self.exchange(Method::GET, origin, path, None, None, limit).await
+        self.exchange(Method::GET, origin, path, None, None, None, limit).await
     }
 
     pub async fn refresh(
@@ -97,8 +100,27 @@ impl Transport {
         body: &[u8],
         proof: &DpopProof,
     ) -> Result<Response, PersonalServerError> {
-        self.exchange(Method::POST, origin, "/api/v1/auth/refresh", Some(body), Some(proof), 16_384)
-            .await
+        self.exchange(
+            Method::POST,
+            origin,
+            "/api/v1/auth/refresh",
+            Some(body),
+            Some(proof),
+            None,
+            16_384,
+        )
+        .await
+    }
+
+    pub async fn account_get(
+        &self,
+        origin: &str,
+        path: &str,
+        access: &str,
+        proof: &DpopProof,
+        limit: usize,
+    ) -> Result<Response, PersonalServerError> {
+        self.exchange(Method::GET, origin, path, None, Some(proof), Some(access), limit).await
     }
 
     pub async fn protected(
@@ -163,9 +185,13 @@ impl Transport {
             refresh_protocol: false,
             nonce: None,
             retry_after: None,
+            etag: None,
+            cache_control: None,
+            pragma: None,
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn exchange(
         &self,
         method: Method,
@@ -173,6 +199,7 @@ impl Transport {
         path: &str,
         body: Option<&[u8]>,
         proof: Option<&DpopProof>,
+        access: Option<&str>,
         limit: usize,
     ) -> Result<Response, PersonalServerError> {
         validate_server_origin(origin).map_err(|_| PersonalServerError::Invitation)?;
@@ -181,6 +208,13 @@ impl Transport {
             .request(method, format!("{origin}{path}"))
             .header(header::ACCEPT, "application/json")
             .header(header::ACCEPT_ENCODING, "identity");
+        if let Some(access) = access {
+            let authorization = zeroize::Zeroizing::new(format!("DPoP {access}"));
+            let mut authorization = header::HeaderValue::from_str(&authorization)
+                .map_err(|_| PersonalServerError::Identity)?;
+            authorization.set_sensitive(true);
+            request = request.header(header::AUTHORIZATION, authorization);
+        }
         if let Some(proof) = proof {
             let mut header = header::HeaderValue::from_str(proof.as_str())
                 .map_err(|_| PersonalServerError::Identity)?;
@@ -232,6 +266,9 @@ impl Transport {
             && single_header("cache-control").is_some()
             && single_header("pragma").is_some_and(|value| value.eq_ignore_ascii_case("no-cache"));
         let nonce = single_header("dpop-nonce").map(str::to_owned);
+        let etag = single_header("etag").map(str::to_owned);
+        let cache_control = single_header("cache-control").map(str::to_owned);
+        let pragma = single_header("pragma").map(str::to_owned);
         let retry_after = single_header("retry-after").and_then(|value| {
             let seconds = value.parse::<u16>().ok()?;
             if value != seconds.to_string() {
@@ -244,6 +281,8 @@ impl Transport {
         if response.status().is_success()
             && (!no_store
                 || cached
+                || response.headers().contains_key(header::CONTENT_ENCODING)
+                || single_header("content-type").is_none()
                 || !matches!(
                     content_type,
                     Some("application/json" | "application/json; charset=utf-8")
@@ -261,6 +300,9 @@ impl Transport {
             refresh_protocol,
             nonce,
             retry_after,
+            etag,
+            cache_control,
+            pragma,
         })
     }
 }

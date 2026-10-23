@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
 import { commands, type PersonalServerError, type PersonalServerStatus } from "./ipc/bindings";
 import { PersonalSyncSettings } from "./personal-sync-settings";
+import { PersonalAccountSettings } from "./personal-account-settings";
 
 type Outcome = { status: "ok"; data: PersonalServerStatus } | { status: "error"; error: PersonalServerError };
 
@@ -102,6 +103,19 @@ export function PersonalSettings() {
     const url = replacement.current.value;
     replacement.current.value = "";
     void run(() => commands.updatePersonalInvitation(url));
+  };
+
+  const onChildBusyChange = (next: boolean) => {
+    setBusy(next);
+    if (!next)
+      void commands
+        .personalServerStatus()
+        .then((latest) => {
+          if (latest.status === "ok") updateStatus(latest.data);
+        })
+        .catch(() => {
+          /* Preserve the visible phase until the encrypted store is available. */
+        });
   };
 
   return (
@@ -283,22 +297,18 @@ export function PersonalSettings() {
           {status.phase === "authenticated" ||
           status.phase === "enrollment_unconfirmed" ||
           status.phase === "authentication_required" ? (
-            <PersonalSyncSettings
-              authenticated={status.phase === "authenticated"}
-              disabled={busy}
-              onBusyChange={(next) => {
-                setBusy(next);
-                if (!next)
-                  void commands
-                    .personalServerStatus()
-                    .then((latest) => {
-                      if (latest.status === "ok") updateStatus(latest.data);
-                    })
-                    .catch(() => {
-                      /* Keep the visible state until the encrypted store is available. */
-                    });
-              }}
-            />
+            <>
+              <PersonalAccountSettings
+                authenticated={status.phase === "authenticated"}
+                disabled={busy}
+                onBusyChange={onChildBusyChange}
+              />
+              <PersonalSyncSettings
+                authenticated={status.phase === "authenticated"}
+                disabled={busy}
+                onBusyChange={onChildBusyChange}
+              />
+            </>
           ) : null}
         </div>
       )}

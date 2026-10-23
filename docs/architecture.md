@@ -143,6 +143,30 @@ restores the claim. Rejected or unverifiable responses never
 restore it. Legacy sessions lacking a verified scope ceiling require fresh authentication;
 their identity, original artifacts and saved bootstrap are retained.
 
+`PersonalServer::query_account` is an explicit read-only operation for D-99/D-113. It reuses
+the same native refresh owner, validates the issuer/account/device/JKT and exact `account:read`
+scope, and binds a new token-specific DPoP proof to each GET. The TLS 1.3 transport bounds the
+profile to 4,096 bytes and device statements to 6,291,456 bytes; shared codecs require exact
+cache-prevention metadata and the profile's matching ETag. Redirects, compressed responses,
+duplicate metadata and wrong media types fail locally. This action does not bootstrap sync
+keys, move inventory or mutate device membership.
+
+The entire statement set is decoded and verified against the locally retained account signing
+key. Every certificate must bind that account; duplicate certificate and revocation device ids
+are rejected, all revocations are applied, and the active set must contain the exact retained
+current-device certificate. No response-provided key becomes trusted. Names and platforms are
+signed claims; the set cannot establish a malicious server's completeness or freshness and is
+not used to bypass K-4 anti-rollback or rotation validation.
+
+Migration 9 stores the raw bounded profile/device responses and local manual-query completion
+time as one SQLCipher snapshot. Cryptographic verification and durable publication run off the
+async executor. A single FULL-synchronous statement replaces both only while the original
+authentication generation, unexpired token, origin, account and retained identity still match.
+Failure or a stale session preserves the prior snapshot. `personal_account_snapshot` reverifies
+the saved statements locally even after authentication expiry; it never initiates refresh or
+network I/O. Safe IPC carries only account id/email, active signed names/platforms/ids and the
+current-device flag plus the local query time, without certificates, keys or credentials.
+
 `PersonalServer::bootstrap_sync` is the Rust-only K-4 first-device boundary. It revalidates the
 retained access token against same-origin JWKS, its account/device ids and device thumbprint,
 expiry, and both `keys:read` and `sync:read` scopes. Its separate HTTP/2-only client requires

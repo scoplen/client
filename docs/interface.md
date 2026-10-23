@@ -50,11 +50,20 @@ and authentication intents, and no invitation appears in localized errors or pub
 
 Authenticated status means Rust retains a verified usable device session, which can refresh
 on an explicit network action when its access token approaches expiry. It does not mean inventory
-has synchronized. Existing hosts and credentials remain local. Pairing and profile display remain
-separate outcomes. Settings navigation supports
+has synchronized. Existing hosts and credentials remain local. Pairing remains a separate
+outcome. Settings navigation supports
 arrow keys, Home/End, visible focus, and wrapping at narrow widths. An explicit action that
 advances to another phase focuses its heading; initial status reads and same-phase actions
 retain keyboard focus.
+
+Account and devices loads the last saved manual query locally, including after authentication
+expires. Refresh account and devices is the only network action for this panel; it queries the
+profile and complete signed device set together. All verification must succeed before either
+result changes. The panel displays the real account id, an exact optional email (or its absence),
+signed names and platform claims, the current device, and the device-local Last manual query time.
+It labels these as saved results, not live presence, hardware guarantees or server admission.
+Errors retain the previous snapshot and timestamp, and expose no raw response. Account and sync
+intents share the parent's busy state; no revocation or pairing action is shown until implemented.
 
 An expired refresh family or uncertain renewal shows Authenticate this device with an explanation
 that local inventory, recovery copies and sync keys were retained. That action obtains a fresh

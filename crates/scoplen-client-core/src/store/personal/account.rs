@@ -1,0 +1,76 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Complete verified account snapshots remain local to the encrypted store.
+
+use rusqlite::{OptionalExtension, params};
+use scoplen_api::{
+    account_devices::MAX_ACCOUNT_DEVICE_STATEMENTS_BYTES,
+    account_profile::MAX_ACCOUNT_PROFILE_BYTES,
+};
+use scoplen_crypto::SecretVec;
+
+use super::{PersonalRecord, Store, StoreError};
+
+pub(crate) struct PersonalAccountRecord {
+    pub queried_at: u64,
+    pub profile: SecretVec,
+    pub devices: SecretVec,
+}
+
+impl Store {
+    pub(crate) fn personal_account_snapshot(
+        &self,
+        identity: &PersonalRecord,
+    ) -> Result<Option<PersonalAccountRecord>, StoreError> {
+        Ok(self.conn().query_row(
+            "SELECT queried_at, profile, devices, length(profile), length(devices)
+             FROM personal_account_snapshot WHERE singleton = 1 AND origin = ?1 AND account_id = ?2",
+            params![identity.origin, identity.account_id.as_bytes().as_slice()],
+            |row| {
+                let profile_size: i64 = row.get(3)?;
+                let devices_size: i64 = row.get(4)?;
+                if !(1..=MAX_ACCOUNT_PROFILE_BYTES as i64).contains(&profile_size)
+                    || !(1..=MAX_ACCOUNT_DEVICE_STATEMENTS_BYTES as i64).contains(&devices_size)
+                {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+                Ok(PersonalAccountRecord {
+                    queried_at: u64::try_from(row.get::<_, i64>(0)?).map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    profile: SecretVec::new(row.get(1)?),
+                    devices: SecretVec::new(row.get(2)?),
+                })
+            },
+        ).optional()?)
+    }
+
+    pub(crate) fn save_personal_account_snapshot(
+        &self,
+        identity: &PersonalRecord,
+        access: &SecretVec,
+        snapshot: &PersonalAccountRecord,
+        now: u64,
+    ) -> Result<bool, StoreError> {
+        let queried_at =
+            i64::try_from(snapshot.queried_at).map_err(|_| StoreError::InvalidIdentifier)?;
+        let material = identity.private_material.as_bytes();
+        if material.len() != 225 || material[0] != 1 {
+            return Err(StoreError::InvalidIdentifier);
+        }
+        let conn = self.conn();
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        Ok(conn.execute(
+            "INSERT INTO personal_account_snapshot (singleton, origin, account_id, queried_at, profile, devices)
+             SELECT 1, origin, account_id, ?1, ?2, ?3 FROM personal_server
+             WHERE singleton = 1 AND auth_generation = ?4 AND access_token = ?5
+                AND access_expires_at > ?6 AND refresh_claimed = 0
+                AND origin = ?7 AND account_id = ?8 AND private_material = ?9
+                AND enrollment_request = ?10
+                AND EXISTS (SELECT 1 FROM device_key_pair WHERE singleton = 1 AND signing = ?11 AND kem = ?12)
+             ON CONFLICT (singleton) DO UPDATE SET origin = excluded.origin, account_id = excluded.account_id,
+                queried_at = excluded.queried_at, profile = excluded.profile, devices = excluded.devices",
+            params![queried_at, snapshot.profile.as_bytes(), snapshot.devices.as_bytes(),
+                identity.auth_generation, access.as_bytes(), now.min(i64::MAX as u64) as i64,
+                identity.origin, identity.account_id.as_bytes().as_slice(), identity.private_material.as_bytes(),
+                identity.enrollment_request.as_ref().map(SecretVec::as_bytes), &material[1..33], &material[33..65]],
+        )? == 1)
+    }
+}

@@ -113,9 +113,19 @@ Settings → Personal account can prepare a Personal invitation from a user-sele
 Scoplen server, save and confirm a recovery file, join, and authenticate the first device.
 The same pending identity is retained across restarts and uncertain responses. The desktop
 can explicitly synchronize selected inventory after key verification. Rust rotates its native
-device session when needed by an explicit sync or key-verification action. Pairing another device
+device session when needed by an explicit account query, sync or key-verification action. Pairing another device
 remains incomplete.
 Existing local SSH data is not uploaded by account setup.
+
+Account and devices reads its saved results locally when Settings opens. Refresh account and
+devices explicitly queries the authenticated account profile and complete signed device statement
+set, renewing the native session when needed. Rust verifies the whole set against the retained
+account signing key, applies revocations, and requires this device's exact saved certificate before
+atomically saving a new offline snapshot. The panel shows the optional email, signed device names
+and platform claims, this device, and the last manual query time. Failed queries retain the previous
+results; opening the page never starts a query. These results do not prove recent activity,
+hardware protection, current server admission, or statements a server has withheld. Pairing,
+revocation publication and key rotation remain separate work.
 
 When enrollment remains unconfirmed, Use a new invitation accepts a link for the same server.
 Rust first authenticates the saved identity: success ends recovery without using the link;
