@@ -19,6 +19,13 @@ All notable changes to the Scoplen desktop client are recorded here.
   exposes the retained-identity recovery action and safe localized renewal/permission errors.
   Older sessions without a verified scope ceiling require fresh authentication.
 
+- Added explicit Account and devices queries in Personal settings. Rust verifies the authenticated
+  profile and complete signed certificate/revocation snapshot before atomically caching both in
+  SQLCipher. Settings shows the optional email, signed device names/platforms, this device and the
+  last manual query; saved results remain available offline after failures or expired authentication.
+  Querying reuses native session refresh. Opening settings makes no network request, and no pairing
+  or revocation action is implied by the read-only list.
+
 - Added bounded full reconciliation after cursor expiry: complete authenticated snapshots are
   validated before one atomic SQLCipher merge, removal and cursor update. Missing local edits
   become immutable encrypted recovery copies instead of being uploaded automatically. Settings

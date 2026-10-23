@@ -138,6 +138,33 @@ export const en = {
     "The server could not refresh this session. Wait before trying sync again, or authenticate this device above.",
   "settings.personal.error.permissionDenied":
     "This device session does not permit this action. Ask your server operator to check its access.",
+  "settings.personal.error.invalidAccountResponse":
+    "The account or signed device list could not be verified. Saved results were retained. Ask your server operator to check the response, then query again.",
+  "settings.personal.account.title": "Account and devices",
+  "settings.personal.account.loading": "Reading saved account results on this device…",
+  "settings.personal.account.empty":
+    "No account results have been saved. Query your server to read the account and its signed device list.",
+  "settings.personal.account.saved":
+    "Saved results from your last manual query. They remain available offline; newer or withheld changes may not appear.",
+  "settings.personal.account.querying": "Querying your server and verifying the complete signed device list…",
+  "settings.personal.account.query": "Refresh account and devices",
+  "settings.personal.account.id": "Account ID",
+  "settings.personal.account.email": "Email",
+  "settings.personal.account.noEmail": "No email on this account",
+  "settings.personal.account.queriedAt": "Last manual query",
+  "settings.personal.account.devices": "Account-signed devices",
+  "settings.personal.account.current": "This device",
+  "settings.personal.account.platform": "Signed platform: {platform}",
+  "settings.personal.account.unnamed": "No signed device name",
+  "settings.personal.account.unspecified": "Not specified",
+  "settings.personal.account.claims":
+    "Names and platforms are claims signed by this account. They do not show recent activity, hardware protection or current server access.",
+  "settings.personal.account.authenticate":
+    "Authenticate this device above before querying. Saved results remain available offline.",
+  "settings.personal.account.network":
+    "The query did not finish. Saved results were retained. Check your connection and server certificate, then query again.",
+  "settings.personal.account.deferred":
+    "The server could not renew this session. Saved results were retained. Wait before querying again, or authenticate this device above.",
   "settings.personal.authenticationRequiredBody":
     "This session expired or could not be safely renewed. Authenticate with the saved device identity. Your local inventory, recovery copies, and sync keys are retained.",
   "settings.personal.error.invalidSyncResponse":

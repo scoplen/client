@@ -46,6 +46,7 @@ function fixture(initial = empty) {
     calls.push({ command, args: (args ?? {}) as Record<string, unknown> });
     if (handlers.has(command)) return handlers.get(command)!();
     if (command === "personal_sync_key_status") return "notConnected";
+    if (command === "personal_account_snapshot") return null;
     if (command === "personal_server_status") return status;
     if (command === "prepare_personal_enrollment") status = prepared;
     else if (command === "save_personal_recovery_key") status = { ...status, recoveryKeySaved: true };
@@ -181,7 +182,11 @@ it("does not enroll or authenticate automatically when a saved pending identity 
   const f = fixture({ ...prepared, phase: "enrollment_unconfirmed" });
   render(view());
   expect(await screen.findByRole("button", { name: "Authenticate this device" })).toBeTruthy();
-  expect(f.calls.map((call) => call.command)).toEqual(["personal_server_status", "personal_sync_key_status"]);
+  expect(f.calls.map((call) => call.command)).toEqual([
+    "personal_server_status",
+    "personal_account_snapshot",
+    "personal_sync_key_status",
+  ]);
   expect(screen.queryByLabelText("Invitation link")).toBeNull();
 });
 

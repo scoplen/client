@@ -5,11 +5,13 @@
 //! SQLCipher. Enrollment is claimed durably once; recovery always authenticates
 //! the retained identity with a new challenge instead of replaying an invitation.
 
+mod account;
 mod identity;
 mod refresh;
 mod sync;
 mod transport;
 
+pub use account::{PersonalAccountDevice, PersonalAccountSnapshot};
 pub use sync::{
     PersonalInventoryIntent, PersonalInventoryProgress, PersonalSyncBootstrap, PersonalSyncError,
 };
@@ -150,6 +152,11 @@ pub enum PersonalServerError {
         "This device session does not permit this operation. Ask your server operator to check its access."
     )]
     PermissionDenied,
+    /// The complete account and signed-device snapshot could not be verified.
+    #[error(
+        "The account or device response was invalid. The previous local snapshot was retained."
+    )]
+    InvalidAccountResponse,
 }
 
 /// Serializes mutating Personal operations while retaining no credentials in frontend state.

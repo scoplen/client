@@ -296,7 +296,7 @@ async fn answer(
         {
             return Err("unexpected credential transport".into());
         }
-        if path.starts_with("/sync/") {
+        if path.starts_with("/sync/") || path.starts_with("/api/v1/accounts/me") {
             let expected = state.expected.as_ref().ok_or("missing fixture identity")?;
             let token = request
                 .headers()
@@ -308,7 +308,11 @@ async fn answer(
                 return Err("wrong token".into());
             }
             if request.headers().get("accept").and_then(|value| value.to_str().ok())
-                != Some("application/cbor")
+                != Some(if path.starts_with("/sync/") {
+                    "application/cbor"
+                } else {
+                    "application/json"
+                })
             {
                 return Err("wrong accept".into());
             }
@@ -388,6 +392,8 @@ async fn answer(
 fn local(dir: &tempfile::TempDir) -> Arc<Store> {
     Arc::new(Store::open(&dir.path().join("personal.db"), &SymmetricKey::new([27; 32])).unwrap())
 }
+
+mod account;
 
 #[tokio::test]
 async fn tls13_h2_bootstrap_verifies_real_proofs_and_restores_offline() {

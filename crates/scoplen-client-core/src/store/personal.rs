@@ -7,7 +7,9 @@ use uuid::Uuid;
 
 use super::{Store, StoreError, uuid_from};
 
+mod account;
 mod auth;
+pub(crate) use account::PersonalAccountRecord;
 pub(crate) use auth::{PersonalRefreshClaim, PersonalTokens};
 
 #[derive(Debug)]

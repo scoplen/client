@@ -125,6 +125,19 @@ export const commands = {
 	startWithEmptyLocalData: () => typedError<Status, LocalDataError>(__TAURI_INVOKE("start_with_empty_local_data")),
 	/**  Return public Personal server metadata without opening a network connection. */
 	personalServerStatus: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("personal_server_status")),
+	/**  Read and locally reverify the last complete manual account query, without network I/O. */
+	personalAccountSnapshot: () => typedError<{
+	/**  The verified session's account, bound to both responses. */
+	accountId: string,
+	/**  The identity service's optional email; absence is not replaced by a synthetic address. */
+	email: string | null,
+	/**  Device-local query completion time in Unix milliseconds, encoded without precision loss. */
+	queriedAt: string,
+	/**  Active certificates after verifying the entire statement set and applying revocations. */
+	devices: PersonalAccountDevice[],
+} | null, PersonalServerError>(__TAURI_INVOKE("personal_account_snapshot")),
+	/**  Explicitly query the account and complete signed device set; never mutates device membership. */
+	queryPersonalAccount: () => typedError<PersonalAccountSnapshot, PersonalServerError>(__TAURI_INVOKE("query_personal_account")),
 	/**  Persist the invitation's generated identity locally before any network request. */
 	preparePersonalEnrollment: (invitationUrl: string, deviceName: string) => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("prepare_personal_enrollment", { invitationUrl, deviceName })),
 	/**  Save the recovery key directly from Rust through a native file picker. */
@@ -747,6 +760,30 @@ export type OpenSshUnsupportedDirective = {
 	directive: string,
 };
 
+/**  Public signed claims only; no certificate or key material crosses IPC. */
+export type PersonalAccountDevice = {
+	/**  Stable signed identity. */
+	id: string,
+	/**  Display name signed by the account, not a hardware attestation. */
+	name: string,
+	/**  Platform text signed by the account, not server-observed activity. */
+	platform: string,
+	/**  The certificate exactly matches this device's retained enrollment certificate. */
+	current: boolean,
+};
+
+/**  The last complete manual query, retained offline independently of authentication expiry. */
+export type PersonalAccountSnapshot = {
+	/**  The verified session's account, bound to both responses. */
+	accountId: string,
+	/**  The identity service's optional email; absence is not replaced by a synthetic address. */
+	email: string | null,
+	/**  Device-local query completion time in Unix milliseconds, encoded without precision loss. */
+	queriedAt: string,
+	/**  Active certificates after verifying the entire statement set and applying revocations. */
+	devices: PersonalAccountDevice[],
+};
+
 /**  Display categories, never object fields or credential content. */
 export type PersonalInventoryCategory =
 /**  A saved machine. */
@@ -910,7 +947,9 @@ export type PersonalServerError =
 /**  A verified unchanged refresh response allows a later explicit retry. */
 "refreshDeferred" |
 /**  A verified token no longer grants the operation's exact required scope. */
-"permissionDenied";
+"permissionDenied" |
+/**  The complete account and signed-device snapshot could not be verified. */
+"invalidAccountResponse";
 
 /**  Redacted progress of this device's Personal server enrollment. */
 export type PersonalServerPhase =

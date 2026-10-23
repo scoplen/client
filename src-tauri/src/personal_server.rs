@@ -5,12 +5,14 @@ use std::sync::Arc;
 
 use scoplen_client_core::{
     personal_server::{
-        PersonalServer, PersonalServerError, PersonalServerStatus, PersonalSyncError,
+        PersonalAccountSnapshot, PersonalServer, PersonalServerError, PersonalServerStatus,
+        PersonalSyncError,
     },
     store::Store,
 };
 use serde::Serialize;
 use specta::Type;
+use tauri::Manager as _;
 use tauri_plugin_dialog::DialogExt as _;
 use zeroize::Zeroizing;
 
@@ -18,6 +20,31 @@ use crate::local_data::LocalDataState;
 
 fn store(local: &LocalDataState) -> Result<Arc<Store>, PersonalServerError> {
     local.store().ok_or(PersonalServerError::Storage)
+}
+
+/// Read and locally reverify the last complete manual account query, without network I/O.
+#[tauri::command]
+#[specta::specta]
+pub async fn personal_account_snapshot(
+    app: tauri::AppHandle,
+    local: tauri::State<'_, LocalDataState>,
+) -> Result<Option<PersonalAccountSnapshot>, PersonalServerError> {
+    let store = store(&local)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<PersonalServer>().account_snapshot(&store)
+    })
+    .await
+    .map_err(|_| PersonalServerError::Storage)?
+}
+
+/// Explicitly query the account and complete signed device set; never mutates device membership.
+#[tauri::command]
+#[specta::specta]
+pub async fn query_personal_account(
+    local: tauri::State<'_, LocalDataState>,
+    personal: tauri::State<'_, PersonalServer>,
+) -> Result<PersonalAccountSnapshot, PersonalServerError> {
+    personal.query_account(store(&local)?).await
 }
 
 /// Locally reverified key availability; never contains wrapped or unwrapped key material.

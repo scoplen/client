@@ -277,6 +277,27 @@ fn calls(peer: &Peer) -> usize {
 }
 
 #[tokio::test]
+async fn explicit_account_query_refreshes_the_same_native_session_and_keeps_offline_results() {
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    super::account::install(&peer, &store);
+    install(&peer, &store, vec![]);
+    assert!(manager.account_snapshot(&store).unwrap().is_none());
+    assert_eq!(calls(&peer), 0);
+    let result = manager.query_account(store.clone()).await.unwrap();
+    assert_eq!(calls(&peer), 1);
+    due(&store);
+    assert_eq!(manager.account_snapshot(&store).unwrap(), Some(result.clone()));
+    assert_eq!(calls(&peer), 1);
+    let current = manager.query_account(store.clone()).await.unwrap();
+    assert_eq!(calls(&peer), 2);
+    assert_eq!(current.devices.len(), result.devices.len());
+    peer.assert_healthy();
+}
+
+#[tokio::test]
 async fn expired_access_refreshes_once_and_new_credentials_survive_restart() {
     let peer = Peer::new().await;
     let dir = tempfile::tempdir().unwrap();
