@@ -2,7 +2,12 @@
 
 The interface (`web/app`, `web/ui`) and the core (`crates/`, `src-tauri`) are built separately. Each screen states what it needs from the core as a TypeScript contract; the core implements that contract with typed commands. This page lists the contracts, what each operation must do, and how a contract is connected once its commands exist.
 
-The screens never read the store, decide business rules, or hold secrets. Anything the screens must not decide — validation beyond "is this field empty", what a deletion removes, which areas the user has reached — is the core's.
+The screens never read the store or decide business rules. Private keys, account material and
+tokens remain in Rust. Dedicated transient inputs accept SSH passphrases and the D-114 pairing
+password; the new-device pairing screen may display that password once. These exceptions never
+enter ordinary state snapshots or clipboard automation. Anything the screens must not decide —
+validation beyond "is this field empty", what a deletion removes, which areas the user has
+reached — is the core's.
 
 ## Seeing the screens
 
@@ -38,6 +43,40 @@ identity. Timeouts, lost responses, and unknown outcomes retain the pending iden
 Authenticate this device, which uses a fresh challenge without replaying the invitation.
 Errors use typed localized codes; arbitrary IPC or server diagnostics are not rendered.
 
+### Pair a second device
+
+In Personal account, a new installation chooses Join an existing account, supplies the same
+canonical HTTPS server and a device name, and creates a five-minute pairing session. Rust
+returns its public link and the one-time eight-character password through a dedicated command.
+Only the public link has a Copy action. The password stays in this transient view and clears
+on termination, failure, cancellation or leaving the view. Reopening settings reads only the
+saved public checkpoint; it does not repeat the password or resume network activity.
+
+On the existing authenticated installation, Pair another device accepts the public link and
+the separately entered password. Submitting clears the password field immediately. Rust runs
+CPace and exposes only the authenticated device name and platform for explicit approval. The
+screen states that approval grants account and Personal sync-key access. All signing, handoff
+validation, durable checkpoints, admission and anchored sync verification stay in Rust.
+
+The explicit create/join/approve/recover action attaches one foreground Rust observer.
+`watchPersonalPairing` drives bounded core progress and sends public status over a typed channel;
+JavaScript does not run network timers. Closing the view detaches that observer without
+cancelling the saved protocol. Late notifications cannot replace newer status. Confirmation,
+terminal state and uncertain admission pause progress. Check and continue pairing resumes from
+the retained identity and exact checkpoint; Cancel pairing is a separate explicit intent.
+Neither action fabricates an invitation, recovery key or new account. Pairing never selects
+local inventory for upload. New-device completion confirms device authentication and sync-key
+verification; the existing device reports admission confirmed and directs verification to the
+new device. QR scanning/display is a separate interface outcome.
+
+Failed operations reload the public local checkpoint without resuming network work, so fresh
+session and uncertain-admission actions follow the saved core phase. A fresh new-device session
+reuses its retained server/name and keys. Observer registration is completed before polling;
+closing or cancelling during registration detaches it before any late poll can begin. A new
+intent waits for the current bounded core tick to finish before invoking another mutation.
+
+### Invitation recovery and account status
+
 Only the unconfirmed phase offers Use a new invitation. It reveals a hidden, uncontrolled
 field for a link from the displayed server, focuses it, and clears it before calling the
 generated `updatePersonalInvitation` command. Cancel also clears the field. Rust handles
@@ -50,8 +89,7 @@ and authentication intents, and no invitation appears in localized errors or pub
 
 Authenticated status means Rust retains a verified usable device session, which can refresh
 on an explicit network action when its access token approaches expiry. It does not mean inventory
-has synchronized. Existing hosts and credentials remain local. Pairing remains a separate
-outcome. Settings navigation supports
+has synchronized. Existing hosts and credentials remain local. Settings navigation supports
 arrow keys, Home/End, visible focus, and wrapping at narrow widths. An explicit action that
 advances to another phase focuses its heading; initial status reads and same-phase actions
 retain keyboard focus.
@@ -63,7 +101,7 @@ result changes. The panel displays the real account id, an exact optional email 
 signed names and platform claims, the current device, and the device-local Last manual query time.
 It labels these as saved results, not live presence, hardware guarantees or server admission.
 Errors retain the previous snapshot and timestamp, and expose no raw response. Account and sync
-intents share the parent's busy state; no revocation or pairing action is shown until implemented.
+intents share the parent's busy state with pairing; revocation publication remains separate work.
 
 An expired refresh family or uncertain renewal shows Authenticate this device with an explanation
 that local inventory, recovery copies and sync keys were retained. That action obtains a fresh

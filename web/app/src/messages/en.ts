@@ -685,6 +685,69 @@ export const en = {
   "settings.personal.inventory.category.snippet": "Snippet and defaults",
   "settings.personal.inventory.category.forward": "Tunnel",
   "settings.personal.inventory.category.workspace": "Workspace",
+  "settings.personal.pairing.title": "Pair a device",
+  "settings.personal.pairing.body":
+    "Use a device already signed in to join the same Personal account. Your existing local hosts stay on this device until you choose to sync them.",
+  "settings.personal.pairing.loading": "Reading saved pairing state…",
+  "settings.personal.pairing.create": "Join an existing account",
+  "settings.personal.pairing.join": "Pair another device",
+  "settings.personal.pairing.start": "Create pairing session",
+  "settings.personal.pairing.verify": "Verify pairing password",
+  "settings.personal.pairing.origin": "Server address",
+  "settings.personal.pairing.originHint":
+    "Use the same HTTPS server as your existing device, such as https://ssh.example.com.",
+  "settings.personal.pairing.retained":
+    "This device’s saved identity is retained. A fresh session uses the same server and device name.",
+  "settings.personal.pairing.link": "Pairing link",
+  "settings.personal.pairing.linkHint":
+    "Paste the public pairing link shown on the new device. Its server must match this account.",
+  "settings.personal.pairing.password": "8-character secret password",
+  "settings.personal.pairing.passwordHint":
+    "On your existing device, open Personal account → Pair another device. Send the link separately and type this password there. It expires in five minutes and is shown only during this session.",
+  "settings.personal.pairing.inputHint":
+    "Type the eight uppercase letters and digits shown on the new device. The password is cleared immediately after submission.",
+  "settings.personal.pairing.copy": "Copy pairing link",
+  "settings.personal.pairing.copied": "Link copied",
+  "settings.personal.pairing.copyFailed": "Could not copy the link. Select the public link above and copy it manually.",
+  "settings.personal.pairing.platform": "Signed platform",
+  "settings.personal.pairing.review":
+    "Check that this name and platform belong to the device you are adding. Approving gives it access to this account and its Personal sync keys.",
+  "settings.personal.pairing.confirm": "Approve this device",
+  "settings.personal.pairing.recover": "Check and continue pairing",
+  "settings.personal.pairing.cancel": "Cancel pairing",
+  "settings.personal.pairing.close": "Close",
+  "settings.personal.pairing.authenticate": "Authenticate this device before pairing another device.",
+  "settings.personal.pairing.reload": "Reload pairing status",
+  "settings.personal.pairing.phase.idle": "No pairing is in progress.",
+  "settings.personal.pairing.phase.waiting": "Waiting for your existing device. Keep this screen open while you pair.",
+  "settings.personal.pairing.phase.exchanging": "Verifying the secret password and both devices…",
+  "settings.personal.pairing.phase.confirm_device": "Review the new device before approving.",
+  "settings.personal.pairing.phase.waiting_acceptance": "Waiting for the new device to verify and accept the account…",
+  "settings.personal.pairing.phase.admission_unconfirmed":
+    "The server may have added this device. Check its saved pairing before starting again. Its identity and keys have been retained.",
+  "settings.personal.pairing.phase.completed":
+    "Pairing complete. Device authentication and sync keys are verified. You can now review what to sync.",
+  "settings.personal.pairing.admissionConfirmed":
+    "Device admission confirmed. Complete verification on the new device before reviewing what to sync.",
+  "settings.personal.pairing.phase.restart_required":
+    "This pairing cannot continue. Start a fresh session with a new password; the new device’s existing keys are retained.",
+  "settings.personal.pairing.phase.cancelled":
+    "Pairing cancelled. Any saved identity remains available for admission checks.",
+  "settings.personal.pairing.error.invalid_input":
+    "Check the HTTPS server, pairing link, device name, and eight-character password.",
+  "settings.personal.pairing.error.invalid_response":
+    "Pairing verification failed. No unverified account was accepted. Start a fresh pairing session.",
+  "settings.personal.pairing.error.expired": "Pairing expired. Create a fresh session and use its new password.",
+  "settings.personal.pairing.error.restart_required":
+    "This attempt cannot resume. Start a fresh pairing session; existing device keys are retained.",
+  "settings.personal.pairing.error.not_active":
+    "There is no pairing to continue. Create a session on the new device first.",
+  "settings.personal.pairing.error.conflict":
+    "Pairing state changed. Check the saved admission result before starting another session.",
+  "settings.personal.pairing.error.authentication_required":
+    "Authenticate this account’s existing device before pairing.",
+  "settings.personal.pairing.error.unavailable":
+    "Could not read pairing progress. The saved identity and exact checkpoint are retained. Reload or check pairing before starting again.",
   "settings.personal.inventory.category.other": "Other object",
   "settings.personal.inventory.error.storage":
     "Local sync data could not be read or saved. Unlock your local data, then refresh its status before retrying.",
