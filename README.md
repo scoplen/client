@@ -124,6 +124,10 @@ authenticated device name and platform before approving admission. Rust owns CPa
 immutable relay slots, deadline and polling decisions. Only an explicitly started ceremony runs
 the foreground progress watcher; opening Settings reads local status.
 
+If the first session request fails before a valid session is saved, the server address and
+device name can be corrected explicitly without replacing the durable device keys or creation
+time. Once a session is saved, fresh sessions keep that exact server and device metadata.
+
 Both sides save their exact recovery checkpoints before sending. A restart before handoff needs
 a fresh session and password while retaining the new device keys. After handoff, Check admission
 uses the saved identity, frame, acceptance and exact approval request; an uncertain commit is

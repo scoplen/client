@@ -121,6 +121,12 @@ A restart before handoff requires a fresh session while retaining device keys. A
 installation has no enrollment request, no invented recovery key and no enrollment-attempt
 flag; it becomes complete only after native authentication and full K-4 verification.
 
+Device keys and their creation time are durable before the first session request. If no valid
+session checkpoint or account identity exists, an explicit retry can correct the origin/name
+with an atomic conditional metadata update. The first saved session checks that exact retained
+device record in the same transaction, so a competing process cannot bind stale metadata.
+Once a session exists, retries retain its original origin and device name.
+
 The independent TLS 1.3/H2 peer drives both public Client managers and verifies checkpoints
 before receiving messages. Focused coverage includes wrong passwords, changed duplicates,
 strict cache headers, restart before/after handoff and acceptance, uncertain complete with

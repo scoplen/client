@@ -3,6 +3,52 @@
 use super::*;
 
 #[tokio::test]
+async fn failed_first_create_allows_correcting_metadata_with_the_same_durable_device_keys() {
+    let (peer, _old_dir, _new_dir, _old, new, _old_manager, new_manager) = setup().await;
+    let wrong_origin = peer.origin.replacen("127.0.0.1", "localhost", 1);
+    assert!(matches!(
+        new_manager.pairing_create(new.clone(), wrong_origin, "Mistyped name".into()).await,
+        Err(PairingError::Personal(_))
+    ));
+    let original = new.pairing_device().unwrap().unwrap();
+    assert!(new.pairing_record().unwrap().is_none());
+    assert!(new.personal_record().unwrap().is_none());
+    assert_eq!(new_manager.pairing_status(&new).unwrap().phase, PairingPhase::Idle);
+    peer.state.lock().unwrap().pairing.as_mut().unwrap().bad_headers = true;
+    assert!(matches!(
+        new_manager.pairing_create(new.clone(), peer.origin.clone(), "New desktop".into()).await,
+        Err(PairingError::Personal(PersonalServerError::InvalidResponse))
+    ));
+    assert!(new.pairing_record().unwrap().is_none());
+    peer.state.lock().unwrap().pairing.as_mut().unwrap().bad_headers = false;
+    let started = new_manager
+        .pairing_create(new.clone(), peer.origin.clone(), "New desktop".into())
+        .await
+        .unwrap();
+    assert_eq!(started.status.phase, PairingPhase::Waiting);
+    assert_eq!(started.status.device_name.as_deref(), Some("New desktop"));
+    let retained = new.pairing_device().unwrap().unwrap();
+    assert_eq!(retained.origin, peer.origin);
+    assert_eq!(retained.device_name, "New desktop");
+    assert!(retained.signing.as_bytes() == original.signing.as_bytes());
+    assert!(retained.kem.as_bytes() == original.kem.as_bytes());
+    assert_eq!(retained.created_at, original.created_at);
+    let requests = peer.state.lock().unwrap().paths.len();
+    assert!(matches!(
+        new_manager.pairing_create(new.clone(), peer.origin.clone(), "Changed name".into()).await,
+        Err(PairingError::InvalidInput)
+    ));
+    assert!(matches!(
+        new_manager
+            .pairing_create(new.clone(), "https://other.example".into(), "New desktop".into())
+            .await,
+        Err(PairingError::InvalidInput)
+    ));
+    assert_eq!(peer.state.lock().unwrap().paths.len(), requests);
+    peer.assert_healthy();
+}
+
+#[tokio::test]
 async fn unclaimed_cancelled_session_stops_before_password_attempt() {
     let (peer, _old_dir, _new_dir, _old, new, _old_manager, new_manager) = setup().await;
     new_manager

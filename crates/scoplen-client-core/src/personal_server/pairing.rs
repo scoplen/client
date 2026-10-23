@@ -353,9 +353,21 @@ impl PersonalServer {
         if previous.as_ref().is_some_and(|record| record.phase == "admission_unconfirmed") {
             return Err(PairingError::Conflict);
         }
-        let device = if let Some(device) = store.pairing_device().map_err(stored)? {
+        let device = if let Some(mut device) = store.pairing_device().map_err(stored)? {
             if device.origin != origin || device.device_name != device_name {
-                return Err(PairingError::InvalidInput);
+                if previous.is_some() {
+                    return Err(PairingError::InvalidInput);
+                }
+                if !store
+                    .correct_unbound_pairing_device(&device, &origin, &device_name)
+                    .map_err(stored)?
+                {
+                    return Err(PairingError::Conflict);
+                }
+                device = store.pairing_device().map_err(stored)?.ok_or(PairingError::Conflict)?;
+                if device.origin != origin || device.device_name != device_name {
+                    return Err(PairingError::Conflict);
+                }
             }
             device
         } else {
@@ -421,7 +433,10 @@ impl PersonalServer {
             acceptance: None,
             approval_request: None,
         };
-        if !store.save_pairing(previous.map(|record| record.generation), &record).map_err(stored)? {
+        if !store
+            .save_pairing_for_device(previous.map(|record| record.generation), &record, &device)
+            .map_err(stored)?
+        {
             return Err(PairingError::Conflict);
         }
         let password = SecretVec::new(code.as_ascii().to_vec());
@@ -435,7 +450,6 @@ impl PersonalServer {
             channel: None,
             peer: None,
         });
-        let _ = device;
         Ok(PairingStarted { status: self.pairing_status(&store)?, password })
     }
 
