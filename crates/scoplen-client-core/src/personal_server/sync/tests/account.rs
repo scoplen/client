@@ -4,7 +4,7 @@
 use super::*;
 use scoplen_api::{account_devices::AccountDeviceStatements, account_profile::AccountProfile};
 
-fn json(body: Vec<u8>) -> Reply {
+pub(super) fn json(body: Vec<u8>) -> Reply {
     Reply {
         content_type: "application/json",
         headers: vec![("cache-control", "no-store".into()), ("pragma", "no-cache".into())],
@@ -354,7 +354,13 @@ async fn stale_authentication_cannot_publish_an_older_snapshot() {
     store.clear_personal_tokens().unwrap();
     assert!(
         !store
-            .save_personal_account_snapshot(&identity, &access, &snapshot, now().unwrap())
+            .save_personal_account_snapshot(
+                &identity,
+                &access,
+                &snapshot,
+                Some(snapshot.devices.as_bytes()),
+                now().unwrap()
+            )
             .unwrap()
     );
     assert_eq!(manager.account_snapshot(&store).unwrap(), Some(original));
@@ -373,6 +379,7 @@ async fn offline_reads_reverify_artifacts_and_bound_the_local_query_time() {
     let requests = peer.state.lock().unwrap().paths.len();
     for invalid_time in [false, true] {
         let mut snapshot = store.personal_account_snapshot(&identity).unwrap().unwrap();
+        let expected = snapshot.devices.as_bytes().to_vec();
         if invalid_time {
             snapshot.devices = SecretVec::new(base.to_json().unwrap());
             snapshot.queried_at = 253_402_300_800_000;
@@ -386,7 +393,13 @@ async fn offline_reads_reverify_artifacts_and_bound_the_local_query_time() {
         }
         assert!(
             store
-                .save_personal_account_snapshot(&identity, &access, &snapshot, now().unwrap())
+                .save_personal_account_snapshot(
+                    &identity,
+                    &access,
+                    &snapshot,
+                    Some(&expected),
+                    now().unwrap()
+                )
                 .unwrap()
         );
         assert_eq!(

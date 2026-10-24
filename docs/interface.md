@@ -196,6 +196,14 @@ review and reports missing identities, agent signing failures, and timeouts in
 the existing session error surface. It never prompts for a password fallback.
 Agent forwarding and Pageant discovery remain unavailable.
 
+Connection details in a terminal lists each verified hop, fingerprint, trust method, source
+device, and recorded confirmation time. A Personal key confirmed manually or imported on
+another active enrolled device needs no additional prompt. A known revoked source instead
+opens Confirm this host key again before SSH authentication; an unknown source shows no
+unverified name or timestamp. A same-key confirmation on another active device remains usable.
+These decisions use locally verified signed device statements and work offline. Fresh attempts
+clear the previous connection details, and stale transport events cannot restore them.
+
 Saved ProxyCommand Routes use the existing Route editor and Login selector. At Connect,
 Rust parses quotes and expands only `%h`, `%p`, `%r`, and `%%` as literal arguments;
 it rejects malformed or oversized commands before process creation, SSH-agent access, or private-key decryption.

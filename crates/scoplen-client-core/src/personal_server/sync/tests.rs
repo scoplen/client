@@ -454,6 +454,7 @@ fn local(dir: &tempfile::TempDir) -> Arc<Store> {
 
 mod account;
 mod membership;
+mod trust;
 
 #[tokio::test]
 async fn tls13_h2_bootstrap_verifies_real_proofs_and_restores_offline() {

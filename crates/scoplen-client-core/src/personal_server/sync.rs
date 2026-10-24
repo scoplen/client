@@ -82,6 +82,7 @@ pub struct PersonalSyncBootstrap {
     personal_epoch: u32,
     personal_keys: BTreeMap<u32, SymmetricKey>,
     active_devices: Vec<DeviceCertificate>,
+    known_devices: Vec<DeviceCertificate>,
 }
 
 struct SyncContext {
@@ -356,8 +357,11 @@ fn validate(
     if certificates.iter().any(|certificate| certificate.account_id != pending.account_id) {
         return Err(PersonalSyncError::InvalidResponse);
     }
-    let active = verify_device_list(&certificates, &revocations, &retained.signing_public)
+    let mut active = verify_device_list(&certificates, &revocations, &retained.signing_public)
         .map_err(invalid)?;
+    if let Some(known) = super::trust::PersonalTrustDevices::load(store).map_err(invalid)? {
+        active.retain(|certificate| !known.revoked.contains(&certificate.device_id));
+    }
     let certificate = active
         .iter()
         .find(|certificate| certificate.device_id == store.device_id())
@@ -443,6 +447,9 @@ fn validate(
     if let Some(previous) = previous {
         let retained =
             SyncAccountKeyBundle::from_cbor(previous.account_keys.as_bytes()).map_err(invalid)?;
+        if !super::trust::preserves_revocations(&retained.revocations, &bundle.revocations) {
+            return Err(PersonalSyncError::InvalidResponse);
+        }
         // Statements can change independently of a bundle revision. Only the key projection
         // is immutable at a retained revision; every statement above is still verified.
         if bundle.revision < retained.revision
@@ -461,6 +468,7 @@ fn validate(
         personal_epoch,
         personal_keys,
         active_devices: active,
+        known_devices: certificates,
     })
 }
 

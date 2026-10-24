@@ -374,8 +374,15 @@ The empty Hosts list can open a native file picker and preview a limited OpenSSH
 `scoplen-client-core::connection` resolves an AccessProfile into an endpoint,
 Route, and device-local credential material, then owns the concrete
 `scoplen-ssh` connection and session channels. The Tauri `session_connect`
-command reads active host-specific trust records before opening a socket;
-new, changed, revoked, wildcard-only, and CA records are rejected. Password
+command retains the negotiated connection and resolves host-specific trust before authentication.
+New, changed, or unverifiable keys require explicit confirmation; wildcard-only and CA records
+do not authorize raw host keys. Personal manual/imported records require the retained account's
+signed source certificate. Account-query and sync-key snapshots contribute a union of verified
+revocations, and each entrance rejects removal of its previously observed revocations. A revoked
+origin remains replicable when relayed by an authenticated active signer but cannot authorize
+SSH without a separate active-device confirmation of the same key. Local-only confirmations
+remain usable offline. Every accepted key records this device and, when verified, its account;
+the per-hop Verified event carries safe source metadata to Connection details. Password
 and OpenSSH Ed25519, ECDSA P-256/P-384/P-521, and RSA private-key
 authentication, one command, and an optional PTY shell are available now.
 Direct connections and saved SOCKS5 or HTTP CONNECT routes use the same
