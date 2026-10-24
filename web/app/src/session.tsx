@@ -87,6 +87,7 @@ export function SessionTerminal({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [uploadAttention, setUploadAttention] = useState(initialUploadAttention);
+  const [downloadUnknown, setDownloadUnknown] = useState(false);
   const filesToggle = useRef<HTMLButtonElement>(null);
   const [context, setContext] = useState<PreparationContext | null>(null);
   const [passphrasePrompt, setPassphrasePrompt] = useState<string | null>(null);
@@ -124,7 +125,8 @@ export function SessionTerminal({
   }, [active]);
 
   const reportFileOutcome = useCallback((outcome: FileOperationOutcome) => {
-    setUploadAttention((current) => recordUploadAttention(current, outcome));
+    if ("kind" in outcome) setDownloadUnknown(true);
+    else setUploadAttention((current) => recordUploadAttention(current, outcome));
   }, []);
 
   const connectSession = useCallback(() => {
@@ -727,6 +729,17 @@ export function SessionTerminal({
         <p role="alert" className="mx-4 mt-0 mb-2 text-sm whitespace-pre-wrap text-attention">
           {error}
         </p>
+      ) : null}
+      {downloadUnknown ? (
+        <div
+          role="alert"
+          className="mx-3 mb-2 flex flex-wrap items-start gap-2 rounded-md border-(length:--scoplen-border-width) border-attention p-3"
+        >
+          <p className="m-0 min-w-0 flex-1 text-xs text-attention">{t("session.files.download.attentionUnknown")}</p>
+          <Button variant="ghost" className="shrink-0 px-2" onClick={() => setDownloadUnknown(false)}>
+            {t("session.files.upload.dismiss")}
+          </Button>
+        </div>
       ) : null}
       {uploadAttention.unknown || uploadAttention.stagingMayRemain ? (
         <div

@@ -8,7 +8,8 @@ use crate::local_data::LocalDataState;
 use scoplen_client_core::connection::preparation::PreparationResponse;
 use scoplen_client_core::locale::Locale;
 use scoplen_client_core::session_files::{
-    RemoteDirectory, RemoteFileKind, SessionFileMutationResult, SessionUploadResult,
+    RemoteDirectory, RemoteFileKind, SessionDownloadResult, SessionFileMutationResult,
+    SessionUploadResult,
 };
 use scoplen_client_core::session_manager::{HistoryChange, SessionFileTransferProgress};
 use scoplen_crypto::SecretVec;
@@ -178,7 +179,7 @@ pub async fn session_download_file(
     operation_id: String,
     remote_path: Vec<u8>,
     progress: Channel<SessionFileTransferProgress>,
-) -> Result<bool, String> {
+) -> Result<SessionDownloadResult, String> {
     let suggested = suggested_download_name(&remote_path);
     manager
         .download_file_with_picker(

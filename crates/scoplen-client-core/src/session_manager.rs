@@ -5,7 +5,6 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::io::ErrorKind;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -26,8 +25,9 @@ use crate::connection::{MAX_SSH_INPUT, SshConnectionError, SshSession, terminal_
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
 use crate::session_files::{
     self, FileTransferProgress, MutationPreflight, RemoteDirectory, RemoteMutation,
-    SessionFileMutationResult, SessionFileMutationStatus, SessionFileTransferPhase,
-    SessionUploadResult, SessionUploadStatus, UploadPreflight, UploadSource, UploadState,
+    SessionDownloadResult, SessionDownloadStatus, SessionFileMutationResult,
+    SessionFileMutationStatus, SessionFileTransferPhase, SessionUploadResult, SessionUploadStatus,
+    UploadPreflight, UploadSource, UploadState,
 };
 use crate::session_lifecycle::SessionHistoryLease;
 use crate::store::Store;
@@ -144,7 +144,7 @@ enum FileCommand {
         transport: Uuid,
         operation: Uuid,
         progress: FileProgressSink,
-        reply: oneshot::Sender<Result<(), String>>,
+        reply: oneshot::Sender<SessionDownloadResult>,
     },
     PreflightUpload {
         target: Vec<u8>,
@@ -212,12 +212,16 @@ struct FileRequestGuard<'a> {
 
 impl Drop for FileRequestGuard<'_> {
     fn drop(&mut self) {
-        self.abort.abort();
+        let effect_started = self.upload_state.effect_started.load(Ordering::SeqCst);
+        if !effect_started {
+            self.abort.abort();
+        }
         if let Ok(mut sessions) = self.manager.sessions.lock()
             && let Some(active) =
                 sessions.get_mut(self.session_id).and_then(|entry| entry.active.as_mut())
             && active.id == self.transport
             && active.file.as_ref().is_some_and(|file| file.id == self.operation)
+            && !effect_started
         {
             if let Some(cancel) = active.file.as_ref().and_then(|file| file.effect_cancel.as_ref())
             {
@@ -266,7 +270,9 @@ impl Drop for Registration<'_> {
             && let Some(active) = entry.active
         {
             active.control.cancel();
-            if let Some(file) = active.file {
+            if let Some(file) = active.file
+                && !file.upload_state.effect_started.load(Ordering::SeqCst)
+            {
                 file.abort.abort();
             }
         }
@@ -451,7 +457,9 @@ impl SessionManager {
             && let Some(active) = &entry.active
         {
             active.control.cancel();
-            if let Some(file) = &active.file {
+            if let Some(file) = &active.file
+                && !file.upload_state.effect_started.load(Ordering::SeqCst)
+            {
                 file.abort.abort();
             }
         }
@@ -529,7 +537,7 @@ impl SessionManager {
         remote_path: Vec<u8>,
         choose_destination: F,
         progress: P,
-    ) -> Result<bool, String>
+    ) -> Result<SessionDownloadResult, String>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Option<PathBuf>, String>>,
@@ -540,9 +548,20 @@ impl SessionManager {
         let guard = self.reserve_file_operation(session_id, transport_id, operation_id, abort)?;
         let result = Abortable::new(
             async {
-                let Some(destination) = choose_destination().await? else { return Ok(false) };
+                let destination = match choose_destination().await {
+                    Ok(Some(destination)) => destination,
+                    Ok(None) => {
+                        return SessionDownloadResult::new(SessionDownloadStatus::Cancelled, None);
+                    }
+                    Err(message) => {
+                        return SessionDownloadResult::new(
+                            SessionDownloadStatus::Failed,
+                            Some(message),
+                        );
+                    }
+                };
                 let (reply, received) = oneshot::channel();
-                self.queue_file_request(
+                if let Err(message) = self.queue_file_request(
                     &guard,
                     FileCommand::Download {
                         remote_path,
@@ -553,18 +572,29 @@ impl SessionManager {
                         progress: Box::new(progress),
                         reply,
                     },
-                )?;
-                received
-                    .await
-                    .map_err(|_| "the file operation ended with this connection".to_owned())??;
-                Ok(true)
+                ) {
+                    return SessionDownloadResult::new(
+                        SessionDownloadStatus::Failed,
+                        Some(message),
+                    );
+                }
+                match received.await {
+                    Ok(result) => result,
+                    Err(_) if guard.upload_state.effect_started.load(Ordering::SeqCst) => {
+                        SessionDownloadResult::new(SessionDownloadStatus::Unknown, None)
+                    }
+                    Err(_) => SessionDownloadResult::new(
+                        SessionDownloadStatus::Failed,
+                        Some("the file operation ended with this connection".into()),
+                    ),
+                }
             },
             cancellation,
         )
         .await
-        .map_err(|_| "file operation was cancelled".to_owned())?;
+        .unwrap_or_else(|_| SessionDownloadResult::new(SessionDownloadStatus::Cancelled, None));
         drop(guard);
-        result
+        Ok(result)
     }
 
     /// Select one local file and upload it only after Rust-owned conflict review.
@@ -869,7 +899,7 @@ impl SessionManager {
             return Err("file operation has ended".into());
         }
         if file.upload_state.effect_started.load(Ordering::SeqCst) {
-            return Err("the remote change has started; its result must be checked".into());
+            return Err("the final file save has started; its result must be checked".into());
         }
         file.abort.abort();
         if let Some(cancel) = &file.effect_cancel {
@@ -997,7 +1027,16 @@ impl SessionManager {
     }
 
     fn finish_remote_effect(&self, session_id: &str, transport: Uuid, operation: Uuid) {
-        if let Ok(mut sessions) = self.sessions.lock()
+        Self::finish_file_effect(&self.sessions, session_id, transport, operation);
+    }
+
+    fn finish_file_effect(
+        sessions: &Mutex<HashMap<String, SessionEntry>>,
+        session_id: &str,
+        transport: Uuid,
+        operation: Uuid,
+    ) {
+        if let Ok(mut sessions) = sessions.lock()
             && let Some(active) =
                 sessions.get_mut(session_id).and_then(|entry| entry.active.as_mut())
             && active.id == transport
@@ -1040,30 +1079,47 @@ impl SessionManager {
         }
     }
 
-    fn commit_download(
+    fn commit_download<F>(
         sessions: &Mutex<HashMap<String, SessionEntry>>,
         session_id: &str,
         transport: Uuid,
         operation: Uuid,
-        temporary: &Path,
-        destination: &Path,
-    ) -> Result<(), session_files::FileAccessError> {
-        let sessions =
-            sessions.lock().map_err(|_| session_files::FileAccessError::ConnectionEnded)?;
-        let entry =
-            sessions.get(session_id).ok_or(session_files::FileAccessError::ConnectionEnded)?;
-        let active =
-            entry.active.as_ref().ok_or(session_files::FileAccessError::ConnectionEnded)?;
-        if active.id != transport
-            || *entry.intent.borrow() != Intent::None
-            || active
-                .file
-                .as_ref()
-                .is_none_or(|file| file.id != operation || file.abort.is_aborted())
-        {
-            return Err(session_files::FileAccessError::ConnectionEnded);
+        commit: F,
+    ) -> SessionDownloadResult
+    where
+        F: FnOnce() -> Result<(), session_files::FileAccessError>,
+    {
+        let authorized = (|| {
+            let sessions =
+                sessions.lock().map_err(|_| session_files::FileAccessError::ConnectionEnded)?;
+            let entry =
+                sessions.get(session_id).ok_or(session_files::FileAccessError::ConnectionEnded)?;
+            let active =
+                entry.active.as_ref().ok_or(session_files::FileAccessError::ConnectionEnded)?;
+            let file =
+                active.file.as_ref().ok_or(session_files::FileAccessError::ConnectionEnded)?;
+            if file.abort.is_aborted() {
+                return Err(session_files::FileAccessError::Cancelled);
+            }
+            if !active.ready
+                || active.id != transport
+                || *entry.intent.borrow() != Intent::None
+                || file.id != operation
+            {
+                return Err(session_files::FileAccessError::ConnectionEnded);
+            }
+            file.upload_state.effect_started.store(true, Ordering::SeqCst);
+            Ok(())
+        })();
+        match authorized.and_then(|()| commit()) {
+            Ok(()) => SessionDownloadResult::new(SessionDownloadStatus::Saved, None),
+            Err(session_files::FileAccessError::Cancelled) => {
+                SessionDownloadResult::new(SessionDownloadStatus::Cancelled, None)
+            }
+            Err(error) => {
+                SessionDownloadResult::new(SessionDownloadStatus::Failed, Some(error.to_string()))
+            }
         }
-        std::fs::rename(temporary, destination).map_err(session_files::FileAccessError::LocalIo)
     }
 
     fn send(
@@ -1094,6 +1150,7 @@ impl SessionManager {
         entry.phase = phase;
         if let Some(active) = entry.active.take()
             && let Some(file) = active.file
+            && !file.upload_state.effect_started.load(Ordering::SeqCst)
         {
             file.abort.abort();
         }
@@ -1106,7 +1163,9 @@ impl SessionManager {
             && active.id == transport
         {
             active.ready = false;
-            if let Some(file) = active.file.take() {
+            if let Some(file) = active.file.take()
+                && !file.upload_state.effect_started.load(Ordering::SeqCst)
+            {
                 file.abort.abort();
             }
         }
@@ -1471,8 +1530,8 @@ async fn serve_files(
                 let sessions = manager.sessions.clone();
                 let progress_sessions = sessions.clone();
                 let progress_session = session_id.clone();
-                tokio::select! { biased;
-                    _ = reply.closed() => {},
+                let result = tokio::select! { biased;
+                    _ = reply.closed() => None,
                     result = session_files::download_file(connection, remote_path, &destination, move |update| {
                         SessionManager::report_file_progress(
                             &progress_sessions,
@@ -1482,22 +1541,35 @@ async fn serve_files(
                             progress.as_mut(),
                             update,
                         );
-                    }, move |temporary, destination| async move {
-                        tokio::task::spawn_blocking(move || {
-                            SessionManager::commit_download(
+                    }) => Some(result),
+                };
+                match result {
+                    Some(Ok(prepared)) => {
+                        // The worker owns both the synchronized file and reply past transport expiry.
+                        drop(tokio::task::spawn_blocking(move || {
+                            let result = SessionManager::commit_download(
                                 &sessions,
                                 &session_id,
                                 transport,
                                 operation,
-                                &temporary,
-                                &destination,
-                            )
-                        })
-                        .await
-                        .map_err(|_| session_files::FileAccessError::LocalIo(std::io::Error::other("local file commit was interrupted")))?
-                    }) => {
-                        let _ = reply.send(result.map_err(|error| error.to_string()));
+                                || prepared.commit(),
+                            );
+                            SessionManager::finish_file_effect(
+                                &sessions,
+                                &session_id,
+                                transport,
+                                operation,
+                            );
+                            let _ = reply.send(result);
+                        }));
                     }
+                    Some(Err(error)) => {
+                        let _ = reply.send(SessionDownloadResult::new(
+                            SessionDownloadStatus::Failed,
+                            Some(error.to_string()),
+                        ));
+                    }
+                    None => {}
                 }
             }
             FileCommand::PreflightUpload { target, mut reply } => {

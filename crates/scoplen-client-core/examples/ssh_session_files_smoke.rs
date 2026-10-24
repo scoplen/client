@@ -11,7 +11,8 @@ use std::time::Duration;
 use scoplen_client_core::connection::preparation::{PreparationEvent, PreparationResponse};
 use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
 use scoplen_client_core::session_files::{
-    RemoteFileKind, SessionFileMutationStatus, SessionFileTransferPhase, SessionUploadStatus,
+    RemoteFileKind, SessionDownloadStatus, SessionFileMutationStatus, SessionFileTransferPhase,
+    SessionUploadStatus,
 };
 use scoplen_client_core::session_manager::{
     SessionEvent, SessionFileTransferProgress, SessionManager,
@@ -160,7 +161,7 @@ async fn exercise(
     };
     let (downloaded, sent) = tokio::join!(download, terminal_during_download);
     sent?;
-    assert!(downloaded?);
+    assert_eq!(downloaded?.status, SessionDownloadStatus::Saved);
     assert_transfer_progress(&download_progress.lock().unwrap(), &transport, &download_id, 262149);
     wait_for(output, b"SCOPLEN-DOWNLOAD-ALIVE").await?;
     let downloaded = fs::read(&destination)?;
@@ -503,19 +504,19 @@ async fn exercise(
     let failed_download_id = Uuid::now_v7().to_string();
     let failed_progress = Arc::new(Mutex::new(Vec::new()));
     let observed_failure = failed_progress.clone();
+    let failed = manager
+        .download_file_with_picker(
+            "fixture-terminal",
+            &transport,
+            &failed_download_id,
+            file.path.clone(),
+            || async { Ok(Some(blocked_destination.clone())) },
+            move |update| observed_failure.lock().unwrap().push(update),
+        )
+        .await?;
+    assert_eq!(failed.status, SessionDownloadStatus::Failed);
     assert!(
-        manager
-            .download_file_with_picker(
-                "fixture-terminal",
-                &transport,
-                &failed_download_id,
-                file.path.clone(),
-                || async { Ok(Some(blocked_destination.clone())) },
-                move |update| observed_failure.lock().unwrap().push(update),
-            )
-            .await
-            .unwrap_err()
-            .contains("local file could not be saved")
+        failed.message.as_deref().unwrap_or_default().contains("local file could not be saved")
     );
     assert_transfer_progress(
         &failed_progress.lock().unwrap(),
@@ -568,7 +569,7 @@ async fn exercise(
         Ok::<_, Box<dyn std::error::Error>>(part)
     };
     let (transfer, cancelled_part) = tokio::join!(transfer, cancel_transfer);
-    assert!(transfer.unwrap_err().contains("cancelled"));
+    assert_eq!(transfer?.status, SessionDownloadStatus::Cancelled);
     let cancelled_part = cancelled_part?;
     tokio::time::timeout(Duration::from_secs(5), async {
         while cancelled_part.exists() {
@@ -618,7 +619,7 @@ async fn exercise(
     };
     let (picker, cancel) = tokio::join!(picker, cancel);
     cancel?;
-    assert!(picker.unwrap_err().contains("cancelled"));
+    assert_eq!(picker?.status, SessionDownloadStatus::Cancelled);
     manager
         .list_files(
             "fixture-terminal",

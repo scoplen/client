@@ -146,6 +146,36 @@ pub enum SessionUploadStatus {
     Failed,
 }
 
+/// The result of one native, terminal-owned download intent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionDownloadStatus {
+    /// The complete file replaced the selected local destination.
+    Saved,
+    /// The person cancelled before the local commit began.
+    Cancelled,
+    /// The local commit began, but its result was lost.
+    Unknown,
+    /// The transfer or local commit failed with a known result.
+    Failed,
+}
+
+/// A download is saved only after its local rename returns successfully.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDownloadResult {
+    /// Whether the local destination was saved, untouched, or has an unknown final state.
+    pub status: SessionDownloadStatus,
+    /// A bounded operational detail; the interface uses localized status text.
+    pub message: Option<String>,
+}
+
+impl SessionDownloadResult {
+    pub(crate) fn new(status: SessionDownloadStatus, message: Option<String>) -> Self {
+        Self { status, message }
+    }
+}
+
 /// The outcome of one terminal-owned remote file change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -1045,6 +1075,21 @@ struct TemporaryDownload {
     committed: bool,
 }
 
+/// The synchronized local file and destination, owned until commit or cleanup.
+pub(crate) struct PreparedDownload {
+    temporary: TemporaryDownload,
+    destination: PathBuf,
+}
+
+impl PreparedDownload {
+    pub(crate) fn commit(mut self) -> Result<(), FileAccessError> {
+        std::fs::rename(&self.temporary.path, &self.destination)
+            .map_err(FileAccessError::LocalIo)?;
+        self.temporary.committed = true;
+        Ok(())
+    }
+}
+
 struct CreatedDownload {
     path: PathBuf,
     file: Option<std::fs::File>,
@@ -1133,17 +1178,14 @@ where
     Ok(created.into_async())
 }
 
-/// Download an opened regular file into a private temporary file and commit it through the owner.
-pub(crate) async fn download_file<F, Fut, P>(
+/// Download an opened regular file into a private temporary file for its commit owner.
+pub(crate) async fn download_file<P>(
     connection: &SshConnection,
     remote_path: Vec<u8>,
     destination: &Path,
     mut progress: P,
-    commit: F,
-) -> Result<(), FileAccessError>
+) -> Result<PreparedDownload, FileAccessError>
 where
-    F: FnOnce(PathBuf, PathBuf) -> Fut,
-    Fut: Future<Output = Result<(), FileAccessError>>,
     P: FnMut(FileTransferProgress),
 {
     validate_path(&remote_path)?;
@@ -1202,9 +1244,7 @@ where
     close_handle(&mut session, handle).await?;
     temporary.file.as_mut().expect("temporary file is open").sync_all().await?;
     temporary.file.take();
-    commit(temporary.path.clone(), destination.to_path_buf()).await?;
-    temporary.committed = true;
-    Ok(())
+    Ok(PreparedDownload { temporary, destination: destination.to_path_buf() })
 }
 
 #[cfg(test)]
@@ -1459,6 +1499,32 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(std::fs::read(destination).unwrap(), b"keep original");
+    }
+
+    #[tokio::test]
+    async fn prepared_download_owner_preserves_destination_on_failure_and_cleans_staging() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let folder = tempfile::tempdir().unwrap();
+        let destination = folder.path().join("existing.bin");
+        std::fs::write(&destination, b"original").unwrap();
+        let mut temporary = temporary_download(&destination).await.unwrap();
+        let temporary_path = temporary.path.clone();
+        temporary.file.as_mut().unwrap().write_all(b"new").await.unwrap();
+        temporary.file.as_mut().unwrap().sync_all().await.unwrap();
+        temporary.file.take();
+        PreparedDownload { temporary, destination: destination.clone() }.commit().unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"new");
+        assert!(!temporary_path.exists());
+
+        let blocked = folder.path().join("directory");
+        std::fs::create_dir(&blocked).unwrap();
+        let mut temporary = temporary_download(&blocked).await.unwrap();
+        let temporary_path = temporary.path.clone();
+        temporary.file.take();
+        assert!(PreparedDownload { temporary, destination: blocked.clone() }.commit().is_err());
+        assert!(blocked.is_dir());
+        assert!(!temporary_path.exists());
     }
 
     #[tokio::test]

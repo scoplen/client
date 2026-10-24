@@ -25,7 +25,7 @@ export const commands = {
 	/**  Browse files on the terminal's authenticated SSH connection. */
 	sessionListFiles: (sessionId: string, transportId: string, operationId: string, path: number[]) => typedError<RemoteDirectory, string>(__TAURI_INVOKE("session_list_files", { sessionId, transportId, operationId, path })),
 	/**  Download a regular remote file to a destination chosen in the native picker. */
-	sessionDownloadFile: (sessionId: string, transportId: string, operationId: string, remotePath: number[], progress: Channel<SessionFileTransferProgress>) => typedError<boolean, string>(__TAURI_INVOKE("session_download_file", { sessionId, transportId, operationId, remotePath, progress })),
+	sessionDownloadFile: (sessionId: string, transportId: string, operationId: string, remotePath: number[], progress: Channel<SessionFileTransferProgress>) => typedError<SessionDownloadResult, string>(__TAURI_INVOKE("session_download_file", { sessionId, transportId, operationId, remotePath, progress })),
 	/**  Select one regular local file and publish it in the terminal's remote directory. */
 	sessionUploadFile: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], locale: Locale, progress: Channel<SessionFileTransferProgress>) => typedError<SessionUploadResult, string>(__TAURI_INVOKE("session_upload_file", { sessionId, transportId, operationId, directoryPath, locale, progress })),
 	/**  Create one directory inside the current remote Files directory. */
@@ -1531,6 +1531,25 @@ export type SessionChanged = {
 	/**  The lifecycle transition. */
 	change: SessionChangeKind,
 };
+
+/**  A download is saved only after its local rename returns successfully. */
+export type SessionDownloadResult = {
+	/**  Whether the local destination was saved, untouched, or has an unknown final state. */
+	status: SessionDownloadStatus,
+	/**  A bounded operational detail; the interface uses localized status text. */
+	message: string | null,
+};
+
+/**  The result of one native, terminal-owned download intent. */
+export type SessionDownloadStatus =
+/**  The complete file replaced the selected local destination. */
+"saved" |
+/**  The person cancelled before the local commit began. */
+"cancelled" |
+/**  The local commit began, but its result was lost. */
+"unknown" |
+/**  The transfer or local commit failed with a known result. */
+"failed";
 
 /**  Why a device-local session event could not be applied. */
 export type SessionError =

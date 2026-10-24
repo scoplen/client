@@ -48,9 +48,13 @@ operation.
 The panel presents finalizing after data transfer reaches the total; it reports
 saved only after Rust confirms the remote publication or local destination commit.
 Cancel and closing the panel request cancellation without ending the terminal;
-Rust rejects cancellation after an upload's final remote rename begins and
-waits for the outcome. Tab close and reconnect fence
-old operations from new transports. A directory error offers another list; a
+Rust rejects cancellation after an upload's final remote rename or a download's
+final local rename begins and waits for the outcome. A started local commit
+keeps ownership of its temporary file and result through terminal disconnect or
+tab close. If its result is lost, the panel and terminal show an unknown local
+outcome and ask the person to inspect the selected local location before another
+download. The client never automatically repeats that save. Tab close and
+reconnect fence old operations from new transports. A directory error offers another list; a
 download or upload error leaves the directory visible. If final remote rename
 has started and its reply cannot be confirmed, or if a temporary upload file
 may remain, an attention notice stays on the terminal after Files unmounts or

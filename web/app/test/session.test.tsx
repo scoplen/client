@@ -334,6 +334,31 @@ it("keeps an uncertain remote deletion visible after Files closes without replay
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
+it("keeps an uncertain local download visible after Files closes without replaying it", async () => {
+  const f = fixture();
+  const listing = f.delay("session_list_files");
+  const download = f.delay("session_download_file");
+  render(sessionView());
+  const connection = await connect(f);
+  await connection.ready();
+  await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(1));
+  await act(() =>
+    listing.resolve({ entries: [{ name: "raw.bin", path: [46, 47, 102], kind: "file", sizeBytes: "4" }] }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Download raw.bin" }));
+  await waitFor(() => expect(f.matching("session_download_file")).toHaveLength(1));
+  await userEvent.click(
+    within(screen.getByRole("region", { name: "Files" })).getByRole("button", { name: "Close files" }),
+  );
+  await act(() => download.resolve({ status: "unknown", message: null }));
+  expect(screen.getByRole("alert").textContent).toContain("A download may have been saved");
+  expect(f.matching("session_download_file")).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(f.matching("session_download_file")).toHaveLength(1);
+});
+
 describe("saved terminal output", () => {
   beforeEach(() => {
     vi.stubGlobal("matchMedia", () => ({

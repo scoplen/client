@@ -335,6 +335,12 @@ export const en = {
   "session.files.download": "Download {name}",
   "session.files.saved": "Download saved to the selected location.",
   "session.files.saveCancelled": "No file was saved.",
+  "session.files.download.failed":
+    "The download could not be saved. Check the connection and destination before trying again.",
+  "session.files.download.unknown":
+    "The download result is unknown. Check the selected local location before downloading again.",
+  "session.files.download.attentionUnknown":
+    "A download may have been saved. Check the selected local location before downloading it again.",
   "session.files.upload.action": "Upload file",
   "session.files.name": "Name",
   "session.files.create.action": "New folder",

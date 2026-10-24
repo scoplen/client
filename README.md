@@ -97,8 +97,12 @@ transfer, it shows a finalizing state while the remote publication or local
 save is still pending; only the final result confirms that the file was saved.
 For uploads, once final remote rename starts, the client waits for its result;
 reconnect fences off the old operation. A download that fails or is cancelled
-before the final save leaves the selected
-destination unchanged. An upload whose final remote rename has started may have
+before the final local save leaves the selected destination unchanged. Once the
+local save starts, cancellation is refused and its result is retained even if
+the terminal disconnects or closes. If that result is lost, Files reports an
+unknown outcome and asks you to check the selected local location before trying
+again; it never automatically repeats the save. An upload whose final remote
+rename has started may have
 an unknown outcome if its reply is lost. The terminal keeps that warning across
 reconnects and asks you to refresh and check the remote directory before trying
 again. It also keeps a warning when the operation may

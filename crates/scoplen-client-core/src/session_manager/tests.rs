@@ -214,7 +214,7 @@ async fn upload_publication_rejects_cancel_and_lost_worker_is_unknown() {
         manager
             .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
             .unwrap_err()
-            .contains("remote change has started")
+            .contains("result must be checked")
     );
     manager.expire_ready_transport("terminal", transport).unwrap();
     drop(reply);
@@ -360,7 +360,7 @@ async fn remote_create_lost_acknowledgement_is_unknown_and_never_requeued() {
         manager
             .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
             .unwrap_err()
-            .contains("remote change has started")
+            .contains("result must be checked")
     );
     manager.expire_ready_transport("terminal", transport).unwrap();
     drop(reply);
@@ -550,7 +550,7 @@ async fn cancelled_picker_cannot_queue_a_late_download() {
     manager
         .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
         .unwrap();
-    assert!(pending.await.unwrap().unwrap_err().contains("cancelled"));
+    assert_eq!(pending.await.unwrap().unwrap().status, SessionDownloadStatus::Cancelled);
     assert!(picker_result.send(PathBuf::from("late-choice")).is_err());
     assert!(files.try_recv().is_err());
 }
@@ -581,7 +581,7 @@ async fn ended_transport_cancels_a_picker_before_its_late_result() {
     });
     started.await.unwrap();
     manager.phase("terminal", Phase::Ended).unwrap();
-    assert!(pending.await.unwrap().unwrap_err().contains("cancelled"));
+    assert_eq!(pending.await.unwrap().unwrap().status, SessionDownloadStatus::Cancelled);
     assert!(files.try_recv().is_err());
 }
 
@@ -600,18 +600,208 @@ fn old_transport_cannot_commit_a_download() {
     std::fs::write(&destination, b"original").unwrap();
     manager.sessions.lock().unwrap().get_mut("terminal").unwrap().active.as_mut().unwrap().id =
         Uuid::now_v7();
-    assert!(matches!(
+    assert_eq!(
         SessionManager::commit_download(
             &manager.sessions,
             "terminal",
             transport,
             operation,
-            &temporary,
-            &destination
-        ),
-        Err(session_files::FileAccessError::ConnectionEnded)
-    ));
+            || std::fs::rename(&temporary, &destination)
+                .map_err(session_files::FileAccessError::LocalIo),
+        )
+        .status,
+        SessionDownloadStatus::Failed
+    );
     assert_eq!(std::fs::read(destination).unwrap(), b"original");
+}
+
+#[test]
+fn cancellation_before_local_commit_leaves_the_destination_untouched() {
+    let (manager, transport, _commands, _files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let (abort, _) = AbortHandle::new_pair();
+    let _guard = manager
+        .reserve_file_operation("terminal", &transport.to_string(), &operation.to_string(), abort)
+        .unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let temporary = folder.path().join("partial");
+    let destination = folder.path().join("existing");
+    std::fs::write(&temporary, b"new").unwrap();
+    std::fs::write(&destination, b"original").unwrap();
+    manager
+        .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+        .unwrap();
+    let result = SessionManager::commit_download(
+        &manager.sessions,
+        "terminal",
+        transport,
+        operation,
+        || {
+            std::fs::rename(&temporary, &destination)
+                .map_err(session_files::FileAccessError::LocalIo)
+        },
+    );
+    assert_eq!(result.status, SessionDownloadStatus::Failed);
+    assert_eq!(std::fs::read(destination).unwrap(), b"original");
+    assert_eq!(std::fs::read(temporary).unwrap(), b"new");
+}
+
+#[tokio::test]
+async fn started_local_commit_rejects_cancel_and_keeps_its_result_after_disconnect_or_close() {
+    for close in [false, true] {
+        let (manager, transport, _commands, _files) = ready_file_manager();
+        let operation = Uuid::now_v7();
+        let (abort, _) = AbortHandle::new_pair();
+        let _guard = manager
+            .reserve_file_operation(
+                "terminal",
+                &transport.to_string(),
+                &operation.to_string(),
+                abort.clone(),
+            )
+            .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let temporary = folder.path().join("partial");
+        let destination = folder.path().join("existing");
+        std::fs::write(&temporary, b"new").unwrap();
+        std::fs::write(&destination, b"original").unwrap();
+        let (commit_started, started) = oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let sessions = manager.sessions.clone();
+        let commit = tokio::task::spawn_blocking(move || {
+            SessionManager::commit_download(&sessions, "terminal", transport, operation, || {
+                commit_started.send(()).unwrap();
+                released.recv().unwrap();
+                std::fs::rename(&temporary, &destination)
+                    .map_err(session_files::FileAccessError::LocalIo)
+            })
+        });
+        started.await.unwrap();
+        assert!(
+            manager
+                .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+                .unwrap_err()
+                .contains("result must be checked")
+        );
+        if close {
+            manager.phase("terminal", Phase::Ended).unwrap();
+        } else {
+            manager.expire_ready_transport("terminal", transport).unwrap();
+        }
+        assert!(!abort.is_aborted());
+        release.send(()).unwrap();
+        assert_eq!(commit.await.unwrap().status, SessionDownloadStatus::Saved);
+        assert_eq!(std::fs::read(folder.path().join("existing")).unwrap(), b"new");
+    }
+}
+
+#[tokio::test]
+async fn claimed_download_delivers_saved_after_stop_fail_close_or_registration_drop() {
+    for action in [Intent::Stop, Intent::Fail, Intent::Close, Intent::None] {
+        let (manager, transport, _commands, mut files) = ready_file_manager();
+        let operation = Uuid::now_v7();
+        let folder = tempfile::tempdir().unwrap();
+        let destination = folder.path().join("existing");
+        let temporary = folder.path().join("partial");
+        std::fs::write(&destination, b"original").unwrap();
+        std::fs::write(&temporary, b"new").unwrap();
+        let pending = tokio::spawn({
+            let manager = manager.clone();
+            let destination = destination.clone();
+            async move {
+                manager
+                    .download_file_with_picker(
+                        "terminal",
+                        &transport.to_string(),
+                        &operation.to_string(),
+                        b"./document".to_vec(),
+                        || async { Ok(Some(destination)) },
+                        |_| {},
+                    )
+                    .await
+            }
+        });
+        let FileCommand::Download { reply, .. } = files.recv().await.unwrap() else {
+            panic!("expected download worker")
+        };
+        let (claimed, started) = oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let sessions = manager.sessions.clone();
+        let worker = tokio::task::spawn_blocking(move || {
+            let result = SessionManager::commit_download(
+                &sessions,
+                "terminal",
+                transport,
+                operation,
+                || {
+                    claimed.send(()).unwrap();
+                    released.recv().unwrap();
+                    std::fs::rename(&temporary, &destination)
+                        .map_err(session_files::FileAccessError::LocalIo)
+                },
+            );
+            SessionManager::finish_file_effect(&sessions, "terminal", transport, operation);
+            let _ = reply.send(result.clone());
+            result
+        });
+        started.await.unwrap();
+        match action {
+            Intent::Stop => manager.stop("terminal").unwrap(),
+            Intent::Fail => manager.fail("terminal").unwrap(),
+            Intent::Close => manager.close("terminal").unwrap(),
+            Intent::None => drop(Registration { manager: &manager, id: "terminal" }),
+            Intent::Retry => unreachable!(),
+        }
+        release.send(()).unwrap();
+        assert_eq!(worker.await.unwrap().status, SessionDownloadStatus::Saved);
+        assert_eq!(pending.await.unwrap().unwrap().status, SessionDownloadStatus::Saved);
+        assert_eq!(std::fs::read(folder.path().join("existing")).unwrap(), b"new");
+    }
+}
+
+#[tokio::test]
+async fn lost_download_worker_reply_is_unknown_after_commit_and_is_not_requeued() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let folder = tempfile::tempdir().unwrap();
+    let destination = folder.path().join("existing");
+    let temporary = folder.path().join("partial");
+    std::fs::write(&destination, b"original").unwrap();
+    std::fs::write(&temporary, b"new").unwrap();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        let destination = destination.clone();
+        async move {
+            manager
+                .download_file_with_picker(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./document".to_vec(),
+                    || async { Ok(Some(destination)) },
+                    |_| {},
+                )
+                .await
+        }
+    });
+    let FileCommand::Download { reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected download worker")
+    };
+    let committed = SessionManager::commit_download(
+        &manager.sessions,
+        "terminal",
+        transport,
+        operation,
+        || {
+            std::fs::rename(&temporary, &destination)
+                .map_err(session_files::FileAccessError::LocalIo)
+        },
+    );
+    assert_eq!(committed.status, SessionDownloadStatus::Saved);
+    drop(reply);
+    assert_eq!(pending.await.unwrap().unwrap().status, SessionDownloadStatus::Unknown);
+    assert_eq!(std::fs::read(destination).unwrap(), b"new");
+    assert!(files.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -636,21 +826,17 @@ async fn ended_ready_transport_fences_a_delayed_file_commit() {
         move || {
             worker_started.send(()).unwrap();
             released.recv().unwrap();
-            SessionManager::commit_download(
-                &sessions,
-                "terminal",
-                transport,
-                operation,
-                &temporary,
-                &destination,
-            )
+            SessionManager::commit_download(&sessions, "terminal", transport, operation, || {
+                std::fs::rename(&temporary, &destination)
+                    .map_err(session_files::FileAccessError::LocalIo)
+            })
         }
     });
     started.await.unwrap();
     manager.expire_ready_transport("terminal", transport).unwrap();
     assert!(manager.input("terminal", &transport.to_string(), b"late\n".to_vec()).is_err());
     release.send(()).unwrap();
-    assert!(matches!(commit.await.unwrap(), Err(session_files::FileAccessError::ConnectionEnded)));
+    assert_eq!(commit.await.unwrap().status, SessionDownloadStatus::Failed);
     assert_eq!(std::fs::read(destination).unwrap(), b"original");
     assert_eq!(std::fs::read(temporary).unwrap(), b"new");
 }

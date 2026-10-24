@@ -52,10 +52,12 @@ function transferProgress(event: SessionFileTransferProgress): TransferProgress 
   };
 }
 
-export type FileOperationOutcome = UploadFeedback & {
+type OutcomeIdentity = {
   transportId: string;
   operationId: string;
 };
+export type RemoteFileOutcome = OutcomeIdentity & UploadFeedback;
+export type FileOperationOutcome = (OutcomeIdentity & { kind: "download"; status: "unknown" }) | RemoteFileOutcome;
 
 function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
@@ -80,6 +82,7 @@ export function SessionFiles({
   const [activity, setActivity] = useState<Activity>("listing");
   const [error, setError] = useState<FileError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [downloadUnknown, setDownloadUnknown] = useState(false);
   const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(null);
   const [mutationFeedback, setMutationFeedback] = useState<MutationFeedback | null>(null);
   const [progress, setProgress] = useState<TransferProgress | null>(null);
@@ -206,26 +209,37 @@ export function SessionFiles({
     setTransferOperationId(id);
     setError(null);
     setNotice(null);
+    setDownloadUnknown(false);
     setUploadFeedback(null);
     setMutationFeedback(null);
     setProgress(null);
     void commands
       .sessionDownloadFile(sessionId, transportId, id, entry.path, progressChannel(id))
       .then((result) => {
+        if (result.status === "ok" && result.data.status === "unknown") {
+          onFileOutcome({ kind: "download", transportId, operationId: id, status: "unknown" });
+        }
         if (!mounted.current || operation.current !== id) return;
         setProgress(null);
         setTransferOperationId(null);
         if (result.status === "error") {
           if (cancelled.current === id) setNotice(translator.current("session.files.cancelled"));
           else setError({ message: result.error, listing: false });
-        } else setNotice(translator.current(result.data ? "session.files.saved" : "session.files.saveCancelled"));
+        } else if (result.data.status === "saved") setNotice(translator.current("session.files.saved"));
+        else if (result.data.status === "cancelled") setNotice(translator.current("session.files.saveCancelled"));
+        else if (result.data.status === "unknown") setDownloadUnknown(true);
+        else
+          setError({
+            message: result.data.message ?? translator.current("session.files.download.failed"),
+            listing: false,
+          });
       })
-      .catch((cause: unknown) => {
+      .catch(() => {
+        onFileOutcome({ kind: "download", transportId, operationId: id, status: "unknown" });
         if (!mounted.current || operation.current !== id) return;
         setProgress(null);
         setTransferOperationId(null);
-        if (cancelled.current === id) setNotice(translator.current("session.files.cancelled"));
-        else setError({ message: message(cause), listing: false });
+        setDownloadUnknown(true);
       })
       .finally(() => {
         if (!mounted.current || operation.current !== id) return;
@@ -375,10 +389,16 @@ export function SessionFiles({
     void commands
       .sessionCancelFileOperation(sessionId, transportId, id)
       .then((result) => {
-        if (result.status === "error" && mounted.current && operation.current === id) setActivity("waiting");
+        if (result.status === "error" && mounted.current && operation.current === id) {
+          cancelled.current = null;
+          setActivity("waiting");
+        }
       })
       .catch(() => {
-        if (mounted.current && operation.current === id) setActivity("waiting");
+        if (mounted.current && operation.current === id) {
+          cancelled.current = null;
+          setActivity("waiting");
+        }
       });
   };
 
@@ -488,6 +508,11 @@ export function SessionFiles({
       {notice ? (
         <p role="status" className="m-0 px-3 py-2 text-xs">
           {notice}
+        </p>
+      ) : null}
+      {downloadUnknown ? (
+        <p role="alert" className="m-0 px-3 py-2 text-xs text-attention">
+          {t("session.files.download.unknown")}
         </p>
       ) : null}
       {uploadFeedback ? (

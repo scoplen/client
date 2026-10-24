@@ -32,7 +32,9 @@ vi.mock("../src/ipc/bindings", () => ({
 
 type Entry = { name: string; path: number[]; kind: "file" | "directory" | "other"; sizeBytes: string | null };
 type Listed = { status: "ok"; data: { entries: Entry[] } } | { status: "error"; error: string };
-type Downloaded = { status: "ok"; data: boolean } | { status: "error"; error: string };
+type Downloaded =
+  | { status: "ok"; data: { status: "saved" | "cancelled" | "unknown" | "failed"; message: string | null } }
+  | { status: "error"; error: string };
 function progressEvent(
   operationId: string,
   changes: Partial<SessionFileTransferProgress> = {},
@@ -76,7 +78,7 @@ const other: Entry = { name: "socket", path: [46, 47, 115, 111, 99, 107, 101, 11
 beforeEach(() => {
   mockIPC(() => undefined);
   fileCommands.list.mockReset().mockResolvedValue({ status: "ok", data: { entries: [] } });
-  fileCommands.download.mockReset().mockResolvedValue({ status: "ok", data: true });
+  fileCommands.download.mockReset().mockResolvedValue({ status: "ok", data: { status: "saved", message: null } });
   fileCommands.upload.mockReset().mockResolvedValue({
     status: "ok",
     data: { status: "saved", message: null, stagingMayRemain: false },
@@ -368,7 +370,7 @@ it("shows download bytes and finalizing while native save is still pending", asy
   expect(screen.getByText("4,096 / 4,096 bytes · 100%")).toBeTruthy();
   expect(screen.getByText("Transfer complete. Waiting for save confirmation.")).toBeTruthy();
   expect(screen.queryByText("Download saved to the selected location.")).toBeNull();
-  await act(async () => pending.resolve({ status: "ok", data: true }));
+  await act(async () => pending.resolve({ status: "ok", data: { status: "saved", message: null } }));
   expect(screen.queryByRole("progressbar")).toBeNull();
   expect(screen.getByText("Download saved to the selected location.")).toBeTruthy();
   await act(() => channel.onmessage(progressEvent(operationId, { transferredBytes: "4096", phase: "finalizing" })));
@@ -405,8 +407,8 @@ it("retries a listing error and keeps download errors alongside the file", async
     .mockResolvedValueOnce({ status: "error", error: "SFTP unavailable" })
     .mockResolvedValueOnce({ status: "ok", data: { entries: [file] } });
   fileCommands.download
-    .mockResolvedValueOnce({ status: "error", error: "Remote file changed" })
-    .mockResolvedValueOnce({ status: "ok", data: false });
+    .mockResolvedValueOnce({ status: "ok", data: { status: "failed", message: "Remote file changed" } })
+    .mockResolvedValueOnce({ status: "ok", data: { status: "cancelled", message: null } });
   render(view());
   expect((await screen.findByRole("alert")).textContent).toContain("SFTP unavailable");
   expect(screen.queryByText("This directory is empty.")).toBeNull();
@@ -430,12 +432,45 @@ it("cancels a pending download without disabling the terminal's file panel", asy
   await act(() => channel.onmessage(progressEvent(operationId)));
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(fileCommands.cancel).toHaveBeenCalledWith("session-1", "transport-1", operationId);
-  await act(async () => pending.resolve({ status: "error", error: "file operation was cancelled" }));
-  expect(await screen.findByText("File operation cancelled.")).toBeTruthy();
+  await act(async () => pending.resolve({ status: "ok", data: { status: "cancelled", message: null } }));
+  expect(await screen.findByText("No file was saved.")).toBeTruthy();
   expect(screen.queryByRole("progressbar")).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Download raw.bin" }));
   expect(fileCommands.download).toHaveBeenCalledTimes(2);
   expect(fileCommands.download.mock.calls[1]?.[2]).not.toBe(operationId);
+});
+
+it("uses the confirmed saved result after a late cancellation is refused", async () => {
+  fileCommands.list.mockResolvedValueOnce({ status: "ok", data: { entries: [file] } });
+  const pending = deferred<Downloaded>();
+  fileCommands.download.mockReturnValueOnce(pending.promise);
+  fileCommands.cancel.mockResolvedValueOnce({ status: "error", error: "the final save has started" });
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Download raw.bin" }));
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.getByText("Waiting for the file operation result…")).toBeTruthy();
+  await act(async () => pending.resolve({ status: "ok", data: { status: "saved", message: null } }));
+  expect(screen.getByText("Download saved to the selected location.")).toBeTruthy();
+  expect(screen.queryByText("No file was saved.")).toBeNull();
+});
+
+it("keeps an unknown local result visible after Files closes", async () => {
+  fileCommands.list.mockResolvedValueOnce({ status: "ok", data: { entries: [file] } });
+  const pending = deferred<Downloaded>();
+  fileCommands.download.mockReturnValueOnce(pending.promise);
+  const onFileOutcome = vi.fn();
+  const rendered = render(view("transport-1", vi.fn(), onFileOutcome));
+  await userEvent.click(await screen.findByRole("button", { name: "Download raw.bin" }));
+  const operationId = fileCommands.download.mock.calls[0]?.[2];
+  rendered.unmount();
+  await act(async () => pending.resolve({ status: "ok", data: { status: "unknown", message: null } }));
+  expect(onFileOutcome).toHaveBeenCalledWith({
+    kind: "download",
+    transportId: "transport-1",
+    operationId,
+    status: "unknown",
+  });
+  expect(fileCommands.download).toHaveBeenCalledTimes(1);
 });
 
 it("cancels the old transport and ignores its late directory response", async () => {
@@ -474,7 +509,7 @@ it("ignores a late download result after the transport changes", async () => {
     oldChannel.onmessage(progressEvent(oldOperation, { transportId: "old-transport", transferredBytes: "2048" })),
   );
   expect(screen.queryByRole("progressbar")).toBeNull();
-  await act(async () => old.resolve({ status: "ok", data: true }));
+  await act(async () => old.resolve({ status: "ok", data: { status: "saved", message: null } }));
   expect(screen.getByRole("button", { name: "logs" })).toBeTruthy();
   expect(screen.queryByText("Download saved to the selected location.")).toBeNull();
 });
@@ -491,7 +526,7 @@ it("cancels a pending picker when the panel closes and does not restore late res
   expect(onClose).toHaveBeenCalledOnce();
   rendered.unmount();
   expect(fileCommands.cancel).toHaveBeenCalledWith("session-1", "transport-1", operationId);
-  await act(async () => pending.resolve({ status: "ok", data: true }));
+  await act(async () => pending.resolve({ status: "ok", data: { status: "saved", message: null } }));
   expect(screen.queryByText("Download saved to the selected location.")).toBeNull();
 });
 
