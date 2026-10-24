@@ -85,6 +85,12 @@ confirmation uploads it. Both devices create or edit synchronized hosts, decrypt
 changes, acknowledge their durable cursors, and revalidate retained keys, account statements
 and objects after offline store reopen. No server database or private test control is accessed.
 
+After both devices have edited the same host, the scenario queries its complete retained
+history through real HTTPS. All three versions must verify, including the paired device's
+signature, without exposing host addresses or advancing local cursors. An explicit offline
+restore creates exactly one unadopted copy of the oldest version, preserves the current
+object and server history, consumes its review ticket, and survives SQLCipher reopen.
+
 The deployment must expose the production pairing endpoints. Repeating the test requires a
 fresh disposable deployment and invitation. Run it separately for SQLite and PostgreSQL.
 Remove the private descriptor, test server and its temporary data after verification. This
