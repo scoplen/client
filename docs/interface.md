@@ -96,6 +96,29 @@ and other remote edits remain separate work.
 
 `web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 92 px for the window controls, which sit centered in it, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.
 
+## Remote text preview
+
+Each ordinary file has an explicit Preview action beside Download. A transient dialog names
+the file and current connection and shows complete literal read-only UTF-8 text. Empty files
+have their own state. Rust permits at most 262,144 bytes, probes EOF, rechecks the ordinary
+opened handle and path size/type/available modification time, and rejects oversized, changed,
+incomplete or invalid text. TAB, CR and LF are permitted; NUL, other C0 controls, DEL and C1
+controls are refused. The dialog interprets no HTML, Markdown, terminal escapes or active links.
+
+`sessionPreviewFile(sessionId, transportId, operationId, path)` returns only typed text/byte
+length or a fixed localized issue. Reading has a 60-second absolute deadline and 15-second
+bounded SFTP steps. The current file-operation admission prevents preview from overtaking
+runnable queued work. Paused and Unknown items retain their resources and allow browsing.
+Input and resize continue through the independent terminal path.
+
+Closing the dialog or Files, changing tabs/directories or replacing the transport discards
+the text and cancels pending reading. Unique display and request identifiers prevent late
+results or cancellation acknowledgements from replacing or closing a newer preview. Keyboard
+closing restores the corresponding action after directory loading settles. No text enters
+the local store, Recent, terminal snapshots, synchronization or diagnostics; no editor,
+local write or remote write is started. SFTP v3 path resolution is not confinement or atomic
+no-follow opening. Matching metadata and EOF do not establish an immutable snapshot.
+
 ## Personal account setup
 
 Settings → Personal account opens the optional first-device flow. It reads public status

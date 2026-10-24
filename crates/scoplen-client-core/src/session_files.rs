@@ -23,10 +23,13 @@ use uuid::Uuid;
 use crate::connection::{SshConnection, SshConnectionError};
 
 pub(crate) mod downloads;
+mod preview;
 pub(crate) use downloads::{
     DownloadCheckpoint, DownloadControl, DownloadExecution, DownloadInput, continue_download,
     prepare_download,
 };
+pub(crate) use preview::preview_file;
+pub use preview::{RemoteTextPreview, RemoteTextPreviewIssue};
 
 const MAX_REMOTE_PATH: usize = 4096;
 const MAX_DIRECTORY_ENTRIES: usize = 1024;
@@ -404,6 +407,12 @@ pub enum FileAccessError {
     /// The bytes or size changed during transfer.
     #[error("the remote file changed while it was being downloaded; try again")]
     FileChanged,
+    /// Preview requires a complete file within its fixed byte limit.
+    #[error("this file is too large to preview; download it instead")]
+    PreviewTooLarge,
+    /// Preview accepts only strict UTF-8 without non-text control characters.
+    #[error("this file is not supported UTF-8 text; download it instead")]
+    PreviewNotText,
     /// The remote server returned a non-success SFTP status.
     #[error("the SSH server refused the file operation (status {0})")]
     RemoteStatus(u32),

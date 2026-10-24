@@ -128,8 +128,16 @@ cost grows with that prefix and does not increase displayed payload progress. Me
 open handle do not provide an immutable source snapshot: unread suffix changes or concurrent
 writes after verification can still affect a download. Keep the source stable until it saves.
 Cancellation and disconnect settle owned partial cleanup; a detected replacement is preserved.
-Uploads, continuation after reconnect or tab/process closure, drag and drop and preview remain
-separate C6 work.
+Upload continuation, continuation after reconnect or tab/process closure, and drag and drop
+remain separate C6 work.
+
+Preview reads one complete ordinary UTF-8 file of at most 256 KiB through the current
+terminal's SSH connection. It shows literal read-only text in a transient dialog, without
+opening an editor, writing a local copy or starting synchronization. Empty files are supported.
+Larger files, invalid UTF-8 and non-text controls require Download instead. Closing the preview,
+changing tabs or ending the connection discards the text. Runnable transfers take priority;
+paused or unknown-result items do not prevent preview. Remote handle and path metadata and EOF
+are checked, but SFTP v3 provides neither an immutable snapshot nor atomic no-follow opening.
 
 When a session closes or fails, choose Reconnect in its header to connect again
 in the same tab. Its displayed terminal output stays available. Reconnect waits

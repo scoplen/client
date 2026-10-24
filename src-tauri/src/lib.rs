@@ -36,6 +36,7 @@ pub fn ipc() -> Builder<tauri::Wry> {
             ssh::session_input,
             ssh::session_resize,
             ssh::session_list_files,
+            ssh::session_preview_file,
             session_transfers::session_transfer_queue,
             session_transfers::session_enqueue_upload,
             session_transfers::session_enqueue_download,

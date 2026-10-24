@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { Button, Dialog, Field, IconButton } from "@scoplen/ui";
-import { Download, File, Folder, FolderPlus, Pencil, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { Download, Eye, File, Folder, FolderPlus, Pencil, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
 import {
@@ -11,6 +11,7 @@ import {
   type SessionTransferQueueSnapshot,
 } from "./ipc/bindings";
 import { SessionTransferQueue } from "./session-transfer-queue";
+import { SessionFilePreview } from "./session-file-preview";
 
 type Location = { name: string; path: number[] };
 type Activity = "listing" | "creating" | "renaming" | "deleting" | "cancelling" | "waiting" | null;
@@ -38,6 +39,8 @@ function message(cause: unknown): string {
 export function SessionFiles({
   sessionId,
   transportId,
+  connectionLabel,
+  active,
   onClose,
   onFileOutcome,
   onEnqueueFeedback,
@@ -46,6 +49,8 @@ export function SessionFiles({
 }: {
   sessionId: string;
   transportId: string | null;
+  connectionLabel: string;
+  active: boolean;
   queue: SessionTransferQueueSnapshot | null;
   queueIssue: SessionTransferIssue | null;
   onClose: () => void;
@@ -66,17 +71,24 @@ export function SessionFiles({
   const [nameDialog, setNameDialog] = useState<NameDialog | null>(null);
   const [name, setName] = useState("");
   const [reload, setReload] = useState(0);
+  const [preview, setPreview] = useState<{ id: string; owner: string; entry: RemoteFileEntry } | null>(null);
   const operation = useRef<string | null>(null);
   const cancelled = useRef<string | null>(null);
   const pendingCancellation = useRef<Promise<unknown>>(Promise.resolve());
   const mounted = useRef(true);
+  const previewFocus = useRef<{ owner: string; path: string } | null>(null);
+  const previewButtons = useRef(new Map<string, HTMLButtonElement>());
   const translator = useRef(t);
   const currentPath = locations[locations.length - 1]!.path;
+  const previewOwner = `${sessionId}:${transportId}:${currentPath.join(",")}`;
+  if (preview && (!active || preview.owner !== previewOwner)) setPreview(null);
+  const previewOpen = active && preview?.owner === previewOwner;
   const queueReady = queue !== null;
   const queueBlocked = !queueReady || !!queue?.blocksFileOperations;
-  const fileOperationsDisabled = activity !== null || queueBlocked || !transportId || selecting;
+  const fileOperationsDisabled = activity !== null || queueBlocked || !transportId || selecting || previewOpen;
   const selectionDisabled =
     activity !== null ||
+    previewOpen ||
     !transportId ||
     !queueReady ||
     selecting ||
@@ -86,6 +98,23 @@ export function SessionFiles({
   useEffect(() => {
     translator.current = t;
   }, [t]);
+
+  useEffect(() => {
+    if (!active || previewFocus.current?.owner !== previewOwner) {
+      previewFocus.current = null;
+      return;
+    }
+    if (previewOpen || activity !== null) return;
+    const frame = requestAnimationFrame(() => {
+      const target = previewFocus.current;
+      const element = target ? previewButtons.current.get(target.path) : null;
+      if (element?.isConnected && !element.disabled) {
+        element.focus();
+        previewFocus.current = null;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active, previewOwner, previewOpen, activity]);
 
   const cancelCurrent = useCallback(() => {
     const id = operation.current;
@@ -105,7 +134,7 @@ export function SessionFiles({
   }, [cancelCurrent]);
 
   useEffect(() => {
-    if (queueBlocked || !transportId) return;
+    if (queueBlocked || !transportId || previewOpen) return;
     let current = true;
     let id: string | null = null;
     void (async () => {
@@ -140,7 +169,7 @@ export function SessionFiles({
       current = false;
       if (operation.current === id) cancelCurrent();
     };
-  }, [cancelCurrent, sessionId, transportId, currentPath, reload, queueBlocked]);
+  }, [cancelCurrent, sessionId, transportId, currentPath, reload, queueBlocked, previewOpen]);
 
   const enqueue = (entry?: RemoteFileEntry) => {
     if (selectionDisabled || selectionPending.current || !transportId || (entry && entry.kind !== "file")) return;
@@ -411,6 +440,23 @@ export function SessionFiles({
               )}
               {entry.kind === "file" ? (
                 <IconButton
+                  ref={(element) => {
+                    const path = entry.path.join(",");
+                    if (element) previewButtons.current.set(path, element);
+                    else previewButtons.current.delete(path);
+                  }}
+                  label={t("session.files.preview.action", { name: entry.name })}
+                  disabled={fileOperationsDisabled}
+                  onClick={() => {
+                    previewFocus.current = { owner: previewOwner, path: entry.path.join(",") };
+                    setPreview({ id: crypto.randomUUID(), owner: previewOwner, entry });
+                  }}
+                >
+                  <Eye aria-hidden="true" className="size-4" />
+                </IconButton>
+              ) : null}
+              {entry.kind === "file" ? (
+                <IconButton
                   label={t("session.files.download", { name: entry.name })}
                   disabled={selectionDisabled}
                   onClick={() => enqueue(entry)}
@@ -445,6 +491,16 @@ export function SessionFiles({
         </ul>
       </div>
       <SessionTransferQueue snapshot={queue} issue={enqueueIssue ?? queueIssue} />
+      {previewOpen && preview && transportId ? (
+        <SessionFilePreview
+          key={preview.id}
+          sessionId={sessionId}
+          transportId={transportId}
+          connectionLabel={connectionLabel}
+          entry={preview.entry}
+          onClose={() => setPreview((current) => (current?.id === preview.id ? null : current))}
+        />
+      ) : null}
       <Dialog
         open={nameDialog !== null}
         onOpenChange={(open) => {

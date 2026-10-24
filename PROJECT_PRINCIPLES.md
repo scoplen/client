@@ -40,8 +40,10 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   Downloads can pause and explicitly continue on their original live transport after local
   and remote confirmed-prefix verification; paused checkpoints retain capacity and release
   execution. Native partial identity gates publication and cleanup. This does not provide a
-  source snapshot or upload, cross-transport or durable continuation. Drag and drop and the
-  remaining C6 workflows are incomplete.
+  source snapshot or upload, cross-transport or durable continuation. Ordinary UTF-8 files up
+  to 256 KiB have a complete, cancellable read-only preview with literal transient display
+  and fixed localized refusals; its metadata checks do not establish a snapshot or remote
+  path confinement. Drag and drop and the remaining C6 workflows are incomplete.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.
 - The Windows TPM path of key storage cannot run on hosted CI runners, which have no TPM; only its DPAPI fallback is exercised there.

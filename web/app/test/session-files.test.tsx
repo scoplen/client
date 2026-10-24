@@ -9,6 +9,7 @@ import { SessionFiles } from "../src/session-files";
 
 const fileCommands = vi.hoisted(() => ({
   list: vi.fn(),
+  preview: vi.fn(),
   download: vi.fn(),
   upload: vi.fn(),
   create: vi.fn(),
@@ -20,6 +21,7 @@ const fileCommands = vi.hoisted(() => ({
 vi.mock("../src/ipc/bindings", () => ({
   commands: {
     sessionListFiles: fileCommands.list,
+    sessionPreviewFile: fileCommands.preview,
     sessionEnqueueDownload: fileCommands.download,
     sessionEnqueueUpload: fileCommands.upload,
     sessionCreateRemoteDirectory: fileCommands.create,
@@ -77,12 +79,15 @@ function view(
   onUploadOutcome = vi.fn(),
   locale: "en" | "zh-Hans" = "en",
   transfers = queue(),
+  active = true,
 ) {
   return (
     <I18nProvider locale={locale}>
       <SessionFiles
         sessionId="session-1"
         transportId={transportId}
+        connectionLabel="fixture@example"
+        active={active}
         onClose={onClose}
         onFileOutcome={onUploadOutcome}
         queue={transfers}
@@ -100,6 +105,7 @@ const other: Entry = { name: "socket", path: [46, 47, 115, 111, 99, 107, 101, 11
 beforeEach(() => {
   mockIPC(() => undefined);
   fileCommands.list.mockReset().mockResolvedValue({ status: "ok", data: { entries: [] } });
+  fileCommands.preview.mockReset().mockResolvedValue({ status: "ok", data: { text: "sample", sizeBytes: 6 } });
   const added = {
     status: "ok",
     data: { status: "queued", queueId: "queue-1", itemId: "item-1", executionId: "execution-1" },
@@ -113,6 +119,179 @@ beforeEach(() => {
 });
 
 afterEach(() => clearMocks());
+
+it("previews only an explicit ordinary file and renders markup as literal text", async () => {
+  const literal = '<img src="https://invalid.example/image">\r\n中文\t<a href="https://invalid.example">link</a>';
+  fileCommands.list.mockResolvedValue({ status: "ok", data: { entries: [directory, file, other] } });
+  fileCommands.preview.mockResolvedValueOnce({ status: "ok", data: { text: literal, sizeBytes: 96 } });
+  render(view());
+  const preview = await screen.findByRole("button", { name: "Preview raw.bin" });
+  expect(fileCommands.preview).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "Preview socket" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Preview logs" })).toBeNull();
+  await userEvent.click(preview);
+  expect(fileCommands.preview).toHaveBeenCalledExactlyOnceWith(
+    "session-1",
+    "transport-1",
+    expect.any(String),
+    file.path,
+  );
+  const content = await screen.findByLabelText("Remote file text");
+  expect(content.textContent).toBe(literal);
+  expect(content.querySelector("img, a, script, iframe")).toBeNull();
+  expect(screen.getByText(/Read-only text from fixture@example/)).toBeTruthy();
+  expect(fileCommands.download).not.toHaveBeenCalled();
+  expect(fileCommands.upload).not.toHaveBeenCalled();
+  expect(fileCommands.create).not.toHaveBeenCalled();
+});
+
+it("shows an empty complete preview in Chinese", async () => {
+  fileCommands.list.mockResolvedValue({ status: "ok", data: { entries: [file] } });
+  fileCommands.preview.mockResolvedValueOnce({ status: "ok", data: { text: "", sizeBytes: 0 } });
+  render(view("transport-1", vi.fn(), vi.fn(), "zh-Hans"));
+  await userEvent.click(await screen.findByRole("button", { name: "预览 raw.bin" }));
+  expect(await screen.findByText("此文本文件为空。")).toBeTruthy();
+  expect(screen.getByText("0 字节 · UTF-8")).toBeTruthy();
+  expect(screen.queryByLabelText("远程文件文本")).toBeNull();
+});
+
+it.each([
+  ["tooLarge", "256 KiB"],
+  ["notText", "not supported UTF-8 text"],
+  ["fileChanged", "changed while reading"],
+  ["notRegularFile", "Only ordinary remote files"],
+  ["missingMetadata", "file metadata needed"],
+  ["remoteDenied", "server refused the preview"],
+  ["timeout", "timed out"],
+  ["unavailable", "file access is unavailable"],
+] as const)("localizes a %s refusal and retries only after explicit intent", async (issue, message) => {
+  fileCommands.list.mockResolvedValue({ status: "ok", data: { entries: [file] } });
+  fileCommands.preview.mockResolvedValueOnce({ status: "error", error: issue });
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Preview raw.bin" }));
+  expect((await screen.findByRole("alert")).textContent).toContain(message);
+  expect(screen.getByText(/Close this preview to download/)).toBeTruthy();
+  expect(fileCommands.preview).toHaveBeenCalledTimes(1);
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByLabelText("Remote file text")).toBeTruthy();
+  expect(fileCommands.preview).toHaveBeenCalledTimes(2);
+});
+
+it("does not reveal bridge exception contents in a preview", async () => {
+  fileCommands.list.mockResolvedValue({ status: "ok", data: { entries: [file] } });
+  fileCommands.preview.mockRejectedValueOnce(new Error("private remote file contents"));
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Preview raw.bin" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("could not be previewed safely");
+  expect(screen.queryByText(/private remote/)).toBeNull();
+});
+
+it("cancels closing preview and discards its late text", async () => {
+  const pending = deferred<{ status: "ok"; data: { text: string; sizeBytes: number } }>();
+  fileCommands.list.mockResolvedValue({ status: "ok", data: { entries: [file] } });
+  fileCommands.preview.mockReturnValueOnce(pending.promise);
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Preview raw.bin" }));
+  expect(await screen.findByText("Reading remote text…")).toBeTruthy();
+  const operation = fileCommands.preview.mock.calls[0]?.[2];
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(fileCommands.cancel).toHaveBeenCalledWith("session-1", "transport-1", operation);
+  await act(async () => pending.resolve({ status: "ok", data: { text: "late private text", sizeBytes: 17 } }));
+  expect(screen.queryByText("late private text")).toBeNull();
+});
+
+it("a late close acknowledgement cannot close a newer preview of the same file", async () => {
+  const oldRead = deferred<{ status: "ok"; data: { text: string; sizeBytes: number } }>();
+  const oldCancel = deferred<{ status: "ok"; data: null }>();
+  fileCommands.list.mockResolvedValue({ status: "ok", data: { entries: [file] } });
+  fileCommands.preview.mockReturnValueOnce(oldRead.promise);
+  fileCommands.cancel.mockReturnValueOnce(oldCancel.promise);
+  const rendered = render(view("old-transport"));
+  await userEvent.click(await screen.findByRole("button", { name: "Preview raw.bin" }));
+  await screen.findByText("Reading remote text…");
+  await userEvent.keyboard("{Escape}");
+  rendered.rerender(view("new-transport"));
+  await userEvent.click(await screen.findByRole("button", { name: "Preview raw.bin" }));
+  await screen.findByLabelText("Remote file text");
+  await act(async () => oldCancel.resolve({ status: "ok", data: null }));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(screen.getByLabelText("Remote file text").textContent).toBe("sample");
+  await act(async () => oldRead.resolve({ status: "ok", data: { text: "stale", sizeBytes: 5 } }));
+  expect(screen.queryByText("stale")).toBeNull();
+});
+
+it("discards the preview when its tab becomes inactive without reopening it on return", async () => {
+  fileCommands.list.mockResolvedValue({ status: "ok", data: { entries: [file] } });
+  const rendered = render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Preview raw.bin" }));
+  await screen.findByLabelText("Remote file text");
+  rendered.rerender(view("transport-1", vi.fn(), vi.fn(), "en", queue(), false));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  rendered.rerender(view());
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Preview raw.bin" }).hasAttribute("disabled")).toBe(false),
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(fileCommands.preview).toHaveBeenCalledTimes(1);
+});
+
+it("opens and closes preview by keyboard and returns focus to its action", async () => {
+  fileCommands.list.mockResolvedValue({ status: "ok", data: { entries: [file] } });
+  render(view());
+  const action = await screen.findByRole("button", { name: "Preview raw.bin" });
+  action.focus();
+  await userEvent.keyboard("{Enter}");
+  await screen.findByLabelText("Remote file text");
+  expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(action));
+});
+
+it("restores preview focus to the rebuilt action after a delayed directory response", async () => {
+  const reloaded = deferred<Listed>();
+  fileCommands.list
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [file] } })
+    .mockReturnValueOnce(reloaded.promise);
+  render(view());
+  const oldAction = await screen.findByRole("button", { name: "Preview raw.bin" });
+  oldAction.focus();
+  await userEvent.keyboard("{Enter}");
+  await screen.findByLabelText("Remote file text");
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(2));
+  expect(oldAction.isConnected).toBe(false);
+  await act(async () => reloaded.resolve({ status: "ok", data: { entries: [file] } }));
+  const newAction = await screen.findByRole("button", { name: "Preview raw.bin" });
+  expect(newAction).not.toBe(oldAction);
+  await waitFor(() => expect(document.activeElement).toBe(newAction));
+});
+
+it("blocks preview behind runnable queue work but allows it with only paused or unknown items", async () => {
+  fileCommands.list.mockResolvedValue({ status: "ok", data: { entries: [file] } });
+  const rendered = render(view());
+  await screen.findByRole("button", { name: "Preview raw.bin" });
+  rendered.rerender(
+    view(
+      "transport-1",
+      vi.fn(),
+      vi.fn(),
+      "en",
+      queue({ blocksFileOperations: true, outstanding: 1, items: [queuedItem] }),
+    ),
+  );
+  expect(screen.getByRole("button", { name: "Preview raw.bin" }).hasAttribute("disabled")).toBe(true);
+  expect(fileCommands.preview).not.toHaveBeenCalled();
+  rendered.rerender(
+    view("transport-1", vi.fn(), vi.fn(), "en", queue({ blocksFileOperations: false, outstanding: 16 })),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Preview raw.bin" }).hasAttribute("disabled")).toBe(false),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Preview raw.bin" }));
+  expect(await screen.findByLabelText("Remote file text")).toBeTruthy();
+});
 
 it("adds native-selected uploads to the queue with the current raw directory", async () => {
   fileCommands.list.mockResolvedValueOnce({ status: "ok", data: { entries: [directory] } });

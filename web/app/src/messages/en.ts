@@ -333,6 +333,30 @@ export const en = {
   "session.files.refresh": "Refresh files",
   "session.files.empty": "This directory is empty.",
   "session.files.download": "Download {name}",
+  "session.files.preview.action": "Preview {name}",
+  "session.files.preview.title": "Preview: {name}",
+  "session.files.preview.description": "Read-only text from {connection}. This is a single read, not a live view.",
+  "session.files.preview.close": "Close preview",
+  "session.files.preview.loading": "Reading remote text…",
+  "session.files.preview.content": "Remote file text",
+  "session.files.preview.bytes": "{bytes} bytes · UTF-8",
+  "session.files.preview.empty": "This text file is empty.",
+  "session.files.preview.downloadHint": "Close this preview to download the file instead.",
+  "session.files.preview.issue.notRegularFile":
+    "Only ordinary remote files can be previewed. Refresh Files and choose a file.",
+  "session.files.preview.issue.missingMetadata":
+    "The server did not provide the file metadata needed for a complete preview.",
+  "session.files.preview.issue.tooLarge": "This file exceeds the 256 KiB preview limit.",
+  "session.files.preview.issue.fileChanged": "The remote file changed while reading. Keep it stable and try again.",
+  "session.files.preview.issue.notText":
+    "This file is not supported UTF-8 text. Binary data and non-text control characters cannot be previewed.",
+  "session.files.preview.issue.timeout": "Reading the file timed out. Check the connection and try again.",
+  "session.files.preview.issue.cancelled": "The preview was cancelled. Try again when you are ready.",
+  "session.files.preview.issue.unavailable":
+    "This connection or its file access is unavailable. Wait for other file work or reconnect before trying again.",
+  "session.files.preview.issue.remoteDenied":
+    "The SSH server refused the preview. Check file access before trying again.",
+  "session.files.preview.issue.failed": "The file could not be previewed safely. Check the connection and try again.",
   "session.files.saved": "Download saved to the selected location.",
   "session.files.saveCancelled": "No file was saved.",
   "session.files.download.failed":

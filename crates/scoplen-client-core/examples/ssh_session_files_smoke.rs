@@ -11,8 +11,8 @@ use std::time::Duration;
 use scoplen_client_core::connection::preparation::{PreparationEvent, PreparationResponse};
 use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
 use scoplen_client_core::session_files::{
-    RemoteFileKind, SessionDownloadStatus, SessionFileMutationStatus, SessionFileTransferPhase,
-    SessionUploadStatus,
+    RemoteFileKind, RemoteTextPreviewIssue, SessionDownloadStatus, SessionFileMutationStatus,
+    SessionFileTransferPhase, SessionUploadStatus,
 };
 use scoplen_client_core::session_manager::{
     SessionEvent, SessionFileTransferProgress, SessionManager,
@@ -141,6 +141,8 @@ async fn exercise(
         .ok_or("binary fixture was not listed")?;
     assert_eq!(file.kind, RemoteFileKind::File);
     assert_eq!(file.size_bytes.as_deref(), Some("262149"));
+
+    exercise_preview(manager, &transport, local, output).await?;
 
     let destination = local.join("downloaded.bin");
     fs::write(&destination, b"original")?;
@@ -635,6 +637,95 @@ async fn exercise(
     exercise_queue(manager, local, &transport, folder.path.clone(), file.path.clone(), output)
         .await?;
     exercise_download_resume(manager, local, &transport, folder.path.clone(), output).await?;
+    Ok(())
+}
+
+async fn exercise_preview(
+    manager: &SessionManager,
+    transport: &str,
+    local: &std::path::Path,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    manager.input("fixture-terminal", transport, b"printf 'Scoplen UTF-8 \\344\\270\\255\\346\\226\\207\\r\\n\\t<literal>\\n' > .scoplen-files-smoke/preview.txt && : > .scoplen-files-smoke/empty.txt && head -c 262144 /dev/zero | tr '\\000' x > .scoplen-files-smoke/cap.txt; printf '\\377' > .scoplen-files-smoke/invalid.txt; printf 'text\\000control' > .scoplen-files-smoke/control.txt; ln -s preview.txt .scoplen-files-smoke/preview-link; printf secret > .scoplen-files-smoke/denied.txt; chmod 000 .scoplen-files-smoke/denied.txt; printf '%s%s\\n' SCOPLEN- PREVIEW-READY\n".to_vec())?;
+    wait_for(output, b"SCOPLEN-PREVIEW-READY").await?;
+    let local_before = fs::read_dir(local)?.count();
+    let operation = Uuid::now_v7().to_string();
+    let preview = manager.preview_file(
+        "fixture-terminal",
+        transport,
+        &operation,
+        b"./.scoplen-files-smoke/preview.txt".to_vec(),
+    );
+    let terminal = async {
+        manager.input(
+            "fixture-terminal",
+            transport,
+            b"printf '%s%s\\n' SCOPLEN- PREVIEW-ALIVE\n".to_vec(),
+        )?;
+        manager.resize("fixture-terminal", transport, 115, 36)
+    };
+    let (preview, sent) = tokio::join!(preview, terminal);
+    sent?;
+    let preview = preview.map_err(|issue| format!("text preview failed: {issue:?}"))?;
+    assert_eq!(preview.text, "Scoplen UTF-8 中文\r\n\t<literal>\n");
+    assert_eq!(preview.size_bytes as usize, preview.text.len());
+    wait_for(output, b"SCOPLEN-PREVIEW-ALIVE").await?;
+    for name in ["empty.txt", "cap.txt"] {
+        let path = format!("./.scoplen-files-smoke/{name}").into_bytes();
+        let result = manager
+            .preview_file("fixture-terminal", transport, &Uuid::now_v7().to_string(), path)
+            .await
+            .map_err(|issue| format!("bounded preview failed: {issue:?}"))?;
+        if name == "empty.txt" {
+            assert!(result.text.is_empty());
+        } else {
+            assert_eq!(result.text.len(), 262144);
+            assert!(result.text.bytes().all(|byte| byte == b'x'));
+        }
+    }
+    for (name, issue) in [
+        ("binary.bin", RemoteTextPreviewIssue::TooLarge),
+        ("invalid.txt", RemoteTextPreviewIssue::NotText),
+        ("control.txt", RemoteTextPreviewIssue::NotText),
+        ("preview-link", RemoteTextPreviewIssue::NotRegularFile),
+        ("denied.txt", RemoteTextPreviewIssue::RemoteDenied),
+    ] {
+        assert_eq!(
+            manager
+                .preview_file(
+                    "fixture-terminal",
+                    transport,
+                    &Uuid::now_v7().to_string(),
+                    format!("./.scoplen-files-smoke/{name}").into_bytes()
+                )
+                .await
+                .unwrap_err(),
+            issue
+        );
+    }
+    assert_eq!(
+        manager
+            .preview_file(
+                "fixture-terminal",
+                transport,
+                &Uuid::now_v7().to_string(),
+                b"./.scoplen-files-smoke".to_vec()
+            )
+            .await
+            .unwrap_err(),
+        RemoteTextPreviewIssue::NotRegularFile
+    );
+    let after_refusal = manager
+        .preview_file(
+            "fixture-terminal",
+            transport,
+            &Uuid::now_v7().to_string(),
+            b"./.scoplen-files-smoke/preview.txt".to_vec(),
+        )
+        .await
+        .map_err(|issue| format!("preview after refusal failed: {issue:?}"))?;
+    assert_eq!(after_refusal.text, preview.text);
+    assert_eq!(fs::read_dir(local)?.count(), local_before, "preview must not create local files");
     Ok(())
 }
 
