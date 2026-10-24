@@ -25,8 +25,9 @@ use crate::connection::preparation::{
 use crate::connection::{MAX_SSH_INPUT, SshConnectionError, SshSession, terminal_size};
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
 use crate::session_files::{
-    self, RemoteDirectory, SessionUploadResult, SessionUploadStatus, UploadPreflight, UploadSource,
-    UploadState,
+    self, MutationPreflight, RemoteDirectory, RemoteMutation, SessionFileMutationResult,
+    SessionFileMutationStatus, SessionUploadResult, SessionUploadStatus, UploadPreflight,
+    UploadSource, UploadState,
 };
 use crate::session_lifecycle::SessionHistoryLease;
 use crate::store::Store;
@@ -142,6 +143,19 @@ enum FileCommand {
         operation: Uuid,
         reply: oneshot::Sender<SessionUploadResult>,
     },
+    PreflightMutation {
+        mutation: RemoteMutation,
+        reply: oneshot::Sender<Result<MutationPreflight, session_files::FileAccessError>>,
+    },
+    Mutation {
+        mutation: RemoteMutation,
+        preflight: MutationPreflight,
+        cancel: watch::Receiver<bool>,
+        session_id: String,
+        transport: Uuid,
+        operation: Uuid,
+        reply: oneshot::Sender<SessionFileMutationResult>,
+    },
 }
 
 enum PreparedUpload {
@@ -153,7 +167,7 @@ struct ActiveFile {
     id: Uuid,
     abort: AbortHandle,
     upload_state: Arc<UploadState>,
-    upload_cancel: Option<watch::Sender<bool>>,
+    effect_cancel: Option<watch::Sender<bool>>,
 }
 
 struct ActiveAttempt {
@@ -183,7 +197,7 @@ impl Drop for FileRequestGuard<'_> {
             && active.id == self.transport
             && active.file.as_ref().is_some_and(|file| file.id == self.operation)
         {
-            if let Some(cancel) = active.file.as_ref().and_then(|file| file.upload_cancel.as_ref())
+            if let Some(cancel) = active.file.as_ref().and_then(|file| file.effect_cancel.as_ref())
             {
                 cancel.send_replace(true);
             } else {
@@ -618,7 +632,7 @@ impl SessionManager {
         };
         let (cancel_sender, cancel) = watch::channel(false);
         let (reply, received) = oneshot::channel();
-        self.queue_upload_request(
+        self.queue_effect_request(
             &guard,
             cancel_sender,
             FileCommand::Upload {
@@ -636,7 +650,7 @@ impl SessionManager {
         )?;
         let result = match received.await {
             Ok(result) => result,
-            Err(_) if guard.upload_state.publication_started.load(Ordering::SeqCst) => {
+            Err(_) if guard.upload_state.effect_started.load(Ordering::SeqCst) => {
                 SessionUploadResult::new(
                     SessionUploadStatus::Unknown,
                     None,
@@ -647,6 +661,157 @@ impl SessionManager {
                 SessionUploadStatus::Failed,
                 Some("the file operation ended with this connection".into()),
                 guard.upload_state.staging_may_remain.load(Ordering::SeqCst),
+            ),
+        };
+        drop(guard);
+        Ok(result)
+    }
+
+    /// Create one directory in the current terminal-owned remote directory.
+    pub async fn create_remote_directory(
+        &self,
+        session_id: &str,
+        transport_id: &str,
+        operation_id: &str,
+        directory: Vec<u8>,
+        name: &str,
+    ) -> Result<SessionFileMutationResult, String> {
+        let mutation =
+            RemoteMutation::create_directory(directory, name).map_err(|error| error.to_string())?;
+        self.mutate_remote_entry(session_id, transport_id, operation_id, mutation, |_, _| async {
+            Ok(true)
+        })
+        .await
+    }
+
+    /// Rename one immediate ordinary child without replacing an existing destination.
+    pub async fn rename_remote_entry(
+        &self,
+        session_id: &str,
+        transport_id: &str,
+        operation_id: &str,
+        directory: Vec<u8>,
+        entry: Vec<u8>,
+        new_name: &str,
+    ) -> Result<SessionFileMutationResult, String> {
+        let mutation = RemoteMutation::rename_entry(directory, entry, new_name)
+            .map_err(|error| error.to_string())?;
+        self.mutate_remote_entry(session_id, transport_id, operation_id, mutation, |_, _| async {
+            Ok(true)
+        })
+        .await
+    }
+
+    /// Delete one immediate ordinary child only after native confirmation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn delete_remote_entry_with_confirmation<C, Fut>(
+        &self,
+        session_id: &str,
+        transport_id: &str,
+        operation_id: &str,
+        directory: Vec<u8>,
+        entry: Vec<u8>,
+        confirm: C,
+    ) -> Result<SessionFileMutationResult, String>
+    where
+        C: FnOnce(session_files::RemoteFileKind, String) -> Fut,
+        Fut: Future<Output = Result<bool, String>>,
+    {
+        let mutation =
+            RemoteMutation::delete_entry(directory, entry).map_err(|error| error.to_string())?;
+        self.mutate_remote_entry(session_id, transport_id, operation_id, mutation, confirm).await
+    }
+
+    async fn mutate_remote_entry<C, Fut>(
+        &self,
+        session_id: &str,
+        transport_id: &str,
+        operation_id: &str,
+        mutation: RemoteMutation,
+        confirm: C,
+    ) -> Result<SessionFileMutationResult, String>
+    where
+        C: FnOnce(session_files::RemoteFileKind, String) -> Fut,
+        Fut: Future<Output = Result<bool, String>>,
+    {
+        let (abort, cancellation) = AbortHandle::new_pair();
+        let guard = self.reserve_file_operation(session_id, transport_id, operation_id, abort)?;
+        let preparation = Abortable::new(
+            async {
+                let (reply, received) = oneshot::channel();
+                self.queue_file_request(
+                    &guard,
+                    FileCommand::PreflightMutation { mutation: mutation.clone(), reply },
+                )
+                .map_err(|message| {
+                    SessionFileMutationResult::new(SessionFileMutationStatus::Failed, Some(message))
+                })?;
+                let preflight = tokio::time::timeout(FILE_LIST_TIMEOUT, received)
+                    .await
+                    .map_err(|_| {
+                        SessionFileMutationResult::new(
+                            SessionFileMutationStatus::Failed,
+                            Some("the remote file did not respond".into()),
+                        )
+                    })?
+                    .map_err(|_| {
+                        SessionFileMutationResult::new(
+                            SessionFileMutationStatus::Failed,
+                            Some("the file operation ended with this connection".into()),
+                        )
+                    })?
+                    .map_err(SessionFileMutationResult::from_error)?;
+                if matches!(mutation, RemoteMutation::DeleteEntry { .. }) {
+                    let kind = preflight.source_kind.expect("delete preflight checked source kind");
+                    let name = mutation.display_name().expect("delete mutation has a source");
+                    let confirmed = confirm(kind, name).await.map_err(|message| {
+                        SessionFileMutationResult::new(
+                            SessionFileMutationStatus::Failed,
+                            Some(message),
+                        )
+                    })?;
+                    if !confirmed {
+                        return Ok(None);
+                    }
+                }
+                Ok::<Option<MutationPreflight>, SessionFileMutationResult>(Some(preflight))
+            },
+            cancellation,
+        )
+        .await;
+        let preflight = match preparation {
+            Ok(Ok(Some(preflight))) => preflight,
+            Ok(Ok(None)) | Err(_) => {
+                return Ok(SessionFileMutationResult::new(
+                    SessionFileMutationStatus::Cancelled,
+                    None,
+                ));
+            }
+            Ok(Err(result)) => return Ok(result),
+        };
+        let (cancel_sender, cancel) = watch::channel(false);
+        let (reply, received) = oneshot::channel();
+        self.queue_effect_request(
+            &guard,
+            cancel_sender,
+            FileCommand::Mutation {
+                mutation,
+                preflight,
+                cancel,
+                session_id: session_id.to_owned(),
+                transport: guard.transport,
+                operation: guard.operation,
+                reply,
+            },
+        )?;
+        let result = match received.await {
+            Ok(result) => result,
+            Err(_) if guard.upload_state.effect_started.load(Ordering::SeqCst) => {
+                SessionFileMutationResult::new(SessionFileMutationStatus::Unknown, None)
+            }
+            Err(_) => SessionFileMutationResult::new(
+                SessionFileMutationStatus::Failed,
+                Some("the file operation ended with this connection".into()),
             ),
         };
         drop(guard);
@@ -674,11 +839,11 @@ impl SessionManager {
         if file.id != operation {
             return Err("file operation has ended".into());
         }
-        if file.upload_state.publication_started.load(Ordering::SeqCst) {
-            return Err("the upload has entered publication; its result must be checked".into());
+        if file.upload_state.effect_started.load(Ordering::SeqCst) {
+            return Err("the remote change has started; its result must be checked".into());
         }
         file.abort.abort();
-        if let Some(cancel) = &file.upload_cancel {
+        if let Some(cancel) = &file.effect_cancel {
             cancel.send_replace(true);
         } else {
             active.file.take();
@@ -711,7 +876,7 @@ impl SessionManager {
             id: operation,
             abort: abort.clone(),
             upload_state: upload_state.clone(),
-            upload_cancel: None,
+            effect_cancel: None,
         });
         Ok(FileRequestGuard {
             manager: self,
@@ -744,7 +909,7 @@ impl SessionManager {
         })
     }
 
-    fn queue_upload_request(
+    fn queue_effect_request(
         &self,
         guard: &FileRequestGuard<'_>,
         cancel: watch::Sender<bool>,
@@ -760,11 +925,11 @@ impl SessionManager {
         {
             return Err("this file operation is no longer current".into());
         }
-        active.file.as_mut().expect("matching file operation exists").upload_cancel = Some(cancel);
+        active.file.as_mut().expect("matching file operation exists").effect_cancel = Some(cancel);
         match active.files.try_send(request) {
             Ok(()) => Ok(()),
             Err(error) => {
-                active.file.as_mut().expect("matching file operation exists").upload_cancel = None;
+                active.file.as_mut().expect("matching file operation exists").effect_cancel = None;
                 Err(match error {
                     mpsc::error::TrySendError::Full(_) => "file operation queue is full".to_owned(),
                     mpsc::error::TrySendError::Closed(_) => {
@@ -775,7 +940,7 @@ impl SessionManager {
         }
     }
 
-    fn authorize_upload_publication(
+    fn authorize_remote_effect(
         sessions: &Mutex<HashMap<String, SessionEntry>>,
         session_id: &str,
         transport: Uuid,
@@ -798,11 +963,11 @@ impl SessionManager {
         {
             return Err(session_files::FileAccessError::ConnectionEnded);
         }
-        file.upload_state.publication_started.store(true, Ordering::SeqCst);
+        file.upload_state.effect_started.store(true, Ordering::SeqCst);
         Ok(())
     }
 
-    fn finish_upload(&self, session_id: &str, transport: Uuid, operation: Uuid) {
+    fn finish_remote_effect(&self, session_id: &str, transport: Uuid, operation: Uuid) {
         if let Ok(mut sessions) = self.sessions.lock()
             && let Some(active) =
                 sessions.get_mut(session_id).and_then(|entry| entry.active.as_mut())
@@ -1292,7 +1457,7 @@ async fn serve_files(
                     cancel,
                     state,
                     move || {
-                        SessionManager::authorize_upload_publication(
+                        SessionManager::authorize_remote_effect(
                             &sessions,
                             &authorized_session,
                             transport,
@@ -1301,7 +1466,44 @@ async fn serve_files(
                     },
                 )
                 .await;
-                manager.finish_upload(&session_id, transport, operation);
+                manager.finish_remote_effect(&session_id, transport, operation);
+                let _ = reply.send(result);
+            }
+            FileCommand::PreflightMutation { mutation, mut reply } => {
+                tokio::select! { biased;
+                    _ = reply.closed() => {},
+                    result = session_files::preflight_mutation(connection, &mutation) => {
+                        let _ = reply.send(result);
+                    }
+                }
+            }
+            FileCommand::Mutation {
+                mutation,
+                preflight,
+                cancel,
+                session_id,
+                transport,
+                operation,
+                reply,
+            } => {
+                let sessions = manager.sessions.clone();
+                let authorized_session = session_id.clone();
+                let result = session_files::mutate_entry(
+                    connection,
+                    mutation,
+                    preflight,
+                    cancel,
+                    move || {
+                        SessionManager::authorize_remote_effect(
+                            &sessions,
+                            &authorized_session,
+                            transport,
+                            operation,
+                        )
+                    },
+                )
+                .await;
+                manager.finish_remote_effect(&session_id, transport, operation);
                 let _ = reply.send(result);
             }
         }
