@@ -42,6 +42,11 @@ The opt-in `live-server-integration` feature checks the production Personal enro
 device authentication, second-device pairing, sync-key verification, native notifications and reviewed inventory APIs against an
 independently running server. It does not read server source or seed its database.
 
+First-device setup requires private offline recovery-file export and explicit confirmation
+before Join. Preparing the identity, exporting the file and confirming its storage send no
+account request. The current client cannot restore an account from a recovery key; after
+enrollment, retain access to at least one enrolled device.
+
 Prepare a fresh disposable server on `https://localhost:<port>` with a trusted test CA.
 Complete public Operator setup and login, then issue an unused Personal invitation. Put a
 JSON descriptor in a private file with exactly `disposable: true`, `origin`,

@@ -107,7 +107,11 @@ persists the same pending identity in SQLCipher before any request.
 
 Save recovery file opens a native picker and writes the plaintext backup directly from Rust
 to a new file; existing files are not overwritten. Cancellation retains the current phase.
-The user separately confirms that the file is kept safely before Join becomes available.
+The prompt asks the user to keep the file private and offline, separate from the device,
+and states that this version cannot restore an account from a recovery key. After joining,
+the user must retain access to at least one enrolled device. It also confirms that no account
+request has been sent yet. The user separately confirms that the file is kept safely before
+Join becomes available.
 Clear connector failures before any HTTP request allow explicit Join again with the same
 identity. Timeouts, lost responses, and unknown outcomes retain the pending identity and show
 Authenticate this device, which uses a fresh challenge without replaying the invitation.

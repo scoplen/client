@@ -165,7 +165,9 @@ and remote-process resumption remain separate capabilities.
 
 Settings → Personal account can prepare a Personal invitation from a user-selected HTTPS
 Scoplen server, save and confirm a recovery file, join, and authenticate the first device.
-The same pending identity is retained across restarts and uncertain responses. The desktop
+Keep the recovery file private and offline, separate from the device. This version cannot
+restore an account from a recovery key; after joining, retain access to at least one enrolled
+device. The same pending identity is retained across restarts and uncertain responses. The desktop
 can explicitly synchronize selected inventory after key verification. Rust rotates its native
 device session when needed by an account query, sync, key verification or the active background owner.
 Existing local SSH data is not uploaded by account setup.

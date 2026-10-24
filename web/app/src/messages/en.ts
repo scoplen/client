@@ -180,7 +180,7 @@ export const en = {
   "settings.personal.server": "Server",
   "settings.personal.recoveryTitle": "Save your recovery key",
   "settings.personal.recoveryBody":
-    "Keep this file private and offline, separate from this device. Without another enrolled device or this key, you cannot recover your Personal data. No account request has been sent yet.",
+    "Keep this file private and offline, separate from this device. This version cannot restore an account from a recovery key. After joining, retain access to at least one enrolled device. No account request has been sent yet.",
   "settings.personal.saveRecovery": "Save recovery file",
   "settings.personal.saveAgain": "Save recovery file again",
   "settings.personal.recoveryConfirm": "I have saved the recovery file somewhere safe, separate from this device.",
