@@ -150,7 +150,7 @@ export const zhHans: Messages = {
   "settings.personal.server": "服务器",
   "settings.personal.recoveryTitle": "保存恢复密钥",
   "settings.personal.recoveryBody":
-    "请将文件私密、离线保存，并与本机分开存放。没有其他已加入的设备或此密钥，你将无法恢复个人数据。此时尚未向服务器提交账号请求。",
+    "请将文件私密、离线保存，并与本机分开存放。当前版本尚不支持使用恢复密钥恢复账号。加入后，请确保至少有一台已加入账号的设备仍可使用。此时尚未向服务器提交账号请求。",
   "settings.personal.saveRecovery": "保存恢复文件",
   "settings.personal.saveAgain": "再次保存恢复文件",
   "settings.personal.recoveryConfirm": "我已将恢复文件保存在安全的位置，并与本机分开存放。",
