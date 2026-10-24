@@ -82,11 +82,20 @@ are available without waiting for a welcome message or prompt.
 A connected terminal's Files button opens an SFTP browser on that terminal's
 authenticated SSH connection. It starts in the server's initial SFTP directory,
 opens subdirectories, and downloads regular files to a location selected in the
-native Save dialog. Cancel and closing Files stop the current file operation
-without closing the terminal; reconnect invalidates the old operation. A download
-that fails or is cancelled before the final save leaves the selected destination
-unchanged. Upload, drag and drop, remote file operations, transfer queues,
-resume, and preview remain separate C6 work.
+native Save dialog. Upload file selects one regular local file through the native
+Open dialog and sends it to the current remote directory. An existing regular
+file requires explicit overwrite confirmation; if the server cannot safely
+replace it, the original stays unchanged. Cancel and closing Files request
+cancellation without closing the terminal. Once final remote rename starts,
+the client waits for its result; reconnect fences off the old operation. A
+download that fails or is cancelled before the final save leaves the selected
+destination unchanged. An upload whose final remote rename has started may have
+an unknown outcome if its reply is lost. The terminal keeps that warning across
+reconnects and asks you to refresh and check the remote directory before trying
+again. It also keeps a warning when the operation may
+have left a temporary remote upload file. It never retries automatically. Drag
+and drop, other file operations, transfer queues, resume, and preview remain
+separate C6 work.
 
 When a session closes or fails, choose Reconnect in its header to connect again
 in the same tab. Its displayed terminal output stays available. Reconnect waits
