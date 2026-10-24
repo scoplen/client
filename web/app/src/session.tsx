@@ -24,7 +24,7 @@ import {
   type HostKeyTrustSource,
 } from "./ipc/bindings";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
-import { SessionFiles } from "./session-files";
+import { SessionFiles, type UploadOutcome } from "./session-files";
 
 export type SessionState =
   "verifying" | "trusting" | "passphrase" | "connecting" | "reconnecting" | "connected" | "closed" | "failed";
@@ -85,6 +85,7 @@ export function SessionTerminal({
   const [verified, setVerified] = useState<Array<Extract<PreparationEvent, { kind: "verified" }>>>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [uploadAttention, setUploadAttention] = useState<UploadOutcome[]>([]);
   const filesToggle = useRef<HTMLButtonElement>(null);
   const [context, setContext] = useState<PreparationContext | null>(null);
   const [passphrasePrompt, setPassphrasePrompt] = useState<string | null>(null);
@@ -120,6 +121,15 @@ export function SessionTerminal({
   useEffect(() => {
     if (!active && passphraseInput.current) passphraseInput.current.value = "";
   }, [active]);
+
+  const reportUploadOutcome = useCallback((outcome: UploadOutcome) => {
+    if (outcome.status !== "unknown" && !outcome.stagingMayRemain) return;
+    setUploadAttention((current) =>
+      current.some((item) => item.transportId === outcome.transportId && item.operationId === outcome.operationId)
+        ? current
+        : [...current, outcome],
+    );
+  }, []);
 
   const connectSession = useCallback(() => {
     if (!mounted.current || connecting.current) return;
@@ -635,6 +645,8 @@ export function SessionTerminal({
                   : t("session.failed");
 
   const face = sessionFaces[state];
+  const unknownUploads = uploadAttention.filter((item) => item.status === "unknown").length;
+  const uploadStagingMayRemain = uploadAttention.some((item) => item.stagingMayRemain);
 
   return (
     <main className="flex h-full min-h-0 flex-col bg-background text-foreground" aria-labelledby={titleId}>
@@ -723,6 +735,33 @@ export function SessionTerminal({
           {error}
         </p>
       ) : null}
+      {uploadAttention.length ? (
+        <div
+          role="alert"
+          className={`mx-3 mb-2 flex flex-wrap items-start gap-2 rounded-md border-(length:--scoplen-border-width) p-3 ${unknownUploads ? "border-attention" : "border-border"}`}
+        >
+          <div className="min-w-0 flex-1 text-xs">
+            {unknownUploads ? (
+              <p className="m-0 text-attention">
+                {t("session.files.upload.attentionUnknown", { count: unknownUploads })}
+              </p>
+            ) : null}
+            {uploadStagingMayRemain ? (
+              <p className="m-0 mt-1 text-attention">
+                {t(unknownUploads ? "session.files.upload.staging" : "session.files.upload.attentionStaging")}
+              </p>
+            ) : null}
+          </div>
+          {state === "connected" && !offline && !closingView && !filesOpen ? (
+            <Button variant="ghost" className="shrink-0 px-2" onClick={() => setFilesOpen(true)}>
+              {t("session.files.open")}
+            </Button>
+          ) : null}
+          <Button variant="ghost" className="shrink-0 px-2" onClick={() => setUploadAttention([])}>
+            {t("session.files.upload.dismiss")}
+          </Button>
+        </div>
+      ) : null}
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div className="min-h-0 min-w-0 flex-1 px-3 pb-3">
           <div
@@ -779,6 +818,7 @@ export function SessionTerminal({
               setFilesOpen(false);
               filesToggle.current?.focus();
             }}
+            onUploadOutcome={reportUploadOutcome}
           />
         ) : null}
       </div>

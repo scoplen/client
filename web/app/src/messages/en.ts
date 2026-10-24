@@ -316,15 +316,34 @@ export const en = {
   "session.files.home": "Home",
   "session.files.listing": "Loading remote files…",
   "session.files.downloading": "Downloading file…",
+  "session.files.uploading": "Uploading file…",
   "session.files.cancelling": "Cancelling file operation…",
+  "session.files.waiting": "Waiting for the file operation result…",
   "session.files.cancel": "Cancel",
   "session.files.cancelled": "File operation cancelled.",
   "session.files.error": "Could not complete the file operation.",
   "session.files.retry": "Try again",
+  "session.files.refresh": "Refresh files",
   "session.files.empty": "This directory is empty.",
   "session.files.download": "Download {name}",
   "session.files.saved": "Download saved to the selected location.",
   "session.files.saveCancelled": "No file was saved.",
+  "session.files.upload.action": "Upload file",
+  "session.files.upload.saved": "File uploaded to this directory.",
+  "session.files.upload.cancelled": "No file was uploaded.",
+  "session.files.upload.unsupported":
+    "This server cannot safely publish the upload here. The remote destination was left unchanged.",
+  "session.files.upload.conflict":
+    "The remote destination changed. It was not replaced. Refresh the directory before trying again.",
+  "session.files.upload.unknown":
+    "The upload result is unknown. Refresh the directory and check before uploading again.",
+  "session.files.upload.failed": "Upload failed before completion. Check the connection before trying again.",
+  "session.files.upload.staging": "A temporary .scoplen-upload-*.part file may remain in the remote directory.",
+  "session.files.upload.attentionUnknown":
+    "{count, plural, one {A file upload has} other {# file uploads have}} an unknown result. A remote file may have been saved. Reconnect if needed, open Files, and refresh the remote directory before uploading again.",
+  "session.files.upload.attentionStaging":
+    "A temporary .scoplen-upload-*.part file may remain in a remote directory. Reconnect if needed, open Files, and refresh the directory to check.",
+  "session.files.upload.dismiss": "Dismiss",
   "session.trust.title": "Verify this host key",
   "session.trust.reviewTitle": "Confirm this host key again",
   "session.trust.revokedBody":

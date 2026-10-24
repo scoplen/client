@@ -28,12 +28,21 @@ IPC request carries the logical session, exact transport, operation identifier,
 and remote path bytes to Rust. The panel keeps display-safe names and raw path
 arrays for navigation. It sends no SSH traffic itself. Rust lists the
 server's initial SFTP directory, opens subdirectories, and permits download of
-regular files through the native Save dialog. One file operation runs per
-terminal at a time. Cancel and closing the panel stop the file operation without
-ending the terminal. Tab close and reconnect invalidate the old result as part
-of the normal session lifecycle. A directory error offers another list;
-a download error leaves the directory visible so the person can select the file
-again. The interface does not claim upload, queue, resume, or remote edits yet.
+regular files through the native Save dialog. Upload file asks Rust to select
+one regular local file through the native Open dialog and upload it into the
+current directory; the frontend never receives its local path or contents.
+Rust checks an existing target and obtains native overwrite confirmation. If
+the server cannot safely replace it, the original remains unchanged. One file
+operation runs per terminal at a time. Cancel and closing the panel request
+cancellation without ending the terminal; Rust rejects cancellation after final
+remote rename begins and waits for the outcome. Tab close and reconnect fence
+old operations from new transports. A directory error offers another list; a
+download or upload error leaves the directory visible. If final remote rename
+has started and its reply cannot be confirmed, or if a temporary upload file
+may remain, an attention notice stays on the terminal after Files
+unmounts or reconnects. It asks the person to refresh and inspect the remote
+directory and never retries automatically. The interface does not claim drag
+and drop, queues, resume, or remote edits yet.
 
 
 `web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 92 px for the window controls, which sit centered in it, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.

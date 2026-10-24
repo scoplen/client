@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 import { Button, IconButton } from "@scoplen/ui";
-import { Download, File, Folder, X } from "lucide-react";
+import { Download, File, Folder, RefreshCw, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
-import { commands, type RemoteFileEntry } from "./ipc/bindings";
+import { commands, type RemoteFileEntry, type SessionUploadResult } from "./ipc/bindings";
 
 type Location = { name: string; path: number[] };
-type Activity = "listing" | "downloading" | "cancelling" | null;
+type Activity = "listing" | "downloading" | "uploading" | "cancelling" | "waiting" | null;
 type FileError = { message: string; listing: boolean };
+type UploadFeedback = Pick<SessionUploadResult, "status" | "stagingMayRemain">;
+
+export type UploadOutcome = UploadFeedback & {
+  transportId: string;
+  operationId: string;
+};
 
 function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
@@ -18,10 +24,12 @@ export function SessionFiles({
   sessionId,
   transportId,
   onClose,
+  onUploadOutcome,
 }: {
   sessionId: string;
   transportId: string;
   onClose: () => void;
+  onUploadOutcome: (outcome: UploadOutcome) => void;
 }) {
   const { t } = useI18n();
   const [locations, setLocations] = useState<Location[]>([{ name: "", path: [46] }]);
@@ -29,6 +37,7 @@ export function SessionFiles({
   const [activity, setActivity] = useState<Activity>("listing");
   const [error, setError] = useState<FileError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(null);
   const [reload, setReload] = useState(0);
   const operation = useRef<string | null>(null);
   const cancelled = useRef<string | null>(null);
@@ -102,6 +111,7 @@ export function SessionFiles({
     setActivity("downloading");
     setError(null);
     setNotice(null);
+    setUploadFeedback(null);
     void commands
       .sessionDownloadFile(sessionId, transportId, id, entry.path)
       .then((result) => {
@@ -124,12 +134,55 @@ export function SessionFiles({
       });
   };
 
+  const upload = () => {
+    if (activity || operation.current) return;
+    const id = crypto.randomUUID();
+    operation.current = id;
+    setActivity("uploading");
+    setError(null);
+    setNotice(null);
+    setUploadFeedback(null);
+    const report = (result: SessionUploadResult) => {
+      const current = mounted.current && operation.current === id;
+      if (result.status === "unknown" || result.stagingMayRemain) {
+        onUploadOutcome({
+          transportId,
+          operationId: id,
+          status: result.status,
+          stagingMayRemain: result.stagingMayRemain,
+        });
+      }
+      if (!current || result.status === "unknown") return;
+      setUploadFeedback({ status: result.status, stagingMayRemain: result.stagingMayRemain });
+      if (result.status === "saved") setReload((value) => value + 1);
+    };
+    void commands
+      .sessionUploadFile(sessionId, transportId, id, currentPath)
+      .then((result) =>
+        report(result.status === "ok" ? result.data : { status: "failed", message: null, stagingMayRemain: false }),
+      )
+      .catch(() => report({ status: "unknown", message: null, stagingMayRemain: true }))
+      .finally(() => {
+        if (!mounted.current || operation.current !== id) return;
+        operation.current = null;
+        cancelled.current = null;
+        setActivity(null);
+      });
+  };
+
   const cancel = () => {
     const id = operation.current;
-    if (!id || activity === "cancelling") return;
+    if (!id || activity === "cancelling" || activity === "waiting") return;
     cancelled.current = id;
     setActivity("cancelling");
-    void commands.sessionCancelFileOperation(sessionId, transportId, id).catch(() => undefined);
+    void commands
+      .sessionCancelFileOperation(sessionId, transportId, id)
+      .then((result) => {
+        if (result.status === "error" && mounted.current && operation.current === id) setActivity("waiting");
+      })
+      .catch(() => {
+        if (mounted.current && operation.current === id) setActivity("waiting");
+      });
   };
 
   return (
@@ -139,9 +192,22 @@ export function SessionFiles({
     >
       <header className="flex shrink-0 items-center justify-between gap-2 px-3 py-2">
         <h2 className="m-0 text-sm font-semibold">{t("session.files.title")}</h2>
-        <IconButton label={t("session.files.close")} onClick={onClose}>
-          <X aria-hidden="true" className="size-4" />
-        </IconButton>
+        <div className="flex min-w-0 items-center gap-1">
+          <Button variant="ghost" className="gap-1 px-2" disabled={activity !== null} onClick={upload}>
+            <Upload aria-hidden="true" className="size-4" />
+            {t("session.files.upload.action")}
+          </Button>
+          <IconButton
+            label={t("session.files.refresh")}
+            disabled={activity !== null}
+            onClick={() => setReload((value) => value + 1)}
+          >
+            <RefreshCw aria-hidden="true" className="size-4" />
+          </IconButton>
+          <IconButton label={t("session.files.close")} onClick={onClose}>
+            <X aria-hidden="true" className="size-4" />
+          </IconButton>
+        </div>
       </header>
       <nav
         aria-label={t("session.files.location")}
@@ -165,7 +231,10 @@ export function SessionFiles({
               disabled={activity !== null}
               title={name}
               className="max-w-40 shrink-0 px-2"
-              onClick={() => setLocations((current) => current.slice(0, index + 1))}
+              onClick={() => {
+                setUploadFeedback(null);
+                setLocations((current) => current.slice(0, index + 1));
+              }}
             >
               <span className="truncate">{name}</span>
             </Button>
@@ -175,7 +244,7 @@ export function SessionFiles({
       {activity ? (
         <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2 text-xs" role="status">
           <span>{t(`session.files.${activity}`)}</span>
-          <Button variant="ghost" disabled={activity === "cancelling"} onClick={cancel}>
+          <Button variant="ghost" disabled={activity === "cancelling" || activity === "waiting"} onClick={cancel}>
             {t("session.files.cancel")}
           </Button>
         </div>
@@ -195,6 +264,15 @@ export function SessionFiles({
         <p role="status" className="m-0 px-3 py-2 text-xs">
           {notice}
         </p>
+      ) : null}
+      {uploadFeedback ? (
+        <div
+          role={uploadFeedback.status === "saved" || uploadFeedback.status === "cancelled" ? "status" : "alert"}
+          className={`px-3 py-2 text-xs ${uploadFeedback.status === "saved" || uploadFeedback.status === "cancelled" ? "" : "text-attention"}`}
+        >
+          <p className="m-0">{t(`session.files.upload.${uploadFeedback.status}`)}</p>
+          {uploadFeedback.stagingMayRemain ? <p className="m-0 mt-1">{t("session.files.upload.staging")}</p> : null}
+        </div>
       ) : null}
       <div className="min-h-0 flex-1 overflow-auto px-2 pb-2">
         {!activity && !error && entries.length === 0 ? (
@@ -217,7 +295,10 @@ export function SessionFiles({
                   disabled={activity !== null}
                   title={entry.name}
                   className="min-w-0 flex-1 truncate text-left text-sm text-foreground underline-offset-2 hover:underline focus-visible:rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-50"
-                  onClick={() => setLocations((current) => [...current, { name: entry.name, path: entry.path }])}
+                  onClick={() => {
+                    setUploadFeedback(null);
+                    setLocations((current) => [...current, { name: entry.name, path: entry.path }]);
+                  }}
                 >
                   {entry.name}
                 </button>

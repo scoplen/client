@@ -250,6 +250,59 @@ it("starts Files at home on a replacement transport and ignores old directory re
   expect(screen.queryByRole("button", { name: "Download old.bin" })).toBeNull();
 });
 
+it.each(["unknown", "failed"] as const)(
+  "keeps an old upload's %s result with possible staging visible while a new transport uploads",
+  async (oldStatus) => {
+    const f = fixture();
+    const oldHome = f.delay("session_list_files");
+    const oldUpload = f.delay("session_upload_file");
+    render(sessionView());
+    const connection = await connect(f);
+    await connection.ready();
+    await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+    await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(1));
+    await act(() => oldHome.resolve({ entries: [] }));
+    await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+    await waitFor(() => expect(f.matching("session_upload_file")).toHaveLength(1));
+    const oldOperation = f.matching("session_upload_file")[0]?.args.operationId;
+    expect(f.matching("session_upload_file")[0]?.args).toMatchObject({
+      transportId: connection.transportId,
+      operationId: oldOperation,
+      directoryPath: [46],
+    });
+
+    await connection.emit({ kind: "retrying", attempt: 1, delaySeconds: 1, error: "Network connection lost" });
+    const replacement = await connection.start(true);
+    await replacement.ready();
+    const newHome = f.delay("session_list_files");
+    await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+    await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(2));
+    await act(() => newHome.resolve({ entries: [] }));
+
+    const newUpload = f.delay("session_upload_file");
+    await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+    await waitFor(() => expect(f.matching("session_upload_file")).toHaveLength(2));
+    expect(f.matching("session_upload_file")[1]?.args.transportId).toBe(replacement.transportId);
+    expect(f.matching("session_upload_file")[1]?.args.operationId).not.toBe(oldOperation);
+
+    await act(() =>
+      oldUpload.resolve({ status: oldStatus, message: "untrusted server detail", stagingMayRemain: true }),
+    );
+    if (oldStatus === "unknown") expect(screen.getByRole("alert").textContent).toContain("unknown result");
+    expect(screen.getByText("Uploading file…")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("A temporary .scoplen-upload-*.part file may remain");
+    expect(screen.queryByText("untrusted server detail")).toBeNull();
+    expect(f.matching("session_upload_file")).toHaveLength(2);
+
+    await act(() => newUpload.resolve({ status: "cancelled", message: null, stagingMayRemain: false }));
+    expect(screen.getByText("No file was uploaded.")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("A temporary .scoplen-upload-*.part file may remain");
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("No file was uploaded.")).toBeTruthy();
+  },
+);
+
 describe("saved terminal output", () => {
   beforeEach(() => {
     vi.stubGlobal("matchMedia", () => ({
