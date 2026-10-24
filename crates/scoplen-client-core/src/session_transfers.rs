@@ -91,6 +91,12 @@ pub enum SessionTransferState {
     AwaitingConfirmation,
     /// Preparing or moving file data; publication has not succeeded.
     Transferring,
+    /// The current bounded download segment is settling before retaining a checkpoint.
+    Pausing,
+    /// An owned download checkpoint is waiting for explicit continuation.
+    Paused,
+    /// The retained local and remote prefixes are being verified before continuation.
+    Validating,
     /// Checking and saving the completed byte stream.
     Finalizing,
     /// Cancellation or disconnection cleanup is still settling.
@@ -191,6 +197,10 @@ pub struct SessionTransferItem {
     pub total_bytes: Option<String>,
     /// Whether this exact execution can accept an explicit cancellation.
     pub can_cancel: bool,
+    /// Whether this download execution can request a checkpoint.
+    pub can_pause: bool,
+    /// Whether explicit continuation can queue this retained checkpoint.
+    pub can_resume: bool,
     /// Whether acknowledgement can clear an unresolved publication reminder.
     pub can_acknowledge: bool,
     /// A fixed category for localized interface feedback.
@@ -289,7 +299,14 @@ impl<T> TransferRecord<T> {
                         | SessionTransferState::AwaitingConfirmation
                         | SessionTransferState::Transferring
                         | SessionTransferState::Finalizing
+                        | SessionTransferState::Pausing
+                        | SessionTransferState::Paused
+                        | SessionTransferState::Validating
                 ),
+            can_pause: !self.publication_started
+                && self.direction == SessionTransferDirection::Download
+                && self.state == SessionTransferState::Transferring,
+            can_resume: self.state == SessionTransferState::Paused,
             can_acknowledge: self.state == SessionTransferState::Unknown,
             issue: self.issue,
             staging_may_remain: self.staging_may_remain,
@@ -304,6 +321,7 @@ pub(crate) struct DispatchedTransfer<T> {
 
 pub(crate) enum CancelTransfer<T> {
     Queued(T),
+    Cleanup(TransferIdentity, T),
     Running(TransferIdentity),
     Settled,
 }
@@ -348,16 +366,26 @@ impl<T> TransferQueue<T> {
     }
 
     pub fn has_pending(&self) -> bool {
-        self.items.iter().any(|record| record.state == SessionTransferState::Queued)
+        self.items.iter().any(|record| {
+            record.state == SessionTransferState::Queued
+                || (record.state == SessionTransferState::Cancelling && record.resources.is_some())
+        })
     }
 
     pub fn has_state(&self) -> bool {
         !self.items.is_empty() || !self.recent.is_empty() || self.native.is_some()
     }
 
+    pub fn is_settling(&self) -> bool {
+        self.running.is_some()
+            || self.items.iter().any(|record| record.state == SessionTransferState::Cancelling)
+    }
+
     pub fn blocks_file_operations(&self) -> bool {
         self.native.is_some()
-            || self.items.iter().any(|item| item.state != SessionTransferState::Unknown)
+            || self.items.iter().any(|item| {
+                !matches!(item.state, SessionTransferState::Unknown | SessionTransferState::Paused)
+            })
     }
 
     pub fn confirmation_open(&self, identity: TransferIdentity) -> bool {
@@ -464,7 +492,11 @@ impl<T> TransferQueue<T> {
             record.state == SessionTransferState::Queued && record.identity.transport == transport
         })?;
         let resources = record.resources.take()?;
-        record.state = SessionTransferState::Transferring;
+        record.state = if record.transferred > 0 {
+            SessionTransferState::Validating
+        } else {
+            SessionTransferState::Transferring
+        };
         let identity = record.identity;
         self.running = Some(identity);
         self.changed();
@@ -493,8 +525,10 @@ impl<T> TransferQueue<T> {
             return Err(SessionTransferIssue::NativeDialogBusy);
         }
         self.native = Some(NativeInteraction::Confirmation(identity));
-        self.running_mut(identity).expect("running item was checked").state =
-            SessionTransferState::AwaitingConfirmation;
+        let record = self.running_mut(identity).expect("running item was checked");
+        if record.state != SessionTransferState::Pausing {
+            record.state = SessionTransferState::AwaitingConfirmation;
+        }
         self.changed();
         Ok(())
     }
@@ -525,6 +559,11 @@ impl<T> TransferQueue<T> {
         record.transferred = update.transferred;
         record.total = update.total;
         record.state = match update.phase {
+            SessionFileTransferPhase::Transferring
+                if record.state == SessionTransferState::Pausing =>
+            {
+                SessionTransferState::Pausing
+            }
             SessionFileTransferPhase::Transferring => SessionTransferState::Transferring,
             SessionFileTransferPhase::Finalizing => SessionTransferState::Finalizing,
         };
@@ -570,6 +609,15 @@ impl<T> TransferQueue<T> {
         }
         if record.publication_started {
             return Err(SessionTransferIssue::PublicationStarted);
+        }
+        if record.state == SessionTransferState::Paused
+            || (record.state == SessionTransferState::Queued && record.transferred > 0)
+        {
+            record.state = SessionTransferState::Cancelling;
+            let resources = record.resources.take().expect("paused item owns checkpoint");
+            let identity = record.identity;
+            self.changed();
+            return Ok(CancelTransfer::Cleanup(identity, resources));
         }
         if record.state == SessionTransferState::Queued {
             let mut record = self.items.remove(index).expect("matching item exists");
@@ -651,6 +699,16 @@ impl<T> TransferQueue<T> {
         while index < self.items.len() {
             let record = &self.items[index];
             if record.identity.transport == transport
+                && (record.state == SessionTransferState::Paused
+                    || (record.state == SessionTransferState::Queued && record.transferred > 0))
+            {
+                let record = &mut self.items[index];
+                record.state = SessionTransferState::Cancelling;
+                record.issue = Some(SessionTransferIssue::TransportEnded);
+                index += 1;
+                continue;
+            }
+            if record.identity.transport == transport
                 && record.state == SessionTransferState::Queued
             {
                 let mut record = self.items.remove(index).expect("matching item exists");
@@ -678,11 +736,117 @@ impl<T> TransferQueue<T> {
 
     fn remember(&mut self, mut view: SessionTransferItem) {
         view.can_cancel = false;
+        view.can_pause = false;
+        view.can_resume = false;
         view.can_acknowledge = false;
         if self.recent.len() == TRANSFER_HISTORY {
             self.recent.pop_front();
         }
         self.recent.push_back(view);
+    }
+
+    pub fn pause(
+        &mut self,
+        queue: Uuid,
+        item: Uuid,
+        execution: Uuid,
+    ) -> Result<TransferIdentity, SessionTransferIssue> {
+        if queue != self.id {
+            return Err(SessionTransferIssue::StaleItem);
+        }
+        let record = self
+            .items
+            .iter_mut()
+            .find(|record| record.identity.item == item && record.identity.execution == execution)
+            .ok_or(SessionTransferIssue::StaleItem)?;
+        if record.publication_started {
+            return Err(SessionTransferIssue::PublicationStarted);
+        }
+        if record.state == SessionTransferState::Pausing {
+            return Ok(record.identity);
+        }
+        if !record.view().can_pause {
+            return Err(SessionTransferIssue::StaleItem);
+        }
+        record.state = SessionTransferState::Pausing;
+        let identity = record.identity;
+        self.changed();
+        Ok(identity)
+    }
+
+    pub fn is_pausing(&self, identity: TransferIdentity) -> bool {
+        self.items.iter().any(|record| {
+            record.identity == identity && record.state == SessionTransferState::Pausing
+        })
+    }
+
+    pub fn retain_paused(&mut self, identity: TransferIdentity, resources: T) -> Result<(), T> {
+        let Some(record) = self.running_mut(identity) else { return Err(resources) };
+        if record.state != SessionTransferState::Pausing {
+            return Err(resources);
+        }
+        record.resources = Some(resources);
+        record.state = SessionTransferState::Paused;
+        self.running = None;
+        self.changed();
+        Ok(())
+    }
+
+    pub fn resume(
+        &mut self,
+        queue: Uuid,
+        item: Uuid,
+        execution: Uuid,
+        transport: Uuid,
+    ) -> Result<(), SessionTransferIssue> {
+        if queue != self.id {
+            return Err(SessionTransferIssue::StaleItem);
+        }
+        let index = self
+            .items
+            .iter()
+            .position(|record| {
+                record.identity.item == item
+                    && record.identity.execution == execution
+                    && record.state == SessionTransferState::Paused
+            })
+            .ok_or(SessionTransferIssue::StaleItem)?;
+        if self.items[index].identity.transport != transport {
+            return Err(SessionTransferIssue::TransportEnded);
+        }
+        let mut record = self.items.remove(index).expect("paused item exists");
+        record.identity.execution = Uuid::now_v7();
+        record.state = SessionTransferState::Queued;
+        self.items.push_back(record);
+        self.changed();
+        Ok(())
+    }
+
+    pub fn finish_cleanup(&mut self, identity: TransferIdentity, completion: TransferCompletion) {
+        let Some(index) = self.items.iter().position(|record| {
+            record.identity == identity
+                && record.state == SessionTransferState::Cancelling
+                && record.resources.is_none()
+        }) else {
+            return;
+        };
+        let mut record = self.items.remove(index).expect("settling item exists");
+        record.state = completion.state;
+        record.issue = completion.issue;
+        record.staging_may_remain = completion.staging_may_remain;
+        self.remember(record.view());
+        self.changed();
+    }
+
+    pub fn take_cleanup(&mut self) -> Option<(DispatchedTransfer<T>, bool)> {
+        let record = self.items.iter_mut().find(|record| {
+            record.state == SessionTransferState::Cancelling && record.resources.is_some()
+        })?;
+        let resources = record.resources.take()?;
+        Some((
+            DispatchedTransfer { identity: record.identity, resources },
+            record.issue == Some(SessionTransferIssue::TransportEnded),
+        ))
     }
 }
 

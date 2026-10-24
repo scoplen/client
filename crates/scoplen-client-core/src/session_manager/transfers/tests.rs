@@ -104,6 +104,209 @@ async fn next_request(requests: &mut mpsc::Receiver<FileCommand>) -> FileCommand
         .expect("file worker closed")
 }
 
+#[tokio::test]
+async fn close_during_partial_creation_retains_capacity_until_the_owned_cleanup_finishes() {
+    use crate::session_files::downloads::tests::{Peer, blocked_creation};
+
+    let peer = Peer::start().await;
+    let (manager, transport, mut requests) = ready_manager();
+    let folder = tempfile::tempdir().unwrap();
+    let destination = folder.path().join("saved.bin");
+    let selected = destination.clone();
+    manager
+        .enqueue_download_with_picker(
+            "terminal",
+            &transport.to_string(),
+            b"./source.bin".to_vec(),
+            move || async move { Ok(Some(selected)) },
+            |_| async { Ok(true) },
+        )
+        .await
+        .unwrap();
+    let FileCommand::TransferDownload { input, control, operation, reply, .. } =
+        next_request(&mut requests).await
+    else {
+        panic!()
+    };
+    let prepared = peer.prepare(input).await;
+    let (started, created) = oneshot::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let owner = tokio::spawn(complete_owned_download(
+        manager.sessions.clone(),
+        "terminal".into(),
+        transport,
+        operation,
+        reply,
+        blocked_creation(prepared, control, started, blocked),
+    ));
+    let partial = created.await.unwrap();
+    assert!(partial.exists());
+    drop(requests);
+    manager.close("terminal").unwrap();
+    drop(Registration { manager: &manager, id: "terminal" });
+    let snapshot = manager.transfer_queue_snapshot("terminal").unwrap();
+    assert_eq!(snapshot.outstanding, 1);
+    assert_eq!(snapshot.items[0].state, SessionTransferState::Cancelling);
+    assert!(partial.exists());
+    assert!(!owner.is_finished());
+    release.send(()).unwrap();
+    owner.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while manager.transfer_queue_snapshot("terminal")
+            != Err(SessionTransferIssue::SessionUnavailable)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!partial.exists());
+    assert!(!destination.exists());
+}
+
+#[tokio::test]
+async fn resume_dispatch_failure_settles_the_retained_partial_including_identity_conflicts() {
+    use crate::session_files::downloads::tests::Peer;
+    let peer = Peer::start().await;
+    for scenario in 0..4 {
+        let (manager, transport, requests) = ready_manager();
+        let folder = tempfile::tempdir().unwrap();
+        let destination = folder.path().join("saved.bin");
+        let checkpoint = peer.paused(destination.clone()).await;
+        let partial = checkpoint.test_partial_path().to_path_buf();
+        let operation = Uuid::now_v7();
+        let identity = TransferIdentity { item: Uuid::now_v7(), execution: operation, transport };
+        let (abort, _) = AbortHandle::new_pair();
+        let guard = manager
+            .reserve_file_operation(
+                "terminal",
+                &transport.to_string(),
+                &operation.to_string(),
+                abort.clone(),
+            )
+            .unwrap();
+        let (queue, context) = {
+            let mut sessions = manager.sessions.lock().unwrap();
+            let entry = sessions.get_mut("terminal").unwrap();
+            let active = entry.active.as_mut().unwrap();
+            active.file.as_mut().unwrap().transfer = Some(identity);
+            if scenario == 0 || scenario == 3 {
+                active.ready = false;
+            }
+            (entry.transfers.id(), active.context.clone().unwrap())
+        };
+        if scenario == 1 {
+            abort.abort();
+        }
+        if scenario == 3 {
+            std::fs::rename(&partial, folder.path().join("old-partial")).unwrap();
+            std::fs::write(&partial, b"replacement must survive").unwrap();
+        }
+        drop(requests);
+        let result = manager
+            .execute_download_transfer(
+                "terminal",
+                queue,
+                identity,
+                &context,
+                guard,
+                None,
+                Some(checkpoint),
+            )
+            .await;
+        let TransferExecutionResult::Finished(result) = result else {
+            panic!("failed dispatch cannot pause")
+        };
+        assert_eq!(
+            result.state,
+            if scenario == 1 {
+                SessionTransferState::Cancelled
+            } else {
+                SessionTransferState::Interrupted
+            }
+        );
+        assert_eq!(result.staging_may_remain, scenario == 3);
+        if scenario == 3 {
+            assert_eq!(std::fs::read(&partial).unwrap(), b"replacement must survive");
+        } else {
+            assert!(!partial.exists());
+        }
+        assert!(!destination.exists());
+    }
+}
+
+#[tokio::test]
+async fn finalization_cleanup_uncertainty_survives_the_published_result_projection() {
+    let (manager, transport, mut requests) = ready_manager();
+    let folder = tempfile::tempdir().unwrap();
+    let chosen = folder.path().join("saved.bin");
+    manager
+        .enqueue_download_with_picker(
+            "terminal",
+            &transport.to_string(),
+            b"./source.bin".to_vec(),
+            move || async move { Ok(Some(chosen)) },
+            |_| async { Ok(true) },
+        )
+        .await
+        .unwrap();
+    let FileCommand::TransferDownload { reply, .. } = next_request(&mut requests).await else {
+        panic!()
+    };
+    reply
+        .send(Ok(DownloadExecution::Published {
+            result: SessionDownloadResult::new(SessionDownloadStatus::Conflict, None),
+            staging_may_remain: true,
+        }))
+        .ok();
+    let snapshot = snapshot_where(&manager, |snapshot| snapshot.recent.len() == 1).await;
+    assert_eq!(snapshot.recent[0].state, SessionTransferState::Conflict);
+    assert!(snapshot.recent[0].staging_may_remain);
+}
+
+#[tokio::test]
+async fn a_late_pause_result_after_close_settles_cleanup_and_releases_the_closed_owner() {
+    use crate::session_files::downloads::tests::Peer;
+    let peer = Peer::start().await;
+    let (manager, transport, _requests) = ready_manager();
+    let folder = tempfile::tempdir().unwrap();
+    let checkpoint = peer.paused(folder.path().join("saved.bin")).await;
+    let partial = checkpoint.test_partial_path().to_path_buf();
+    let (queue, selected) = {
+        let mut sessions = manager.sessions.lock().unwrap();
+        let entry = sessions.get_mut("terminal").unwrap();
+        let selection = entry.transfers.reserve_selection(transport).unwrap();
+        entry
+            .transfers
+            .enqueue_selected(
+                selection,
+                "source.bin",
+                SessionTransferDirection::Download,
+                Some(3 * 1024 * 1024 + 17),
+                SelectedTransfer::ResumeDownload(checkpoint),
+            )
+            .unwrap();
+        let selected = entry.transfers.take_next(transport).unwrap();
+        entry
+            .transfers
+            .pause(entry.transfers.id(), selected.identity.item, selected.identity.execution)
+            .unwrap();
+        entry.transfers.interrupt_transport(transport);
+        entry.intent.send_replace(Intent::Close);
+        entry.active = None;
+        (entry.transfers.id(), selected)
+    };
+    assert!(manager.transfer_queue_snapshot("terminal").unwrap().outstanding > 0);
+    manager
+        .settle_rejected_checkpoint("terminal", queue, selected.identity, selected.resources)
+        .await;
+    assert!(!partial.exists());
+    assert_eq!(
+        manager.transfer_queue_snapshot("terminal"),
+        Err(SessionTransferIssue::SessionUnavailable)
+    );
+}
+
 fn saved(
     manager: &SessionManager,
     transport: Uuid,
@@ -447,11 +650,12 @@ async fn final_destination_recheck_conflicts_before_the_publication_claim() {
         )
         .await
         .unwrap();
-    let FileCommand::Download { baseline, operation, reply, .. } =
+    let FileCommand::TransferDownload { input, operation, reply, .. } =
         next_request(&mut requests).await
     else {
         panic!()
     };
+    let DownloadInput::New { destination: baseline, .. } = input else { panic!() };
     std::fs::write(&target, b"created after download started").unwrap();
     let published = AtomicBool::new(false);
     let result = SessionManager::commit_download(
@@ -459,7 +663,7 @@ async fn final_destination_recheck_conflicts_before_the_publication_claim() {
         "terminal",
         transport,
         operation,
-        baseline.as_ref(),
+        Some(&baseline),
         || {
             published.store(true, Ordering::SeqCst);
             Ok(())
@@ -485,16 +689,16 @@ async fn final_destination_recheck_conflicts_before_the_publication_claim() {
             .load(Ordering::SeqCst)
     );
     manager.finish_remote_effect("terminal", transport, operation);
-    reply.send(result).ok();
+    reply.send(Ok(DownloadExecution::Published { result, staging_may_remain: false })).ok();
     let snapshot = snapshot_where(&manager, |snapshot| snapshot.recent.len() == 1).await;
     assert_eq!(snapshot.recent[0].state, SessionTransferState::Conflict);
     assert_eq!(snapshot.recent[0].issue, Some(SessionTransferIssue::TargetChanged));
-    assert!(snapshot.recent[0].staging_may_remain);
+    assert!(!snapshot.recent[0].staging_may_remain);
     assert_eq!(std::fs::read(target).unwrap(), b"created after download started");
 }
 
 #[tokio::test]
-async fn cancellation_of_a_dispatched_download_reports_unconfirmed_partial_cleanup() {
+async fn cancellation_of_a_dispatched_download_waits_for_owned_cleanup_settlement() {
     let (manager, transport, mut requests) = ready_manager();
     let directory = tempfile::tempdir().unwrap();
     let target = directory.path().join("cancelled.bin");
@@ -508,15 +712,25 @@ async fn cancellation_of_a_dispatched_download_reports_unconfirmed_partial_clean
         )
         .await
         .unwrap();
-    let FileCommand::Download { mut reply, .. } = next_request(&mut requests).await else {
+    let FileCommand::TransferDownload { mut control, reply, .. } =
+        next_request(&mut requests).await
+    else {
         panic!()
     };
     let (queue, item, execution) = enqueue_ids(&queued);
     manager.cancel_transfer("terminal", queue, item, execution).unwrap();
-    reply.closed().await;
+    control.changed().await.unwrap();
+    assert!(*control.borrow() == DownloadControl::Cancel);
+    assert_eq!(manager.transfer_queue_snapshot("terminal").unwrap().outstanding, 1);
+    reply
+        .send(Ok(DownloadExecution::Failed {
+            error: FileAccessError::Cancelled,
+            staging_may_remain: false,
+        }))
+        .ok();
     let snapshot = snapshot_where(&manager, |snapshot| snapshot.recent.len() == 1).await;
     assert_eq!(snapshot.recent[0].state, SessionTransferState::Cancelled);
-    assert!(snapshot.recent[0].staging_may_remain);
+    assert!(!snapshot.recent[0].staging_may_remain);
 }
 
 #[tokio::test]

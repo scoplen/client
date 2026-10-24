@@ -91,11 +91,12 @@ the new name is unused, and delete a regular file or empty directory after nativ
 confirmation. Standard SFTP v3 rename may still replace a concurrently created
 target on some servers. Other remote entry types are shown but cannot be changed here.
 Uploads and downloads join a FIFO queue owned by the logical terminal session.
-Up to 16 selections, queued files, running transfers and unacknowledged unknown
+Up to 16 selections, queued files, running or paused transfers and unacknowledged unknown
 results may be outstanding; the latest 32 known results remain visible. Hiding
 Files leaves transfers running. You can add files from the current listing while
 a transfer runs; directory navigation and remote changes wait until the queue is
-settled. One native picker or replacement review is open per queue.
+settled; paused downloads release execution so later queued work and file navigation can run.
+One native picker or replacement review is open per queue.
 
 Files shows confirmed contiguous bytes and a separate finalizing state. Only a
 confirmed remote publication or local save shows Saved. Cancellation stops an
@@ -112,7 +113,16 @@ destination before adding the file again; Dismiss reminder releases its queue
 slot without verifying or retrying the transfer. Cleanup warnings state when an
 incomplete file may remain. Closing the logical tab cancels pending work and
 settles a save already in progress. The queue has no recovery after tab or process
-closure. Drag and drop, pause, resume and preview remain separate C6 work.
+closure. A download can pause after its current bounded segment settles and resume explicitly
+on the same connected SSH transport. Resume keeps the original open remote file and local
+partial, verifies both confirmed prefixes, and queues a fresh execution at the FIFO tail.
+Verification rereads the complete confirmed prefix locally and remotely on every resume; its
+cost grows with that prefix and does not increase displayed payload progress. Metadata and an
+open handle do not provide an immutable source snapshot: unread suffix changes or concurrent
+writes after verification can still affect a download. Keep the source stable until it saves.
+Cancellation and disconnect settle owned partial cleanup; a detected replacement is preserved.
+Uploads, continuation after reconnect or tab/process closure, drag and drop and preview remain
+separate C6 work.
 
 When a session closes or fails, choose Reconnect in its header to connect again
 in the same tab. Its displayed terminal output stays available. Reconnect waits

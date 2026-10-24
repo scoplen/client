@@ -4,13 +4,20 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added download pause and explicit continuation on the same live SSH transport. Pausing settles
+  the current bounded segment before retaining the original remote handle and local partial;
+  the paused item retains capacity while later queued work can run. Resume verifies both
+  confirmed prefixes and the destination, then continues from that offset under a fresh FIFO
+  execution. Partial cleanup and publication check native file identity. Upload continuation,
+  cross-transport continuation and recovery after session/process closure remain incomplete.
+
 - Added a bounded per-terminal upload/download queue that keeps running while Files is hidden.
   Typed snapshots show contiguous byte progress, finalizing, conflicts, cancellation and known
   results. Unknown saves retain a reminder until explicitly acknowledged, without retrying or
   claiming success. Reconnection retains results but never replays old transfers. Native
   replacement review identifies the bound host, login and selected filename. Closing the
-  logical tab releases pending work and settles a local save already in progress. Pause,
-  resume, drag and drop, and recovery after closing the tab remain separate work.
+  logical tab releases pending work and settles a local save already in progress. Drag and drop
+  and recovery after closing the tab remain separate work.
 
 - Added terminal-owned SFTP create-directory, rename, and delete actions in connected Files.
   Rust accepts only one direct child with its original remote filename bytes, checks ordinary

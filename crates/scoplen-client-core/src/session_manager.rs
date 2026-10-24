@@ -25,7 +25,8 @@ use crate::connection::preparation::{
 use crate::connection::{MAX_SSH_INPUT, SshConnectionError, SshSession, terminal_size};
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
 use crate::session_files::{
-    self, FileTransferProgress, MutationPreflight, RemoteDirectory, RemoteMutation,
+    self, DownloadCheckpoint, DownloadControl, DownloadExecution, DownloadInput,
+    FileTransferProgress, MutationPreflight, RemoteDirectory, RemoteMutation,
     SessionDownloadResult, SessionDownloadStatus, SessionFileMutationResult,
     SessionFileMutationStatus, SessionFileTransferPhase, SessionUploadResult, SessionUploadStatus,
     UploadPreflight, UploadSource, UploadState,
@@ -139,6 +140,14 @@ enum TransportCommand {
 }
 
 enum FileCommand {
+    TransferDownload {
+        input: DownloadInput,
+        control: watch::Receiver<DownloadControl>,
+        session_id: String,
+        transport: Uuid,
+        operation: Uuid,
+        reply: oneshot::Sender<Result<DownloadExecution, session_files::FileAccessError>>,
+    },
     List {
         path: Vec<u8>,
         reply: oneshot::Sender<Result<RemoteDirectory, String>>,
@@ -198,6 +207,7 @@ struct ActiveFile {
     upload_state: Arc<UploadState>,
     effect_cancel: Option<watch::Sender<bool>>,
     transfer: Option<TransferIdentity>,
+    download_control: Option<watch::Sender<DownloadControl>>,
 }
 
 struct ActiveAttempt {
@@ -269,7 +279,9 @@ fn interrupt_transfers(entry: &mut SessionEntry, transport: Uuid) {
         && file.transfer == Some(identity)
         && !file.upload_state.effect_started.load(Ordering::SeqCst)
     {
-        if let Some(cancel) = &file.effect_cancel {
+        if let Some(control) = &file.download_control {
+            control.send_replace(DownloadControl::Cancel);
+        } else if let Some(cancel) = &file.effect_cancel {
             cancel.send_replace(true);
         } else {
             file.abort.abort();
@@ -298,8 +310,7 @@ impl Drop for Registration<'_> {
         if let Ok(mut sessions) = self.manager.sessions.lock()
             && let Some(mut entry) = sessions.remove(self.id)
         {
-            let retain_queue =
-                *entry.intent.borrow() != Intent::Close && entry.transfers.has_state();
+            let closing = *entry.intent.borrow() == Intent::Close;
             if let Some(transport) = entry.active.as_ref().map(|active| active.id) {
                 interrupt_transfers(&mut entry, transport);
             }
@@ -312,14 +323,18 @@ impl Drop for Registration<'_> {
                     file.abort.abort();
                 }
             }
-            if retain_queue {
+            if entry.transfers.has_state()
+                && (!closing || entry.transfers.has_pending() || entry.transfers.is_settling())
+            {
                 entry.phase = Phase::Ended;
-                let (intent, receiver) = watch::channel(Intent::None);
+                let (intent, receiver) =
+                    watch::channel(if closing { Intent::Close } else { Intent::None });
                 entry.intent = intent;
                 entry.receiver = Some(receiver);
                 sessions.insert(self.id.to_owned(), entry);
             }
         }
+        self.manager.start_transfer_worker(self.id);
     }
 }
 
@@ -520,9 +535,15 @@ impl SessionManager {
             }
         }
         entry.intent.send_replace(intent);
-        if intent == Intent::Close && entry.receiver.is_some() {
+        if intent == Intent::Close
+            && entry.receiver.is_some()
+            && !entry.transfers.has_pending()
+            && !entry.transfers.is_settling()
+        {
             sessions.remove(session_id);
         }
+        drop(sessions);
+        self.start_transfer_worker(session_id);
         Ok(())
     }
 
@@ -1000,6 +1021,7 @@ impl SessionManager {
             upload_state: upload_state.clone(),
             effect_cancel: None,
             transfer: None,
+            download_control: None,
         });
         Ok(FileRequestGuard {
             manager: self,
@@ -1243,6 +1265,8 @@ impl SessionManager {
                 file.abort.abort();
             }
         }
+        drop(sessions);
+        self.start_transfer_worker(session_id);
         Ok(())
     }
 
@@ -1590,6 +1614,38 @@ impl SessionManager {
     }
 }
 
+async fn complete_owned_download(
+    sessions: Arc<Mutex<HashMap<String, SessionEntry>>>,
+    session_id: String,
+    transport: Uuid,
+    operation: Uuid,
+    reply: oneshot::Sender<Result<DownloadExecution, session_files::FileAccessError>>,
+    download: impl Future<Output = DownloadExecution>,
+) {
+    match download.await {
+        DownloadExecution::Ready { prepared, destination } => {
+            drop(tokio::task::spawn_blocking(move || {
+                let mut prepared = prepared;
+                let result = SessionManager::commit_download(
+                    &sessions,
+                    &session_id,
+                    transport,
+                    operation,
+                    Some(&destination),
+                    || prepared.commit_retained(),
+                );
+                let clean = result.status == SessionDownloadStatus::Saved || prepared.discard();
+                SessionManager::finish_file_effect(&sessions, &session_id, transport, operation);
+                let _ = reply
+                    .send(Ok(DownloadExecution::Published { result, staging_may_remain: !clean }));
+            }));
+        }
+        result => {
+            let _ = reply.send(Ok(result));
+        }
+    }
+}
+
 async fn serve_files(
     manager: &SessionManager,
     connection: &crate::connection::SshConnection,
@@ -1597,6 +1653,42 @@ async fn serve_files(
 ) {
     while let Some(request) = files.recv().await {
         match request {
+            FileCommand::TransferDownload {
+                input,
+                control,
+                session_id,
+                transport,
+                operation,
+                reply,
+            } => {
+                let sessions = manager.sessions.clone();
+                let progress_sessions = sessions.clone();
+                let progress_session = session_id.clone();
+                let prepared = match session_files::prepare_download(connection, input).await {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                        continue;
+                    }
+                };
+                drop(tokio::spawn(complete_owned_download(
+                    sessions,
+                    session_id,
+                    transport,
+                    operation,
+                    reply,
+                    session_files::continue_download(prepared, control, move |update| {
+                        SessionManager::report_file_progress(
+                            &progress_sessions,
+                            &progress_session,
+                            transport,
+                            operation,
+                            &mut |_| {},
+                            update,
+                        );
+                    }),
+                )));
+            }
             FileCommand::List { path, mut reply } => {
                 tokio::select! { biased;
                     _ = reply.closed() => {},

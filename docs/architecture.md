@@ -470,6 +470,35 @@ The Hosts source navigation remains available as a horizontally scrolling row
 when the window is narrower than the desktop sidebar breakpoint, including at
 the desktop window's minimum width.
 
+## Session download checkpoints
+
+The Rust session transfer queue owns selected resources and paused download checkpoints.
+Each checkpoint retains its original SFTP session and remote file handle, source attributes,
+same-directory private local partial and read/write handle, native destination baseline,
+absolute confirmed offset and streaming SHA-256 state. Paths, handles and digests never enter
+IPC. A download completes 1 MiB segments with the published `download_to` range-end API and
+four pipelined 32 KiB reads; Pause waits for normal segment completion, flush and local sync.
+It does not cancel and reuse a poisoned SFTP session. Paused items retain an outstanding slot
+but release the execution permit. Each retained channel also consumes the peer's channel
+budget; refusing another channel does not evict existing checkpoints.
+
+Resume allocates a fresh execution, keeps the item identity and moves it to the FIFO tail.
+At dispatch, it checks source size and available non-access-time attributes, local native
+partial identity and exact length, and the selected destination. It hashes both confirmed
+prefixes again before seeking the retained local file and continuing the original remote
+handle from the absolute offset. Prefix verification uses bounded buffers but rereads the
+entire confirmed prefix on each resume. These reads never increment payload progress.
+An open handle and metadata are not an immutable snapshot, and prefix hashes cannot prove
+an unread suffix is unchanged or exclude writes after validation. Sources must remain stable.
+
+An owned download task settles cancellation and cleanup even when the transport actor ends.
+Native file identity and ordinary-file checks gate both partial deletion and publication;
+a path replaced by another file is preserved and cleanup uncertainty is projected. These
+checks followed by unlink or rename are not filesystem compare-and-swap. Disconnect and
+session close discard checkpoints after cleanup settlement; no item is replayed over a new
+transport. Unknown publication remains an explicit acknowledgement-only result. Upload
+continuation, cross-transport continuation and recovery after process closure remain open.
+
 ## Localization
 
 Messages are ICU MessageFormat catalogs in `web/app/src/messages`. English (`en.ts`) is the source; every other catalog has its type, so a missing key fails type checking, and the catalog tests format every message. The interface language is chosen in the core (`Locale::negotiate`) from the system's preferred languages: Simplified Chinese for `zh-Hans` and Simplified-script regions, otherwise English. A language setting arrives with Preference objects (roadmap C2).
