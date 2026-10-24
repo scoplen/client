@@ -317,6 +317,9 @@ export const en = {
   "session.files.listing": "Loading remote files…",
   "session.files.downloading": "Downloading file…",
   "session.files.uploading": "Uploading file…",
+  "session.files.creating": "Creating folder…",
+  "session.files.renaming": "Renaming remote item…",
+  "session.files.deleting": "Deleting remote item…",
   "session.files.cancelling": "Cancelling file operation…",
   "session.files.waiting": "Waiting for the file operation result…",
   "session.files.cancel": "Cancel",
@@ -329,6 +332,29 @@ export const en = {
   "session.files.saved": "Download saved to the selected location.",
   "session.files.saveCancelled": "No file was saved.",
   "session.files.upload.action": "Upload file",
+  "session.files.name": "Name",
+  "session.files.create.action": "New folder",
+  "session.files.create.title": "New folder",
+  "session.files.create.submit": "Create folder",
+  "session.files.rename.action": "Rename {name}",
+  "session.files.rename.title": "Rename remote item",
+  "session.files.rename.description":
+    "Enter a new name for {name}. Existing names are rejected, but a simultaneous remote change may be replaced on some servers.",
+  "session.files.rename.submit": "Rename",
+  "session.files.delete.action": "Delete {name}",
+  "session.files.operation.saved.create": "Folder created in this directory.",
+  "session.files.operation.saved.rename": "Remote item renamed.",
+  "session.files.operation.saved.delete": "Remote item deleted.",
+  "session.files.operation.cancelled": "Remote operation cancelled.",
+  "session.files.operation.conflict":
+    "The remote item changed or the target name already exists. Refresh the directory before trying again.",
+  "session.files.operation.unsupported":
+    "This type of remote directory or item cannot be changed here. Refresh to check it.",
+  "session.files.operation.unknown": "The result is unknown. Refresh the directory and check before trying again.",
+  "session.files.operation.failed":
+    "Could not complete the remote operation. Refresh the directory and check before trying again.",
+  "session.files.operation.attentionUnknown":
+    "One or more remote file operations have an unknown result. A change may have completed. Reconnect if needed, open Files, and refresh the directory to check before trying again.",
   "session.files.upload.saved": "File uploaded to this directory.",
   "session.files.upload.cancelled": "No file was uploaded.",
   "session.files.upload.unsupported":
@@ -339,8 +365,6 @@ export const en = {
     "The upload result is unknown. Refresh the directory and check before uploading again.",
   "session.files.upload.failed": "Upload failed before completion. Check the connection before trying again.",
   "session.files.upload.staging": "A temporary .scoplen-upload-*.part file may remain in the remote directory.",
-  "session.files.upload.attentionUnknown":
-    "One or more file uploads have an unknown result. A remote file may have been saved. Reconnect if needed, open Files, and refresh the remote directory before uploading again.",
   "session.files.upload.attentionStaging":
     "A temporary .scoplen-upload-*.part file may remain in a remote directory. Reconnect if needed, open Files, and refresh the directory to check.",
   "session.files.upload.dismiss": "Dismiss",

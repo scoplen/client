@@ -65,3 +65,22 @@ it("keeps a staging warning after its operation leaves the recent window", () =>
   expect(attention.recent.some((item) => item.operationId === "old-staging")).toBe(false);
   expect(attention).toMatchObject({ unknown: true, stagingMayRemain: true });
 });
+
+it("keeps an uncertain remote edit and a possible upload staging file together", () => {
+  const mutation = {
+    transportId: "first-transport",
+    operationId: "rename-operation",
+    status: "unknown",
+    stagingMayRemain: false,
+  } as const;
+  const first = recordUploadAttention(initialUploadAttention, mutation);
+  const second = recordUploadAttention(first, {
+    transportId: "second-transport",
+    operationId: "upload-operation",
+    status: "failed",
+    stagingMayRemain: true,
+  });
+  expect(second).toMatchObject({ unknown: true, stagingMayRemain: true });
+  expect(second.recent).toHaveLength(2);
+  expect(recordUploadAttention(second, mutation)).toBe(second);
+});

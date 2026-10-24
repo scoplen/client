@@ -34,17 +34,26 @@ current directory; the frontend never receives its local path or contents.
 Rust checks an existing target and obtains native overwrite confirmation. If
 the server cannot safely replace it, the original remains unchanged. The upload
 intent passes the current interface locale so Rust can localize the native
-overwrite dialog. One file operation runs per terminal at a time. Cancel and
-closing the panel request
-cancellation without ending the terminal; Rust rejects cancellation after final
-remote rename begins and waits for the outcome. Tab close and reconnect fence
+overwrite dialog. New folder sends only the entered name and current raw
+directory path to Rust. Rename sends a new name with the listed item's raw
+path; it never derives a new path from its display name. Rust rechecks target
+absence before dispatch, but standard SFTP v3 rename can still replace a target
+created concurrently on some servers. Delete is available only for listed regular
+files and directories. Rust checks the current remote type and asks for native
+confirmation before removing a regular file or empty directory. Other entry
+types remain visible but cannot be changed here. One file operation runs per
+terminal at a time. Cancel and closing the panel request cancellation without
+ending the terminal; Rust rejects cancellation after an upload's final remote
+rename begins and waits for the outcome. Tab close and reconnect fence
 old operations from new transports. A directory error offers another list; a
 download or upload error leaves the directory visible. If final remote rename
 has started and its reply cannot be confirmed, or if a temporary upload file
 may remain, an attention notice stays on the terminal after Files unmounts or
 reconnects. It asks the person to refresh and inspect the remote
-directory and never retries automatically. The interface does not claim drag
-and drop, queues, resume, or remote edits yet.
+directory and never retries automatically. An uncertain create, rename, or
+delete also keeps that reminder across Files closure or reconnect. The panel
+refreshes after a confirmed change; conflicts require a manual refresh. Drag
+and drop, queues, resume, and other remote edits remain separate work.
 
 
 `web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 92 px for the window controls, which sit centered in it, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Exercise terminal-owned SFTP browsing, download, and upload against disposable OpenSSH.
+//! Exercise terminal-owned SFTP browsing, transfer, and file changes against disposable OpenSSH.
 
 use std::env;
 use std::fs;
@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use scoplen_client_core::connection::preparation::{PreparationEvent, PreparationResponse};
 use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
-use scoplen_client_core::session_files::{RemoteFileKind, SessionUploadStatus};
+use scoplen_client_core::session_files::{
+    RemoteFileKind, SessionFileMutationStatus, SessionUploadStatus,
+};
 use scoplen_client_core::session_manager::{SessionEvent, SessionManager};
 use scoplen_client_core::store::Store;
 use scoplen_crypto::LocalDatabaseKey;
@@ -266,6 +268,170 @@ async fn exercise(
         )
         .await?;
     assert!(staged.entries.iter().all(|entry| !entry.name.starts_with(".scoplen-upload-")));
+
+    let created = manager
+        .create_remote_directory(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+            "new-directory",
+        )
+        .await?;
+    assert_eq!(created.status, SessionFileMutationStatus::Saved);
+    let collision = manager
+        .create_remote_directory(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+            "new-directory",
+        )
+        .await?;
+    assert_eq!(collision.status, SessionFileMutationStatus::Conflict);
+    let entries = manager
+        .list_files(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+        )
+        .await?;
+    let new_directory = entries
+        .entries
+        .iter()
+        .find(|entry| entry.name == "new-directory")
+        .ok_or("created directory was not listed")?;
+    assert_eq!(new_directory.kind, RemoteFileKind::Directory);
+    let uploaded_file = entries
+        .entries
+        .iter()
+        .find(|entry| entry.name == "upload.bin")
+        .ok_or("uploaded file was not listed before rename")?;
+    let renamed = manager
+        .rename_remote_entry(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+            uploaded_file.path.clone(),
+            "renamed.bin",
+        )
+        .await?;
+    assert_eq!(renamed.status, SessionFileMutationStatus::Saved);
+    let renamed_entries = manager
+        .list_files(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+        )
+        .await?;
+    assert!(renamed_entries.entries.iter().all(|entry| entry.name != "upload.bin"));
+    let renamed_file = renamed_entries
+        .entries
+        .iter()
+        .find(|entry| entry.name == "renamed.bin")
+        .ok_or("renamed file was not listed")?;
+    let rename_collision = manager
+        .rename_remote_entry(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+            renamed_file.path.clone(),
+            "binary.bin",
+        )
+        .await?;
+    assert_eq!(rename_collision.status, SessionFileMutationStatus::Conflict);
+    let declined_delete = manager
+        .delete_remote_entry_with_confirmation(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+            renamed_file.path.clone(),
+            |kind, name| {
+                assert_eq!(kind, RemoteFileKind::File);
+                assert_eq!(name, "renamed.bin");
+                async { Ok(false) }
+            },
+        )
+        .await?;
+    assert_eq!(declined_delete.status, SessionFileMutationStatus::Cancelled);
+    let deleted_file = manager
+        .delete_remote_entry_with_confirmation(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+            renamed_file.path.clone(),
+            |kind, _| {
+                assert_eq!(kind, RemoteFileKind::File);
+                async { Ok(true) }
+            },
+        )
+        .await?;
+    assert_eq!(deleted_file.status, SessionFileMutationStatus::Saved);
+    let deleted_directory = manager
+        .delete_remote_entry_with_confirmation(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+            new_directory.path.clone(),
+            |kind, _| {
+                assert_eq!(kind, RemoteFileKind::Directory);
+                async { Ok(true) }
+            },
+        )
+        .await?;
+    assert_eq!(deleted_directory.status, SessionFileMutationStatus::Saved);
+    let nonempty_directory = manager
+        .delete_remote_entry_with_confirmation(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            b".".to_vec(),
+            folder.path.clone(),
+            |kind, _| {
+                assert_eq!(kind, RemoteFileKind::Directory);
+                async { Ok(true) }
+            },
+        )
+        .await?;
+    assert_eq!(nonempty_directory.status, SessionFileMutationStatus::Failed);
+    manager.input(
+        "fixture-terminal",
+        &transport,
+        b"ln -s binary.bin .scoplen-files-smoke/link.bin && printf '%s%s\\n' SCOPLEN- LINK-READY\n"
+            .to_vec(),
+    )?;
+    wait_for(output, b"SCOPLEN-LINK-READY").await?;
+    let linked = manager
+        .list_files(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+        )
+        .await?
+        .entries
+        .into_iter()
+        .find(|entry| entry.name == "link.bin")
+        .ok_or("link fixture was not listed")?;
+    assert_eq!(linked.kind, RemoteFileKind::Other);
+    let special = manager
+        .delete_remote_entry_with_confirmation(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+            linked.path,
+            |_, _| async { Err("special entry must not request confirmation".into()) },
+        )
+        .await?;
+    assert_eq!(special.status, SessionFileMutationStatus::Unsupported);
 
     let cancelled_source = local.join("cancel-upload.bin");
     fs::File::create(&cancelled_source)?.set_len(1024 * 1024 * 1024)?;

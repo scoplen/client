@@ -31,8 +31,11 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   A connected terminal can browse bounded SFTP directories, download regular files through
   a native destination picker, and upload one regular local file through a native source picker
   on the same authenticated SSH connection. Upload to an existing regular target requires
-  explicit native overwrite confirmation and safe replacement support. Drag and drop,
-  transfer queues, resume, remote file operations, and the remaining C6 workflows are incomplete.
+  explicit native overwrite confirmation and safe replacement support. The same Files panel
+  creates folders, checks for an unused target before renaming regular files or directories, and
+  deletes regular files or empty directories after native confirmation. A concurrent remote rename
+  target may still be replaced on some servers; uncertain results require manual review.
+  Drag and drop, transfer queues, resume, and the remaining C6 workflows are incomplete.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.
 - The Windows TPM path of key storage cannot run on hosted CI runners, which have no TPM; only its DPAPI fallback is exercised there.

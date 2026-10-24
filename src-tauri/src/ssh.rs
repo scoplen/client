@@ -7,7 +7,9 @@ use crate::frames::SessionMessage;
 use crate::local_data::LocalDataState;
 use scoplen_client_core::connection::preparation::PreparationResponse;
 use scoplen_client_core::locale::Locale;
-use scoplen_client_core::session_files::{RemoteDirectory, SessionUploadResult};
+use scoplen_client_core::session_files::{
+    RemoteDirectory, RemoteFileKind, SessionFileMutationResult, SessionUploadResult,
+};
 use scoplen_client_core::session_manager::HistoryChange;
 use scoplen_crypto::SecretVec;
 use serde::Deserialize;
@@ -268,6 +270,116 @@ pub async fn session_upload_file(
                 })
                 .await
                 .map_err(|_| "the overwrite confirmation failed".to_owned())
+            },
+        )
+        .await
+}
+
+/// Create one directory inside the current remote Files directory.
+#[tauri::command]
+#[specta::specta]
+pub async fn session_create_remote_directory(
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    transport_id: String,
+    operation_id: String,
+    directory_path: Vec<u8>,
+    name: String,
+    locale: Locale,
+) -> Result<SessionFileMutationResult, String> {
+    let _ = locale;
+    manager
+        .create_remote_directory(&session_id, &transport_id, &operation_id, directory_path, &name)
+        .await
+}
+
+/// Rename one ordinary remote entry without offering replacement.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+#[specta::specta]
+pub async fn session_rename_remote_entry(
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    transport_id: String,
+    operation_id: String,
+    directory_path: Vec<u8>,
+    entry_path: Vec<u8>,
+    new_name: String,
+    locale: Locale,
+) -> Result<SessionFileMutationResult, String> {
+    let _ = locale;
+    manager
+        .rename_remote_entry(
+            &session_id,
+            &transport_id,
+            &operation_id,
+            directory_path,
+            entry_path,
+            &new_name,
+        )
+        .await
+}
+
+/// Delete one ordinary remote file or empty directory after native confirmation.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+#[specta::specta]
+pub async fn session_delete_remote_entry(
+    app: tauri::AppHandle,
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    transport_id: String,
+    operation_id: String,
+    directory_path: Vec<u8>,
+    entry_path: Vec<u8>,
+    locale: Locale,
+) -> Result<SessionFileMutationResult, String> {
+    manager
+        .delete_remote_entry_with_confirmation(
+            &session_id,
+            &transport_id,
+            &operation_id,
+            directory_path,
+            entry_path,
+            move |kind, name| async move {
+                tauri::async_runtime::spawn_blocking(move || {
+                    use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
+                    let (title, message, delete, keep) = match (locale, kind) {
+                        (Locale::En, RemoteFileKind::File) => (
+                            "Delete remote file",
+                            format!("Delete remote file \"{name}\" permanently?"),
+                            "Delete file",
+                            "Keep file",
+                        ),
+                        (Locale::En, RemoteFileKind::Directory) => (
+                            "Delete remote directory",
+                            format!("Delete remote directory \"{name}\" permanently?\n\nOnly empty directories can be deleted."),
+                            "Delete directory",
+                            "Keep directory",
+                        ),
+                        (Locale::ZhHans, RemoteFileKind::File) => (
+                            "删除远程文件",
+                            format!("要永久删除远程文件“{name}”吗？"),
+                            "删除文件",
+                            "保留文件",
+                        ),
+                        (Locale::ZhHans, RemoteFileKind::Directory) => (
+                            "删除远程目录",
+                            format!("要永久删除远程目录“{name}”吗？\n\n只能删除空目录。"),
+                            "删除目录",
+                            "保留目录",
+                        ),
+                        (_, RemoteFileKind::Other) => unreachable!("preflight rejects special entries"),
+                    };
+                    app.dialog()
+                        .message(message)
+                        .title(title)
+                        .kind(MessageDialogKind::Warning)
+                        .buttons(MessageDialogButtons::OkCancelCustom(delete.into(), keep.into()))
+                        .blocking_show()
+                })
+                .await
+                .map_err(|_| "the delete confirmation failed".to_owned())
             },
         )
         .await

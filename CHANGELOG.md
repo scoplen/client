@@ -4,6 +4,14 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added terminal-owned SFTP create-directory, rename, and delete actions in connected Files.
+  Rust accepts only one direct child with its original remote filename bytes, checks ordinary
+  file or directory type and destination absence before dispatch, and requires native deletion
+  confirmation. Deletion uses file removal or empty-directory removal; rename never requests
+  replacement. A lost reply is reported as unknown for manual inspection, without auto-retry.
+  The disposable OpenSSH fixture covers successful changes, collisions, declined deletion,
+  nonempty directory refusal, symbolic-link refusal, and a responsive terminal.
+
 - Added terminal-owned, single-file SFTP upload through the authenticated SSH connection.
   Rust selects and holds a regular local source, reviews existing remote targets in a native
   confirmation, writes a private exclusive staging file, and publishes only after transfer and

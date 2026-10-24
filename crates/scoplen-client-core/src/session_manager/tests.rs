@@ -117,18 +117,13 @@ async fn upload_publication_rejects_cancel_and_lost_worker_is_unknown() {
         panic!("expected upload worker")
     };
     state.staging_may_remain.store(true, Ordering::SeqCst);
-    SessionManager::authorize_upload_publication(
-        &manager.sessions,
-        "terminal",
-        transport,
-        operation,
-    )
-    .unwrap();
+    SessionManager::authorize_remote_effect(&manager.sessions, "terminal", transport, operation)
+        .unwrap();
     assert!(
         manager
             .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
             .unwrap_err()
-            .contains("publication")
+            .contains("remote change has started")
     );
     manager.expire_ready_transport("terminal", transport).unwrap();
     drop(reply);
@@ -223,10 +218,141 @@ async fn cancel_before_upload_publication_waits_for_worker_cleanup() {
         .unwrap();
     assert!(*cancel.borrow());
     assert!(!pending.is_finished(), "caller must wait for cleanup result");
-    manager.finish_upload("terminal", transport, operation);
+    manager.finish_remote_effect("terminal", transport, operation);
     reply.send(SessionUploadResult::new(SessionUploadStatus::Cancelled, None, false)).unwrap();
     let result = pending.await.unwrap().unwrap();
     assert_eq!(result.status, SessionUploadStatus::Cancelled);
+}
+
+#[tokio::test]
+async fn remote_create_lost_acknowledgement_is_unknown_and_never_requeued() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .create_remote_directory(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b".".to_vec(),
+                    "new-folder",
+                )
+                .await
+        }
+    });
+    let FileCommand::PreflightMutation { mutation, reply } = files.recv().await.unwrap() else {
+        panic!("expected mutation preflight")
+    };
+    assert!(
+        matches!(mutation, RemoteMutation::CreateDirectory { target, .. } if target == b"./new-folder")
+    );
+    reply
+        .send(Ok(MutationPreflight {
+            directory_attributes: scoplen_ssh::SftpAttributes {
+                permissions: Some(0o040700),
+                ..Default::default()
+            },
+            source_attributes: None,
+            source_kind: None,
+        }))
+        .ok();
+    let FileCommand::Mutation { reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected mutation dispatch")
+    };
+    SessionManager::authorize_remote_effect(&manager.sessions, "terminal", transport, operation)
+        .unwrap();
+    assert!(
+        manager
+            .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+            .unwrap_err()
+            .contains("remote change has started")
+    );
+    manager.expire_ready_transport("terminal", transport).unwrap();
+    drop(reply);
+    let result = pending.await.unwrap().unwrap();
+    assert_eq!(result.status, SessionFileMutationStatus::Unknown);
+    assert!(files.try_recv().is_err(), "unknown result must not enqueue a retry");
+}
+
+#[tokio::test]
+async fn cancelled_delete_confirmation_cannot_dispatch_a_late_removal() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let (entered, waiting) = oneshot::channel();
+    let (confirm, decided) = oneshot::channel::<bool>();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .delete_remote_entry_with_confirmation(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b".".to_vec(),
+                    b"./empty".to_vec(),
+                    |kind, name| async move {
+                        assert_eq!(kind, session_files::RemoteFileKind::Directory);
+                        assert_eq!(name, "empty");
+                        entered.send(()).unwrap();
+                        Ok(decided.await.unwrap())
+                    },
+                )
+                .await
+        }
+    });
+    let FileCommand::PreflightMutation { reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected mutation preflight")
+    };
+    reply
+        .send(Ok(MutationPreflight {
+            directory_attributes: scoplen_ssh::SftpAttributes {
+                permissions: Some(0o040700),
+                ..Default::default()
+            },
+            source_attributes: Some(scoplen_ssh::SftpAttributes {
+                permissions: Some(0o040700),
+                ..Default::default()
+            }),
+            source_kind: Some(session_files::RemoteFileKind::Directory),
+        }))
+        .ok();
+    waiting.await.unwrap();
+    manager
+        .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+        .unwrap();
+    let result = pending.await.unwrap().unwrap();
+    assert_eq!(result.status, SessionFileMutationStatus::Cancelled);
+    assert!(confirm.send(true).is_err(), "late native answer must be ignored");
+    assert!(files.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn remote_rename_conflict_stops_before_dispatch() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .rename_remote_entry(
+                    "terminal",
+                    &transport.to_string(),
+                    &Uuid::now_v7().to_string(),
+                    b".".to_vec(),
+                    b"./source".to_vec(),
+                    "existing",
+                )
+                .await
+        }
+    });
+    let FileCommand::PreflightMutation { reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected mutation preflight")
+    };
+    reply.send(Err(session_files::FileAccessError::Conflict)).ok();
+    let result = pending.await.unwrap().unwrap();
+    assert_eq!(result.status, SessionFileMutationStatus::Conflict);
+    assert!(files.try_recv().is_err());
 }
 
 #[tokio::test]
