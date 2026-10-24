@@ -201,6 +201,10 @@ export const commands = {
 	restorePersonalInventory: (ids: string[]) => typedError<number, PersonalInventoryError>(__TAURI_INVOKE("restore_personal_inventory", { ids })),
 	/**  Restore explicit copies of edits quarantined by a complete server reconciliation. */
 	restorePersonalInventoryRecovery: (ids: string[]) => typedError<number, PersonalInventoryError>(__TAURI_INVOKE("restore_personal_inventory_recovery", { ids })),
+	/**  Query complete verified history without exposing object fields or envelopes. */
+	queryPersonalInventoryHistory: (objectId: string) => typedError<PersonalInventoryHistory, PersonalInventoryError>(__TAURI_INVOKE("query_personal_inventory_history", { objectId })),
+	/**  Restore one reviewed version as a fresh local copy; no server write is sent. */
+	restorePersonalInventoryHistory: (reviewToken: string, sequence: string) => typedError<null, PersonalInventoryError>(__TAURI_INVOKE("restore_personal_inventory_history", { reviewToken, sequence })),
 };
 
 /** Events */
@@ -988,7 +992,19 @@ export type PersonalInventoryError =
 /**  Trust provenance requires review. */
 "trustReviewRequired" |
 /**  The review expired or local objects changed after it. */
-"previewExpired";
+"previewExpired" |
+/**  The server has no retained history for this object. */
+"historyNotFound";
+
+/**  Complete verified history, retained in Rust behind one short-lived review ticket. */
+export type PersonalInventoryHistory = {
+	/**  Single-use reference to the verified source retained inside Rust. */
+	token: string,
+	/**  Exact adopted object requested by the user. */
+	objectId: string,
+	/**  All retained versions, in ascending sequence order. */
+	versions: PersonalInventoryVersion[],
+};
 
 /**  Public metadata safe to expose over IPC. */
 export type PersonalInventoryObject = {
@@ -1054,6 +1070,14 @@ export type PersonalInventoryStatus = {
 	appliedCursor: string,
 	/**  Confirmed acknowledgement as decimal text. */
 	acknowledgedCursor: string,
+};
+
+/**  One verified version's safe metadata. Sequences are decimal text, never JS numbers. */
+export type PersonalInventoryVersion = {
+	/**  Exact server sequence of this version. */
+	sequence: string,
+	/**  Public category, name and content flags only. */
+	object: PersonalInventoryObject,
 };
 
 /**  Safe failures contain no source body, URL fragment, token, or underlying network diagnostic. */

@@ -7,6 +7,7 @@ use scoplen_model::{FieldEntry, FieldPath, ObjectType, cbor::Value};
 use super::*;
 use crate::store::LocalWrite;
 
+mod history;
 mod reconciliation;
 mod recovery_limits;
 

@@ -207,6 +207,16 @@ Applied and acknowledged positions are displayed separately without JavaScript i
 Original local copies can be selected and restored while offline; this creates new local
 objects and does not undo server changes or restore device-only secrets and handles.
 
+Version history queries one explicitly selected Personal object and verifies the complete
+retained list before showing names, categories, sequences, and content flags. Opening Settings
+does not query history. After selecting a version, a separate confirmation creates a fresh
+local copy with a new identifier and field clocks. The original object and concurrent edits
+stay intact. This does not upload or overwrite anything; the new copy needs the usual explicit
+adoption and shared-secret review before synchronization. The single-use review expires after
+five minutes and cannot be reused after reopening the store. Device-local credentials and
+hardware handles are never copied. Malformed or over-budget history leaves inventory and
+sync cursors unchanged.
+
 An expired cursor downloads and verifies a complete, bounded snapshot before one atomic local
 reconciliation. Missing clean objects are removed; missing local edits, including new selections
 that never uploaded, become immutable encrypted recovery copies requiring attention. They never

@@ -106,6 +106,8 @@ pub fn ipc() -> Builder<tauri::Wry> {
             personal_inventory::synchronize_personal_inventory,
             personal_inventory::restore_personal_inventory,
             personal_inventory::restore_personal_inventory_recovery,
+            personal_inventory::query_personal_inventory_history,
+            personal_inventory::restore_personal_inventory_history,
         ])
         .events(collect_events![
             events::StoreChanged,

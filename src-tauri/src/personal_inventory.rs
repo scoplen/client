@@ -4,8 +4,8 @@
 use crate::local_data::LocalDataState;
 use scoplen_client_core::{
     personal_inventory::{
-        PersonalInventoryError, PersonalInventoryPreview, PersonalInventoryResult,
-        PersonalInventorySettings, PersonalInventoryStatus,
+        PersonalInventoryError, PersonalInventoryHistory, PersonalInventoryPreview,
+        PersonalInventoryResult, PersonalInventorySettings, PersonalInventoryStatus,
     },
     personal_server::PersonalServer,
     store::Store,
@@ -15,6 +15,37 @@ use tauri::Manager as _;
 
 fn store(local: &LocalDataState) -> Result<Arc<Store>, PersonalInventoryError> {
     local.store().ok_or(PersonalInventoryError::Storage)
+}
+
+/// Query complete verified history without exposing object fields or envelopes.
+#[tauri::command]
+#[specta::specta]
+pub async fn query_personal_inventory_history(
+    local: tauri::State<'_, LocalDataState>,
+    personal: tauri::State<'_, PersonalServer>,
+    settings: tauri::State<'_, Arc<PersonalInventorySettings>>,
+    object_id: String,
+) -> Result<PersonalInventoryHistory, PersonalInventoryError> {
+    settings.query_history(&personal, store(&local)?, object_id).await
+}
+
+/// Restore one reviewed version as a fresh local copy; no server write is sent.
+#[tauri::command]
+#[specta::specta]
+pub async fn restore_personal_inventory_history(
+    app: tauri::AppHandle,
+    local: tauri::State<'_, LocalDataState>,
+    settings: tauri::State<'_, Arc<PersonalInventorySettings>>,
+    review_token: String,
+    sequence: String,
+) -> Result<(), PersonalInventoryError> {
+    let store = store(&local)?;
+    let settings = settings.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        settings.restore_history(&app.state::<PersonalServer>(), store, review_token, sequence)
+    })
+    .await
+    .map_err(|_| PersonalInventoryError::Storage)?
 }
 
 /// Read public inventory metadata and durable sync progress without network access.

@@ -810,6 +810,26 @@ export const en = {
     "A host-key trust record lacks verified same-account provenance. No unverified trust was accepted. Review that record before retrying.",
   "settings.personal.inventory.error.previewExpired":
     "This review expired or no longer matches local data. Nothing was adopted by this attempt. Review the selected objects again.",
+  "settings.personal.inventory.error.historyNotFound":
+    "The server has no retained versions for this object. Local data was kept. Refresh sync and query its history again.",
+  "settings.personal.history.title": "Version history",
+  "settings.personal.history.body":
+    "Query the verified versions of an object already in your Personal vault. Opening this page does not contact the server.",
+  "settings.personal.history.object": "Synced object",
+  "settings.personal.history.choose": "Choose an object",
+  "settings.personal.history.query": "View version history",
+  "settings.personal.history.version": "Version to restore",
+  "settings.personal.history.sequence": "Version {sequence}",
+  "settings.personal.history.retention":
+    "The current version and up to 20 earlier versions are available. Earlier versions are retained for at most 30 days. Choose a version to create a local copy.",
+  "settings.personal.history.restore": "Create local copy",
+  "settings.personal.history.confirmTitle": "Restore this version as a local copy?",
+  "settings.personal.history.confirmBody":
+    "A new local object will be created. The original and any current edits stay in place. Nothing is uploaded; review and select the copy separately before syncing it.",
+  "settings.personal.history.secret":
+    "This version includes shared credential content. It stays in the encrypted local copy and needs separate consent before upload.",
+  "settings.personal.history.restored":
+    "Created a new local copy. Review it in your inventory; select it explicitly if you want to sync it.",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };

@@ -2,6 +2,7 @@
 import { Button, Confirm, Dialog } from "@scoplen/ui";
 import { useEffect, useRef, useState } from "react";
 import { catalogs, useI18n } from "./i18n";
+import { PersonalHistorySettings } from "./personal-history-settings";
 import {
   commands,
   type PersonalInventoryError,
@@ -284,6 +285,20 @@ export function PersonalInventorySettings({
               </ul>
             </details>
           ) : null}
+          <PersonalHistorySettings
+            objects={status.objects.filter((object) => object.personal)}
+            authenticated={authenticated}
+            disabled={blocked}
+            onBusyChange={(active) => {
+              setBusy(active);
+              onBusyChange(active);
+            }}
+            onRestored={async () => {
+              const latest = await commands.personalInventoryStatus();
+              if (latest.status === "error") throw latest.error;
+              if (mounted.current) setStatus(latest.data);
+            }}
+          />
           <fieldset className="mt-6 min-w-0" disabled={blocked}>
             <legend className="text-sm font-medium">{t("settings.personal.inventory.backups")}</legend>
             <p className="mt-2 text-sm text-muted-foreground">{t("settings.personal.inventory.restoreBody")}</p>

@@ -732,4 +732,21 @@ export const zhHans: Messages = {
     "某条主机密钥信任记录缺少可验证的同账号来源，未接受未经验证的信任。请检查该记录后重试。",
   "settings.personal.inventory.error.previewExpired":
     "预览已过期或与本地数据不再一致，此次操作未改变对象归属。请重新检查所选对象。",
+  "settings.personal.inventory.error.historyNotFound":
+    "服务器未保留此对象的版本，本地数据已保留。请刷新同步后重新查询版本历史。",
+  "settings.personal.history.title": "版本历史",
+  "settings.personal.history.body": "查询已加入个人保管库的对象的已验证版本。打开此页面不会访问服务器。",
+  "settings.personal.history.object": "已同步对象",
+  "settings.personal.history.choose": "选择对象",
+  "settings.personal.history.query": "查看版本历史",
+  "settings.personal.history.version": "要恢复的版本",
+  "settings.personal.history.sequence": "版本 {sequence}",
+  "settings.personal.history.retention":
+    "可查看当前版本及最多 20 个历史版本。历史版本最多保留 30 天。选择一个版本以创建本地副本。",
+  "settings.personal.history.restore": "创建本地副本",
+  "settings.personal.history.confirmTitle": "将此版本恢复为本地副本？",
+  "settings.personal.history.confirmBody":
+    "将创建新的本地对象，原对象和当前改动均会保留。此次操作不上传数据；如需同步副本，请另行检查并明确选择。",
+  "settings.personal.history.secret": "此版本包含共享凭据内容，会保存在加密的本地副本中，上传前仍需另行确认。",
+  "settings.personal.history.restored": "已创建新的本地副本。请在清单中检查，如需同步，请明确选择该副本。",
 };

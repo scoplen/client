@@ -38,6 +38,7 @@ const MAX_CONFLICTS: usize = 3;
 const READ_LIMITS: SyncReadLimits =
     SyncReadLimits { max_envelope_bytes: MAX_ENVELOPE, max_body_bytes: RESPONSE_LIMIT };
 
+mod history;
 mod reconciliation;
 
 /// An explicit intent for the retained Personal vault. Empty `adopt` only synchronizes
@@ -556,7 +557,7 @@ fn local(error: StoreError) -> PersonalSyncError {
     match error {
         StoreError::SyncSelection | StoreError::NotFound(_) => PersonalSyncError::Selection,
         StoreError::SyncChanged => PersonalSyncError::ConcurrentChanges,
-        StoreError::RecoveryLimit => PersonalSyncError::ResourceLimit,
+        StoreError::RecoveryLimit | StoreError::VaultFull => PersonalSyncError::ResourceLimit,
         _ => storage(error).into(),
     }
 }

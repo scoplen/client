@@ -24,6 +24,7 @@ const sample = {
   id: "019a0123-4567-7890-8123-456789abcdef",
   downloaded: 2,
   uploaded: 3,
+  sequence: "9007199254740993",
 };
 
 describe("message catalogs", () => {
