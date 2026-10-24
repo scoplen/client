@@ -81,9 +81,14 @@ PNG recognition when `SCOPLEN_LIVE_PAIRING_MODE=png`. It verifies the old device
 explicitly approves admission, and requires the new device's real native authentication and
 complete K-4 bootstrap. Both devices query the signed two-device list. A pre-existing local
 host stays local throughout setup and the first explicit download; only a later preview and
-confirmation uploads it. Both devices create or edit synchronized hosts, decrypt each other's
-changes, acknowledge their durable cursors, and revalidate retained keys, account statements
-and objects after offline store reopen. No server database or private test control is accessed.
+confirmation uploads it. Both production background owners then run concurrently. Local store
+edits on each device must upload automatically and reach the connected peer through real
+notifications, with matching durable applied/acknowledged cursors. Each direction has a
+15-second deadline, shorter than the 60-second polling fallback; no manual sync intent follows
+either edit. New unadopted hosts remain local on both devices throughout these transfers.
+Both owners shut down normally, and retained keys, account statements, synchronized objects
+and local-only hosts revalidate after offline store reopen. No server database or private
+test control is accessed.
 
 After both devices have edited the same host, the scenario queries its complete retained
 history through real HTTPS. All three versions must verify, including the paired device's

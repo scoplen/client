@@ -3,17 +3,18 @@
 
 use super::*;
 
+mod background;
+
 pub(super) async fn verify(
     deployment: &Deployment,
     old_manager: &PersonalServer,
     old: Arc<Store>,
     old_host: uuid::Uuid,
-) -> PersonalAccountSnapshot {
+) -> (PersonalAccountSnapshot, scoplen_model::Object) {
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
-    let certificate = reqwest::Certificate::from_pem(&ca).expect("pairing test CA certificate");
     let new_manager = PersonalServer {
         operation: Mutex::new(()),
-        transport: Ok(Transport::fixture(certificate, Duration::from_secs(15))),
+        transport: Ok(trusted_transport(&ca)),
         pairing: Default::default(),
     };
     let directory = tempfile::tempdir().expect("independent paired device directory");
@@ -138,36 +139,8 @@ pub(super) async fn verify(
         .expect("original device decrypts paired-device host");
     assert_eq!(old.get(local_host.id).unwrap(), new.get(local_host.id).unwrap());
 
-    old.write(LocalWrite {
-        id: Some(local_host.id),
-        object_type: ObjectType::HOST,
-        fields: vec![(FieldPath::Field(1), Value::Text("Edited on original device".into()))],
-    })
-    .expect("original device edits paired-device object");
-    settings
-        .synchronize(old_manager, old.clone(), None)
-        .await
-        .expect("original device uploads encrypted edit");
-    settings
-        .synchronize(&new_manager, new.clone(), None)
-        .await
-        .expect("paired device decrypts original-device edit");
-    assert_eq!(old.get(local_host.id).unwrap(), new.get(local_host.id).unwrap());
-    new.write(LocalWrite {
-        id: Some(old_host),
-        object_type: ObjectType::HOST,
-        fields: vec![(FieldPath::Field(1), Value::Text("Edited on paired device".into()))],
-    })
-    .expect("paired device edits original-device object");
-    settings
-        .synchronize(&new_manager, new.clone(), None)
-        .await
-        .expect("paired device uploads encrypted edit");
-    settings
-        .synchronize(old_manager, old.clone(), None)
-        .await
-        .expect("original device decrypts paired-device edit");
-    assert_eq!(old.get(old_host).unwrap(), new.get(old_host).unwrap());
+    let (old_unshared, new_unshared) =
+        background::verify(old_manager, &new_manager, &old, &new, old_host, local_host.id).await;
     let saved = settings.status(&new).expect("paired device durable progress");
     assert_eq!(saved.pending, 0);
     assert_eq!(saved.applied_cursor, saved.acknowledged_cursor);
@@ -186,8 +159,10 @@ pub(super) async fn verify(
     assert_eq!(offline.pairing_status(&reopened).unwrap().phase, PairingPhase::Completed);
     assert_eq!(reopened.get(host.id).unwrap(), Some(host));
     assert_eq!(reopened.get(local_host.id).unwrap(), Some(local_host));
+    assert_eq!(reopened.get(new_unshared.id).unwrap(), Some(new_unshared));
+    assert!(reopened.get(old_unshared.id).unwrap().is_none());
     let restored = settings.status(&reopened).expect("paired offline progress");
     assert_eq!(restored.applied_cursor, saved.applied_cursor);
     assert_eq!(restored.applied_cursor, restored.acknowledged_cursor);
-    old_account
+    (old_account, old_unshared)
 }
