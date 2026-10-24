@@ -90,6 +90,13 @@ the current directory, rename a regular file or directory after checking that
 the new name is unused, and delete a regular file or empty directory after native
 confirmation. Standard SFTP v3 rename may still replace a concurrently created
 target on some servers. Other remote entry types are shown but cannot be changed here.
+
+Upload source admission rejects final symbolic links on Unix and final reparse
+points on Windows, including substitutions after the initial path check. Ancestor
+directories resolve normally. Rust retains the admitted ordinary-file handle, so
+later path replacement does not redirect reads; concurrent writes to that file
+remain possible. Keep the source stable until the upload saves.
+
 Uploads and downloads join a FIFO queue owned by the logical terminal session.
 Up to 16 selections, queued files, running or paused transfers and unacknowledged unknown
 results may be outstanding; the latest 32 known results remain visible. Hiding

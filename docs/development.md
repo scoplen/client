@@ -221,6 +221,22 @@ cargo test -p scoplen-client-core --lib personal_server::sync::tests::notificati
 cargo test -p scoplen-client-core --lib personal_server::background::tests
 ```
 
+## Upload source admission regressions
+
+Run the native source-admission and related file-access tests with:
+
+```bash
+cargo test -p scoplen-client-core --lib session_files::tests::
+```
+
+On Windows, these tests create real file symlinks and verify their reparse attributes.
+The replacement regression deterministically substitutes a symlink between the path
+preflight and the production handle-admission step; it does not rely on a timed race.
+Enable Windows Developer Mode or use an account with the Create symbolic links privilege.
+A permission error fails the tests; an unavailable symlink fixture is not passing evidence.
+An ordinary-file test also checks that replacing the path after admission does not
+redirect reads from the retained handle. Unix additionally checks FIFO rejection.
+
 ## Generated files
 
 | File | Regenerate with | When |
