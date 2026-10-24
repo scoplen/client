@@ -75,7 +75,7 @@ it("registers the listener before reading state and keeps a newer event over a d
   let register!: (unlisten: () => void) => void;
   let snapshot!: (value: "polling") => void;
   let notify!: Parameters<typeof events.personalSyncChanged.listen>[0];
-  vi.spyOn(events.personalSyncChanged, "listen").mockImplementation((listener) => {
+  const listen = vi.spyOn(events.personalSyncChanged, "listen").mockImplementation((listener) => {
     notify = listener;
     return new Promise((resolve) => {
       register = resolve;
@@ -91,6 +91,7 @@ it("registers the listener before reading state and keeps a newer event over a d
   const stop = vi.fn();
   const rendered = render(f.view());
   await screen.findByText(/Sync keys are verified on this device/);
+  await waitFor(() => expect(listen).toHaveBeenCalledOnce());
   expect(read).not.toHaveBeenCalled();
   await act(async () => register(stop));
   await waitFor(() => expect(read).toHaveBeenCalledOnce());
