@@ -8,6 +8,7 @@ import { SessionFiles } from "../src/session-files";
 const fileCommands = vi.hoisted(() => ({
   list: vi.fn(),
   download: vi.fn(),
+  upload: vi.fn(),
   cancel: vi.fn(),
 }));
 
@@ -15,6 +16,7 @@ vi.mock("../src/ipc/bindings", () => ({
   commands: {
     sessionListFiles: fileCommands.list,
     sessionDownloadFile: fileCommands.download,
+    sessionUploadFile: fileCommands.upload,
     sessionCancelFileOperation: fileCommands.cancel,
   },
 }));
@@ -31,10 +33,20 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function view(transportId = "transport-1", onClose = vi.fn()) {
+function view(
+  transportId = "transport-1",
+  onClose = vi.fn(),
+  onUploadOutcome = vi.fn(),
+  locale: "en" | "zh-Hans" = "en",
+) {
   return (
-    <I18nProvider locale="en">
-      <SessionFiles sessionId="session-1" transportId={transportId} onClose={onClose} />
+    <I18nProvider locale={locale}>
+      <SessionFiles
+        sessionId="session-1"
+        transportId={transportId}
+        onClose={onClose}
+        onUploadOutcome={onUploadOutcome}
+      />
     </I18nProvider>
   );
 }
@@ -46,7 +58,180 @@ const other: Entry = { name: "socket", path: [46, 47, 115, 111, 99, 107, 101, 11
 beforeEach(() => {
   fileCommands.list.mockReset().mockResolvedValue({ status: "ok", data: { entries: [] } });
   fileCommands.download.mockReset().mockResolvedValue({ status: "ok", data: true });
+  fileCommands.upload.mockReset().mockResolvedValue({
+    status: "ok",
+    data: { status: "saved", message: null, stagingMayRemain: false },
+  });
   fileCommands.cancel.mockReset().mockResolvedValue({ status: "ok", data: null });
+});
+
+it("uploads one native-selected file into the current raw directory and refreshes after success", async () => {
+  fileCommands.list
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [directory] } })
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [] } })
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [file] } });
+  const onUploadOutcome = vi.fn();
+  render(view("transport-1", vi.fn(), onUploadOutcome));
+  await userEvent.click(await screen.findByRole("button", { name: "logs" }));
+  await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(2));
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  expect(fileCommands.upload).toHaveBeenCalledWith(
+    "session-1",
+    "transport-1",
+    expect.any(String),
+    directory.path,
+    "en",
+  );
+  expect(await screen.findByText("File uploaded to this directory.")).toBeTruthy();
+  await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(3));
+  expect(screen.getByRole("button", { name: "Download raw.bin" })).toBeTruthy();
+  expect(onUploadOutcome).not.toHaveBeenCalled();
+});
+
+it("passes the current Chinese interface language to the native upload command", async () => {
+  render(view("transport-1", vi.fn(), vi.fn(), "zh-Hans"));
+  await screen.findByText("此目录为空。");
+  await userEvent.click(screen.getByRole("button", { name: "上传文件" }));
+  expect(fileCommands.upload).toHaveBeenCalledWith("session-1", "transport-1", expect.any(String), [46], "zh-Hans");
+});
+
+it.each([
+  ["cancelled", "No file was uploaded."],
+  ["unsupported", "This server cannot safely publish the upload here. The remote destination was left unchanged."],
+  ["conflict", "The remote destination changed. It was not replaced. Refresh the directory before trying again."],
+  ["failed", "Upload failed before completion. Check the connection before trying again."],
+])("shows the %s upload result without an automatic retry", async (status, text) => {
+  fileCommands.upload.mockResolvedValueOnce({ status: "ok", data: { status, message: null, stagingMayRemain: true } });
+  render(view());
+  await screen.findByText("This directory is empty.");
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  expect(await screen.findByText(text)).toBeTruthy();
+  expect(screen.getByText("A temporary .scoplen-upload-*.part file may remain in the remote directory.")).toBeTruthy();
+  expect(fileCommands.upload).toHaveBeenCalledTimes(1);
+  expect(fileCommands.list).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a rejected cancellation pending and reports an uncertain upload before stale guards", async () => {
+  const pending = deferred<{ status: "ok"; data: { status: "unknown"; message: null; stagingMayRemain: true } }>();
+  fileCommands.upload.mockReturnValueOnce(pending.promise);
+  fileCommands.cancel.mockResolvedValueOnce({ status: "error", error: "publication started" });
+  const onUploadOutcome = vi.fn();
+  render(view("transport-1", vi.fn(), onUploadOutcome));
+  await screen.findByText("This directory is empty.");
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  const operationId = fileCommands.upload.mock.calls[0]?.[2];
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(fileCommands.cancel).toHaveBeenCalledWith("session-1", "transport-1", operationId);
+  expect(await screen.findByText("Waiting for the file operation result…")).toBeTruthy();
+  await act(async () =>
+    pending.resolve({ status: "ok", data: { status: "unknown", message: null, stagingMayRemain: true } }),
+  );
+  expect(onUploadOutcome).toHaveBeenCalledWith({
+    transportId: "transport-1",
+    operationId,
+    status: "unknown",
+    stagingMayRemain: true,
+  });
+  expect(screen.queryByText("File operation cancelled.")).toBeNull();
+  expect(fileCommands.upload).toHaveBeenCalledTimes(1);
+  expect(fileCommands.list).toHaveBeenCalledTimes(1);
+});
+
+it("reports an old transport's uncertain result without changing the new directory", async () => {
+  const old = deferred<{ status: "ok"; data: { status: "unknown"; message: null; stagingMayRemain: false } }>();
+  fileCommands.upload.mockReturnValueOnce(old.promise);
+  fileCommands.list
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [] } })
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [directory] } });
+  const onUploadOutcome = vi.fn();
+  const rendered = render(view("old-transport", vi.fn(), onUploadOutcome));
+  await screen.findByText("This directory is empty.");
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  const oldOperation = fileCommands.upload.mock.calls[0]?.[2];
+  rendered.rerender(view("new-transport", vi.fn(), onUploadOutcome));
+  await waitFor(() => expect(fileCommands.cancel).toHaveBeenCalledWith("session-1", "old-transport", oldOperation));
+  await screen.findByRole("button", { name: "logs" });
+  await act(async () =>
+    old.resolve({ status: "ok", data: { status: "unknown", message: null, stagingMayRemain: false } }),
+  );
+  expect(onUploadOutcome).toHaveBeenCalledWith({
+    transportId: "old-transport",
+    operationId: oldOperation,
+    status: "unknown",
+    stagingMayRemain: false,
+  });
+  expect(screen.getByRole("button", { name: "logs" })).toBeTruthy();
+  expect(fileCommands.upload).toHaveBeenCalledTimes(1);
+});
+
+it("refreshes the directory after an unknown result without retrying the upload", async () => {
+  fileCommands.upload.mockResolvedValueOnce({
+    status: "ok",
+    data: { status: "unknown", message: "untrusted server detail", stagingMayRemain: false },
+  });
+  const onUploadOutcome = vi.fn();
+  render(view("transport-1", vi.fn(), onUploadOutcome));
+  await screen.findByText("This directory is empty.");
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  await waitFor(() => expect(onUploadOutcome).toHaveBeenCalledTimes(1));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Refresh files" }).hasAttribute("disabled")).toBe(false),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Refresh files" }));
+  await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(2));
+  expect(fileCommands.upload).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("untrusted server detail")).toBeNull();
+});
+
+it("shows a preflight IPC error as failed without a residual-file warning", async () => {
+  fileCommands.upload.mockResolvedValueOnce({ status: "error", error: "untrusted preflight detail" });
+  const onUploadOutcome = vi.fn();
+  render(view("transport-1", vi.fn(), onUploadOutcome));
+  await screen.findByText("This directory is empty.");
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  expect(
+    await screen.findByText("Upload failed before completion. Check the connection before trying again."),
+  ).toBeTruthy();
+  expect(screen.queryByText("untrusted preflight detail")).toBeNull();
+  expect(screen.queryByText("A temporary .scoplen-upload-*.part file may remain in the remote directory.")).toBeNull();
+  expect(onUploadOutcome).not.toHaveBeenCalled();
+});
+
+it("treats a rejected IPC promise as an unknown upload outcome", async () => {
+  fileCommands.upload.mockRejectedValueOnce(new Error("untrusted bridge detail"));
+  const onUploadOutcome = vi.fn();
+  render(view("transport-1", vi.fn(), onUploadOutcome));
+  await screen.findByText("This directory is empty.");
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  await waitFor(() => expect(onUploadOutcome).toHaveBeenCalledTimes(1));
+  expect(onUploadOutcome.mock.calls[0]?.[0]).toMatchObject({
+    status: "unknown",
+    stagingMayRemain: true,
+  });
+  expect(screen.queryByText("untrusted bridge detail")).toBeNull();
+});
+
+it("reports a possible staging file after the Files view closes", async () => {
+  const pending = deferred<{ status: "ok"; data: { status: "failed"; message: string; stagingMayRemain: true } }>();
+  fileCommands.upload.mockReturnValueOnce(pending.promise);
+  const onUploadOutcome = vi.fn();
+  const rendered = render(view("old-transport", vi.fn(), onUploadOutcome));
+  await screen.findByText("This directory is empty.");
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  const operationId = fileCommands.upload.mock.calls[0]?.[2];
+  rendered.unmount();
+  await act(async () =>
+    pending.resolve({
+      status: "ok",
+      data: { status: "failed", message: "untrusted server detail", stagingMayRemain: true },
+    }),
+  );
+  expect(onUploadOutcome).toHaveBeenCalledWith({
+    transportId: "old-transport",
+    operationId,
+    status: "failed",
+    stagingMayRemain: true,
+  });
 });
 
 it("opens one directory request in StrictMode and reports an empty directory", async () => {

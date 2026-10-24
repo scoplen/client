@@ -28,9 +28,11 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   fresh trust and credentials, and attempt-fenced input/output; a reconnect starts
   a new remote shell and does not restore remote processes. Bounded rendered output is saved
   locally and can be opened read-only from Recent after closing a tab or restarting the app.
-  A connected terminal can browse bounded SFTP directories and download regular files
-  through the same authenticated SSH connection, with a native destination picker and
-  cancellable operation. Upload, transfer queues, and the remaining file workflows are incomplete.
+  A connected terminal can browse bounded SFTP directories, download regular files through
+  a native destination picker, and upload one regular local file through a native source picker
+  on the same authenticated SSH connection. Upload to an existing regular target requires
+  explicit native overwrite confirmation and safe replacement support. Drag and drop,
+  transfer queues, resume, remote file operations, and the remaining C6 workflows are incomplete.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.
 - The Windows TPM path of key storage cannot run on hosted CI runners, which have no TPM; only its DPAPI fallback is exercised there.

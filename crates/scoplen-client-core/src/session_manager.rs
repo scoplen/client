@@ -7,6 +7,7 @@ use std::future::Future;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -23,7 +24,10 @@ use crate::connection::preparation::{
 };
 use crate::connection::{MAX_SSH_INPUT, SshConnectionError, SshSession, terminal_size};
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
-use crate::session_files::{self, RemoteDirectory};
+use crate::session_files::{
+    self, RemoteDirectory, SessionUploadResult, SessionUploadStatus, UploadPreflight, UploadSource,
+    UploadState,
+};
 use crate::session_lifecycle::SessionHistoryLease;
 use crate::store::Store;
 use crate::terminal_output::{SavedOutputError, TerminalSnapshot};
@@ -122,11 +126,34 @@ enum FileCommand {
         operation: Uuid,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    PreflightUpload {
+        target: Vec<u8>,
+        reply: oneshot::Sender<Result<UploadPreflight, String>>,
+    },
+    Upload {
+        source: Box<UploadSource>,
+        directory: Vec<u8>,
+        target: Vec<u8>,
+        preflight: UploadPreflight,
+        cancel: watch::Receiver<bool>,
+        state: Arc<UploadState>,
+        session_id: String,
+        transport: Uuid,
+        operation: Uuid,
+        reply: oneshot::Sender<SessionUploadResult>,
+    },
+}
+
+enum PreparedUpload {
+    Done(SessionUploadResult),
+    Ready { source: Box<UploadSource>, target: Vec<u8>, preflight: UploadPreflight },
 }
 
 struct ActiveFile {
     id: Uuid,
     abort: AbortHandle,
+    upload_state: Arc<UploadState>,
+    upload_cancel: Option<watch::Sender<bool>>,
 }
 
 struct ActiveAttempt {
@@ -144,6 +171,7 @@ struct FileRequestGuard<'a> {
     transport: Uuid,
     operation: Uuid,
     abort: AbortHandle,
+    upload_state: Arc<UploadState>,
 }
 
 impl Drop for FileRequestGuard<'_> {
@@ -155,7 +183,12 @@ impl Drop for FileRequestGuard<'_> {
             && active.id == self.transport
             && active.file.as_ref().is_some_and(|file| file.id == self.operation)
         {
-            active.file.take();
+            if let Some(cancel) = active.file.as_ref().and_then(|file| file.upload_cancel.as_ref())
+            {
+                cancel.send_replace(true);
+            } else {
+                active.file.take();
+            }
         }
     }
 }
@@ -495,6 +528,131 @@ impl SessionManager {
         result
     }
 
+    /// Select one local file and upload it only after Rust-owned conflict review.
+    pub async fn upload_file_with_picker<F, Fut, C, ConfirmFut>(
+        &self,
+        session_id: &str,
+        transport_id: &str,
+        operation_id: &str,
+        directory: Vec<u8>,
+        choose_source: F,
+        confirm_replace: C,
+    ) -> Result<SessionUploadResult, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Option<PathBuf>, String>>,
+        C: FnOnce(String) -> ConfirmFut,
+        ConfirmFut: Future<Output = Result<bool, String>>,
+    {
+        session_files::validate_path(&directory).map_err(|error| error.to_string())?;
+        let (abort, cancellation) = AbortHandle::new_pair();
+        let guard = self.reserve_file_operation(session_id, transport_id, operation_id, abort)?;
+        let preparation = Abortable::new(
+            async {
+                let Some(path) = choose_source().await? else {
+                    return Ok(PreparedUpload::Done(SessionUploadResult::new(
+                        SessionUploadStatus::Cancelled,
+                        None,
+                        false,
+                    )));
+                };
+                let source = session_files::open_upload_source(&path)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let target = source.target(&directory).map_err(|error| error.to_string())?;
+                let (reply, received) = oneshot::channel();
+                self.queue_file_request(
+                    &guard,
+                    FileCommand::PreflightUpload { target: target.clone(), reply },
+                )?;
+                let preflight = tokio::time::timeout(FILE_LIST_TIMEOUT, received)
+                    .await
+                    .map_err(|_| "the remote upload target did not respond".to_owned())?
+                    .map_err(|_| "the file operation ended with this connection".to_owned())??;
+                if preflight.target_attributes.is_some() {
+                    if !preflight.replacement_supported
+                        || !preflight
+                            .target_attributes
+                            .as_ref()
+                            .is_some_and(session_files::is_regular_upload_target)
+                    {
+                        return Ok(PreparedUpload::Done(SessionUploadResult::new(
+                            SessionUploadStatus::Unsupported,
+                            None,
+                            false,
+                        )));
+                    }
+                    if !confirm_replace(source.display_name()).await? {
+                        return Ok(PreparedUpload::Done(SessionUploadResult::new(
+                            SessionUploadStatus::Cancelled,
+                            None,
+                            false,
+                        )));
+                    }
+                }
+                Ok::<PreparedUpload, String>(PreparedUpload::Ready {
+                    source: Box::new(source),
+                    target,
+                    preflight,
+                })
+            },
+            cancellation,
+        )
+        .await;
+        let prepared = match preparation {
+            Ok(Ok(prepared)) => prepared,
+            Ok(Err(error)) => {
+                return Ok(SessionUploadResult::new(
+                    SessionUploadStatus::Failed,
+                    Some(error),
+                    false,
+                ));
+            }
+            Err(_) => {
+                return Ok(SessionUploadResult::new(SessionUploadStatus::Cancelled, None, false));
+            }
+        };
+        let (source, target, preflight) = match prepared {
+            PreparedUpload::Ready { source, target, preflight } => (source, target, preflight),
+            PreparedUpload::Done(result) => return Ok(result),
+        };
+        let (cancel_sender, cancel) = watch::channel(false);
+        let (reply, received) = oneshot::channel();
+        self.queue_upload_request(
+            &guard,
+            cancel_sender,
+            FileCommand::Upload {
+                source,
+                directory,
+                target,
+                preflight,
+                cancel,
+                state: guard.upload_state.clone(),
+                session_id: session_id.to_owned(),
+                transport: guard.transport,
+                operation: guard.operation,
+                reply,
+            },
+        )?;
+        let result = match received.await {
+            Ok(result) => result,
+            Err(_) if guard.upload_state.publication_started.load(Ordering::SeqCst) => {
+                SessionUploadResult::new(
+                    SessionUploadStatus::Unknown,
+                    None,
+                    guard.upload_state.staging_may_remain.load(Ordering::SeqCst),
+                )
+            }
+            Err(_) => SessionUploadResult::new(
+                SessionUploadStatus::Failed,
+                Some("the file operation ended with this connection".into()),
+                guard.upload_state.staging_may_remain.load(Ordering::SeqCst),
+            ),
+        };
+        drop(guard);
+        Ok(result)
+    }
+
     /// Cancel only the matching in-flight SFTP operation.
     pub fn cancel_file_operation(
         &self,
@@ -512,12 +670,19 @@ impl SessionManager {
         if active.id != transport || *entry.intent.borrow() != Intent::None {
             return Err("this session transport is no longer ready".into());
         }
-        let file = active.file.take().ok_or("file operation has ended")?;
+        let file = active.file.as_mut().ok_or("file operation has ended")?;
         if file.id != operation {
-            active.file = Some(file);
             return Err("file operation has ended".into());
         }
+        if file.upload_state.publication_started.load(Ordering::SeqCst) {
+            return Err("the upload has entered publication; its result must be checked".into());
+        }
         file.abort.abort();
+        if let Some(cancel) = &file.upload_cancel {
+            cancel.send_replace(true);
+        } else {
+            active.file.take();
+        }
         Ok(())
     }
 
@@ -541,8 +706,21 @@ impl SessionManager {
         if active.file.is_some() {
             return Err("another file operation is already running".into());
         }
-        active.file = Some(ActiveFile { id: operation, abort: abort.clone() });
-        Ok(FileRequestGuard { manager: self, session_id, transport, operation, abort })
+        let upload_state = Arc::new(UploadState::default());
+        active.file = Some(ActiveFile {
+            id: operation,
+            abort: abort.clone(),
+            upload_state: upload_state.clone(),
+            upload_cancel: None,
+        });
+        Ok(FileRequestGuard {
+            manager: self,
+            session_id,
+            transport,
+            operation,
+            abort,
+            upload_state,
+        })
     }
 
     fn queue_file_request(
@@ -564,6 +742,75 @@ impl SessionManager {
             mpsc::error::TrySendError::Full(_) => "file operation queue is full".to_owned(),
             mpsc::error::TrySendError::Closed(_) => "session is no longer connected".to_owned(),
         })
+    }
+
+    fn queue_upload_request(
+        &self,
+        guard: &FileRequestGuard<'_>,
+        cancel: watch::Sender<bool>,
+        request: FileCommand,
+    ) -> Result<(), String> {
+        let mut sessions = self.sessions.lock().map_err(|_| "session manager is unavailable")?;
+        let entry = sessions.get_mut(guard.session_id).ok_or("session is not connected")?;
+        let active = entry.active.as_mut().ok_or("session is not ready")?;
+        if active.id != guard.transport
+            || *entry.intent.borrow() != Intent::None
+            || guard.abort.is_aborted()
+            || active.file.as_ref().is_none_or(|file| file.id != guard.operation)
+        {
+            return Err("this file operation is no longer current".into());
+        }
+        active.file.as_mut().expect("matching file operation exists").upload_cancel = Some(cancel);
+        match active.files.try_send(request) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                active.file.as_mut().expect("matching file operation exists").upload_cancel = None;
+                Err(match error {
+                    mpsc::error::TrySendError::Full(_) => "file operation queue is full".to_owned(),
+                    mpsc::error::TrySendError::Closed(_) => {
+                        "session is no longer connected".to_owned()
+                    }
+                })
+            }
+        }
+    }
+
+    fn authorize_upload_publication(
+        sessions: &Mutex<HashMap<String, SessionEntry>>,
+        session_id: &str,
+        transport: Uuid,
+        operation: Uuid,
+    ) -> Result<(), session_files::FileAccessError> {
+        let sessions =
+            sessions.lock().map_err(|_| session_files::FileAccessError::ConnectionEnded)?;
+        let entry =
+            sessions.get(session_id).ok_or(session_files::FileAccessError::ConnectionEnded)?;
+        let active =
+            entry.active.as_ref().ok_or(session_files::FileAccessError::ConnectionEnded)?;
+        let file = active.file.as_ref().ok_or(session_files::FileAccessError::ConnectionEnded)?;
+        if file.abort.is_aborted() {
+            return Err(session_files::FileAccessError::Cancelled);
+        }
+        if !active.ready
+            || active.id != transport
+            || *entry.intent.borrow() != Intent::None
+            || file.id != operation
+        {
+            return Err(session_files::FileAccessError::ConnectionEnded);
+        }
+        file.upload_state.publication_started.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn finish_upload(&self, session_id: &str, transport: Uuid, operation: Uuid) {
+        if let Ok(mut sessions) = self.sessions.lock()
+            && let Some(active) =
+                sessions.get_mut(session_id).and_then(|entry| entry.active.as_mut())
+            && active.id == transport
+            && active.file.as_ref().is_some_and(|file| file.id == operation)
+        {
+            active.file.take();
+        }
     }
 
     fn commit_download(
@@ -1013,6 +1260,49 @@ async fn serve_files(
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
                 }
+            }
+            FileCommand::PreflightUpload { target, mut reply } => {
+                tokio::select! { biased;
+                    _ = reply.closed() => {},
+                    result = session_files::preflight_upload(connection, &target) => {
+                        let _ = reply.send(result.map_err(|error| error.to_string()));
+                    }
+                }
+            }
+            FileCommand::Upload {
+                source,
+                directory,
+                target,
+                preflight,
+                cancel,
+                state,
+                session_id,
+                transport,
+                operation,
+                reply,
+            } => {
+                let sessions = manager.sessions.clone();
+                let authorized_session = session_id.clone();
+                let result = session_files::upload_file(
+                    connection,
+                    *source,
+                    directory,
+                    target,
+                    preflight,
+                    cancel,
+                    state,
+                    move || {
+                        SessionManager::authorize_upload_publication(
+                            &sessions,
+                            &authorized_session,
+                            transport,
+                            operation,
+                        )
+                    },
+                )
+                .await;
+                manager.finish_upload(&session_id, transport, operation);
+                let _ = reply.send(result);
             }
         }
     }

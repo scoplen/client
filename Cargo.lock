@@ -4649,6 +4649,7 @@ dependencies = [
  "h2",
  "http",
  "httpdate",
+ "libc",
  "png 0.18.1",
  "qrcode",
  "rcgen",

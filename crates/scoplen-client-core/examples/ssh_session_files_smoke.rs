@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Exercise terminal-owned SFTP browsing and download against disposable OpenSSH.
+//! Exercise terminal-owned SFTP browsing, download, and upload against disposable OpenSSH.
 
 use std::env;
 use std::fs;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use scoplen_client_core::connection::preparation::{PreparationEvent, PreparationResponse};
 use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
-use scoplen_client_core::session_files::RemoteFileKind;
+use scoplen_client_core::session_files::{RemoteFileKind, SessionUploadStatus};
 use scoplen_client_core::session_manager::{SessionEvent, SessionManager};
 use scoplen_client_core::store::Store;
 use scoplen_crypto::LocalDatabaseKey;
@@ -161,6 +162,158 @@ async fn exercise(
     assert!(fs::read_dir(local)?.all(|entry| {
         !entry.unwrap().file_name().to_string_lossy().starts_with(".scoplen-download-")
     }));
+
+    let upload_source = local.join("upload.bin");
+    fs::write(&upload_source, b"first\0\xffupload")?;
+    let uploaded = manager
+        .upload_file_with_picker(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+            || async { Ok(Some(upload_source.clone())) },
+            |_| async { Err("new target unexpectedly requested replacement".into()) },
+        )
+        .await?;
+    assert_eq!(uploaded.status, SessionUploadStatus::Saved);
+    assert!(!uploaded.staging_may_remain);
+    let remote_upload = manager
+        .list_files(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+        )
+        .await?
+        .entries
+        .into_iter()
+        .find(|entry| entry.name == "upload.bin")
+        .ok_or("uploaded file was not listed")?;
+    let first_download = local.join("upload-first.bin");
+    manager
+        .download_file_with_picker(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            remote_upload.path.clone(),
+            || async { Ok(Some(first_download.clone())) },
+        )
+        .await?;
+    assert_eq!(fs::read(&first_download)?, b"first\0\xffupload");
+
+    fs::write(&upload_source, b"replacement\0\xfe")?;
+    let confirmations = AtomicUsize::new(0);
+    let declined = manager
+        .upload_file_with_picker(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+            || async { Ok(Some(upload_source.clone())) },
+            |name| {
+                assert_eq!(name, "upload.bin");
+                confirmations.fetch_add(1, Ordering::SeqCst);
+                async { Ok(false) }
+            },
+        )
+        .await?;
+    assert_eq!(declined.status, SessionUploadStatus::Cancelled);
+    assert_eq!(confirmations.load(Ordering::SeqCst), 1);
+    let declined_download = local.join("upload-declined.bin");
+    manager
+        .download_file_with_picker(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            remote_upload.path.clone(),
+            || async { Ok(Some(declined_download.clone())) },
+        )
+        .await?;
+    assert_eq!(fs::read(&declined_download)?, b"first\0\xffupload");
+    let replaced = manager
+        .upload_file_with_picker(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+            || async { Ok(Some(upload_source.clone())) },
+            |name| {
+                assert_eq!(name, "upload.bin");
+                confirmations.fetch_add(1, Ordering::SeqCst);
+                async { Ok(true) }
+            },
+        )
+        .await?;
+    assert_eq!(replaced.status, SessionUploadStatus::Saved);
+    assert_eq!(confirmations.load(Ordering::SeqCst), 2);
+    let replacement_download = local.join("upload-replaced.bin");
+    manager
+        .download_file_with_picker(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            remote_upload.path,
+            || async { Ok(Some(replacement_download.clone())) },
+        )
+        .await?;
+    assert_eq!(fs::read(&replacement_download)?, b"replacement\0\xfe");
+    let staged = manager
+        .list_files(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+        )
+        .await?;
+    assert!(staged.entries.iter().all(|entry| !entry.name.starts_with(".scoplen-upload-")));
+
+    let cancelled_source = local.join("cancel-upload.bin");
+    fs::File::create(&cancelled_source)?.set_len(1024 * 1024 * 1024)?;
+    manager.input(
+        "fixture-terminal",
+        &transport,
+        b"while :; do for staged in .scoplen-files-smoke/.scoplen-upload-*.part; do if [ -s \"$staged\" ] && [ ! -e .scoplen-files-smoke/cancel-upload.bin ]; then printf '%s%s\\n' SCOPLEN- UPLOAD-IN-FLIGHT; break 2; fi; done; sleep 0.02; done\n".to_vec(),
+    )?;
+    let cancel_upload_id = Uuid::now_v7().to_string();
+    let upload = manager.upload_file_with_picker(
+        "fixture-terminal",
+        &transport,
+        &cancel_upload_id,
+        folder.path.clone(),
+        || async { Ok(Some(cancelled_source.clone())) },
+        |_| async { Err("new target unexpectedly requested replacement".into()) },
+    );
+    let cancel_after_staging = async {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            wait_for(output, b"SCOPLEN-UPLOAD-IN-FLIGHT"),
+        )
+        .await??;
+        manager.cancel_file_operation("fixture-terminal", &transport, &cancel_upload_id)?;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    };
+    let (cancelled, cancelled_after_staging) = tokio::join!(upload, cancel_after_staging);
+    cancelled_after_staging?;
+    let cancelled = cancelled?;
+    assert_eq!(cancelled.status, SessionUploadStatus::Cancelled);
+    assert!(!cancelled.staging_may_remain);
+    let after_cancel = manager
+        .list_files(
+            "fixture-terminal",
+            &transport,
+            &Uuid::now_v7().to_string(),
+            folder.path.clone(),
+        )
+        .await?;
+    assert!(after_cancel.entries.iter().all(|entry| {
+        entry.name != "cancel-upload.bin" && !entry.name.starts_with(".scoplen-upload-")
+    }));
+    manager.input(
+        "fixture-terminal",
+        &transport,
+        b"printf '%s%s\\n' SCOPLEN- UPLOAD-CANCEL-ALIVE\n".to_vec(),
+    )?;
+    wait_for(output, b"SCOPLEN-UPLOAD-CANCEL-ALIVE").await?;
 
     let blocked_destination = local.join("existing-directory");
     fs::create_dir(&blocked_destination)?;

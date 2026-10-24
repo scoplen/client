@@ -6,7 +6,8 @@ use crate::events::{SessionChangeKind, SessionChanged};
 use crate::frames::SessionMessage;
 use crate::local_data::LocalDataState;
 use scoplen_client_core::connection::preparation::PreparationResponse;
-use scoplen_client_core::session_files::RemoteDirectory;
+use scoplen_client_core::locale::Locale;
+use scoplen_client_core::session_files::{RemoteDirectory, SessionUploadResult};
 use scoplen_client_core::session_manager::HistoryChange;
 use scoplen_crypto::SecretVec;
 use serde::Deserialize;
@@ -198,6 +199,75 @@ pub async fn session_download_file(
                         path.into_path().map_err(|_| "choose a local file destination".to_owned())
                     })
                     .transpose()
+            },
+        )
+        .await
+}
+
+/// Select one regular local file and publish it in the terminal's remote directory.
+#[tauri::command]
+#[specta::specta]
+pub async fn session_upload_file(
+    app: tauri::AppHandle,
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    transport_id: String,
+    operation_id: String,
+    directory_path: Vec<u8>,
+    locale: Locale,
+) -> Result<SessionUploadResult, String> {
+    let confirm_app = app.clone();
+    let picker_title = match locale {
+        Locale::En => "Upload local file",
+        Locale::ZhHans => "选择要上传的本地文件",
+    };
+    manager
+        .upload_file_with_picker(
+            &session_id,
+            &transport_id,
+            &operation_id,
+            directory_path,
+            || async move {
+                let source = tauri::async_runtime::spawn_blocking(move || {
+                    use tauri_plugin_dialog::DialogExt as _;
+                    app.dialog().file().set_title(picker_title).blocking_pick_file()
+                })
+                .await
+                .map_err(|_| "the upload source picker failed".to_owned())?;
+                source
+                    .map(|path| path.into_path().map_err(|_| "choose a local file".to_owned()))
+                    .transpose()
+            },
+            move |name| async move {
+                tauri::async_runtime::spawn_blocking(move || {
+                    use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
+                    let (title, message, replace, keep) = match locale {
+                        Locale::En => (
+                            "Replace remote file",
+                            format!("Replace remote file \"{name}\"?\n\nThe existing file stays in place until the upload is complete."),
+                            "Replace file",
+                            "Keep existing",
+                        ),
+                        Locale::ZhHans => (
+                            "替换远程文件",
+                            format!("要替换远程文件“{name}”吗？\n\n上传完成前，原文件会保持不变。"),
+                            "替换文件",
+                            "保留原文件",
+                        ),
+                    };
+                    confirm_app
+                        .dialog()
+                        .message(message)
+                        .title(title)
+                        .kind(MessageDialogKind::Warning)
+                        .buttons(MessageDialogButtons::OkCancelCustom(
+                            replace.into(),
+                            keep.into(),
+                        ))
+                        .blocking_show()
+                })
+                .await
+                .map_err(|_| "the overwrite confirmation failed".to_owned())
             },
         )
         .await

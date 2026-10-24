@@ -68,6 +68,7 @@ mockIPC((cmd, args) => {
     };
   }
   if (cmd === "session_download_file") return false;
+  if (cmd === "session_upload_file") return { status: "unknown", message: null, stagingMayRemain: true };
   return null;
 });
 

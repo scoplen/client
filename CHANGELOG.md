@@ -4,6 +4,15 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added terminal-owned, single-file SFTP upload through the authenticated SSH connection.
+  Rust selects and holds a regular local source, reviews existing remote targets in a native
+  confirmation, writes a private exclusive staging file, and publishes only after transfer and
+  target recheck. Existing files require OpenSSH atomic replacement support; refusals and
+  changed targets leave them untouched. Cancellation cleans confirmed staging when possible,
+  while a lost publication acknowledgement reports an unknown result for manual inspection.
+  The OpenSSH fixture exercises save, declined and confirmed replacement, in-flight cancellation,
+  staging cleanup, and a still-responsive terminal.
+
 - Added transient pairing QR display and an explicit native PNG screenshot picker. Rust
   bounds local decoding, accepts exactly one canonical QRv2, checks the selected account's
   origin before claiming, and verifies the authenticated device-key digest before approval.

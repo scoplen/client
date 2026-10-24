@@ -26,6 +26,8 @@ export const commands = {
 	sessionListFiles: (sessionId: string, transportId: string, operationId: string, path: number[]) => typedError<RemoteDirectory, string>(__TAURI_INVOKE("session_list_files", { sessionId, transportId, operationId, path })),
 	/**  Download a regular remote file to a destination chosen in the native picker. */
 	sessionDownloadFile: (sessionId: string, transportId: string, operationId: string, remotePath: number[]) => typedError<boolean, string>(__TAURI_INVOKE("session_download_file", { sessionId, transportId, operationId, remotePath })),
+	/**  Select one regular local file and publish it in the terminal's remote directory. */
+	sessionUploadFile: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], locale: Locale) => typedError<SessionUploadResult, string>(__TAURI_INVOKE("session_upload_file", { sessionId, transportId, operationId, directoryPath, locale })),
 	/**  Stop only the matching SFTP operation, leaving the terminal connected. */
 	sessionCancelFileOperation: (sessionId: string, transportId: string, operationId: string) => typedError<null, string>(__TAURI_INVOKE("session_cancel_file_operation", { sessionId, transportId, operationId })),
 	/**  Begin an explicit reconnect with a fresh automatic retry budget. */
@@ -1588,6 +1590,31 @@ export type SessionPreparationIntent =
 { kind: "passphrase";
 /**  One-time secret input. */
 value: string };
+
+/**  A lost publish acknowledgement must never be presented as a retryable failure. */
+export type SessionUploadResult = {
+	/**  Whether the target was saved, untouched, or has an unknown final state. */
+	status: SessionUploadStatus,
+	/**  A bounded operational detail; the interface uses localized status text. */
+	message: string | null,
+	/**  A private remote staging file might remain after interrupted cleanup. */
+	stagingMayRemain: boolean,
+};
+
+/**  The result of one native, terminal-owned upload intent. */
+export type SessionUploadStatus =
+/**  The server acknowledged publication of the complete file. */
+"saved" |
+/**  The person cancelled before publication began. */
+"cancelled" |
+/**  Safe replacement is unavailable for an existing target. */
+"unsupported" |
+/**  The target changed after preflight; no replacement was attempted. */
+"conflict" |
+/**  Publication began, but the final acknowledgement was lost. */
+"unknown" |
+/**  Upload failed before publication or received an explicit refusal. */
+"failed";
 
 /**  How a new host authenticates. */
 export type SignIn =
