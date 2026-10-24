@@ -40,6 +40,8 @@ pub fn ipc() -> Builder<tauri::Wry> {
             session_transfers::session_enqueue_upload,
             session_transfers::session_enqueue_download,
             session_transfers::session_cancel_transfer,
+            session_transfers::session_pause_transfer,
+            session_transfers::session_resume_transfer,
             session_transfers::session_acknowledge_transfer,
             ssh::session_create_remote_directory,
             ssh::session_rename_remote_entry,

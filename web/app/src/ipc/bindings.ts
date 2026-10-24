@@ -32,6 +32,10 @@ export const commands = {
 	sessionEnqueueDownload: (sessionId: string, transportId: string, remotePath: number[], locale: Locale) => typedError<SessionTransferEnqueueResult, SessionTransferIssue>(__TAURI_INVOKE("session_enqueue_download", { sessionId, transportId, remotePath, locale })),
 	/**  Cancel only the queue item and execution the person selected. */
 	sessionCancelTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_cancel_transfer", { sessionId, queueId, itemId, executionId })),
+	/**  Pause a download after its current bounded segment has settled. */
+	sessionPauseTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_pause_transfer", { sessionId, queueId, itemId, executionId })),
+	/**  Queue an explicit continuation of the retained download on its original transport. */
+	sessionResumeTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_resume_transfer", { sessionId, queueId, itemId, executionId })),
 	/**  Clear one unknown-result reminder without retrying or asserting a successful save. */
 	sessionAcknowledgeTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_acknowledge_transfer", { sessionId, queueId, itemId, executionId })),
 	/**  Create one directory inside the current remote Files directory. */
@@ -1705,6 +1709,10 @@ export type SessionTransferItem = {
 	totalBytes: string | null,
 	/**  Whether this exact execution can accept an explicit cancellation. */
 	canCancel: boolean,
+	/**  Whether this download execution can request a checkpoint. */
+	canPause: boolean,
+	/**  Whether explicit continuation can queue this retained checkpoint. */
+	canResume: boolean,
 	/**  Whether acknowledgement can clear an unresolved publication reminder. */
 	canAcknowledge: boolean,
 	/**  A fixed category for localized interface feedback. */
@@ -1743,6 +1751,12 @@ export type SessionTransferState =
 "awaitingConfirmation" |
 /**  Preparing or moving file data; publication has not succeeded. */
 "transferring" |
+/**  The current bounded download segment is settling before retaining a checkpoint. */
+"pausing" |
+/**  An owned download checkpoint is waiting for explicit continuation. */
+"paused" |
+/**  The retained local and remote prefixes are being verified before continuation. */
+"validating" |
 /**  Checking and saving the completed byte stream. */
 "finalizing" |
 /**  Cancellation or disconnection cleanup is still settling. */

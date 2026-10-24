@@ -148,3 +148,39 @@ it("stops requesting snapshots after the logical view unmounts", async () => {
   await tick();
   expect(queue).toHaveBeenCalledTimes(1);
 });
+
+it("reads a retained paused checkpoint again after reopening without inventing an execution", async () => {
+  const paused = snapshot({
+    outstanding: 1,
+    items: [
+      {
+        itemId: "download-1",
+        executionId: "execution-1",
+        transportId: "transport-1",
+        name: "archive.bin",
+        direction: "download",
+        state: "paused",
+        transferredBytes: "1024",
+        totalBytes: "4096",
+        canCancel: true,
+        canPause: false,
+        canResume: true,
+        canAcknowledge: false,
+        issue: null,
+        stagingMayRemain: false,
+      },
+    ],
+  });
+  queue.mockResolvedValue({ status: "ok", data: paused });
+  const view = renderHook(({ visible }) => useSessionTransfers("session-1", visible), {
+    initialProps: { visible: true },
+  });
+  await act(async () => {});
+  view.rerender({ visible: false });
+  await tick();
+  expect(queue).toHaveBeenCalledTimes(1);
+  expect(view.result.current.snapshot?.items[0]?.transferredBytes).toBe("1024");
+  await act(async () => view.rerender({ visible: true }));
+  expect(queue).toHaveBeenCalledTimes(2);
+  expect(view.result.current.snapshot?.items[0]).toEqual(paused.items[0]);
+});

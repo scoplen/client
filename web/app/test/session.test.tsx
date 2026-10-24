@@ -482,6 +482,8 @@ function unknownTransfer(transportId: string, direction: "upload" | "download" =
     transferredBytes: "4",
     totalBytes: "4",
     canCancel: false,
+    canPause: false,
+    canResume: false,
     canAcknowledge: true,
     issue: "publicationUnknown",
     stagingMayRemain: false,

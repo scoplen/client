@@ -54,14 +54,15 @@ retains the latest 32 known terminal records.
 
 Closing Files hides transfers; it never cancels or replays them. The existing
 listing can add files while transfers run, but navigation, refresh and remote
-changes are disabled during actual queue work. Unknown results alone allow
-browsing so the destination can be inspected. Cancellation and acknowledgement
+changes are disabled during actual queue work. Unknown results and paused downloads
+alone allow browsing so the destination can be inspected. Cancellation and acknowledgement
 identify the exact queue, item and execution. Reaching the byte total shows
 finalizing, and only confirmed publication shows Saved. Cancellation is refused
 after publication starts. Native replacement review identifies the authenticated
 Host and Login from Rust's bound connection. Source and destination metadata are
-rechecked before execution and local publication; this is not an atomic filesystem
-compare-and-swap or a detector for content changes preserving that metadata.
+rechecked before execution and local publication. These metadata checks do not
+provide atomic filesystem compare-and-swap or detect every content change that
+preserves metadata.
 
 Disconnect interrupts unstarted items. Reconnect keeps the logical queue and its
 results while creating a new authenticated transport; old items never run there.
@@ -70,8 +71,27 @@ require explicit acknowledgement, which clears a reminder without retrying or
 claiming success. Cleanup uncertainty remains explicit. A directory error offers
 another list; an uncertain create, rename or delete keeps the existing terminal
 attention notice. Closing the logical tab settles its current save and releases
-pending work. Queue recovery after tab/process closure, drag and drop, pause,
-resume and other remote edits remain separate work.
+pending work.
+
+An active download offers Pause while payload transfer is active. Pausing shows that
+the current bounded part is still settling; only Rust's Paused snapshot confirms
+the checkpoint is retained. Paused downloads keep their confirmed byte count and
+queue capacity, while later files may run. Resume sends the same item identity to
+Rust, which allocates a new execution at the FIFO tail and verifies retained local
+and remote prefix bytes before continuing from the confirmed offset. The queue
+shows Checking downloaded bytes without counting validation reads as new payload.
+No picker is reopened, and the renderer never receives the retained partial path,
+handle or digest. Pause, Resume and Cancel are fenced by queue, item and execution;
+a fresh snapshot can settle a pending action even if its IPC reply is lost. Late
+replies cannot override a newer action.
+
+Pause and Resume are available only for downloads on their original ready
+connection. Publication, interrupted transfers and Unknown results have no Resume
+action. Reconnecting or closing the session ends paused downloads and settles
+their owned cleanup. A retained remote handle is not an immutable snapshot; the
+source must remain stable for a consistent complete-file download. Upload resume,
+cross-connection recovery, queue recovery after tab/process closure, drag and drop
+and other remote edits remain separate work.
 
 
 `web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 92 px for the window controls, which sit centered in it, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.

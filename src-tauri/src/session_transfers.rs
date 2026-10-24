@@ -89,6 +89,32 @@ pub fn session_cancel_transfer(
     manager.cancel_transfer(&session_id, &queue_id, &item_id, &execution_id)
 }
 
+/// Pause a download after its current bounded segment has settled.
+#[tauri::command]
+#[specta::specta]
+pub fn session_pause_transfer(
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    queue_id: String,
+    item_id: String,
+    execution_id: String,
+) -> Result<(), SessionTransferIssue> {
+    manager.pause_transfer(&session_id, &queue_id, &item_id, &execution_id)
+}
+
+/// Queue an explicit continuation of the retained download on its original transport.
+#[tauri::command]
+#[specta::specta]
+pub fn session_resume_transfer(
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    queue_id: String,
+    item_id: String,
+    execution_id: String,
+) -> Result<(), SessionTransferIssue> {
+    manager.resume_transfer(&session_id, &queue_id, &item_id, &execution_id)
+}
+
 /// Clear one unknown-result reminder without retrying or asserting a successful save.
 #[tauri::command]
 #[specta::specta]

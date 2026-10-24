@@ -932,6 +932,8 @@ export const en = {
   "session.transfers.direction.download": "Download",
   "session.transfers.capacity": "{count} / {capacity} pending",
   "session.transfers.background": "Transfers continue when you hide Files.",
+  "session.transfers.pausedHelp":
+    "Resume joins the end of the queue and checks downloaded bytes before continuing. Closing or reconnecting this session ends paused downloads.",
   "session.transfers.browsingBlocked":
     "Directory navigation and file changes are paused while transfers are pending. You can add files from this listing.",
   "session.transfers.disconnected":
@@ -951,10 +953,17 @@ export const en = {
   "session.transfers.dismiss": "Dismiss reminder",
   "session.transfers.dismissNamed": "Dismiss unknown-result reminder for {name}",
   "session.transfers.cancelNamed": "Cancel transfer of {name}",
+  "session.transfers.pause": "Pause",
+  "session.transfers.pauseNamed": "Pause download of {name}",
+  "session.transfers.resume": "Resume",
+  "session.transfers.resumeNamed": "Resume download of {name}",
   "session.transfers.progressNamed": "Transfer progress for {name}",
   "session.transfers.state.queued": "Queued",
   "session.transfers.state.awaitingConfirmation": "Waiting for replacement confirmation",
   "session.transfers.state.transferring": "Transferring",
+  "session.transfers.state.pausing": "Finishing the current part before pausing",
+  "session.transfers.state.paused": "Paused",
+  "session.transfers.state.validating": "Checking downloaded bytes",
   "session.transfers.state.finalizing": "Verifying and saving",
   "session.transfers.state.cancelling": "Stopping and cleaning up",
   "session.transfers.state.saved": "Saved",
@@ -969,16 +978,17 @@ export const en = {
   "session.transfers.issue.sessionUnavailable":
     "This terminal session is unavailable. Open a connected session to add files.",
   "session.transfers.issue.transportEnded":
-    "The SSH connection ended. Unstarted transfers were not sent. Reconnect, then add them again.",
+    "The SSH connection ended. Pending and paused transfers will not resume. Reconnect to add files again.",
   "session.transfers.issue.queueFull":
-    "The transfer queue is full. Wait for transfers to finish or review unknown results.",
+    "The transfer queue is full. Finish or cancel pending transfers, or review unknown results.",
   "session.transfers.issue.nativeDialogBusy":
     "Finish the current file selection or replacement confirmation before adding another file.",
   "session.transfers.issue.selectionFailed":
     "The file selection or replacement confirmation could not finish. Check the queue before trying the action again.",
   "session.transfers.issue.invalidSelection":
     "Choose an ordinary local file or file destination. Links and special files cannot be used.",
-  "session.transfers.issue.sourceChanged": "The selected source changed. Check the local file before adding it again.",
+  "session.transfers.issue.sourceChanged":
+    "The source or retained partial changed. No replacement was made. Check the files before adding the transfer again.",
   "session.transfers.issue.targetChanged":
     "The destination changed. It was not replaced by this attempt. Review it before adding the transfer again.",
   "session.transfers.issue.unsupported":
@@ -994,7 +1004,7 @@ export const en = {
   "session.transfers.issue.publicationUnknown":
     "The file may have been saved. Check the destination before starting another transfer.",
   "session.transfers.issue.publicationStarted":
-    "Saving has started and can no longer be cancelled. Wait for the result.",
+    "Saving has started and can no longer be paused or cancelled. Wait for the result.",
   "session.transfers.issue.staleItem": "This transfer changed or ended. Refresh Files to see its current result.",
 } as const;
 

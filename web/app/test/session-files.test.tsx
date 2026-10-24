@@ -56,6 +56,8 @@ const queuedItem: SessionTransferItem = {
   transferredBytes: "0",
   totalBytes: "4",
   canCancel: false,
+  canPause: false,
+  canResume: false,
   canAcknowledge: false,
   issue: null,
   stagingMayRemain: false,
@@ -241,6 +243,33 @@ it("cancels the old transport and ignores its late directory response", async ()
   await act(async () => old.resolve({ status: "ok", data: { entries: [file] } }));
   expect(screen.getByRole("button", { name: "logs" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Download raw.bin" })).toBeNull();
+});
+
+it("keeps directory navigation available when Rust reports only paused downloads", async () => {
+  const paused = { ...queuedItem, direction: "download" as const, state: "paused" as const, canResume: true };
+  fileCommands.list
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [directory] } })
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [] } });
+  render(
+    view(
+      "transport-1",
+      vi.fn(),
+      vi.fn(),
+      "en",
+      queue({
+        items: [paused],
+        outstanding: 1,
+        blocksFileOperations: false,
+      }),
+    ),
+  );
+  await userEvent.click(await screen.findByRole("button", { name: "logs" }));
+  await screen.findByText("This directory is empty.");
+  expect(fileCommands.list).toHaveBeenLastCalledWith("session-1", "transport-1", expect.any(String), directory.path);
+  expect(screen.getByText("Paused")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "New folder" }).hasAttribute("disabled")).toBe(false);
+  expect(fileCommands.upload).not.toHaveBeenCalled();
+  expect(fileCommands.download).not.toHaveBeenCalled();
 });
 
 it("creates one folder in the current opaque directory and refreshes after success", async () => {
