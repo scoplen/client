@@ -97,7 +97,14 @@ restore creates exactly one unadopted copy of the oldest version, preserves the 
 object and server history, consumes its review ticket, and survives SQLCipher reopen.
 
 A third independent device then completes the same public pairing ceremony, and all devices
-verify the signed three-device list. Two separate hosts are explicitly adopted for an offline
+verify the signed three-device list. The original device explicitly confirms a disposable
+SSH peer's actual key, then adopts its Host, Login, Credential and generated trust record.
+Both paired devices verify that record through Personal synchronization and authenticate
+to the SSH peer without another trust prompt. Source provenance and key bindings revalidate
+after offline SQLCipher reopen. This Rust SSH peer does not establish OpenSSH or native
+desktop interoperability.
+
+Two separate hosts are explicitly adopted for an offline
 round with every background owner stopped. Each store changes the same name and a different
 field; the second device also edits and then tombstones the other host. Before reconnecting,
 each durable outbox and cursor must reflect only its own changes. One parallel synchronization

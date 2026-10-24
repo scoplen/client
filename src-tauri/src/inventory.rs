@@ -16,6 +16,25 @@ use scoplen_client_core::inventory::{
 };
 use tauri_specta::Event as _;
 
+/// Read bounded local output explicitly; this command never starts SSH.
+#[tauri::command]
+#[specta::specta]
+pub async fn session_saved_output(
+    local: tauri::State<'_, LocalDataState>,
+    state: tauri::State<'_, InventoryState>,
+    session_id: String,
+) -> Result<
+    scoplen_client_core::inventory::SavedTerminalOutput,
+    scoplen_client_core::terminal_output::SavedOutputError,
+> {
+    local
+        .with_store(|store| {
+            Inventory::with_deletions(store.clone(), state.deletions.clone())
+                .saved_terminal_output(session_id)
+        })
+        .unwrap_or(Err(scoplen_client_core::terminal_output::SavedOutputError::Unavailable))
+}
+
 /// Process-local undo state shared by inventory command calls.
 #[derive(Clone, Default)]
 pub struct InventoryState {

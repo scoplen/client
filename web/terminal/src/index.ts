@@ -19,6 +19,7 @@ export type {
   TerminalObjectSink,
   TerminalProfile,
   TerminalSize,
+  TerminalSnapshot,
   TerminalSink,
   TerminalSource,
   TerminalSubscription,

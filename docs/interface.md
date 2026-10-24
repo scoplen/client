@@ -162,6 +162,7 @@ Contract: `web/app/src/inventory/api.ts` (`InventoryApi`). Screens: `inventory/h
 | `closeSession(id, outcome)` | Records `closed` or `failed` from the connection owner. A missing or already-ended session is rejected, and a failed write leaves history unchanged. |
 | `reconnectSession(id)` | Resolves an ended terminal history entry to its current Host and Login, which the screen passes to the normal Connect flow. Active sessions, unsupported session kinds, and deleted logins are rejected. Lookup creates no history row. |
 | `forgetSession(id)` | Deletes one ended device-local history row and its saved scrollback. Active sessions cannot be forgotten; orphaned rows can still be cleaned up by identifier. |
+| `savedOutput(id)` | Explicitly reads a retained terminal snapshot and its current Login metadata, without network access, history creation, or a credential lookup. `hasSavedOutput` in Recent is availability metadata only; retention and local read errors are handled when viewing. |
 | `host(id)` | The host with every login, `null` when it no longer exists. Inspecting a host promotes its implicit login; inspecting a private-key login also promotes that key credential. Password and agent credentials remain implicit. A key credential carries its public key. |
 | `addHost(host)` | Creates the host, one implicit login, and an implicit credential, with a direct route, as one change (§7.6 tier 0). `name` defaults to the address and `port` to 22. Password and pasted or generated keys are stored as shared-binding credentials; a key file is read and stored the same way; `agent` creates an agent credential. Reusing an existing private key on a second host reuses and promotes that credential in the same transaction; the reuse search is bounded at 4,096 private-key credentials and returns a clear error beyond that limit. Each `AddHostError` names the field it belongs to; nothing is saved on error. |
 | `setFavorite(id, favorite)` | Sets the favorite field. |
@@ -220,7 +221,23 @@ forget operation so the Recent view reloads without polling. The event carries o
 the session identifier and transition. The connection owner records accepted SSH
 attempts and their closed or failed outcomes; terminal output and credentials stay
 outside history DTOs. Reconnect in Recent starts the normal Connect flow for the
-current saved Login. Restoring scrollback after tab closure remains a later outcome.
+current saved Login. Recent's View output opens a saved snapshot offline and read-only, including
+after restart. Reconnect is a separate explicit action through the current saved Login.
+
+`sessionSaveOutput(sessionId, transportId, sequence, snapshot)` checkpoints only rendered state
+owned by the exact open store, logical session and current attempt. Rust rejects stale or
+out-of-order writes, forgotten/pruned rows, invalid grids and snapshots above 1 MiB, preserving
+the previous valid snapshot. Aggregate retention is 64 MiB. The terminal serializes only after
+renderer writes drain. Checkpoints run every five seconds; orderly close stops the transport,
+drains its final output, and awaits a final checkpoint before unmounting. Save failure leaves
+the view open with a local explanation and explicit Close without saving. Restoring suppresses
+terminal replies, keyboard/paste and broadcast input. Window close and ordinary application
+quit use this same flow before native geometry saving and background shutdown.
+Explicit discard closes the logical session through unmount cancellation without repeating
+a failed transport drain or checkpoint.
+The window capability includes `allow-close` for requesting that flow and `allow-destroy`
+for Tauri's `onCloseRequested` wrapper, which destroys the window after the checked
+close request is allowed.
 
 The session header also offers Reconnect after the current connection closes or
 fails. It stays disabled until that attempt finishes cleanup. The same terminal
@@ -228,8 +245,8 @@ element keeps its displayed scrollback while a new transport identifier runs the
 normal host-key review, current saved-credential lookup, and one-time passphrase
 prompt. Each accepted attempt records its own history lifecycle. Old ready,
 output, input-error, and trust results cannot update the replacement connection;
-closing the tab cancels the whole logical session. Displayed output is retained
-in the open tab; this does not restore output from a closed tab.
+closing the tab cancels the whole logical session. Reconnect retains the open tab's
+display; use Recent's View output to reopen a closed tab's saved snapshot.
 
 Rust owns automatic retries after a previously ready terminal suffers a typed
 network failure: 1/2/4/8/16-second delays, at most five attempts, and a budget reset

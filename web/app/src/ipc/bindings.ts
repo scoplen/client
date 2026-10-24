@@ -30,6 +30,10 @@ export const commands = {
 	sessionFailTransport: (sessionId: string) => typedError<null, string>(__TAURI_INVOKE("session_fail_transport", { sessionId })),
 	/**  End the complete logical session, including every timer, prompt, and transport. */
 	sessionCloseTransport: (sessionId: string) => typedError<null, string>(__TAURI_INVOKE("session_close_transport", { sessionId })),
+	/**  Checkpoint rendered output without letting a late caller select its store or history row. */
+	sessionSaveOutput: (sessionId: string, transportId: string, sequence: number, snapshot: TerminalSnapshot) => typedError<null, SavedOutputError>(__TAURI_INVOKE("session_save_output", { sessionId, transportId, sequence, snapshot })),
+	/**  Read bounded local output explicitly; this command never starts SSH. */
+	sessionSavedOutput: (sessionId: string) => typedError<SavedTerminalOutput, SavedOutputError>(__TAURI_INVOKE("session_saved_output", { sessionId })),
 	/**  Returns which inventory areas have content. */
 	inventoryAreas: () => typedError<Areas, Failure>(__TAURI_INVOKE("inventory_areas")),
 	/**  Lists groups with live-host counts. */
@@ -1336,6 +1340,8 @@ export type RecentSession = {
 	endedAt: string | null,
 	/**  End status, if it has ended. */
 	outcome: RecentSessionOutcome | null,
+	/**  A bounded local snapshot is retained for explicit offline viewing. */
+	hasSavedOutput: boolean,
 };
 
 /**  The kind of a device-local session shown in the Recent area. */
@@ -1444,6 +1450,25 @@ export type RouteSummary = {
 	orphaned: boolean,
 	/**  Whether a later write resurrected this route. */
 	restored: boolean,
+};
+
+/**  A safe, local output failure. No terminal content is included. */
+export type SavedOutputError =
+/**  The snapshot is too large or has invalid format/grid metadata. */
+"invalidSnapshot" |
+/**  A newer attempt, different store or closed owner invalidated the checkpoint. */
+"staleCheckpoint" |
+/**  Retention or forgetting removed the entry or it is not a terminal. */
+"unavailable" |
+/**  Local storage could not be read or written. */
+"storage";
+
+/**  Offline terminal output with its current saved Login, without opening a transport. */
+export type SavedTerminalOutput = {
+	/**  Current display-safe reconnect target. */
+	target: ReconnectTarget,
+	/**  Local rendered state, never replicated. */
+	snapshot: TerminalSnapshot,
 };
 
 /**  Why a device-local session view should reload. */
@@ -1576,6 +1601,18 @@ export type StoreChanged = {
 	recordType: RecordType,
 	/**  Their identifiers, as lowercase hyphenated UUIDs. */
 	ids: string[],
+};
+
+/**  Rendered terminal state, rather than an unbounded SSH transport log. */
+export type TerminalSnapshot = {
+	/**  Current local format. Unreleased legacy transport logs are not restored. */
+	version: number,
+	/**  Grid width at serialization. */
+	columns: number,
+	/**  Grid height at serialization. */
+	rows: number,
+	/**  Serialized xterm state and retained scrollback. */
+	data: string,
 };
 
 /**  Why the local store cannot be opened. */

@@ -46,6 +46,14 @@ impl LocalDataState {
         self.0.as_ref().ok().and_then(|data| data.store())
     }
 
+    /// Prevent local-store replacement during one bounded persistence operation.
+    pub fn with_store<T>(
+        &self,
+        operation: impl FnOnce(&Arc<scoplen_client_core::store::Store>) -> T,
+    ) -> Option<T> {
+        self.0.as_ref().ok().and_then(|data| data.with_store(operation))
+    }
+
     fn get(&self) -> Result<Arc<LocalData>, LocalDataError> {
         self.0.clone()
     }

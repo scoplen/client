@@ -63,6 +63,12 @@ export interface TerminalSize {
   rows: number;
 }
 
+/** Versioned rendered state. Its encoded JSON representation is limited to 1 MiB. */
+export interface TerminalSnapshot extends TerminalSize {
+  version: number;
+  data: string;
+}
+
 export interface TerminalElementEventMap {
   /** The grid changed size, for example because the element was resized. */
   "terminal-resize": CustomEvent<TerminalSize>;

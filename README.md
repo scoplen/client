@@ -106,8 +106,17 @@ An ended terminal in Recent can be started again through the normal Connect
 entry point using its current saved login. The lookup opens no connection and
 does not write history; the new attempt runs the usual host-key checks and
 records its own lifecycle. Active sessions and Files/Forward entries do not
-offer this action. Restoring scrollback after closing a tab remains a later
-session-management outcome.
+offer this action. Recent also offers View output when a saved terminal snapshot is retained.
+It opens offline and read-only, without a connection or terminal input. Reconnect is explicit
+and repeats the normal current Login, host-key and credential checks while retaining the display.
+
+Rendered output is checkpointed every five seconds and before an orderly tab or application
+close, in the encrypted local store only. A snapshot is limited to 1 MiB; retained snapshots
+together are limited to 64 MiB, evicting the oldest output while retaining Recent entries.
+Forgetting or pruning history removes its output atomically. An interrupted application can
+recover its last durable checkpoint. A save failure keeps the tab/window open with an explicit
+Close without saving option; it does not interrupt ordinary live SSH. Workspace restoration
+and remote-process resumption remain separate capabilities.
 
 Settings → Personal account can prepare a Personal invitation from a user-selected HTTPS
 Scoplen server, save and confirm a recovery file, join, and authenticate the first device.

@@ -170,6 +170,37 @@ describe("ScoplenTerminalElement", () => {
     expect(writes).toEqual([[1]]);
   });
 
+  it.each([false, true])("fences pending input only when read-only actually changes to %s", async (readOnly) => {
+    const writes: number[][] = [];
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const element = mount({
+      sink: (bytes) => {
+        writes.push([...bytes]);
+        if (writes.length === 1) return pending;
+      },
+    });
+    const results = Promise.allSettled([element.send(new Uint8Array([1])), element.send(new Uint8Array([2]))]);
+    await flush();
+    expect(writes).toEqual([[1]]);
+    element.profile = { ...element.profile, fontSize: 16 };
+    element.readOnly = false;
+    if (readOnly) element.readOnly = true;
+    release();
+    const completed = await results;
+    expect(writes).toEqual(readOnly ? [[1]] : [[1], [2]]);
+    expect(completed.map((result) => result.status)).toEqual(
+      readOnly ? ["rejected", "rejected"] : ["fulfilled", "fulfilled"],
+    );
+    if (readOnly) {
+      for (const result of completed) {
+        if (result.status === "rejected") expect(result.reason).toBeInstanceOf(TerminalDisconnectedError);
+      }
+    }
+  });
+
   it("maps keyboard input to bytes at the sink boundary", async () => {
     const writes: number[][] = [];
     const element = mount({

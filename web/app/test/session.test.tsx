@@ -3,7 +3,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { Channel } from "@tauri-apps/api/core";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StrictMode } from "react";
+import { StrictMode, type ComponentProps } from "react";
 import { AppearanceProvider } from "@scoplen/ui";
 import { I18nProvider } from "../src/i18n";
 import { TerminalColorsProvider } from "../src/terminal-colors";
@@ -49,7 +49,13 @@ function fixture() {
   return { connections, delay, matching: (command: string) => calls.filter((c) => c.command === command) };
 }
 
-function sessionView(locale: "en" | "zh-Hans" = "en", active = true, onClose = vi.fn(), onStateChange = vi.fn()) {
+function sessionView(
+  locale: "en" | "zh-Hans" = "en",
+  active = true,
+  onClose = vi.fn(),
+  onStateChange = vi.fn(),
+  options: Partial<ComponentProps<typeof SessionTerminal>> = {},
+) {
   return (
     <AppearanceProvider>
       <TerminalColorsProvider>
@@ -60,6 +66,7 @@ function sessionView(locale: "en" | "zh-Hans" = "en", active = true, onClose = v
             active={active}
             onClose={onClose}
             onStateChange={onStateChange}
+            {...options}
           />
         </I18nProvider>
       </TerminalColorsProvider>
@@ -173,8 +180,271 @@ it("reserves once in StrictMode, routes input/resize to the exact attempt, and c
   });
   expect(f.connections).toHaveLength(1);
   await userEvent.click(screen.getByRole("button", { name: "Close session" }));
-  expect(close).toHaveBeenCalledOnce();
+  expect(close).not.toHaveBeenCalled();
+  expect(f.matching("session_stop_reconnecting")).toHaveLength(1);
+  await c.emit({ kind: "closed" });
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
   expect(f.matching("session_close_transport").at(-1)?.args.sessionId).toBe(c.sessionId);
+});
+
+describe("saved terminal output", () => {
+  beforeEach(() => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => vi.restoreAllMocks());
+
+  function checkpointTimer() {
+    const interval = vi.spyOn(globalThis, "setInterval");
+    return () =>
+      act(() => {
+        const tick = interval.mock.calls.filter(([, delay]) => delay === 5_000).at(-1)?.[0];
+        expect(tick).toBeTypeOf("function");
+        (tick as () => void)();
+      });
+  }
+
+  it("opens read-only offline even in StrictMode and connects only after explicit Reconnect", async () => {
+    const f = fixture();
+    const view = render(
+      <StrictMode>
+        {sessionView("en", true, vi.fn(), vi.fn(), {
+          savedOutput: { version: 1, columns: 90, rows: 30, data: "retained output\x1b[6n" },
+        })}
+      </StrictMode>,
+    );
+    const element = view.container.querySelector("scoplen-terminal") as ScoplenTerminalElement;
+    await waitFor(() => expect(element.findNext("retained output")).toBe(true));
+    expect(screen.getByRole("status").textContent).toContain("Offline, read-only");
+    await element.send(new TextEncoder().encode("must not send"));
+    expect(f.matching("session_input")).toHaveLength(0);
+    expect(f.matching("session_reserve_transport")).toHaveLength(0);
+    expect(f.connections).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    const c = await connect(f);
+    await c.prepare(trust());
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Trust and connect" }));
+    await c.ready();
+    expect(element.findNext("retained output")).toBe(true);
+    expect(f.matching("session_input")).toHaveLength(0);
+  });
+
+  it("awaits final processed output after Stop before permitting a close", async () => {
+    const f = fixture();
+    let close!: (discard?: boolean) => Promise<boolean>;
+    render(
+      sessionView("en", true, vi.fn(), vi.fn(), {
+        registerClose: (controller) => {
+          close = controller;
+          return () => undefined;
+        },
+      }),
+    );
+    const c = await connect(f);
+    await c.ready();
+    await c.output("saved before stop\r\n");
+    let completion!: Promise<boolean>;
+    await act(() => {
+      completion = close();
+    });
+    expect(f.matching("session_save_output")).toHaveLength(0);
+    await c.output("final tail\r\n");
+    await c.emit({ kind: "closed" });
+    expect(await completion).toBe(true);
+    const checkpoint = f.matching("session_save_output")[0]!;
+    expect(checkpoint.args).toMatchObject({ sessionId: c.sessionId, transportId: c.transportId, sequence: 1 });
+    expect((checkpoint.args.snapshot as { data: string }).data).toContain("final tail");
+    expect(f.matching("session_close_transport")).toHaveLength(0);
+  });
+
+  it("keeps the tab on a save failure and offers explicit close without saving", async () => {
+    const f = fixture();
+    let close!: (discard?: boolean) => Promise<boolean>;
+    const onClose = vi.fn();
+    render(
+      sessionView("zh-Hans", true, onClose, vi.fn(), {
+        registerClose: (controller) => {
+          close = controller;
+          return () => undefined;
+        },
+      }),
+    );
+    const c = await connect(f);
+    await c.ready();
+    await c.output("still visible");
+    await c.emit({ kind: "closed" });
+    const failure = f.delay("session_save_output");
+    void failure.promise.catch(() => undefined);
+    failure.reject("storage");
+    let result = true;
+    await act(async () => {
+      result = await close();
+    });
+    expect(result).toBe(false);
+    expect(screen.getByRole("alert").textContent).toContain("之前保存的内容仍会保留");
+    expect(onClose).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "不保存并关闭" }));
+    expect(onClose).toHaveBeenCalledWith(true);
+    await act(async () => {
+      expect(await close(true)).toBe(true);
+    });
+    expect(f.matching("session_save_output")).toHaveLength(1);
+  });
+
+  it.each(["stop failure", "drain timeout"])("can explicitly discard and close after a %s", async (failure) => {
+    const f = fixture();
+    const stop = failure === "stop failure" ? f.delay("session_stop_reconnecting") : null;
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    let close!: (discard?: boolean) => Promise<boolean>;
+    const onClose = vi.fn(async (discard?: boolean) => {
+      if (await close(discard)) view.unmount();
+    });
+    const view = render(
+      sessionView("en", true, onClose, vi.fn(), {
+        registerClose: (controller) => {
+          close = controller;
+          return () => undefined;
+        },
+      }),
+    );
+    const c = await connect(f);
+    await c.ready();
+    await c.output("output retained after a failed close");
+    let completion!: Promise<boolean>;
+    await act(() => {
+      completion = close();
+    });
+    await act(async () => {
+      if (stop) stop.reject("stop failed");
+      else {
+        const timeout = timers.mock.calls.find(([, delay]) => delay === 10_000)?.[0];
+        expect(timeout).toBeTypeOf("function");
+        (timeout as () => void)();
+      }
+      expect(await completion).toBe(false);
+    });
+    expect(screen.getByRole("alert").textContent).toContain("close without saving");
+    await userEvent.click(screen.getByRole("button", { name: "Close without saving" }));
+    await waitFor(() => expect(view.container.querySelector("scoplen-terminal")).toBeNull());
+    expect(onClose).toHaveBeenCalledWith(true);
+    expect(f.matching("session_stop_reconnecting")).toHaveLength(1);
+    expect(f.matching("session_save_output")).toHaveLength(0);
+    expect(f.matching("session_close_transport").at(-1)?.args.sessionId).toBe(c.sessionId);
+  });
+
+  it("ignores a delayed checkpoint failure after recreating the logical session", async () => {
+    const tick = checkpointTimer();
+    const f = fixture();
+    const pending = f.delay("session_save_output");
+    const view = render(sessionView());
+    const first = await connect(f);
+    await first.ready();
+    await first.output("first logical session");
+    await tick();
+    await waitFor(() => expect(f.matching("session_save_output")).toHaveLength(1));
+    await tick();
+    await act(() => first.finish.resolve(null));
+    await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    const second = await connect(f, 1);
+    expect(second.sessionId).not.toBe(first.sessionId);
+    await second.ready();
+    await second.output("new logical session");
+    await act(() => pending.reject("staleCheckpoint"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Connected");
+    expect(f.matching("session_save_output")).toHaveLength(1);
+    await tick();
+    await waitFor(() => expect(f.matching("session_save_output")).toHaveLength(2));
+    expect(f.matching("session_save_output").at(-1)?.args).toMatchObject({
+      sessionId: second.sessionId,
+      transportId: second.transportId,
+    });
+    const terminal = view.container.querySelector("scoplen-terminal") as ScoplenTerminalElement;
+    await terminal.send(new Uint8Array([13]));
+    expect(f.matching("session_input").at(-1)?.args.transportId).toBe(second.transportId);
+  });
+
+  it.each(["logical session", "automatic transport"])(
+    "ignores an old renderer failure in a new %s",
+    async (replacement) => {
+      const tick = checkpointTimer();
+      const f = fixture();
+      const view = render(sessionView());
+      const first = await connect(f);
+      await first.ready();
+      await first.output("old renderer output");
+      const terminal = view.container.querySelector("scoplen-terminal") as ScoplenTerminalElement;
+      const pending = deferred<Awaited<ReturnType<typeof terminal.serialize>>>();
+      vi.spyOn(terminal, "serialize").mockImplementationOnce(() => pending.promise);
+      await tick();
+      let second: Awaited<ReturnType<typeof first.start>>;
+      if (replacement === "logical session") {
+        await act(() => first.finish.resolve(null));
+        await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+        second = await connect(f, 1);
+      } else {
+        await first.emit({ kind: "retrying", attempt: 1, delaySeconds: 1, error: "Network connection lost" });
+        second = await first.start(true);
+      }
+      await second.ready();
+      await second.output("new renderer output");
+      await act(() => pending.reject(new Error("old renderer disconnected")));
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.getByRole("status").textContent).toContain("Connected");
+      expect(f.matching("session_save_output")).toHaveLength(0);
+      await tick();
+      await waitFor(() => expect(f.matching("session_save_output")).toHaveLength(1));
+      expect(f.matching("session_save_output")[0]?.args.transportId).toBe(second.transportId);
+    },
+  );
+
+  it("ignores an old checkpoint rejection after an automatic transport replacement", async () => {
+    const tick = checkpointTimer();
+    const f = fixture();
+    const pending = f.delay("session_save_output");
+    render(sessionView());
+    const first = await connect(f);
+    await first.ready();
+    await first.output("first transport");
+    await tick();
+    await waitFor(() => expect(f.matching("session_save_output")).toHaveLength(1));
+    await first.emit({ kind: "retrying", attempt: 1, delaySeconds: 1, error: "Network connection lost" });
+    const second = await first.start(true);
+    await second.ready();
+    await second.output("second transport");
+    await act(() => pending.reject("staleCheckpoint"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Connected");
+    await tick();
+    await waitFor(() => expect(f.matching("session_save_output")).toHaveLength(2));
+    expect(f.matching("session_save_output").at(-1)?.args.transportId).toBe(second.transportId);
+  });
+});
+
+it.each(["completion", "failure"])("ignores old source %s while a replacement is active", async (ending) => {
+  const f = fixture();
+  const view = render(sessionView());
+  const first = await connect(f);
+  await first.ready();
+  const terminal = view.container.querySelector("scoplen-terminal") as ScoplenTerminalElement;
+  const source = terminal.source;
+  act(() => {
+    terminal.source = source;
+  });
+  const second = await connect(f, 1);
+  await second.ready();
+  await act(() => (ending === "completion" ? first.finish.resolve(null) : first.finish.reject("old failure")));
+  await second.output("current output");
+  expect(new TextDecoder().decode(terminal.getOutput())).toBe("current output");
+  expect(screen.getByRole("status").textContent).toContain("Connected");
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 it.each(["connecting", "connected"])("keeps the transport when locale changes while %s", async (state) => {

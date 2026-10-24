@@ -446,8 +446,8 @@ Output is delivered as bounded binary frames (8 MiB aggregate per session),
 and command/input fields are bounded at 64 KiB. The desktop session view uses
 `@scoplen/terminal` to interpret ANSI/VT output. A process-local session
 registry routes bounded input frames and close requests to the owning SSH
-channel; disconnecting the tab closes that channel. Jump and ProxyCommand routes,
-remaining credential providers, automatic reconnect, and saved scrollback remain
+channel; disconnecting the tab closes that channel. Remaining credential providers
+and complete workspace restoration remain
 later connection slices.
 
 After local profile and trust-record preflight, each `session_connect` attempt
@@ -481,6 +481,27 @@ Messages are ICU MessageFormat catalogs in `web/app/src/messages`. English (`en.
 ## Device-local records
 
 Records that never replicate (`04-object-model.md` §4.9) live in the same encrypted store, in their own tables (migration 2): this device's half of device-bound credentials, as a stored secret or a keystore handle; the device key pair, created at sync enrollment; the session history, limited to the 1,000 most recent sessions; saved scrollback; and window geometry. None of them is an object, so sync never sends them. Device-key handles are opaque references to platform slots and are invalidated when the credential is deleted or changed away from a device-bound key. Secrets resolved from either the encrypted table or a platform slot come back as `SecretVec`, which is zeroized when dropped and redacted when formatted. The main window's size and position are saved when it closes and restored at the next launch if they are still on a display.
+
+## Saved terminal output
+
+Saved terminal output is a bounded, versioned snapshot of rendered xterm state and dimensions,
+kept in the device-local `scrollback` table. `SessionManager::save_output` binds a checkpoint
+to its logical owner, current attempt, generated history UUID and exact store Arc, with a
+monotonic sequence. `LocalData::with_store` holds the replacement boundary during the bounded
+write. The store validates Terminal history, the 1 MiB encoded limit and grid dimensions before
+one transaction writes and evicts oldest snapshots to a 64 MiB aggregate limit. History prune
+and forgetting remove snapshots atomically; late calls cannot resurrect them. Neither output
+nor input enters sync or error diagnostics; snapshot Debug output is redacted.
+
+The terminal package owns serialization after queued rendering drains. The desktop checkpoints
+every five seconds. Closing stops the transport and waits for its final ordered output before
+saving and unmounting; a failed save preserves the view and offers an explicit discard action.
+Recent loads snapshots only through View output into an offline read-only terminal. Restoring
+suppresses parser-generated replies and input, and rejects attaching a live source or sink
+until complete. Explicit Reconnect creates a new normal attempt while retaining the display.
+Window close is requested again only after saves succeed, so native geometry and shutdown hooks
+remain active. The window capability includes close and destroy because Tauri's
+`onCloseRequested` completes an allowed native close through its internal destroy command.
 
 ## No network while sync is disabled
 

@@ -14,6 +14,25 @@ use tauri::ipc::Channel;
 use tauri_specta::Event as _;
 
 pub use scoplen_client_core::session_manager::SessionManager;
+use scoplen_client_core::terminal_output::{SavedOutputError, TerminalSnapshot};
+
+/// Checkpoint rendered output without letting a late caller select its store or history row.
+#[tauri::command]
+#[specta::specta]
+pub async fn session_save_output(
+    local: tauri::State<'_, LocalDataState>,
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    transport_id: String,
+    sequence: u32,
+    snapshot: TerminalSnapshot,
+) -> Result<(), SavedOutputError> {
+    local
+        .with_store(|store| {
+            manager.save_output(store, &session_id, &transport_id, sequence, &snapshot)
+        })
+        .unwrap_or(Err(SavedOutputError::StaleCheckpoint))
+}
 
 /// Reserve a logical session before starting its cancellable manager task.
 #[tauri::command]

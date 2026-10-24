@@ -72,7 +72,15 @@ emulator and does not claim full-screen program compatibility.
 
 ## Capability boundaries
 
-This slice intentionally leaves WebGL, Unicode 15 width handling, scrollback
-serialization, inline image protocols, cross-platform IME verification, and the
+This slice intentionally leaves WebGL, Unicode 15 width handling,
+inline image protocols, cross-platform IME verification, and the
 `vttest`/`esctest` compatibility suite for later C4 outcomes. The package does
 not describe those capabilities as available through a hidden fallback.
+
+Serialization uses xterm's serialize addon after a write-barrier callback, preserving rendered
+state rather than replaying the bounded raw transport suffix. Snapshots include version, grid
+dimensions and ANSI state, with a 1 MiB encoded UTF-8 bound. Restore validates before mutation,
+requires an offline source/sink, suppresses input and parser replies across its asynchronous
+write barrier, and fits only after restoring the saved grid. Disconnect cancels pending barriers.
+The optional `readOnly` property keeps all input disabled after restore. Persistence and
+authorization are outside this framework-independent package.

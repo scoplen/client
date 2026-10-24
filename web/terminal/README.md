@@ -155,7 +155,6 @@ listeners when the component unmounts.
 The following are deliberately not claimed by this slice:
 
 - WebGL renderer and Unicode 15 width provider;
-- scrollback serialization for reconnect and workspace restoration;
 - SIXEL and iTerm2 image protocols;
 - IME behavior verified on every desktop platform;
 - `vttest`, `esctest`, and recorded full-screen program compatibility runs.
@@ -164,6 +163,19 @@ The xterm.js core can render an accessible DOM surface with screen-reader mode
 enabled. If a host cannot initialize the renderer, the element keeps the
 bounded text preview, reports a `renderer` error, and remains keyboard and
 screen-reader addressable.
+
+## Serialization
+
+`await element.serialize()` returns version 1 rendered state and grid dimensions only after
+pending writes are processed. Its encoded JSON representation is limited to 1 MiB. Invalid
+dimensions, oversized output or an unavailable renderer reject without producing a snapshot.
+`await element.restore(snapshot)` restores the saved grid and state before fitting the current
+view. The raw suffix returned by `getOutput()` still respects `maxOutputBytes`, while the renderer
+restores the complete bounded snapshot. It requires no source or sink; attaching one during restoration is rejected. Parser
+replies and input are discarded until restoration completes. Set `readOnly` (also supported by
+the React binding) to keep keyboard, paste and broadcast input disabled for offline viewing.
+Transport ownership, encrypted persistence, retention and reconnect consent belong to callers.
+This API does not create sessions or restore remote processes or workspace layout.
 
 ## Development
 

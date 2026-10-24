@@ -172,6 +172,14 @@ impl LocalData {
         }
     }
 
+    /// Run a bounded local operation while preventing store replacement.
+    pub fn with_store<T>(&self, operation: impl FnOnce(&Arc<Store>) -> T) -> Option<T> {
+        match &*self.state() {
+            State::Open { store, .. } => Some(operation(store)),
+            State::Locked(_) => None,
+        }
+    }
+
     /// Opens the store with the local passphrase.
     pub fn unlock(&self, passphrase: &str) -> Result<Status, LocalDataError> {
         let mut state = self.state();
