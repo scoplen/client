@@ -29,9 +29,9 @@ function actionAvailable(item: SessionTransferItem, action: TransferAction) {
     case "cancel":
       return item.canCancel;
     case "pause":
-      return item.direction === "download" && item.state === "transferring" && item.canPause;
+      return item.state === "transferring" && item.canPause;
     case "resume":
-      return item.direction === "download" && item.state === "paused" && item.canResume;
+      return item.state === "paused" && item.canResume;
     case "acknowledge":
       return item.canAcknowledge;
   }

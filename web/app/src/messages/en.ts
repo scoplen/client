@@ -968,7 +968,7 @@ export const en = {
   "session.transfers.capacity": "{count} / {capacity} pending",
   "session.transfers.background": "Transfers continue when you hide Files.",
   "session.transfers.pausedHelp":
-    "Resume joins the end of the queue and checks downloaded bytes before continuing. Closing or reconnecting this session ends paused downloads.",
+    "Resume joins the end of the queue and checks transferred bytes before continuing. Closing or reconnecting this session ends paused transfers.",
   "session.transfers.browsingBlocked":
     "Directory navigation and file changes are paused while transfers are pending. You can add files from this listing.",
   "session.transfers.disconnected":
@@ -989,16 +989,16 @@ export const en = {
   "session.transfers.dismissNamed": "Dismiss unknown-result reminder for {name}",
   "session.transfers.cancelNamed": "Cancel transfer of {name}",
   "session.transfers.pause": "Pause",
-  "session.transfers.pauseNamed": "Pause download of {name}",
+  "session.transfers.pauseNamed": "Pause transfer of {name}",
   "session.transfers.resume": "Resume",
-  "session.transfers.resumeNamed": "Resume download of {name}",
+  "session.transfers.resumeNamed": "Resume transfer of {name}",
   "session.transfers.progressNamed": "Transfer progress for {name}",
   "session.transfers.state.queued": "Queued",
   "session.transfers.state.awaitingConfirmation": "Waiting for replacement confirmation",
   "session.transfers.state.transferring": "Transferring",
   "session.transfers.state.pausing": "Finishing the current part before pausing",
   "session.transfers.state.paused": "Paused",
-  "session.transfers.state.validating": "Checking downloaded bytes",
+  "session.transfers.state.validating": "Checking transferred bytes",
   "session.transfers.state.finalizing": "Verifying and saving",
   "session.transfers.state.cancelling": "Stopping and cleaning up",
   "session.transfers.state.saved": "Saved",

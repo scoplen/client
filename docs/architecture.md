@@ -541,8 +541,37 @@ Native file identity and ordinary-file checks gate both partial deletion and pub
 a path replaced by another file is preserved and cleanup uncertainty is projected. These
 checks followed by unlink or rename are not filesystem compare-and-swap. Disconnect and
 session close discard checkpoints after cleanup settlement; no item is replayed over a new
-transport. Unknown publication remains an explicit acknowledgement-only result. Upload
-continuation, cross-transport continuation and recovery after process closure remain open.
+transport. Unknown publication remains an explicit acknowledgement-only result.
+
+## Session upload checkpoints
+
+The queue enables upload Pause only after ordinary exclusive `WRITE | CREAT | EXCL` staging
+creation succeeds and a separate read-only open of that owned pathname has matching private,
+zero-length ordinary-file attributes and returns EOF on an empty-file read. An associated
+remote STATUS refusal closes any known read handle and retains ordinary upload without Pause.
+Malformed or uncertain admission ends the attempt and follows owned staging cleanup;
+staging creation is never retried to obtain read capability.
+
+Uploads finish 1 MiB bounded `upload_from` segments with four pipelined 32 KiB writes. Pause
+and Cancel wait for the current segment to finish normally. Each completed segment captures
+the write-handle baseline; Pause additionally waits for supported `fsync` and verifies both
+local and remote confirmed-prefix digests. The Rust checkpoint retains the original SFTP
+session, write/read handles, private staging path/baseline, admitted local source handle and
+metadata, absolute offset, SHA-256 state, target baseline and original replacement consent.
+Paused uploads retain capacity and release execution. Resume keeps the item identity,
+allocates a fresh execution at the FIFO tail, rechecks source/staging/target and both prefixes,
+then seeks the retained source and continues the original write handle at the actual offset.
+Validation reads never advance payload progress. Access-time changes caused by reads are
+ignored; changed source, staging or target refuses continuation or publication.
+
+Cancellation and transport/session expiry settle retained staging cleanup. Failure cleanup
+rechecks the current pathname against the last confirmed write-handle baseline before removal;
+a detected replacement or unverified baseline preserves the path and reports possible staging.
+These checks and removal are separate filesystem operations. A new transport cannot inherit a checkpoint. Publication
+refuses Pause/Cancel, and a lost rename reply stays Unknown without automatic replay.
+SFTP v3 has no stable file identifier or compare-and-swap: matching attributes and prefix
+hashes do not prove inode identity or an immutable snapshot, an unchanged unread suffix,
+or absence of later concurrent writes. Cross-transport and durable continuation remain open.
 
 ## Localization
 

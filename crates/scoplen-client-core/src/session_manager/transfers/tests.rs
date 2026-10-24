@@ -83,13 +83,19 @@ fn enqueue_ids(result: &SessionTransferEnqueueResult) -> (&str, &str, &str) {
 async fn next_upload(
     requests: &mut mpsc::Receiver<FileCommand>,
     expected: &[u8],
-) -> (oneshot::Sender<SessionUploadResult>, Arc<UploadState>, Uuid) {
+) -> (oneshot::Sender<UploadExecution>, Arc<UploadState>, Uuid) {
     let FileCommand::PreflightUpload { target, reply } = next_request(requests).await else {
         panic!("expected upload preflight");
     };
     assert_eq!(target, expected);
     reply.send(Ok(UploadPreflight { target_attributes: None, replacement_supported: true })).ok();
-    let FileCommand::Upload { target, reply, state, operation, .. } = next_request(requests).await
+    let FileCommand::TransferUpload {
+        input: UploadInput::New { target, .. },
+        reply,
+        state,
+        operation,
+        ..
+    } = next_request(requests).await
     else {
         panic!("expected the selected upload");
     };
@@ -102,6 +108,308 @@ async fn next_request(requests: &mut mpsc::Receiver<FileCommand>) -> FileCommand
         .await
         .expect("queued file operation did not dispatch")
         .expect("file worker closed")
+}
+
+async fn drive_upload(
+    manager: &SessionManager,
+    peer: &crate::session_files::uploads::tests::Peer,
+    request: FileCommand,
+    pause: bool,
+) {
+    let FileCommand::TransferUpload {
+        input,
+        control,
+        state,
+        session_id,
+        transport,
+        operation,
+        reply,
+    } = request
+    else {
+        panic!("expected a queued upload")
+    };
+    let mut requested = false;
+    let result = session_files::transfer_upload(
+        &peer.connection,
+        input,
+        control,
+        state,
+        |update| {
+            SessionManager::report_file_progress(
+                &manager.sessions,
+                &session_id,
+                transport,
+                operation,
+                &mut |_| {},
+                update,
+            );
+            if pause && !requested {
+                let snapshot = manager.transfer_queue_snapshot(&session_id).unwrap();
+                let row = snapshot
+                    .items
+                    .iter()
+                    .find(|row| row.execution_id == operation.to_string())
+                    .unwrap();
+                manager
+                    .pause_transfer(
+                        &session_id,
+                        &snapshot.queue_id,
+                        &row.item_id,
+                        &row.execution_id,
+                    )
+                    .unwrap();
+                requested = true;
+            }
+        },
+        || {
+            SessionManager::report_upload_pause(
+                &manager.sessions,
+                &session_id,
+                transport,
+                operation,
+            )
+        },
+        || {
+            SessionManager::authorize_remote_effect(
+                &manager.sessions,
+                &session_id,
+                transport,
+                operation,
+            )
+        },
+    )
+    .await;
+    manager.finish_remote_effect(&session_id, transport, operation);
+    reply.send(result).ok();
+}
+
+#[tokio::test]
+async fn public_upload_queue_releases_paused_execution_and_resumes_real_original_handle() {
+    use crate::session_files::uploads::tests::{Peer, source};
+    let peer = Peer::start().await;
+    let (manager, transport, mut requests) = ready_manager();
+    let folder = tempfile::tempdir().unwrap();
+    let (path, bytes) = source(folder.path());
+    let queued = enqueue_upload(&manager, transport, path).await;
+    let (queue, item, execution) = enqueue_ids(&queued);
+    let FileCommand::PreflightUpload { target, reply } = next_request(&mut requests).await else {
+        panic!()
+    };
+    reply
+        .send(
+            session_files::preflight_upload(&peer.connection, &target)
+                .await
+                .map_err(|error| error.to_string()),
+        )
+        .ok();
+    let request = next_request(&mut requests).await;
+    drive_upload(&manager, &peer, request, true).await;
+    let snapshot = snapshot_where(&manager, |snapshot| {
+        snapshot.items[0].state == SessionTransferState::Paused
+    })
+    .await;
+    let offset = snapshot.items[0].transferred_bytes.parse::<u64>().unwrap();
+    assert!(offset > 0 && offset < bytes.len() as u64);
+    assert_eq!(snapshot.outstanding, 1);
+    assert!(!snapshot.blocks_file_operations);
+    let follower = folder.path().join("later.bin");
+    std::fs::write(&follower, b"later queued selection").unwrap();
+    enqueue_upload(&manager, transport, follower).await;
+    let (reply, _, operation) = next_upload(&mut requests, b"./later.bin").await;
+    manager.resume_transfer("terminal", queue, item, execution).unwrap();
+    assert!(manager.cancel_transfer("terminal", queue, item, execution).is_err());
+    saved(&manager, transport, operation, reply);
+    let request = next_request(&mut requests).await;
+    let FileCommand::TransferUpload { operation, .. } = &request else { panic!() };
+    assert_ne!(operation.to_string(), execution);
+    let writes = peer.write_offsets().len();
+    drive_upload(&manager, &peer, request, false).await;
+    let snapshot = snapshot_where(&manager, |snapshot| snapshot.recent.len() == 2).await;
+    assert!(snapshot.items.is_empty());
+    assert_eq!(snapshot.recent[1].item_id, item);
+    assert_eq!(snapshot.recent[1].state, SessionTransferState::Saved);
+    assert_eq!(snapshot.recent[1].transferred_bytes, bytes.len().to_string());
+    assert_eq!(peer.write_offsets()[writes], offset);
+}
+
+#[tokio::test]
+async fn upload_resume_dispatch_loss_settles_the_checkpoint_before_finishing() {
+    use crate::session_files::uploads::tests::{Peer, source};
+    let peer = Peer::start().await;
+    let (manager, transport, requests) = ready_manager();
+    let folder = tempfile::tempdir().unwrap();
+    let (path, _) = source(folder.path());
+    let checkpoint = peer.paused(&path).await;
+    let operation = Uuid::now_v7();
+    let identity = TransferIdentity { item: Uuid::now_v7(), execution: operation, transport };
+    let (abort, _) = AbortHandle::new_pair();
+    let guard = manager
+        .reserve_file_operation("terminal", &transport.to_string(), &operation.to_string(), abort)
+        .unwrap();
+    {
+        let mut sessions = manager.sessions.lock().unwrap();
+        sessions
+            .get_mut("terminal")
+            .unwrap()
+            .active
+            .as_mut()
+            .unwrap()
+            .file
+            .as_mut()
+            .unwrap()
+            .transfer = Some(identity);
+    }
+    drop(requests);
+    let TransferExecutionResult::Finished(result) = manager
+        .execute_upload_transfer("terminal", identity, guard, UploadInput::Resume(checkpoint))
+        .await
+    else {
+        panic!()
+    };
+    assert!(!result.staging_may_remain);
+    assert!(matches!(
+        result.state,
+        SessionTransferState::Interrupted | SessionTransferState::Cancelled
+    ));
+}
+
+#[tokio::test]
+async fn accepted_upload_resume_dropped_before_poll_reports_unconfirmed_remote_staging() {
+    use crate::session_files::uploads::tests::{Peer, source};
+    let peer = Peer::start().await;
+    let (manager, transport, mut requests) = ready_manager();
+    let folder = tempfile::tempdir().unwrap();
+    let (path, bytes) = source(folder.path());
+    let queued = enqueue_upload(&manager, transport, path).await;
+    let (queue, item, execution) = enqueue_ids(&queued);
+    let FileCommand::PreflightUpload { target, reply } = next_request(&mut requests).await else {
+        panic!()
+    };
+    reply
+        .send(
+            session_files::preflight_upload(&peer.connection, &target)
+                .await
+                .map_err(|error| error.to_string()),
+        )
+        .ok();
+    let request = next_request(&mut requests).await;
+    drive_upload(&manager, &peer, request, true).await;
+    snapshot_where(&manager, |snapshot| snapshot.items[0].state == SessionTransferState::Paused)
+        .await;
+    manager.resume_transfer("terminal", queue, item, execution).unwrap();
+    let request = next_request(&mut requests).await;
+    let FileCommand::TransferUpload { input: UploadInput::Resume(_), state, .. } = &request else {
+        panic!()
+    };
+    assert!(state.staging_may_remain.load(Ordering::SeqCst));
+    let writes = peer.write_offsets().len();
+    manager.expire_ready_transport("terminal", transport).unwrap();
+    drop(request);
+    drop(requests);
+    let snapshot = snapshot_where(&manager, |snapshot| snapshot.recent.len() == 1).await;
+    assert_eq!(snapshot.recent[0].state, SessionTransferState::Interrupted);
+    assert!(snapshot.recent[0].staging_may_remain);
+    assert_eq!(snapshot.recent[0].item_id, item);
+    assert!(snapshot.recent[0].transferred_bytes.parse::<usize>().unwrap() < bytes.len());
+    assert!(peer.staging_exists());
+    assert_eq!(peer.write_offsets().len(), writes);
+}
+
+#[tokio::test]
+async fn paused_upload_cancel_disconnect_and_close_settle_owned_resources() {
+    use crate::session_files::uploads::tests::{Peer, source};
+    for scenario in 0..4 {
+        let peer = Peer::start().await;
+        let (manager, transport, _requests) = ready_manager();
+        let folder = tempfile::tempdir().unwrap();
+        let (path, bytes) = source(folder.path());
+        let checkpoint = peer.paused(&path).await;
+        let (queue, identity) = {
+            let mut sessions = manager.sessions.lock().unwrap();
+            let entry = sessions.get_mut("terminal").unwrap();
+            let selection = entry.transfers.reserve_selection(transport).unwrap();
+            entry
+                .transfers
+                .enqueue_selected(
+                    selection,
+                    "source.bin",
+                    SessionTransferDirection::Upload,
+                    Some(bytes.len() as u64),
+                    SelectedTransfer::ResumeUpload(checkpoint),
+                )
+                .unwrap();
+            let selected = entry.transfers.take_next(transport).unwrap();
+            entry.transfers.admit_upload_pause(selected.identity);
+            entry.transfers.progress(
+                selected.identity,
+                FileTransferProgress {
+                    transferred: 1024 * 1024,
+                    total: Some(bytes.len() as u64),
+                    phase: SessionFileTransferPhase::Transferring,
+                },
+            );
+            entry
+                .transfers
+                .pause(entry.transfers.id(), selected.identity.item, selected.identity.execution)
+                .unwrap();
+            assert!(entry.transfers.retain_paused(selected.identity, selected.resources).is_ok());
+            (entry.transfers.id(), selected.identity)
+        };
+        match scenario {
+            1 => manager.expire_ready_transport("terminal", transport).unwrap(),
+            2 => manager.close("terminal").unwrap(),
+            _ => {
+                if scenario == 3 {
+                    peer.refuse_cleanup();
+                }
+                manager
+                    .cancel_transfer(
+                        "terminal",
+                        &queue.to_string(),
+                        &identity.item.to_string(),
+                        &identity.execution.to_string(),
+                    )
+                    .unwrap();
+            }
+        }
+        if scenario == 2 {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while manager.transfer_queue_snapshot("terminal")
+                    != Err(SessionTransferIssue::SessionUnavailable)
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        } else {
+            let snapshot = snapshot_where(&manager, |snapshot| snapshot.recent.len() == 1).await;
+            assert_eq!(snapshot.outstanding, 0);
+            assert_eq!(
+                snapshot.recent[0].state,
+                if scenario == 1 {
+                    SessionTransferState::Interrupted
+                } else {
+                    SessionTransferState::Cancelled
+                }
+            );
+            assert_eq!(snapshot.recent[0].staging_may_remain, scenario == 3);
+            if scenario == 3 {
+                assert_eq!(snapshot.recent[0].issue, Some(SessionTransferIssue::CleanupIncomplete));
+            }
+            assert!(
+                manager
+                    .resume_transfer(
+                        "terminal",
+                        &queue.to_string(),
+                        &identity.item.to_string(),
+                        &identity.execution.to_string()
+                    )
+                    .is_err()
+            );
+        }
+        assert_eq!(peer.staging_exists(), scenario == 3);
+    }
 }
 
 #[tokio::test]
@@ -311,10 +619,10 @@ fn saved(
     manager: &SessionManager,
     transport: Uuid,
     operation: Uuid,
-    reply: oneshot::Sender<SessionUploadResult>,
+    reply: oneshot::Sender<UploadExecution>,
 ) {
     manager.finish_remote_effect("terminal", transport, operation);
-    reply.send(SessionUploadResult::new(SessionUploadStatus::Saved, None, false)).ok();
+    reply.send(UploadExecution::Published).ok();
 }
 
 #[tokio::test]
@@ -577,7 +885,12 @@ async fn publication_claim_fences_cancellation_and_unknown_reminders_allow_brows
         Err(SessionTransferIssue::PublicationStarted)
     );
     manager.finish_remote_effect("terminal", transport, operation);
-    reply.send(SessionUploadResult::new(SessionUploadStatus::Unknown, None, true)).ok();
+    reply
+        .send(UploadExecution::Failed {
+            error: FileAccessError::PublicationUnknown,
+            staging_may_remain: true,
+        })
+        .ok();
     let snapshot = snapshot_where(&manager, |snapshot| {
         snapshot.items[0].state == SessionTransferState::Unknown
     })
@@ -720,7 +1033,7 @@ async fn cancellation_of_a_dispatched_download_waits_for_owned_cleanup_settlemen
     let (queue, item, execution) = enqueue_ids(&queued);
     manager.cancel_transfer("terminal", queue, item, execution).unwrap();
     control.changed().await.unwrap();
-    assert!(*control.borrow() == DownloadControl::Cancel);
+    assert!(*control.borrow() == TransferControl::Cancel);
     assert_eq!(manager.transfer_queue_snapshot("terminal").unwrap().outstanding, 1);
     reply
         .send(Ok(DownloadExecution::Failed {
@@ -744,7 +1057,12 @@ async fn ended_runtime_retains_unknown_for_offline_review_and_same_session_reope
     SessionManager::authorize_remote_effect(&manager.sessions, "terminal", transport, operation)
         .unwrap();
     manager.finish_remote_effect("terminal", transport, operation);
-    reply.send(SessionUploadResult::new(SessionUploadStatus::Unknown, None, true)).ok();
+    reply
+        .send(UploadExecution::Failed {
+            error: FileAccessError::PublicationUnknown,
+            staging_may_remain: true,
+        })
+        .ok();
     snapshot_where(&manager, |snapshot| snapshot.items[0].state == SessionTransferState::Unknown)
         .await;
     drop(Registration { manager: &manager, id: "terminal" });

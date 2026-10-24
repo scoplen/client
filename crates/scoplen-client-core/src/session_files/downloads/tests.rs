@@ -197,7 +197,7 @@ impl Peer {
             destination: DownloadDestination::capture(destination).await.unwrap(),
         };
         let prepared = prepare_download(&self.connection, input).await.unwrap();
-        let (_sender, control) = watch::channel(DownloadControl::Pause);
+        let (_sender, control) = watch::channel(TransferControl::Pause);
         match continue_download(prepared, control, |_| {}).await {
             DownloadExecution::Paused(checkpoint) => checkpoint,
             _ => panic!("expected a real checkpoint"),
@@ -207,7 +207,7 @@ impl Peer {
 
 pub(crate) async fn blocked_creation(
     prepared: DownloadPreparation,
-    control: watch::Receiver<DownloadControl>,
+    control: watch::Receiver<TransferControl>,
     started: tokio::sync::oneshot::Sender<PathBuf>,
     release: std::sync::mpsc::Receiver<()>,
 ) -> DownloadExecution {
@@ -242,7 +242,7 @@ async fn refused_new_channel_does_not_evict_an_existing_download_checkpoint() {
     assert!(prepare_download(&peer.connection, later).await.is_err());
     assert_eq!(peer.refused_channels.load(Ordering::SeqCst), 1);
     assert!(partial.exists());
-    let (_sender, control) = watch::channel(DownloadControl::Run);
+    let (_sender, control) = watch::channel(TransferControl::Run);
     let DownloadExecution::Ready { prepared, .. } =
         continue_download(DownloadPreparation::Resume(checkpoint), control, |_| {}).await
     else {
@@ -266,7 +266,7 @@ async fn bounded_segments_retain_exact_partial_and_resume_after_prefix_validatio
     let first = peer.reads.lock().unwrap().clone();
     assert!(first.iter().all(|(offset, count)| offset + u64::from(*count) <= SEGMENT_BYTES));
     peer.reads.lock().unwrap().clear();
-    let (_sender, control) = watch::channel(DownloadControl::Run);
+    let (_sender, control) = watch::channel(TransferControl::Run);
     let mut progress = Vec::new();
     let result = continue_download(DownloadPreparation::Resume(checkpoint), control, |update| {
         progress.push(update)
@@ -293,7 +293,7 @@ async fn prefix_mutation_without_metadata_change_conflicts_and_preserves_destina
     let checkpoint = peer.paused(destination.clone()).await;
     let partial = checkpoint.temporary.path.clone();
     peer.bytes.lock().unwrap()[0] ^= 1;
-    let (_sender, control) = watch::channel(DownloadControl::Run);
+    let (_sender, control) = watch::channel(TransferControl::Run);
     assert!(matches!(
         continue_download(DownloadPreparation::Resume(checkpoint), control, |_| {}).await,
         DownloadExecution::Failed {
@@ -315,7 +315,7 @@ async fn replaced_partial_is_neither_resumed_nor_deleted() {
     let retained = directory.path().join("original-partial");
     std::fs::rename(&partial, &retained).unwrap();
     std::fs::copy(&retained, &partial).unwrap();
-    let (_sender, control) = watch::channel(DownloadControl::Run);
+    let (_sender, control) = watch::channel(TransferControl::Run);
     assert!(matches!(
         continue_download(DownloadPreparation::Resume(checkpoint), control, |_| {}).await,
         DownloadExecution::Failed { error: FileAccessError::FileChanged, staging_may_remain: true }
@@ -335,7 +335,7 @@ async fn local_prefix_mutation_with_restored_timestamp_is_detected_by_digest() {
     let times = file.metadata().unwrap();
     std::io::Write::write_all(&mut &file, b"changed").unwrap();
     file.set_times(std::fs::FileTimes::new().set_modified(times.modified().unwrap())).unwrap();
-    let (_sender, control) = watch::channel(DownloadControl::Run);
+    let (_sender, control) = watch::channel(TransferControl::Run);
     assert!(matches!(
         continue_download(DownloadPreparation::Resume(checkpoint), control, |_| {}).await,
         DownloadExecution::Failed {
@@ -368,7 +368,7 @@ async fn changed_source_size_and_changed_destination_fail_before_any_continuatio
         } else {
             std::fs::write(&destination, b"new local data").unwrap();
         }
-        let (_sender, control) = watch::channel(DownloadControl::Run);
+        let (_sender, control) = watch::channel(TransferControl::Run);
         let result =
             continue_download(DownloadPreparation::Resume(checkpoint), control, |_| {}).await;
         assert!(matches!(
@@ -392,17 +392,17 @@ async fn repeated_pause_advances_the_original_partial_and_cancel_settles_its_cle
     let directory = tempfile::tempdir().unwrap();
     let checkpoint = peer.paused(directory.path().join("saved.bin")).await;
     let path = checkpoint.temporary.path.clone();
-    let (sender, control) = watch::channel(DownloadControl::Run);
+    let (sender, control) = watch::channel(TransferControl::Run);
     let result = continue_download(DownloadPreparation::Resume(checkpoint), control, |update| {
         if update.transferred >= SEGMENT_BYTES {
-            sender.send_replace(DownloadControl::Pause);
+            sender.send_replace(TransferControl::Pause);
         }
     })
     .await;
     let DownloadExecution::Paused(checkpoint) = result else { panic!("second checkpoint missing") };
     assert_eq!(checkpoint.offset, 2 * SEGMENT_BYTES);
     assert_eq!(checkpoint.temporary.path, path);
-    let (_sender, control) = watch::channel(DownloadControl::Cancel);
+    let (_sender, control) = watch::channel(TransferControl::Cancel);
     assert!(matches!(
         continue_download(DownloadPreparation::Resume(checkpoint), control, |_| {}).await,
         DownloadExecution::Failed { error: FileAccessError::Cancelled, staging_may_remain: false }
@@ -412,13 +412,14 @@ async fn repeated_pause_advances_the_original_partial_and_cancel_settles_its_cle
 
 #[tokio::test]
 async fn pause_never_drops_an_inflight_exchange_but_cancel_preempts_it() {
-    let (sender, mut control) = watch::channel(DownloadControl::Run);
+    let (sender, mut control) = watch::channel(TransferControl::Run);
     let task = tokio::spawn(async move {
-        controlled(&mut control, std::future::pending::<Result<(), FileAccessError>>()).await
+        transfer_controlled(&mut control, std::future::pending::<Result<(), FileAccessError>>())
+            .await
     });
-    sender.send_replace(DownloadControl::Pause);
+    sender.send_replace(TransferControl::Pause);
     tokio::task::yield_now().await;
     assert!(!task.is_finished());
-    sender.send_replace(DownloadControl::Cancel);
+    sender.send_replace(TransferControl::Cancel);
     assert!(matches!(task.await.unwrap(), Err(FileAccessError::Cancelled)));
 }

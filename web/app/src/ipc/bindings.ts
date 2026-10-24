@@ -1784,7 +1784,7 @@ export type SessionTransferItem = {
 	totalBytes: string | null,
 	/**  Whether this exact execution can accept an explicit cancellation. */
 	canCancel: boolean,
-	/**  Whether this download execution can request a checkpoint. */
+	/**  Whether this execution has admitted the handles required for a checkpoint. */
 	canPause: boolean,
 	/**  Whether explicit continuation can queue this retained checkpoint. */
 	canResume: boolean,

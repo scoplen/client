@@ -25,11 +25,11 @@ use crate::connection::preparation::{
 use crate::connection::{MAX_SSH_INPUT, SshConnectionError, SshSession, terminal_size};
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
 use crate::session_files::{
-    self, DownloadCheckpoint, DownloadControl, DownloadExecution, DownloadInput,
-    FileTransferProgress, MutationPreflight, RemoteDirectory, RemoteMutation, RemoteTextPreview,
-    RemoteTextPreviewIssue, SessionDownloadResult, SessionDownloadStatus,
-    SessionFileMutationResult, SessionFileMutationStatus, SessionFileTransferPhase,
-    SessionUploadResult, SessionUploadStatus, UploadPreflight, UploadSource, UploadState,
+    self, DownloadCheckpoint, DownloadExecution, DownloadInput, FileTransferProgress,
+    MutationPreflight, RemoteDirectory, RemoteMutation, RemoteTextPreview, RemoteTextPreviewIssue,
+    SessionDownloadResult, SessionDownloadStatus, SessionFileMutationResult,
+    SessionFileMutationStatus, SessionFileTransferPhase, SessionUploadResult, SessionUploadStatus,
+    TransferControl, UploadExecution, UploadInput, UploadPreflight, UploadSource, UploadState,
 };
 use crate::session_lifecycle::SessionHistoryLease;
 use crate::session_transfers::{
@@ -142,9 +142,18 @@ enum TransportCommand {
 }
 
 enum FileCommand {
+    TransferUpload {
+        input: UploadInput,
+        control: watch::Receiver<TransferControl>,
+        state: Arc<UploadState>,
+        session_id: String,
+        transport: Uuid,
+        operation: Uuid,
+        reply: oneshot::Sender<UploadExecution>,
+    },
     TransferDownload {
         input: DownloadInput,
-        control: watch::Receiver<DownloadControl>,
+        control: watch::Receiver<TransferControl>,
         session_id: String,
         transport: Uuid,
         operation: Uuid,
@@ -213,7 +222,7 @@ struct ActiveFile {
     upload_state: Arc<UploadState>,
     effect_cancel: Option<watch::Sender<bool>>,
     transfer: Option<TransferIdentity>,
-    download_control: Option<watch::Sender<DownloadControl>>,
+    transfer_control: Option<watch::Sender<TransferControl>>,
 }
 
 struct ActiveAttempt {
@@ -285,8 +294,8 @@ fn interrupt_transfers(entry: &mut SessionEntry, transport: Uuid) {
         && file.transfer == Some(identity)
         && !file.upload_state.effect_started.load(Ordering::SeqCst)
     {
-        if let Some(control) = &file.download_control {
-            control.send_replace(DownloadControl::Cancel);
+        if let Some(control) = &file.transfer_control {
+            control.send_replace(TransferControl::Cancel);
         } else if let Some(cancel) = &file.effect_cancel {
             cancel.send_replace(true);
         } else {
@@ -1067,7 +1076,7 @@ impl SessionManager {
             upload_state: upload_state.clone(),
             effect_cancel: None,
             transfer: None,
-            download_control: None,
+            transfer_control: None,
         });
         Ok(FileRequestGuard {
             manager: self,
@@ -1184,6 +1193,27 @@ impl SessionManager {
         {
             active.file.take();
             entry.transfer_notify.notify_one();
+        }
+    }
+
+    fn report_upload_pause(
+        sessions: &Mutex<HashMap<String, SessionEntry>>,
+        session_id: &str,
+        transport: Uuid,
+        operation: Uuid,
+    ) {
+        if let Ok(mut sessions) = sessions.lock()
+            && let Some(entry) = sessions.get_mut(session_id)
+            && let Some(active) = &entry.active
+            && active.ready
+            && active.id == transport
+            && *entry.intent.borrow() == Intent::None
+            && let Some(file) = &active.file
+            && file.id == operation
+            && !file.abort.is_aborted()
+            && let Some(identity) = file.transfer
+        {
+            entry.transfers.admit_upload_pause(identity);
         }
     }
 
@@ -1699,6 +1729,59 @@ async fn serve_files(
 ) {
     while let Some(request) = files.recv().await {
         match request {
+            FileCommand::TransferUpload {
+                input,
+                control,
+                state,
+                session_id,
+                transport,
+                operation,
+                reply,
+            } => {
+                let sessions = manager.sessions.clone();
+                let progress_sessions = sessions.clone();
+                let capability_sessions = sessions.clone();
+                let progress_session = session_id.clone();
+                let capability_session = session_id.clone();
+                let authorized_session = session_id.clone();
+                let result = session_files::transfer_upload(
+                    connection,
+                    input,
+                    control,
+                    state,
+                    move |update| {
+                        SessionManager::report_file_progress(
+                            &progress_sessions,
+                            &progress_session,
+                            transport,
+                            operation,
+                            &mut |_| {},
+                            update,
+                        );
+                    },
+                    move || {
+                        SessionManager::report_upload_pause(
+                            &capability_sessions,
+                            &capability_session,
+                            transport,
+                            operation,
+                        );
+                    },
+                    move || {
+                        SessionManager::authorize_remote_effect(
+                            &sessions,
+                            &authorized_session,
+                            transport,
+                            operation,
+                        )
+                    },
+                )
+                .await;
+                manager.finish_remote_effect(&session_id, transport, operation);
+                if let Err(UploadExecution::Paused(checkpoint)) = reply.send(result) {
+                    let _ = checkpoint.discard().await;
+                }
+            }
             FileCommand::TransferDownload {
                 input,
                 control,

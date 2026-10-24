@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::session_files::{DownloadCheckpoint, UploadSource};
+use crate::session_files::{DownloadCheckpoint, UploadCheckpoint, UploadSource};
 
 use super::{DownloadDestination, SessionTransferIssue, SessionTransferReview};
 
@@ -27,4 +27,5 @@ pub(crate) enum SelectedTransfer {
         confirm: ReplaceConfirmation,
     },
     ResumeDownload(Box<DownloadCheckpoint>),
+    ResumeUpload(Box<UploadCheckpoint>),
 }

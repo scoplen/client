@@ -276,6 +276,25 @@ acceptance. Before marking the native-drop roadmap outcome complete, perform rea
 on scaled Windows and Retina macOS, including empty directories, resizing, zoom and refusal
 outside the Files list.
 
+## Upload continuation checks
+
+```text
+cargo test -p scoplen-client-core --lib session_files::uploads
+cargo test -p scoplen-client-core --lib session_manager::transfers
+cargo test -p scoplen-client-core --lib session_transfers
+pnpm --filter @scoplen/app test -- session-transfer-queue
+```
+
+The independent SSH/SFTP peer records actual WRITE offsets and retained handles across
+repeated pauses, separately from validation READ requests. Regressions cover first-Pause
+staging verification, metadata-preserving source/staging prefix changes, pathname replacement,
+changed targets, staging-read refusal and uncertain admission, cleanup, cancellation and lost
+publication replies. Queue tests exercise fresh FIFO executions, retained capacity and stale
+messages. The disposable OpenSSH Files example also exercises upload Pause/Resume through
+the public queue with later queued work, terminal input/resize and exact saved bytes.
+These checks do not establish cross-transport or process recovery, immutable source/staging
+files, inode identity, or physical-platform UI acceptance.
+
 ## Generated files
 
 | File | Regenerate with | When |

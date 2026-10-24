@@ -64,7 +64,7 @@ enum TransferExecutionResult {
 }
 
 impl SessionManager {
-    /// Request normal settlement of the running download's bounded segment.
+    /// Request normal settlement of the running transfer's bounded segment.
     pub fn pause_transfer(
         &self,
         session_id: &str,
@@ -85,9 +85,9 @@ impl SessionManager {
         if active.id != identity.transport {
             return Err(SessionTransferIssue::TransportEnded);
         }
-        if let Some(control) = active.file.as_ref().and_then(|file| file.download_control.as_ref())
+        if let Some(control) = active.file.as_ref().and_then(|file| file.transfer_control.as_ref())
         {
-            control.send_replace(DownloadControl::Pause);
+            control.send_replace(TransferControl::Pause);
         }
         Ok(())
     }
@@ -252,8 +252,8 @@ impl SessionManager {
                     && let Some(file) = &active.file
                     && file.transfer == Some(identity)
                 {
-                    if let Some(control) = &file.download_control {
-                        control.send_replace(DownloadControl::Cancel);
+                    if let Some(control) = &file.transfer_control {
+                        control.send_replace(TransferControl::Cancel);
                     } else if let Some(cancel) = &file.effect_cancel {
                         cancel.send_replace(true);
                     } else {
@@ -396,7 +396,7 @@ impl SessionManager {
                                 upload_state: state.clone(),
                                 effect_cancel: None,
                                 transfer: Some(selected.identity),
-                                download_control: None,
+                                transfer_control: None,
                             });
                             TransferExecution { selected, context, abort, cancellation, state }
                         })
@@ -513,51 +513,19 @@ impl SessionManager {
                     Ok(Err(issue)) => issue_completion(issue, false),
                     Ok(Ok(None)) => known_completion(SessionTransferState::Cancelled),
                     Ok(Ok(Some((source, target, preflight)))) => {
-                        let (cancel_sender, cancel) = watch::channel(false);
-                        let (reply, received) = oneshot::channel();
-                        let request = FileCommand::Upload {
-                            source: Box::new(source),
-                            directory,
-                            target,
-                            preflight,
-                            cancel,
-                            state: guard.upload_state.clone(),
-                            session_id: session.to_owned(),
-                            transport: identity.transport,
-                            operation: identity.execution,
-                            progress: Box::new(|_| {}),
-                            reply,
-                        };
-                        if self.queue_effect_request(&guard, cancel_sender, request).is_err() {
-                            self.stopped_completion(session, identity, false)
-                        } else {
-                            match received.await {
-                                Ok(result) if result.status == SessionUploadStatus::Cancelled => {
-                                    self.stopped_completion(
-                                        session,
-                                        identity,
-                                        result.staging_may_remain,
-                                    )
-                                }
-                                Ok(result) => upload_completion(result),
-                                Err(_)
-                                    if guard.upload_state.effect_started.load(Ordering::SeqCst) =>
-                                {
-                                    issue_completion(
-                                        SessionTransferIssue::PublicationUnknown,
-                                        guard
-                                            .upload_state
-                                            .staging_may_remain
-                                            .load(Ordering::SeqCst),
-                                    )
-                                }
-                                Err(_) => self.stopped_completion(
-                                    session,
-                                    identity,
-                                    guard.upload_state.staging_may_remain.load(Ordering::SeqCst),
-                                ),
-                            }
-                        }
+                        return self
+                            .execute_upload_transfer(
+                                session,
+                                identity,
+                                guard,
+                                UploadInput::New {
+                                    source: Box::new(source),
+                                    directory,
+                                    target,
+                                    preflight,
+                                },
+                            )
+                            .await;
                     }
                 }
             }
@@ -587,6 +555,16 @@ impl SessionManager {
                     )
                     .await;
             }
+            SelectedTransfer::ResumeUpload(checkpoint) => {
+                return self
+                    .execute_upload_transfer(
+                        session,
+                        identity,
+                        guard,
+                        UploadInput::Resume(checkpoint),
+                    )
+                    .await;
+            }
         };
         drop(guard);
         TransferExecutionResult::Finished(completion)
@@ -602,6 +580,7 @@ impl SessionManager {
     ) {
         let clean = match resources {
             SelectedTransfer::ResumeDownload(checkpoint) => checkpoint.discard().await,
+            SelectedTransfer::ResumeUpload(checkpoint) => checkpoint.discard().await,
             _ => true,
         };
         if let Ok(mut sessions) = self.sessions.lock()
@@ -646,6 +625,7 @@ impl SessionManager {
     ) {
         let clean = match resources {
             SelectedTransfer::ResumeDownload(checkpoint) => checkpoint.discard().await,
+            SelectedTransfer::ResumeUpload(checkpoint) => checkpoint.discard().await,
             _ => true,
         };
         let completion = self.stopped_completion(session, identity, !clean);
@@ -661,6 +641,118 @@ impl SessionManager {
                 && entry.active.is_none()
             {
                 sessions.remove(session);
+            }
+        }
+    }
+
+    async fn execute_upload_transfer(
+        &self,
+        session: &str,
+        identity: TransferIdentity,
+        guard: FileRequestGuard<'_>,
+        input: UploadInput,
+    ) -> TransferExecutionResult {
+        let (reply, received) = oneshot::channel();
+        let result = match self.dispatch_upload(&guard, identity, input, reply) {
+            Ok(()) => received.await.ok(),
+            Err(failed) => {
+                let (error, input) = *failed;
+                let clean = match input {
+                    UploadInput::Resume(checkpoint) => checkpoint.discard().await,
+                    UploadInput::New { .. } => true,
+                };
+                Some(UploadExecution::Failed { error, staging_may_remain: !clean })
+            }
+        };
+        let result = match result {
+            Some(UploadExecution::Paused(checkpoint)) => {
+                TransferExecutionResult::Paused(SelectedTransfer::ResumeUpload(checkpoint))
+            }
+            Some(UploadExecution::Published) => {
+                TransferExecutionResult::Finished(known_completion(SessionTransferState::Saved))
+            }
+            Some(UploadExecution::Failed { error, staging_may_remain }) => {
+                TransferExecutionResult::Finished(if matches!(error, FileAccessError::Cancelled) {
+                    self.stopped_completion(session, identity, staging_may_remain)
+                } else if matches!(error, FileAccessError::PublicationUnknown) {
+                    issue_completion(SessionTransferIssue::PublicationUnknown, staging_may_remain)
+                } else {
+                    issue_completion(file_issue(error), staging_may_remain)
+                })
+            }
+            None => {
+                let remains = guard.upload_state.staging_may_remain.load(Ordering::SeqCst);
+                TransferExecutionResult::Finished(
+                    if guard.upload_state.effect_started.load(Ordering::SeqCst) {
+                        issue_completion(SessionTransferIssue::PublicationUnknown, remains)
+                    } else {
+                        self.stopped_completion(session, identity, remains)
+                    },
+                )
+            }
+        };
+        drop(guard);
+        result
+    }
+
+    fn dispatch_upload(
+        &self,
+        guard: &FileRequestGuard<'_>,
+        identity: TransferIdentity,
+        input: UploadInput,
+        reply: oneshot::Sender<UploadExecution>,
+    ) -> Result<(), Box<(FileAccessError, UploadInput)>> {
+        // The command may be accepted and dropped before the file actor polls it.
+        if matches!(&input, UploadInput::Resume(_)) {
+            guard.upload_state.staging_may_remain.store(true, Ordering::SeqCst);
+        }
+        let (sender, control) = watch::channel(TransferControl::Run);
+        let mut request = Some(FileCommand::TransferUpload {
+            input,
+            control,
+            state: guard.upload_state.clone(),
+            session_id: guard.session_id.to_owned(),
+            transport: identity.transport,
+            operation: identity.execution,
+            reply,
+        });
+        let result = (|| {
+            let mut sessions =
+                self.sessions.lock().map_err(|_| FileAccessError::ConnectionEnded)?;
+            let entry =
+                sessions.get_mut(guard.session_id).ok_or(FileAccessError::ConnectionEnded)?;
+            if *entry.intent.borrow() != Intent::None {
+                return Err(FileAccessError::ConnectionEnded);
+            }
+            if guard.abort.is_aborted() {
+                return Err(FileAccessError::Cancelled);
+            }
+            if entry.transfers.is_pausing(identity) {
+                sender.send_replace(TransferControl::Pause);
+            }
+            let active = entry
+                .active
+                .as_mut()
+                .filter(|active| active.ready && active.id == identity.transport)
+                .ok_or(FileAccessError::ConnectionEnded)?;
+            let file = active
+                .file
+                .as_mut()
+                .filter(|file| file.transfer == Some(identity))
+                .ok_or(FileAccessError::ConnectionEnded)?;
+            file.transfer_control = Some(sender);
+            active.files.try_send(request.take().expect("owned request")).map_err(|error| {
+                request = Some(error.into_inner());
+                FileAccessError::ConnectionEnded
+            })
+        })();
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let Some(FileCommand::TransferUpload { input, .. }) = request else {
+                    unreachable!("failed dispatch retains ownership")
+                };
+                Err(Box::new((error, input)))
             }
         }
     }
@@ -778,7 +870,7 @@ impl SessionManager {
         input: DownloadInput,
         reply: oneshot::Sender<Result<DownloadExecution, FileAccessError>>,
     ) -> Result<(), Box<(FileAccessError, DownloadInput)>> {
-        let (sender, control) = watch::channel(DownloadControl::Run);
+        let (sender, control) = watch::channel(TransferControl::Run);
         let mut request = Some(FileCommand::TransferDownload {
             input,
             control,
@@ -799,7 +891,7 @@ impl SessionManager {
                 return Err(FileAccessError::Cancelled);
             }
             if entry.transfers.is_pausing(identity) {
-                sender.send_replace(DownloadControl::Pause);
+                sender.send_replace(TransferControl::Pause);
             }
             let active = entry
                 .active
@@ -811,7 +903,7 @@ impl SessionManager {
                 .as_mut()
                 .filter(|file| file.transfer == Some(identity))
                 .ok_or(FileAccessError::ConnectionEnded)?;
-            file.download_control = Some(sender);
+            file.transfer_control = Some(sender);
             active.files.try_send(request.take().expect("owned request")).map_err(|error| {
                 request = Some(error.into_inner());
                 FileAccessError::ConnectionEnded
@@ -949,29 +1041,6 @@ fn issue_completion(issue: SessionTransferIssue, staging_may_remain: bool) -> Tr
         },
         issue: Some(issue),
         staging_may_remain,
-    }
-}
-
-fn upload_completion(result: SessionUploadResult) -> TransferCompletion {
-    match result.status {
-        SessionUploadStatus::Saved => known_completion(SessionTransferState::Saved),
-        SessionUploadStatus::Cancelled => TransferCompletion {
-            state: SessionTransferState::Cancelled,
-            issue: None,
-            staging_may_remain: result.staging_may_remain,
-        },
-        SessionUploadStatus::Conflict => {
-            issue_completion(SessionTransferIssue::TargetChanged, result.staging_may_remain)
-        }
-        SessionUploadStatus::Unsupported => {
-            issue_completion(SessionTransferIssue::Unsupported, result.staging_may_remain)
-        }
-        SessionUploadStatus::Unknown => {
-            issue_completion(SessionTransferIssue::PublicationUnknown, result.staging_may_remain)
-        }
-        SessionUploadStatus::Failed => {
-            issue_completion(SessionTransferIssue::TransferFailed, result.staging_may_remain)
-        }
     }
 }
 

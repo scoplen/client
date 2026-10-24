@@ -102,7 +102,7 @@ Up to 16 selections, queued files, running or paused transfers and unacknowledge
 results may be outstanding; the latest 32 known results remain visible. Hiding
 Files leaves transfers running. You can add files from the current listing while
 a transfer runs; directory navigation and remote changes wait until the queue is
-settled; paused downloads release execution so later queued work and file navigation can run.
+settled; paused transfers release execution so later queued work and file navigation can run.
 One native picker or replacement review is open per queue.
 
 Files also accepts a native drop of 1 to 16 ordinary local files onto its visible remote
@@ -137,8 +137,16 @@ cost grows with that prefix and does not increase displayed payload progress. Me
 open handle do not provide an immutable source snapshot: unread suffix changes or concurrent
 writes after verification can still affect a download. Keep the source stable until it saves.
 Cancellation and disconnect settle owned partial cleanup; a detected replacement is preserved.
-Upload continuation and continuation after reconnect or tab/process closure
-remain separate C6 work.
+Uploads can also pause on the original live transport when the server admits a separate
+read handle for the exclusively created private staging file. A server refusing staging
+reads still supports ordinary uploads without Pause. Pausing settles a bounded segment and
+supported remote synchronization, then checks both confirmed prefixes. Resume retains the
+original local source and remote write/read handles, verifies source, staging and destination,
+and continues at the confirmed offset under a fresh FIFO execution. Validation reads do not
+increase payload progress. SFTP v3 has no stable file identity: matching staging attributes
+and prefix hashes cannot prove inode identity, an unchanged unread suffix or absence of
+concurrent writes after validation. Keep the source and staging stable until publication.
+Continuation after reconnect or tab/process closure remains separate C6 work.
 
 Preview reads one complete ordinary UTF-8 file of at most 256 KiB through the current
 terminal's SSH connection. It shows literal read-only text in a transient dialog, without

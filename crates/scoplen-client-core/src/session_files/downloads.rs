@@ -12,13 +12,6 @@ use super::*;
 
 const SEGMENT_BYTES: u64 = 1024 * 1024;
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) enum DownloadControl {
-    Run,
-    Pause,
-    Cancel,
-}
-
 pub(crate) enum DownloadInput {
     New { remote_path: Vec<u8>, destination: DownloadDestination },
     Resume(Box<DownloadCheckpoint>),
@@ -52,25 +45,6 @@ pub(crate) struct DownloadCheckpoint {
     digest: Sha256,
     offset: u64,
     total: u64,
-}
-
-async fn controlled<T>(
-    control: &mut watch::Receiver<DownloadControl>,
-    work: impl Future<Output = Result<T, FileAccessError>>,
-) -> Result<T, FileAccessError> {
-    tokio::pin!(work);
-    loop {
-        if *control.borrow() == DownloadControl::Cancel {
-            return Err(FileAccessError::Cancelled);
-        }
-        tokio::select! {
-            biased;
-            result = &mut work => return result,
-            changed = control.changed() => {
-                if changed.is_err() { return Err(FileAccessError::Cancelled); }
-            }
-        }
-    }
 }
 
 struct HashWriter<'a> {
@@ -248,7 +222,7 @@ pub(crate) async fn prepare_download(
 
 pub(crate) async fn continue_download<P>(
     prepared: DownloadPreparation,
-    control: watch::Receiver<DownloadControl>,
+    control: watch::Receiver<TransferControl>,
     progress: P,
 ) -> DownloadExecution
 where
@@ -259,7 +233,7 @@ where
 
 async fn continue_download_with<P, C>(
     prepared: DownloadPreparation,
-    mut control: watch::Receiver<DownloadControl>,
+    mut control: watch::Receiver<TransferControl>,
     mut progress: P,
     create: C,
 ) -> DownloadExecution
@@ -298,17 +272,17 @@ where
     let mut reporter = TransferReporter::new(&mut progress);
     let result = async {
         if resuming {
-            controlled(&mut control, checkpoint.validate()).await?;
+            transfer_controlled(&mut control, checkpoint.validate()).await?;
         }
         loop {
-            if *control.borrow() == DownloadControl::Cancel {
+            if *control.borrow() == TransferControl::Cancel {
                 return Err(FileAccessError::Cancelled);
             }
-            if *control.borrow() == DownloadControl::Pause
+            if *control.borrow() == TransferControl::Pause
                 && checkpoint.offset > 0
                 && checkpoint.offset < checkpoint.total
             {
-                controlled(&mut control, async {
+                transfer_controlled(&mut control, async {
                     checkpoint
                         .temporary
                         .file
@@ -370,7 +344,7 @@ where
                     });
                 },
             );
-            let count = controlled(
+            let count = transfer_controlled(
                 &mut control,
                 transfer_with_stall_limit(transfer, started, &last, DOWNLOAD_STALL_TIMEOUT),
             )
