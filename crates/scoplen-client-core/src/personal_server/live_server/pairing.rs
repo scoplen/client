@@ -5,12 +5,31 @@ use super::*;
 
 mod background;
 
+pub(super) struct PairedDevice {
+    pub(super) manager: PersonalServer,
+    pub(super) store: Arc<Store>,
+    directory: tempfile::TempDir,
+    key: SymmetricKey,
+}
+
+impl PairedDevice {
+    pub(super) fn reopen(self) -> Self {
+        let Self { manager, store, directory, key } = self;
+        drop(store);
+        let store = Arc::new(
+            Store::open(&directory.path().join("paired.sqlite"), &key)
+                .expect("reopen independent paired device"),
+        );
+        Self { manager, store, directory, key }
+    }
+}
+
 pub(super) async fn verify(
     deployment: &Deployment,
     old_manager: &PersonalServer,
     old: Arc<Store>,
     old_host: uuid::Uuid,
-) -> (PersonalAccountSnapshot, scoplen_model::Object) {
+) -> (PairedDevice, scoplen_model::Object) {
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
     let new_manager = PersonalServer {
         operation: Mutex::new(()),
@@ -32,67 +51,14 @@ pub(super) async fn verify(
             ],
         })
         .expect("retain pre-existing local inventory on the new device");
-    let started = new_manager
-        .pairing_create(new.clone(), deployment.origin.clone(), "Live paired device".into())
-        .await
-        .expect("create public locator and separate password through real HTTPS");
-    assert_eq!(started.status.phase, PairingPhase::Waiting);
-    let public_link = started.status.public_link.as_ref().expect("public pairing locator");
-    let password =
-        std::str::from_utf8(started.password.as_bytes()).expect("ASCII pairing password");
-    assert_eq!(password.len(), 8);
-    assert!(!public_link.contains(password));
-    assert!(!serde_json::to_string(&started.status).unwrap().contains(password));
-    if std::env::var("SCOPLEN_LIVE_PAIRING_MODE").as_deref() == Ok("png") {
-        let screenshot = directory.path().join("pairing.png");
-        crate::personal_server::pairing::qr::tests::write_png(
-            started.qr.as_ref().expect("native QR rendering"),
-            &screenshot,
-        );
-        old_manager
-            .pairing_join_png(old.clone(), screenshot.clone(), || true)
-            .await
-            .expect("existing device recognizes local PNG and claims through genuine DPoP");
-        std::fs::remove_file(screenshot).expect("remove transient screenshot");
-    } else {
-        old_manager
-            .pairing_join(old.clone(), public_link.clone(), Zeroizing::new(password.into()))
-            .await
-            .expect("existing device claims with its genuine DPoP session");
-    }
-    drop(started);
-
-    tokio::time::timeout(Duration::from_secs(90), async {
-        new_manager.pairing_progress(new.clone()).await.expect("new CPace share");
-        new_manager.pairing_progress(new.clone()).await.expect("new CPace confirmation");
-        old_manager.pairing_progress(old.clone()).await.expect("old CPace confirmation");
-        new_manager.pairing_progress(new.clone()).await.expect("authenticated new-device claims");
-        let review = old_manager.pairing_progress(old.clone()).await.expect("review new device");
-        assert_eq!(review.phase, PairingPhase::ConfirmDevice);
-        assert_eq!(review.peer_name.as_deref(), Some("Live paired device"));
-        assert_eq!(review.peer_platform.as_deref(), Some(std::env::consts::OS));
-        assert!(new_manager.load_sync_bootstrap(&new).expect("no pre-approval keys").is_none());
-        old_manager.pairing_confirm(old.clone()).await.expect("explicitly approve exact claims");
-        new_manager.pairing_progress(new.clone()).await.expect("durably accept exact handoff");
-        assert_eq!(
-            new_manager.status(&new).expect("retained new identity").phase,
-            PersonalServerPhase::AuthenticationRequired
-        );
-        assert_eq!(
-            old_manager.pairing_progress(old.clone()).await.expect("complete real admission").phase,
-            PairingPhase::Completed
-        );
-        assert_eq!(
-            new_manager
-                .pairing_progress(new.clone())
-                .await
-                .expect("authenticate admitted device and verify complete K-4 keys")
-                .phase,
-            PairingPhase::Completed
-        );
-    })
-    .await
-    .expect("bounded public pairing ceremony");
+    admit(
+        deployment,
+        (old_manager, &old),
+        (&new_manager, &new),
+        directory.path(),
+        "Live paired device",
+    )
+    .await;
 
     let old_account = old_manager.query_account(old.clone()).await.expect("original device list");
     let new_account = new_manager.query_account(new.clone()).await.expect("paired device list");
@@ -147,7 +113,6 @@ pub(super) async fn verify(
     assert_ne!(saved.applied_cursor, "0");
     let host = new.get(old_host).unwrap().expect("retained synchronized host");
     let local_host = new.get(local_host.id).unwrap().expect("retained adopted host");
-    drop(new_manager);
     drop(new);
     let reopened = Store::open(&path, &key).expect("reopen encrypted paired device offline");
     let offline = PersonalServer::default();
@@ -164,5 +129,77 @@ pub(super) async fn verify(
     let restored = settings.status(&reopened).expect("paired offline progress");
     assert_eq!(restored.applied_cursor, saved.applied_cursor);
     assert_eq!(restored.applied_cursor, restored.acknowledged_cursor);
-    (old_account, old_unshared)
+    (PairedDevice { manager: new_manager, store: Arc::new(reopened), directory, key }, old_unshared)
+}
+
+pub(super) async fn admit(
+    deployment: &Deployment,
+    existing: (&PersonalServer, &Arc<Store>),
+    joining: (&PersonalServer, &Arc<Store>),
+    directory: &Path,
+    name: &str,
+) {
+    let (old_manager, old) = existing;
+    let (new_manager, new) = joining;
+    let started = new_manager
+        .pairing_create(new.clone(), deployment.origin.clone(), name.into())
+        .await
+        .expect("create public locator and separate password through real HTTPS");
+    assert_eq!(started.status.phase, PairingPhase::Waiting);
+    let public_link = started.status.public_link.as_ref().expect("public pairing locator");
+    let password =
+        std::str::from_utf8(started.password.as_bytes()).expect("ASCII pairing password");
+    assert_eq!(password.len(), 8);
+    assert!(!public_link.contains(password));
+    assert!(!serde_json::to_string(&started.status).unwrap().contains(password));
+    if std::env::var("SCOPLEN_LIVE_PAIRING_MODE").as_deref() == Ok("png") {
+        let screenshot = directory.join("pairing.png");
+        crate::personal_server::pairing::qr::tests::write_png(
+            started.qr.as_ref().expect("native QR rendering"),
+            &screenshot,
+        );
+        old_manager
+            .pairing_join_png(old.clone(), screenshot.clone(), || true)
+            .await
+            .expect("existing device recognizes local PNG and claims through genuine DPoP");
+        std::fs::remove_file(screenshot).expect("remove transient screenshot");
+    } else {
+        old_manager
+            .pairing_join(old.clone(), public_link.clone(), Zeroizing::new(password.into()))
+            .await
+            .expect("existing device claims with its genuine DPoP session");
+    }
+    drop(started);
+
+    tokio::time::timeout(Duration::from_secs(90), async {
+        new_manager.pairing_progress(new.clone()).await.expect("new CPace share");
+        new_manager.pairing_progress(new.clone()).await.expect("new CPace confirmation");
+        old_manager.pairing_progress(old.clone()).await.expect("old CPace confirmation");
+        new_manager.pairing_progress(new.clone()).await.expect("authenticated new-device claims");
+        let review = old_manager.pairing_progress(old.clone()).await.expect("review new device");
+        assert_eq!(review.phase, PairingPhase::ConfirmDevice);
+        assert_eq!(review.peer_name.as_deref(), Some(name));
+        assert_eq!(review.peer_platform.as_deref(), Some(std::env::consts::OS));
+        assert!(new_manager.load_sync_bootstrap(new).expect("no pre-approval keys").is_none());
+        old_manager.pairing_confirm(old.clone()).await.expect("explicitly approve exact claims");
+        new_manager.pairing_progress(new.clone()).await.expect("durably accept exact handoff");
+        assert_eq!(
+            new_manager.status(new).expect("retained new identity").phase,
+            PersonalServerPhase::AuthenticationRequired
+        );
+        assert_eq!(
+            old_manager.pairing_progress(old.clone()).await.expect("complete real admission").phase,
+            PairingPhase::Completed
+        );
+        assert_eq!(
+            new_manager
+                .pairing_progress(new.clone())
+                .await
+                .expect("authenticate admitted device and verify complete K-4 keys")
+                .phase,
+            PairingPhase::Completed
+        );
+    })
+    .await
+    .expect("bounded public pairing ceremony");
 }
