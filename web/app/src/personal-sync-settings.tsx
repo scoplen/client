@@ -2,7 +2,13 @@
 import { Button } from "@scoplen/ui";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
-import { commands, type PersonalSyncCommandError, type PersonalSyncKeyStatus } from "./ipc/bindings";
+import {
+  commands,
+  events,
+  type PersonalBackgroundStatus,
+  type PersonalSyncCommandError,
+  type PersonalSyncKeyStatus,
+} from "./ipc/bindings";
 import { PersonalInventorySettings } from "./personal-inventory-settings";
 
 export function PersonalSyncSettings({
@@ -91,12 +97,59 @@ export function PersonalSyncSettings({
         {t(busy ? "settings.personal.working" : "settings.personal.sync.connect")}
       </Button>
       {status === "verified" ? (
-        <PersonalInventorySettings
-          authenticated={authenticated}
-          disabled={busy || disabled}
-          onBusyChange={onBusyChange}
-        />
+        <>
+          <BackgroundStatus />
+          <PersonalInventorySettings
+            authenticated={authenticated}
+            disabled={busy || disabled}
+            onBusyChange={onBusyChange}
+          />
+        </>
       ) : null}
     </section>
+  );
+}
+
+function BackgroundStatus() {
+  const { t } = useI18n();
+  const [status, setStatus] = useState<PersonalBackgroundStatus>("inactive");
+  useEffect(() => {
+    let active = true;
+    let changed = false;
+    let stop: (() => void) | undefined;
+    void events.personalSyncChanged
+      .listen((event) => {
+        if (active) {
+          changed = true;
+          setStatus(event.payload.status);
+        }
+      })
+      .then(async (unlisten) => {
+        if (!active) {
+          unlisten();
+          return;
+        }
+        stop = unlisten;
+        const saved = await commands.personalSyncBackgroundStatus();
+        if (active && !changed) setStatus(saved);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+      stop?.();
+    };
+  }, []);
+  const attention =
+    status === "authenticationRequired" ||
+    status === "rotationRequired" ||
+    status === "permissionDenied" ||
+    status === "failed";
+  return (
+    <p
+      role={attention ? "alert" : "status"}
+      className={`mt-2 text-sm ${attention ? "text-attention" : "text-muted-foreground"}`}
+    >
+      {t(`settings.personal.sync.background.${status}`)}
+    </p>
   );
 }

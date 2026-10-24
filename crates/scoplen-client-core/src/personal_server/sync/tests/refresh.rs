@@ -16,7 +16,7 @@ use super::*;
 use crate::personal_server::PersonalServerPhase;
 
 #[derive(Default)]
-enum Mode {
+pub(super) enum Mode {
     #[default]
     Success,
     Narrow,
@@ -259,7 +259,7 @@ fn problem(status: u16, code: &str, changed: bool, retryable: bool) -> Reply {
     }
 }
 
-fn install(peer: &Peer, store: &Arc<Store>, modes: Vec<Mode>) {
+pub(super) fn install(peer: &Peer, store: &Arc<Store>, modes: Vec<Mode>) {
     let pending = record(store).unwrap();
     peer.state.lock().unwrap().refresh = Some(RefreshPeer {
         observer: store.clone(),
@@ -280,7 +280,7 @@ fn due(store: &Store) {
     identity.access_expires_at = Some(now().unwrap().saturating_sub(1));
     store.set_personal_session_metadata_for_test(&identity).unwrap();
 }
-fn calls(peer: &Peer) -> usize {
+pub(super) fn calls(peer: &Peer) -> usize {
     peer.state.lock().unwrap().refresh.as_ref().unwrap().calls
 }
 

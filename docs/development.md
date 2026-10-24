@@ -39,7 +39,7 @@ The first launch rebuilds the Rust dependencies. A fresh checkout does not need 
 ## Disposable Personal server integration
 
 The opt-in `live-server-integration` feature checks the production Personal enrollment,
-device authentication, second-device pairing, sync-key verification and reviewed inventory APIs against an
+device authentication, second-device pairing, sync-key verification, native notifications and reviewed inventory APIs against an
 independently running server. It does not read server source or seed its database.
 
 Prepare a fresh disposable server on `https://localhost:<port>` with a trusted test CA.
@@ -57,7 +57,7 @@ cargo test -p scoplen-client-core --lib --features live-server-integration live_
 ```
 
 The test rejects a non-loopback origin, bounds descriptor and certificate reads, and adds
-the test CA only to its own HTTPS client. It consumes the invitation, creates and reopens
+the test CA only to its own HTTPS and TLS 1.3/H2 notification clients. It consumes the invitation, creates and reopens
 an isolated SQLCipher store, uploads and downloads a signed encrypted host and its edit,
 checks durable acknowledgements, and restores the original local copy offline. Before the
 first transfer and again after reopening the store, it expires only the client's cached
@@ -68,6 +68,12 @@ after reopening SQLCipher. It checks durable session generation, a changed acces
 the retained refresh-family deadline ceiling; server clocks and signed JWTs are unchanged.
 The remaining whole seconds and JWT issuance time can be sampled independently. Rotation
 uses their lifetime estimate conservatively and never extends the retained ceiling.
+
+After the first reviewed upload, the test starts the production Rust background owner without
+Settings. It requires a real D-75 extended CONNECT context/auth/ready exchange, then uploads and
+acknowledges an adopted local edit automatically. Expiring only the local cache exercises actual
+refresh and notification reconnect before orderly owner shutdown. No alternate WebSocket path
+or server-private test control is used.
 
 The same test then creates a second independent SQLCipher store and HTTPS client. It pairs
 through a public link and separate password by default, or through real QR rendering and local
@@ -165,6 +171,21 @@ This fixture does not establish a released Server deployment or two physical des
 installations. Native QR display and PNG recognition are connected to desktop IPC/UI; key rotation remains
 unsupported. The public-link/password path retains every Personal epoch supplied by the
 verified handoff and never uploads pre-existing local inventory during account setup.
+
+## Native Personal notification fault tests
+
+The independent TLS 1.3/H2 peer verifies context/auth/ready, CONNECT/token-bound fresh DPoP,
+fragment reassembly, complete message limits, text and invalid ordering, close replies,
+bounded handshake timeout, fresh reconnect, durable refresh, typed revocation and stale-session
+invalidation. Runtime tests cover no network before bootstrap, initial catch-up, coalesced hints,
+foreign-vault hints, remote apply without a feedback loop, adopted local edits, 60-second fallback,
+FIFO confirmed adoption, rotation during an active pull, and replacement/shutdown during a sent
+write. A separate cancellation test checks serialization with the synchronous commit boundary.
+
+```text
+cargo test -p scoplen-client-core --lib personal_server::sync::tests::notification
+cargo test -p scoplen-client-core --lib personal_server::background::tests
+```
 
 ## Generated files
 

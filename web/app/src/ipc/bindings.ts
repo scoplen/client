@@ -154,6 +154,8 @@ export const commands = {
 	personalSyncKeyStatus: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("personal_sync_key_status")),
 	/**  Verify and save the retained account's sync keys without uploading local inventory. */
 	connectPersonalSync: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("connect_personal_sync")),
+	/**  Read the native background owner's state without activating network activity. */
+	personalSyncBackgroundStatus: () => __TAURI_INVOKE<PersonalBackgroundStatus>("personal_sync_background_status"),
 	/**  Inspect the encrypted local pairing checkpoint without network access. */
 	personalPairingStatus: () => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("personal_pairing_status")),
 	/**  Explicitly create a new-device session and display its password once. */
@@ -203,6 +205,7 @@ export const commands = {
 
 /** Events */
 export const events = {
+	personalSyncChanged: makeEvent<PersonalSyncChanged>("personal-sync-changed"),
 	sessionChanged: makeEvent<SessionChanged>("session-changed"),
 	storeChanged: makeEvent<StoreChanged>("store-changed"),
 };
@@ -906,6 +909,25 @@ export type PersonalAccountSnapshot = {
 	devices: PersonalAccountDevice[],
 };
 
+/**  Redacted background state. Neither server diagnostics nor credentials cross IPC. */
+export type PersonalBackgroundStatus =
+/**  No open store with locally verified Personal sync keys. */
+"inactive" |
+/**  Preparing the first authenticated notification connection. */
+"connecting" |
+/**  Notifications are ready; hints and adopted local edits schedule sync. */
+"connected" |
+/**  Notifications are unavailable; adopted inventory is polled every 60 seconds. */
+"polling" |
+/**  An explicit fresh device authentication is required. */
+"authenticationRequired" |
+/**  Current keys cannot be safely rotated; background transfer is paused. */
+"rotationRequired" |
+/**  The current token lacks the operation's scope. */
+"permissionDenied" |
+/**  A local, verification, clock or reconciliation failure needs an explicit retry. */
+"failed";
+
 /**  Display categories, never object fields or credential content. */
 export type PersonalInventoryCategory =
 /**  A saved machine. */
@@ -1012,7 +1034,7 @@ export type PersonalInventoryResult = {
 	downloaded: number,
 	/**  Number of writes with confirmed assignments. */
 	uploaded: number,
-	/**  Another explicit cycle is needed; nothing is scheduled automatically. */
+	/**  Another bounded cycle is needed; the active native owner schedules continuation. */
 	more: boolean,
 };
 
@@ -1106,6 +1128,12 @@ export type PersonalServerStatus = {
 	recoveryKeySaved: boolean,
 	/**  The user explicitly confirmed keeping the recovery key safely. */
 	recoveryKeyConfirmed: boolean,
+};
+
+/**  Safe background status; no object content, key material or server diagnostics. */
+export type PersonalSyncChanged = {
+	/**  The native owner's current state. */
+	status: PersonalBackgroundStatus,
 };
 
 /**  Reuses the safe account failures and adds actionable sync failures. */

@@ -113,7 +113,7 @@ Settings → Personal account can prepare a Personal invitation from a user-sele
 Scoplen server, save and confirm a recovery file, join, and authenticate the first device.
 The same pending identity is retained across restarts and uncertain responses. The desktop
 can explicitly synchronize selected inventory after key verification. Rust rotates its native
-device session when needed by an explicit account query, sync or key-verification action.
+device session when needed by an account query, sync, key verification or the active background owner.
 Existing local SSH data is not uploaded by account setup.
 
 Second-device pairing joins the existing Personal account using a QR screenshot or a public
@@ -137,8 +137,8 @@ a fresh session and password while retaining the new device keys. After handoff,
 uses the saved identity, frame, acceptance and exact approval request; an uncertain commit is
 queried before replay. The new device must authenticate and verify every retained Personal key
 epoch before pairing completes. It receives no fabricated enrollment request or recovery key,
-and account setup never adopts local inventory. QR display/scanning and key rotation are not
-connected to the desktop workflow yet.
+and account setup never adopts local inventory. Key rotation is not connected to the desktop
+workflow yet.
 
 Account and devices reads its saved results locally when Settings opens. Refresh account and
 devices explicitly queries the authenticated account profile and complete signed device statement
@@ -177,11 +177,11 @@ Native session refresh is single-use and claimed durably in SQLCipher before sen
 verifies the new token's issuer, signature, account, device, signing-key binding and non-expanding
 scope, and cannot extend the original refresh family's absolute expiry. JWT issuance and remaining
 whole seconds may cross a clock boundary; their lifetime estimate is capped by the retained
-deadline. There is no background
-refresh or automatic replay after a missing response or uncertain commit. Authenticate this
+deadline. The active background owner refreshes before reconnecting near expiry. There is no
+automatic replay after a missing response or uncertain commit. Authenticate this
 device uses a fresh challenge with the retained identity when required; saved keys, inventory
 and recovery copies remain available offline. A verified unchanged rate-limit response retains
-the credential and its Retry-After deadline for a later explicit action. Older saved sessions
+the credential and its Retry-After deadline for a later operation. Older saved sessions
 without a verified scope ceiling require fresh authentication after this update.
 
 The Rust-owned `sync_personal_inventory` API implements a bounded Personal
@@ -194,7 +194,7 @@ The core pulls authenticated encrypted pages, merges and saves their cursor befo
 and encrypts queued K-1 objects with the verified Personal key before compare-and-swap writes.
 Device-bound private keys, secrets, and keystore handles never enter these envelopes.
 Conflicts merge and retry within a fixed budget. Unknown write outcomes retain the queue and
-require a fresh pull on the next explicit cycle. Immutable adoption copies can be restored as
+require a fresh pull on the next cycle. Immutable adoption copies can be restored as
 fresh local objects, preserving the original copies and leaving remote state unchanged.
 
 After Verify sync keys succeeds, Inventory sync exposes local status, exact object selection,
@@ -213,7 +213,7 @@ that never uploaded, become immutable encrypted recovery copies requiring attent
 upload automatically. Recover selected edits works offline and creates fresh local objects that
 need a separate upload preview and confirmation. Original adoption copies remain separate.
 Failed snapshot downloads leave inventory and cursors unchanged. Concurrent server writes stop
-the pass safely; Sync now retries with a fresh session. Automatic inventory polling, key rotation,
+the pass safely; the next bounded cycle retries with a fresh session. Key rotation
 and the complete host-key trust replication policy remain later outcomes. Trust records with
 missing or unverified same-user provenance are retained locally and require review before sync.
 
@@ -310,16 +310,22 @@ SPL_SMOKE_TEST=1 target/release/bundle/macos/Scoplen.app/Contents/MacOS/scoplen
 
 Scoplen keeps its local data in the application data directory (`~/Library/Application Support/com.scoplen.client` on macOS, `%APPDATA%\com.scoplen.client` on Windows). The store is a SQLCipher database encrypted with a random 256-bit key. That key is held in the macOS Keychain (only on this device, after the first unlock) or, on Windows, wrapped by a TPM-held key or by DPAPI for the current user. With a local passphrase, the key is additionally wrapped with a key derived from the passphrase by Argon2id; forgetting the passphrase makes the data unrecoverable. If the key is lost, Scoplen keeps the unreadable store under a new name and can start with empty data.
 
-Network access follows explicit SSH actions, Personal enrollment/authentication, or the explicit
-Rust sync bootstrap or inventory intent. Personal
+Network access follows explicit SSH actions, Personal enrollment/authentication, and Personal
+sync after explicit key verification. Personal
 setup sends the invitation token, public identity metadata, signed certificates, and encrypted
 account material only to the selected origin. Its HTTPS transport verifies certificates,
 rejects redirects, and bounds exchanges and response bodies. Device signing/KEM keys currently
 use software implementations protected by SQLCipher; hardware device signing is not implemented.
 The recovery key is exported as a plaintext file only at the user's chosen location: Unix files
 are created with mode 0600, while Windows uses the destination directory's inherited ACLs.
-Keep that file private and offline. Access/refresh tokens and secret keys never cross IPC into the frontend. There is
-no automatic inventory upload, background network activity, or telemetry in this build.
+Keep that file private and offline. Access/refresh tokens and secret keys never cross IPC into the frontend.
+After a successful sync bootstrap, Rust maintains a TLS 1.3/HTTP/2 notification connection and
+synchronizes already adopted Personal objects in the background. Reopening locally verified
+saved keys resumes it. Notification failure enables a 60-second polling fallback. New local
+objects still require the exact preview and upload consent; neither account setup nor background
+work adopts them. Store replacement and shutdown cancel owned work. Authentication or unsupported
+rotation pauses transfer while local editing and SSH remain available. Settings shows safe
+background status without starting network work. This build has no telemetry.
 
 ## Security
 

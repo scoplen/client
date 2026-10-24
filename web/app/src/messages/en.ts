@@ -211,6 +211,21 @@ export const en = {
   "settings.personal.sync.unavailable": "Saved sync keys could not be checked. Existing account data was retained.",
   "settings.personal.sync.authenticate": "Authenticate this device above before connecting to the server.",
   "settings.personal.sync.connect": "Verify sync keys",
+  "settings.personal.sync.background.inactive":
+    "Background sync starts when this device's saved Personal keys are verified.",
+  "settings.personal.sync.background.connecting": "Connecting background sync for objects already in Personal.",
+  "settings.personal.sync.background.connected":
+    "Background sync is connected. Changes to Personal objects sync automatically.",
+  "settings.personal.sync.background.polling":
+    "Live notifications are unavailable. Personal sync checks for changes every 60 seconds.",
+  "settings.personal.sync.background.authenticationRequired":
+    "Background sync is paused. Authenticate this device above to continue.",
+  "settings.personal.sync.background.rotationRequired":
+    "Background sync is paused because the account or vault needs unsupported key rotation. Existing local data is available.",
+  "settings.personal.sync.background.permissionDenied":
+    "Background sync is paused. Ask your server operator to check this device's sync access, then authenticate again.",
+  "settings.personal.sync.background.failed":
+    "Background sync is paused. Verify sync keys and retry synchronization to review the problem. Local data is available.",
   "settings.terminal.title": "Terminal colors",
   "settings.terminal.body": "Used by every session. Change any color; your changes become your own scheme.",
   "settings.terminal.scheme": "Scheme",
@@ -620,7 +635,7 @@ export const en = {
     "The identity file could not be read: {path}. Check the path in the config and try again.",
   "settings.personal.inventory.title": "Inventory sync",
   "settings.personal.inventory.body":
-    "Sync runs only when you choose an action here. Unselected and newly created local objects stay on this device.",
+    "Review and confirm which local objects join Personal sync. Their later changes sync automatically. Unselected and newly created local objects stay on this device.",
   "settings.personal.inventory.content":
     "Selected objects are encrypted for your Personal vault. Shared credentials include their passwords or private keys; device-only secrets, keystore handles, and session history are never uploaded.",
   "settings.personal.inventory.loading": "Reading local inventory and sync progress…",

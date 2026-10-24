@@ -3,6 +3,7 @@
 
 use std::{io::Read as _, path::PathBuf, time::Duration};
 
+use rustls::pki_types::pem::PemObject as _;
 use scoplen_crypto::SymmetricKey;
 use scoplen_model::{FieldPath, ObjectType, cbor::Value};
 use serde::Deserialize;
@@ -95,11 +96,21 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
     );
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
     let certificate = reqwest::Certificate::from_pem(&ca).expect("test CA certificate");
-    let manager = PersonalServer {
+    let mut transport = Transport::fixture(certificate, Duration::from_secs(15));
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(rustls::pki_types::CertificateDer::from_pem_slice(&ca).expect("notification CA"))
+        .expect("trusted notification CA");
+    let mut tls = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    tls.alpn_protocols = vec![b"h2".to_vec()];
+    transport.notification_tls = Arc::new(tls);
+    let manager = Arc::new(PersonalServer {
         operation: Mutex::new(()),
-        transport: Ok(Transport::fixture(certificate, Duration::from_secs(15))),
+        transport: Ok(transport),
         pairing: Default::default(),
-    };
+    });
     let directory = tempfile::tempdir().expect("private local store directory");
     let path = directory.path().join("personal.sqlite");
     let key = SymmetricKey::new([27; 32]);
@@ -154,6 +165,18 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
     assert_ne!(saved.applied_cursor, "0");
     assert_eq!(store.get(object.id).expect("stored host"), Some(object.clone()));
 
+    let runtime = Arc::new(PersonalSyncRuntime::default());
+    runtime.set_store(Some(store.clone()));
+    let owner = runtime.clone();
+    let server = manager.clone();
+    let background = tokio::spawn(async move { owner.run(&server).await });
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while runtime.status() != PersonalBackgroundStatus::Connected {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("real TLS 1.3/H2 D-75 context/auth/ready without Settings");
     store
         .write(LocalWrite {
             id: Some(object.id),
@@ -161,11 +184,40 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
             fields: vec![(FieldPath::Field(1), Value::Text("Edited live Personal host".into()))],
         })
         .expect("edit adopted host");
-    let second = settings
-        .synchronize(&manager, store.clone(), None)
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let current = settings.status(&store).expect("background progress");
+            if current.pending == 0
+                && current.applied_cursor != saved.applied_cursor
+                && current.applied_cursor == current.acknowledged_cursor
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("adopted local edit uploads and acknowledges without Settings");
+    let before_refresh = record(&store).unwrap();
+    let mut expired = record(&store).unwrap();
+    expired.access_expires_at = Some(0);
+    store.set_personal_session_metadata_for_test(&expired).unwrap();
+    store.personal_changed();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while record(&store).unwrap().auth_generation <= before_refresh.auth_generation
+            || runtime.status() != PersonalBackgroundStatus::Connected
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("notification reconnect rotates real credentials");
+    assert!(record(&store).unwrap().refresh_expires_at <= before_refresh.refresh_expires_at);
+    runtime.shutdown();
+    tokio::time::timeout(Duration::from_secs(5), background)
         .await
-        .expect("incremental update through existing adoption");
-    assert_eq!(second.uploaded, 1);
+        .expect("background shutdown")
+        .unwrap();
     let saved = settings.status(&store).expect("second committed progress");
     assert_eq!(saved.pending, 0);
     assert_eq!(saved.applied_cursor, saved.acknowledged_cursor);

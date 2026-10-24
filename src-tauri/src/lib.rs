@@ -90,6 +90,7 @@ pub fn ipc() -> Builder<tauri::Wry> {
             personal_server::update_personal_invitation,
             personal_server::personal_sync_key_status,
             personal_server::connect_personal_sync,
+            personal_server::personal_sync_background_status,
             personal_pairing::personal_pairing_status,
             personal_pairing::create_personal_pairing,
             personal_pairing::join_personal_pairing,
@@ -106,7 +107,11 @@ pub fn ipc() -> Builder<tauri::Wry> {
             personal_inventory::restore_personal_inventory,
             personal_inventory::restore_personal_inventory_recovery,
         ])
-        .events(collect_events![events::StoreChanged, events::SessionChanged])
+        .events(collect_events![
+            events::StoreChanged,
+            events::SessionChanged,
+            events::PersonalSyncChanged
+        ])
 }
 
 /// Writes the TypeScript bindings for [`ipc`] to `path`.
@@ -153,6 +158,22 @@ pub fn run() {
             app.manage(ssh::SessionManager::default());
             app.manage(inventory::InventoryState::default());
             app.manage(scoplen_client_core::personal_server::PersonalServer::default());
+            let background = std::sync::Arc::new(scoplen_client_core::personal_server::PersonalSyncRuntime::default());
+            background.set_store(app.state::<local_data::LocalDataState>().store());
+            let owner = background.clone();
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                owner.run(&handle.state::<scoplen_client_core::personal_server::PersonalServer>()).await;
+            });
+            let mut status = background.subscribe();
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while status.changed().await.is_ok() {
+                    let current = *status.borrow_and_update();
+                    let _ = events::PersonalSyncChanged { status: current }.emit(&handle);
+                }
+            });
+            app.manage(background);
             app.manage(personal_pairing::PairingWatchState::default());
             app.manage(std::sync::Arc::new(
                 scoplen_client_core::personal_inventory::PersonalInventorySettings::default(),
@@ -171,8 +192,13 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("the application failed to start");
+        .build(tauri::generate_context!())
+        .expect("the application failed to start")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+                app.state::<std::sync::Arc<scoplen_client_core::personal_server::PersonalSyncRuntime>>().shutdown();
+            }
+        });
 }
 
 #[cfg(test)]

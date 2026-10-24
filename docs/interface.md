@@ -97,7 +97,7 @@ A rejected replacement retains the pending phase and offers no Join. Busy state 
 and authentication intents, and no invitation appears in localized errors or public status.
 
 Authenticated status means Rust retains a verified usable device session, which can refresh
-on an explicit network action when its access token approaches expiry. It does not mean inventory
+on a server operation or background reconnect when its access token approaches expiry. It does not mean inventory
 has synchronized. Existing hosts and credentials remain local. Settings navigation supports
 arrow keys, Home/End, visible focus, and wrapping at narrow widths. An explicit action that
 advances to another phase focuses its heading; initial status reads and same-phase actions
@@ -132,7 +132,10 @@ The panel shows pending changes and separate applied/confirmed-ack positions. Ev
 or failed intent reloads durable local status without starting another network cycle. Typed
 uncertainty, reconciliation, rotation, trust, clock, authentication, and selection failures are
 localized; arbitrary native diagnostics are replaced with a safe local-data failure. A bounded
-cycle with more work offers the same explicit Sync now action. Original local copies have a
+cycle with more work offers the same explicit Sync now action and the native owner schedules
+continuation for already adopted objects. Background status explains live connection, 60-second
+fallback, required authentication, permissions and unsupported rotation. Observing this state
+does not start synchronization; the native owner runs independently of Settings. Original local copies have a
 separate exact selection and confirmation. Restore works with expired authentication and no
 network, creates new local objects, and explicitly says it does not undo remote data or copy
 device-only secrets/handles. Cancelling either confirmation performs no mutation.

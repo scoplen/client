@@ -6,7 +6,9 @@
 //! the retained identity with a new challenge instead of replaying an invitation.
 
 mod account;
+mod background;
 mod identity;
+mod notification;
 mod pairing;
 mod refresh;
 mod retained;
@@ -14,6 +16,7 @@ mod sync;
 mod transport;
 
 pub use account::{PersonalAccountDevice, PersonalAccountSnapshot};
+pub use background::{PersonalBackgroundStatus, PersonalSyncRuntime};
 pub use pairing::{
     PairingError, PairingPhase, PairingQrDisplay, PairingSide, PairingStarted, PairingStatus,
 };

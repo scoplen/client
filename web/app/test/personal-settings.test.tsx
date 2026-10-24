@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { AppearanceProvider } from "@scoplen/ui";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "../src/i18n";
 import type { PersonalServerError, PersonalServerStatus } from "../src/ipc/bindings";
@@ -10,7 +10,10 @@ import { SettingsView } from "../src/settings";
 import { TerminalColorsProvider } from "../src/terminal-colors";
 import { violations } from "../../ui/test/axe";
 
-afterEach(() => clearMocks());
+afterEach(() => {
+  cleanup();
+  clearMocks();
+});
 
 const empty: PersonalServerStatus = {
   phase: "not_configured",
@@ -42,30 +45,34 @@ function fixture(initial = empty) {
   let status = initial;
   const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
   const handlers = new Map<string, () => unknown>();
-  mockIPC((command, args) => {
-    calls.push({ command, args: (args ?? {}) as Record<string, unknown> });
-    if (handlers.has(command)) return handlers.get(command)!();
-    if (command === "personal_sync_key_status") return "notConnected";
-    if (command === "personal_account_snapshot") return null;
-    if (command === "personal_pairing_status")
-      return {
-        phase: "idle",
-        side: null,
-        origin: null,
-        publicLink: null,
-        deviceName: null,
-        peerName: null,
-        peerPlatform: null,
-      };
-    if (command === "personal_server_status") return status;
-    if (command === "prepare_personal_enrollment") status = prepared;
-    else if (command === "save_personal_recovery_key") status = { ...status, recoveryKeySaved: true };
-    else if (command === "confirm_personal_recovery_key")
-      status = { ...status, phase: "ready_to_enroll", recoveryKeyConfirmed: true };
-    else if (command === "submit_personal_enrollment" || command === "authenticate_personal_server")
-      status = { ...status, phase: "authenticated" };
-    return status;
-  });
+  mockIPC(
+    (command, args) => {
+      if (command === "personal_sync_background_status") return "inactive";
+      calls.push({ command, args: (args ?? {}) as Record<string, unknown> });
+      if (handlers.has(command)) return handlers.get(command)!();
+      if (command === "personal_sync_key_status") return "notConnected";
+      if (command === "personal_account_snapshot") return null;
+      if (command === "personal_pairing_status")
+        return {
+          phase: "idle",
+          side: null,
+          origin: null,
+          publicLink: null,
+          deviceName: null,
+          peerName: null,
+          peerPlatform: null,
+        };
+      if (command === "personal_server_status") return status;
+      if (command === "prepare_personal_enrollment") status = prepared;
+      else if (command === "save_personal_recovery_key") status = { ...status, recoveryKeySaved: true };
+      else if (command === "confirm_personal_recovery_key")
+        status = { ...status, phase: "ready_to_enroll", recoveryKeyConfirmed: true };
+      else if (command === "submit_personal_enrollment" || command === "authenticate_personal_server")
+        status = { ...status, phase: "authenticated" };
+      return status;
+    },
+    { shouldMockEvents: true },
+  );
   return {
     calls,
     handlers,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Single-use native refresh, only on an explicit server operation.
+//! Single-use native refresh shared by explicit operations and the background owner.
 
 use scoplen_api::{
     ProblemDetails,
@@ -22,6 +22,15 @@ impl PersonalServer {
         &self,
         store: &Store,
     ) -> Result<(), PersonalServerError> {
+        self.refresh_for_run(store, None).await
+    }
+
+    pub(super) async fn refresh_for_run(
+        &self,
+        store: &Store,
+        run: Option<&std::sync::Arc<super::background::Run>>,
+    ) -> Result<(), PersonalServerError> {
+        super::background::guard(run)?;
         let identity = super::record(store)?;
         let current = now()?;
         if identity.auth_scope.is_some()
@@ -38,10 +47,13 @@ impl PersonalServer {
         let target = DpopTarget::new("POST", &identity.origin, "/api/v1/auth/refresh")
             .map_err(|_| PersonalServerError::Identity)?;
         let transport = self.transport.as_ref().map_err(|error| *error)?;
-        let claim = store
-            .claim_personal_refresh(&identity, current)
-            .map_err(storage)?
-            .ok_or(PersonalServerError::AuthenticationRequired)?;
+        let claim = {
+            let _active = super::background::guard(run)?;
+            store
+                .claim_personal_refresh(&identity, current)
+                .map_err(storage)?
+                .ok_or(PersonalServerError::AuthenticationRequired)?
+        };
         // A committed claim survives cancellation and crashes. Only a verified unchanged
         // response, or a confirmed connection failure before sending, may return it to use.
         let refresh = std::str::from_utf8(claim.previous.refresh.as_bytes())
@@ -53,6 +65,7 @@ impl PersonalServer {
         let body = body.map_err(|_| PersonalServerError::AuthenticationRequired)?;
         let mut nonce = None;
         for attempt in 0..2 {
+            super::background::guard(run)?;
             if now()? >= claim.previous.refresh_expires_at {
                 return Err(PersonalServerError::AuthenticationRequired);
             }
@@ -69,6 +82,7 @@ impl PersonalServer {
             {
                 Ok(response) => response,
                 Err(PersonalServerError::ConnectionBeforeRequest) => {
+                    let _active = super::background::guard(run)?;
                     restore(store, &identity, &claim, None)?;
                     return Err(PersonalServerError::ConnectionBeforeRequest);
                 }
@@ -124,6 +138,7 @@ impl PersonalServer {
                     refresh_expires_at: expiry,
                     scope: claims.scope.clone(),
                 };
+                let _active = super::background::guard(run)?;
                 if !store
                     .finish_personal_session(&identity, claim.generation, true, &tokens, None)
                     .map_err(storage)?
@@ -141,6 +156,7 @@ impl PersonalServer {
                 return Err(PersonalServerError::AuthenticationRequired);
             };
             if !problem.changed && problem.retryable {
+                let _active = super::background::guard(run)?;
                 match (response.status, problem.code.as_str()) {
                     (400, "auth.use_dpop_nonce") => {
                         if let Some(challenge) = response.nonce {

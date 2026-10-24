@@ -49,6 +49,7 @@ impl Store {
             WHERE singleton = 1 AND auth_generation = ?1 AND access_token = ?2",
             params![identity.auth_generation, access.as_bytes()],
         )?;
+        self.personal_changed();
         Ok(())
     }
 
@@ -59,7 +60,7 @@ impl Store {
     ) -> Result<Option<i64>, StoreError> {
         let conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
-        Ok(conn.query_row(
+        let generation = conn.query_row(
             "UPDATE personal_server SET auth_generation = auth_generation + 1,
                 access_token = NULL, refresh_token = NULL, access_expires_at = NULL,
                 refresh_expires_at = NULL, auth_scope = NULL, refresh_claimed = 0, refresh_retry_at = NULL
@@ -70,7 +71,9 @@ impl Store {
             params![identity.auth_generation, identity.origin, identity.account_id.as_bytes().as_slice(),
                 identity.private_material.as_bytes()],
             |row| row.get(0),
-        ).optional()?)
+        ).optional()?;
+        self.personal_changed();
+        Ok(generation)
     }
 
     pub(crate) fn claim_personal_refresh(
@@ -107,6 +110,7 @@ impl Store {
             [],
         )?;
         tx.commit()?;
+        self.personal_changed();
         Ok(Some(PersonalRefreshClaim { generation: identity.auth_generation + 1, previous }))
     }
 
@@ -123,7 +127,7 @@ impl Store {
         let (signing, kem) = identity.device_secrets()?;
         let conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
-        Ok(conn.execute(
+        let changed = conn.execute(
             "UPDATE personal_server SET access_token = ?1, refresh_token = ?2,
                 access_expires_at = ?3, refresh_expires_at = ?4, auth_scope = ?5,
                 refresh_claimed = 0, session_established = 1, auth_generation = auth_generation + 1,
@@ -141,6 +145,8 @@ impl Store {
                 identity.enrollment_request.as_ref().map(SecretVec::as_bytes), signing, kem,
                 retry_at.map(|value| value.min(i64::MAX as u64) as i64),
                 identity.paired_handoff.as_ref().map(SecretVec::as_bytes)],
-        )? == 1)
+        )? == 1;
+        self.personal_changed();
+        Ok(changed)
     }
 }
