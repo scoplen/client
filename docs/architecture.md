@@ -21,11 +21,16 @@ web/app (React)  ── typed commands, binary channels ──  src-tauri  ─�
 - `scoplen-client-core` holds every behavior, so it is the same on both platforms and testable without a window.
 - `scoplen-client-platform` is the only crate that may contain `unsafe` code or FFI; it is denied by default there too and allowed per module with each block documented.
 
-The shared libraries and Pageant patch are pinned to `proto@22a83ad`. This revision retains
-the K-2 public API and wire bytes while upgrading HPKE and P-256 to 0.14. The client lockfile
-resolves `crypto-bigint` 0.7.6 and `ctutils` 0.4.5 for RUSTSEC-2026-0387, removing the former
-0.5.5 bigint/P-256 0.13 dependency path. Updating the shared pin requires checking the client's
-own transitive lockfile; the shared repository's lockfile does not constrain consumer resolution.
+The shared libraries and Pageant patch are pinned to `proto@e2b8817`. D-116 adds the object-safe
+`Signer::sign_async` hook, awaited by concrete SSH authentication. The built-in agent signer
+runs each serialized signing exchange on Tokio's blocking pool. Existing synchronous signers
+retain the default hook; other blocking providers need their own override. SSH and agent wire
+bytes remain unchanged.
+
+The client lockfile retains HPKE and P-256 0.14, `crypto-bigint` 0.7.6 and `ctutils` 0.4.5 for
+RUSTSEC-2026-0387, without the former 0.5.5 bigint/P-256 0.13 dependency path. Updating the shared
+pin requires checking the client's own transitive lockfile; the shared repository's lockfile
+does not constrain consumer resolution.
 
 ## IPC
 
@@ -420,11 +425,15 @@ shared `AgentClient`, framed channel, and `AgentSshSigner` own protocol messages
 and signatures. The core requires the exact public-key blob to appear among
 the agent identities; it never substitutes a first identity or another credential.
 
-Synchronous signer calls run on at most four blocking workers, leaving the app
-executor responsive. One absolute ten-second deadline covers agent connection,
-all partial local reads/writes, identity listing, and SSH authentication. Dropping
+The core retains at most four native authentication workers for synchronous agent setup and
+identity listing. Concrete authentication awaits the shared D-116 signer hook, whose complete
+serialized signing exchange runs on the blocking pool. One absolute ten-second client deadline
+covers agent connection, all partial local reads/writes, identity listing, and SSH authentication. Dropping
 the authentication future aborts agent I/O and notifies the worker, which discards
 its result; only a live caller restores its connection and advances to Open.
+The shared hook releases an awaiting caller on cancellation while a running blocking exchange
+retains channel ownership until completion or its underlying I/O deadline. It adds no agent
+transport deadline or asynchronous setup guarantee; the native guard and deadline remain in place.
 This path adds no unsafe code, protocol format, IPC field, private-key export,
 Pageant discovery, or forwarding permission. RSA agents use the existing bounded
 SHA-2 discovery and never retry with SHA-1 or a password.
