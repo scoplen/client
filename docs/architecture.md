@@ -21,6 +21,12 @@ web/app (React)  ── typed commands, binary channels ──  src-tauri  ─�
 - `scoplen-client-core` holds every behavior, so it is the same on both platforms and testable without a window.
 - `scoplen-client-platform` is the only crate that may contain `unsafe` code or FFI; it is denied by default there too and allowed per module with each block documented.
 
+The shared libraries and Pageant patch are pinned to `proto@22a83ad`. This revision retains
+the K-2 public API and wire bytes while upgrading HPKE and P-256 to 0.14. The client lockfile
+resolves `crypto-bigint` 0.7.6 and `ctutils` 0.4.5 for RUSTSEC-2026-0387, removing the former
+0.5.5 bigint/P-256 0.13 dependency path. Updating the shared pin requires checking the client's
+own transitive lockfile; the shared repository's lockfile does not constrain consumer resolution.
+
 ## IPC
 
 Commands are declared in `src-tauri/src/commands.rs` with `#[specta::specta]`. `pnpm bindings` writes `web/app/src/ipc/bindings.ts` from them; a test fails when the committed file differs from what the commands generate, so the frontend and the core cannot drift.

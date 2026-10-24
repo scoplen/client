@@ -136,11 +136,11 @@ fn generate_scalar() -> Result<Zeroizing<Vec<u8>>, CredentialError> {
 
 fn signing_key(secret: &[u8]) -> Result<SigningKey, CredentialError> {
     let scalar: &[u8; 32] = secret.try_into().map_err(|_| CredentialError::InvalidKey)?;
-    SigningKey::from_bytes(scalar.into()).map_err(|_| CredentialError::InvalidKey)
+    SigningKey::from_slice(scalar).map_err(|_| CredentialError::InvalidKey)
 }
 
 fn openssh_public_key(key: &SigningKey) -> String {
-    let point = key.verifying_key().to_encoded_point(false);
+    let point = key.verifying_key().to_sec1_point(false);
     let mut blob = Vec::with_capacity(19 + point.as_bytes().len());
     put_string(&mut blob, b"ecdsa-sha2-nistp256");
     put_string(&mut blob, b"nistp256");
