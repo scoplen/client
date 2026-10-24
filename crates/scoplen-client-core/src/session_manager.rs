@@ -26,10 +26,10 @@ use crate::connection::{MAX_SSH_INPUT, SshConnectionError, SshSession, terminal_
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
 use crate::session_files::{
     self, DownloadCheckpoint, DownloadControl, DownloadExecution, DownloadInput,
-    FileTransferProgress, MutationPreflight, RemoteDirectory, RemoteMutation,
-    SessionDownloadResult, SessionDownloadStatus, SessionFileMutationResult,
-    SessionFileMutationStatus, SessionFileTransferPhase, SessionUploadResult, SessionUploadStatus,
-    UploadPreflight, UploadSource, UploadState,
+    FileTransferProgress, MutationPreflight, RemoteDirectory, RemoteMutation, RemoteTextPreview,
+    RemoteTextPreviewIssue, SessionDownloadResult, SessionDownloadStatus,
+    SessionFileMutationResult, SessionFileMutationStatus, SessionFileTransferPhase,
+    SessionUploadResult, SessionUploadStatus, UploadPreflight, UploadSource, UploadState,
 };
 use crate::session_lifecycle::SessionHistoryLease;
 use crate::session_transfers::{
@@ -41,6 +41,7 @@ use crate::terminal_output::{SavedOutputError, TerminalSnapshot};
 const COMMAND_QUEUE: usize = 64;
 const FILE_QUEUE: usize = 1;
 const FILE_LIST_TIMEOUT: Duration = Duration::from_secs(20);
+const FILE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(60);
 const STABLE_READY: Duration = Duration::from_secs(30);
 const RETRY_DELAYS: [u8; 5] = [1, 2, 4, 8, 16];
 
@@ -151,6 +152,10 @@ enum FileCommand {
     List {
         path: Vec<u8>,
         reply: oneshot::Sender<Result<RemoteDirectory, String>>,
+    },
+    Preview {
+        path: Vec<u8>,
+        reply: oneshot::Sender<Result<RemoteTextPreview, RemoteTextPreviewIssue>>,
     },
     Download {
         remote_path: Vec<u8>,
@@ -601,6 +606,45 @@ impl SessionManager {
                 .map_err(|_| "file operation was cancelled".to_owned())?
                 .map_err(|_| "the remote directory did not respond; try again".to_owned())?
                 .map_err(|_| "the file operation ended with this connection".to_owned())?;
+        drop(guard);
+        result
+    }
+
+    /// Disclose one complete bounded text file only to its current requesting transport.
+    pub async fn preview_file(
+        &self,
+        session_id: &str,
+        transport_id: &str,
+        operation_id: &str,
+        path: Vec<u8>,
+    ) -> Result<RemoteTextPreview, RemoteTextPreviewIssue> {
+        let (abort, cancellation) = AbortHandle::new_pair();
+        let guard = self
+            .reserve_file_operation(session_id, transport_id, operation_id, abort)
+            .map_err(|_| RemoteTextPreviewIssue::Unavailable)?;
+        let (reply, received) = oneshot::channel();
+        self.queue_file_request(&guard, FileCommand::Preview { path, reply })
+            .map_err(|_| RemoteTextPreviewIssue::Unavailable)?;
+        let result =
+            Abortable::new(tokio::time::timeout(FILE_PREVIEW_TIMEOUT, received), cancellation)
+                .await
+                .map_err(|_| RemoteTextPreviewIssue::Cancelled)?
+                .map_err(|_| RemoteTextPreviewIssue::Timeout)?
+                .map_err(|_| RemoteTextPreviewIssue::Unavailable)?;
+        {
+            let sessions = self.sessions.lock().map_err(|_| RemoteTextPreviewIssue::Unavailable)?;
+            let current = sessions.get(session_id).is_some_and(|entry| {
+                *entry.intent.borrow() == Intent::None
+                    && entry.active.as_ref().is_some_and(|active| {
+                        active.ready
+                            && active.id == guard.transport
+                            && active.file.as_ref().is_some_and(|file| file.id == guard.operation)
+                    })
+            });
+            if !current || guard.abort.is_aborted() {
+                return Err(RemoteTextPreviewIssue::Unavailable);
+            }
+        }
         drop(guard);
         result
     }
@@ -1694,6 +1738,14 @@ async fn serve_files(
                     _ = reply.closed() => {},
                     result = session_files::list_directory(connection, path) => {
                         let _ = reply.send(result.map_err(|error| error.to_string()));
+                    }
+                }
+            }
+            FileCommand::Preview { path, mut reply } => {
+                tokio::select! { biased;
+                    _ = reply.closed() => {},
+                    result = session_files::preview_file(connection, path) => {
+                        let _ = reply.send(result.map_err(RemoteTextPreviewIssue::from));
                     }
                 }
             }

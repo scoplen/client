@@ -4,6 +4,14 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added explicit read-only preview for complete ordinary UTF-8 files up to 256 KiB in Files.
+  Rust checks metadata and EOF over the current SSH transport; typed refusals guide larger or
+  non-text files to Download. The English/Chinese dialog keeps literal text transient, supports
+  cancellation and retry, restores keyboard focus and discards content across connection or
+  tab changes. It starts no editor, local write, remote write or synchronization.
+  Long dialog titles and descriptions wrap within scrollable content, keeping closing
+  controls visible in narrow windows.
+
 - Added download pause and explicit continuation on the same live SSH transport. Pausing settles
   the current bounded segment before retaining the original remote handle and local partial;
   the paused item retains capacity while later queued work can run. Resume verifies both

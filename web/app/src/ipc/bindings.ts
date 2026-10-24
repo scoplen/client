@@ -24,6 +24,8 @@ export const commands = {
 	sessionResize: (sessionId: string, transportId: string, columns: number, rows: number) => typedError<null, string>(__TAURI_INVOKE("session_resize", { sessionId, transportId, columns, rows })),
 	/**  Browse files on the terminal's authenticated SSH connection. */
 	sessionListFiles: (sessionId: string, transportId: string, operationId: string, path: number[]) => typedError<RemoteDirectory, string>(__TAURI_INVOKE("session_list_files", { sessionId, transportId, operationId, path })),
+	/**  Preview complete bounded text without saving or executing it. */
+	sessionPreviewFile: (sessionId: string, transportId: string, operationId: string, path: number[]) => typedError<RemoteTextPreview, RemoteTextPreviewIssue>(__TAURI_INVOKE("session_preview_file", { sessionId, transportId, operationId, path })),
 	/**  Read a complete queue snapshot without changing any transfer's lifetime. */
 	sessionTransferQueue: (sessionId: string) => typedError<SessionTransferQueueSnapshot, SessionTransferIssue>(__TAURI_INVOKE("session_transfer_queue", { sessionId })),
 	/**  Select a local source, then leave its transfer owned by the logical session. */
@@ -1440,6 +1442,37 @@ export type RemoteFileKind =
 "directory" |
 /**  An unrecognized type, including symbolic links. */
 "other";
+
+/**  Transient complete text, never included in session status or diagnostics. */
+export type RemoteTextPreview = {
+	/**  Literal UTF-8 text; the interface must not interpret markup or escapes. */
+	text: string,
+	/**  Original byte length, including line endings. */
+	sizeBytes: number,
+};
+
+/**  Localized preview refusals contain no remote contents or server-supplied status text. */
+export type RemoteTextPreviewIssue =
+/**  The entry is not an ordinary remote file. */
+"notRegularFile" |
+/**  The server omitted required ordinary-file metadata. */
+"missingMetadata" |
+/**  The complete file exceeds the preview byte bound. */
+"tooLarge" |
+/**  The reported file or EOF changed during reading. */
+"fileChanged" |
+/**  UTF-8 or supported text-control validation failed. */
+"notText" |
+/**  A bounded request or complete operation timed out. */
+"timeout" |
+/**  The person cancelled this request. */
+"cancelled" |
+/**  This transport or its file-operation admission is unavailable. */
+"unavailable" |
+/**  The SSH server refused a file request. */
+"remoteDenied" |
+/**  The request could not complete safely. */
+"failed";
 
 /**
  *  A device-independent route definition. Managed routes are represented so

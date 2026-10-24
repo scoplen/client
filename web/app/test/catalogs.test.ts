@@ -10,6 +10,8 @@ const sample = {
   reference: "E-1",
   count: 3,
   capacity: 16,
+  bytes: 1024,
+  connection: "deploy@fixture.example",
   skipped: 2,
   line: 5,
   directive: "Include",

@@ -38,6 +38,135 @@ fn ready_file_manager()
     (manager, transport, commands, file_requests)
 }
 
+#[tokio::test]
+async fn preview_serializes_file_access_without_blocking_terminal_commands() {
+    let (manager, transport, mut commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .preview_file(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./text".to_vec(),
+                )
+                .await
+        }
+    });
+    let FileCommand::Preview { path, reply } = files.recv().await.unwrap() else {
+        panic!("preview request expected")
+    };
+    assert_eq!(path, b"./text");
+    assert_eq!(
+        manager
+            .preview_file(
+                "terminal",
+                &transport.to_string(),
+                &Uuid::now_v7().to_string(),
+                b"./second".to_vec()
+            )
+            .await
+            .unwrap_err(),
+        RemoteTextPreviewIssue::Unavailable
+    );
+    manager.input("terminal", &transport.to_string(), b"echo alive\n".to_vec()).unwrap();
+    manager.resize("terminal", &transport.to_string(), 100, 30).unwrap();
+    assert!(matches!(commands.recv().await.unwrap(), TransportCommand::Input(_)));
+    assert!(matches!(commands.recv().await.unwrap(), TransportCommand::Resize { .. }));
+    reply.send(Ok(RemoteTextPreview { text: "complete".into(), size_bytes: 8 })).unwrap();
+    assert_eq!(pending.await.unwrap().unwrap().text, "complete");
+    assert!(manager.sessions.lock().unwrap()["terminal"].active.as_ref().unwrap().file.is_none());
+}
+
+#[tokio::test]
+async fn preview_cancel_is_operation_fenced_and_closes_its_response_receiver() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .preview_file(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./text".to_vec(),
+                )
+                .await
+        }
+    });
+    let FileCommand::Preview { mut reply, .. } = files.recv().await.unwrap() else {
+        panic!("preview request expected")
+    };
+    assert!(
+        manager
+            .cancel_file_operation("terminal", &transport.to_string(), &Uuid::now_v7().to_string())
+            .is_err()
+    );
+    assert!(!pending.is_finished());
+    manager
+        .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+        .unwrap();
+    assert_eq!(pending.await.unwrap().unwrap_err(), RemoteTextPreviewIssue::Cancelled);
+    reply.closed().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn preview_has_a_sixty_second_absolute_deadline_and_releases_admission() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .preview_file(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./text".to_vec(),
+                )
+                .await
+        }
+    });
+    let FileCommand::Preview { mut reply, .. } = files.recv().await.unwrap() else {
+        panic!("preview request expected")
+    };
+    tokio::time::advance(Duration::from_secs(59)).await;
+    assert!(!pending.is_finished());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(pending.await.unwrap().unwrap_err(), RemoteTextPreviewIssue::Timeout);
+    reply.closed().await;
+    assert!(manager.sessions.lock().unwrap()["terminal"].active.as_ref().unwrap().file.is_none());
+}
+
+#[tokio::test]
+async fn preview_cannot_disclose_a_reply_after_transport_replacement() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .preview_file(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./text".to_vec(),
+                )
+                .await
+        }
+    });
+    let FileCommand::Preview { reply, .. } = files.recv().await.unwrap() else {
+        panic!("preview request expected")
+    };
+    manager.sessions.lock().unwrap().get_mut("terminal").unwrap().active.as_mut().unwrap().id =
+        Uuid::now_v7();
+    reply.send(Ok(RemoteTextPreview { text: "old transport".into(), size_bytes: 13 })).unwrap();
+    assert_eq!(pending.await.unwrap().unwrap_err(), RemoteTextPreviewIssue::Unavailable);
+}
+
 #[test]
 fn file_progress_is_decimal_and_fenced_to_the_current_operation() {
     let (manager, transport, _commands, _files) = ready_file_manager();

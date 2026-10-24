@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-import { createEvent, fireEvent, render, screen } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   Button,
   ChoiceList,
   ContextMenuProvider,
+  Dialog,
   HostEgg,
   Lockup,
   Mark,
@@ -18,6 +19,35 @@ import {
   useContextMenu,
 } from "../src";
 import { violations } from "./axe";
+
+describe("Dialog", () => {
+  it("keeps long file and connection text accessible while closing by keyboard", async () => {
+    const title = `${"n".repeat(251)}.txt`;
+    const description = `user@${"host".repeat(60)}.example`;
+    const onOpenChange = vi.fn();
+    render(
+      <Dialog
+        open
+        onOpenChange={onOpenChange}
+        title={title}
+        description={description}
+        closeLabel="Close preview"
+        footer={<Button>Done</Button>}
+      >
+        <p>Read-only text</p>
+      </Dialog>,
+    );
+    const dialog = await screen.findByRole("dialog", { name: title });
+    expect(screen.getByRole("heading", { name: title }).textContent).toBe(title);
+    expect(document.getElementById(dialog.getAttribute("aria-describedby")!)?.textContent).toBe(description);
+    await userEvent.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Done" }));
+    await userEvent.tab();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close preview" })));
+    await userEvent.keyboard("{Escape}");
+    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false, expect.objectContaining({ reason: "escape-key" }));
+  });
+});
 
 describe("Button", () => {
   it("is a button that does not submit forms unless asked", () => {

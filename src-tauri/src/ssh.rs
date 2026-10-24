@@ -8,7 +8,8 @@ use crate::local_data::LocalDataState;
 use scoplen_client_core::connection::preparation::PreparationResponse;
 use scoplen_client_core::locale::Locale;
 use scoplen_client_core::session_files::{
-    RemoteDirectory, RemoteFileKind, SessionFileMutationResult,
+    RemoteDirectory, RemoteFileKind, RemoteTextPreview, RemoteTextPreviewIssue,
+    SessionFileMutationResult,
 };
 use scoplen_client_core::session_manager::HistoryChange;
 use scoplen_crypto::SecretVec;
@@ -165,6 +166,19 @@ pub async fn session_list_files(
     path: Vec<u8>,
 ) -> Result<RemoteDirectory, String> {
     manager.list_files(&session_id, &transport_id, &operation_id, path).await
+}
+
+/// Preview complete bounded text without saving or executing it.
+#[tauri::command]
+#[specta::specta]
+pub async fn session_preview_file(
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    transport_id: String,
+    operation_id: String,
+    path: Vec<u8>,
+) -> Result<RemoteTextPreview, RemoteTextPreviewIssue> {
+    manager.preview_file(&session_id, &transport_id, &operation_id, path).await
 }
 
 /// Create one directory inside the current remote Files directory.

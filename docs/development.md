@@ -237,6 +237,26 @@ A permission error fails the tests; an unavailable symlink fixture is not passin
 An ordinary-file test also checks that replacing the path after admission does not
 redirect reads from the retained handle. Unix additionally checks FIFO rejection.
 
+## Remote text preview checks
+
+```text
+cargo test -p scoplen-client-core --lib preview
+pnpm --filter @scoplen/app test -- session-files
+```
+
+The independent SSH/SFTP peer checks complete UTF-8, empty and exact-cap text, bounded short
+reads, progressing reads beyond one step deadline, stalled-request timeout, EOF growth and
+shrinkage, type/size/modification changes, control/encoding refusal,
+malformed EOF-probe packets, cleanup refusal and cancellation followed by a fresh channel.
+Manager checks cover serialized admission, live terminal input/resize, cancellation, the
+60-second absolute deadline and late replies after transport replacement. The public OpenSSH
+Files fixture also checks real UTF-8, empty and exact-cap previews, binary/control/link/folder
+and permission refusals, continued terminal input/resize and absence of local preview files.
+The frontend suite covers literal rendering, localized refusal/retry, tab/transport fencing,
+late cancellation, queue admission and keyboard focus after delayed directory loading.
+Rendered English and Chinese checks cover literal text, empty/error/retry states, long file
+and connection names, narrow-window content scrolling and visible keyboard closing controls.
+
 ## Generated files
 
 | File | Regenerate with | When |

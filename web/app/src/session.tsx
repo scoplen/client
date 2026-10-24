@@ -858,6 +858,8 @@ export function SessionTerminal({
             key={transportId ?? "disconnected"}
             sessionId={sessionId}
             transportId={state === "connected" ? transportId : null}
+            connectionLabel={label}
+            active={active}
             queue={transfers.snapshot}
             queueIssue={enqueueIssue ?? transfers.issue}
             onEnqueueFeedback={reportEnqueue}
