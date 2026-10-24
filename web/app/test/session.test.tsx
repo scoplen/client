@@ -304,6 +304,36 @@ it.each(["unknown", "failed"] as const)(
   },
 );
 
+it("keeps an uncertain remote deletion visible after Files closes without replaying it", async () => {
+  const f = fixture();
+  const listing = f.delay("session_list_files");
+  const deletion = f.delay("session_delete_remote_entry");
+  render(sessionView());
+  const connection = await connect(f);
+  await connection.ready();
+  await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(1));
+  const remotePath = [46, 47, 255, 46, 98, 105, 110];
+  await act(() => listing.resolve({ entries: [{ name: "raw.bin", path: remotePath, kind: "file", sizeBytes: "4" }] }));
+  await userEvent.click(screen.getByRole("button", { name: "Delete raw.bin" }));
+  await waitFor(() => expect(f.matching("session_delete_remote_entry")).toHaveLength(1));
+  expect(f.matching("session_delete_remote_entry")[0]?.args).toMatchObject({
+    sessionId: connection.sessionId,
+    transportId: connection.transportId,
+    directoryPath: [46],
+    entryPath: remotePath,
+    locale: "en",
+  });
+  await userEvent.click(
+    within(screen.getByRole("region", { name: "Files" })).getByRole("button", { name: "Close files" }),
+  );
+  await act(() => deletion.resolve({ status: "unknown", message: null }));
+  expect(screen.getByRole("alert").textContent).toContain("remote file operations have an unknown result");
+  expect(f.matching("session_delete_remote_entry")).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 describe("saved terminal output", () => {
   beforeEach(() => {
     vi.stubGlobal("matchMedia", () => ({

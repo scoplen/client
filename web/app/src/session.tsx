@@ -24,7 +24,7 @@ import {
   type HostKeyTrustSource,
 } from "./ipc/bindings";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
-import { SessionFiles, type UploadOutcome } from "./session-files";
+import { SessionFiles, type FileOperationOutcome } from "./session-files";
 import { dismissUploadAttention, initialUploadAttention, recordUploadAttention } from "./session-upload-attention";
 
 export type SessionState =
@@ -123,7 +123,7 @@ export function SessionTerminal({
     if (!active && passphraseInput.current) passphraseInput.current.value = "";
   }, [active]);
 
-  const reportUploadOutcome = useCallback((outcome: UploadOutcome) => {
+  const reportFileOutcome = useCallback((outcome: FileOperationOutcome) => {
     setUploadAttention((current) => recordUploadAttention(current, outcome));
   }, []);
 
@@ -735,7 +735,7 @@ export function SessionTerminal({
         >
           <div className="min-w-0 flex-1 text-xs">
             {uploadAttention.unknown ? (
-              <p className="m-0 text-attention">{t("session.files.upload.attentionUnknown")}</p>
+              <p className="m-0 text-attention">{t("session.files.operation.attentionUnknown")}</p>
             ) : null}
             {uploadAttention.stagingMayRemain ? (
               <p className="m-0 mt-1 text-attention">
@@ -809,7 +809,7 @@ export function SessionTerminal({
               setFilesOpen(false);
               filesToggle.current?.focus();
             }}
-            onUploadOutcome={reportUploadOutcome}
+            onFileOutcome={reportFileOutcome}
           />
         ) : null}
       </div>

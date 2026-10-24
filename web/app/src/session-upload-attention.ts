@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { UploadOutcome } from "./session-files";
+import type { FileOperationOutcome } from "./session-files";
 
 const recentLimit = 32;
 
@@ -18,7 +18,7 @@ export type UploadAttention = {
 
 export const initialUploadAttention: UploadAttention = { recent: [], unknown: false, stagingMayRemain: false };
 
-export function recordUploadAttention(current: UploadAttention, outcome: UploadOutcome): UploadAttention {
+export function recordUploadAttention(current: UploadAttention, outcome: FileOperationOutcome): UploadAttention {
   const unknown = outcome.status === "unknown";
   if (!unknown && !outcome.stagingMayRemain) return current;
   const index = current.recent.findIndex(

@@ -9,6 +9,9 @@ const fileCommands = vi.hoisted(() => ({
   list: vi.fn(),
   download: vi.fn(),
   upload: vi.fn(),
+  create: vi.fn(),
+  rename: vi.fn(),
+  delete: vi.fn(),
   cancel: vi.fn(),
 }));
 
@@ -17,6 +20,9 @@ vi.mock("../src/ipc/bindings", () => ({
     sessionListFiles: fileCommands.list,
     sessionDownloadFile: fileCommands.download,
     sessionUploadFile: fileCommands.upload,
+    sessionCreateRemoteDirectory: fileCommands.create,
+    sessionRenameRemoteEntry: fileCommands.rename,
+    sessionDeleteRemoteEntry: fileCommands.delete,
     sessionCancelFileOperation: fileCommands.cancel,
   },
 }));
@@ -41,12 +47,7 @@ function view(
 ) {
   return (
     <I18nProvider locale={locale}>
-      <SessionFiles
-        sessionId="session-1"
-        transportId={transportId}
-        onClose={onClose}
-        onUploadOutcome={onUploadOutcome}
-      />
+      <SessionFiles sessionId="session-1" transportId={transportId} onClose={onClose} onFileOutcome={onUploadOutcome} />
     </I18nProvider>
   );
 }
@@ -62,6 +63,9 @@ beforeEach(() => {
     status: "ok",
     data: { status: "saved", message: null, stagingMayRemain: false },
   });
+  fileCommands.create.mockReset().mockResolvedValue({ status: "ok", data: { status: "saved", message: null } });
+  fileCommands.rename.mockReset().mockResolvedValue({ status: "ok", data: { status: "saved", message: null } });
+  fileCommands.delete.mockReset().mockResolvedValue({ status: "ok", data: { status: "saved", message: null } });
   fileCommands.cancel.mockReset().mockResolvedValue({ status: "ok", data: null });
 });
 
@@ -340,4 +344,186 @@ it("cancels a pending picker when the panel closes and does not restore late res
   expect(fileCommands.cancel).toHaveBeenCalledWith("session-1", "transport-1", operationId);
   await act(async () => pending.resolve({ status: "ok", data: true }));
   expect(screen.queryByText("Download saved to the selected location.")).toBeNull();
+});
+
+it("creates one folder in the current opaque directory and refreshes after success", async () => {
+  fileCommands.list
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [directory] } })
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [] } })
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [{ ...directory, name: "snapshots" }] } });
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "logs" }));
+  await screen.findByText("This directory is empty.");
+  await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+  const submit = screen.getByRole("button", { name: "Create folder" });
+  expect(submit.hasAttribute("disabled")).toBe(true);
+  await userEvent.type(screen.getByRole("textbox", { name: "Name" }), "snapshots");
+  await userEvent.click(submit);
+  expect(fileCommands.create).toHaveBeenCalledWith(
+    "session-1",
+    "transport-1",
+    expect.any(String),
+    directory.path,
+    "snapshots",
+    "en",
+  );
+  expect(await screen.findByText("Folder created in this directory.")).toBeTruthy();
+  await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(3));
+});
+
+it("passes the Chinese locale to folder creation and keeps directory paths as bytes", async () => {
+  render(view("transport-1", vi.fn(), vi.fn(), "zh-Hans"));
+  await screen.findByText("此目录为空。");
+  await userEvent.click(screen.getByRole("button", { name: "新建文件夹" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "名称" }), "归档");
+  await userEvent.click(screen.getByRole("button", { name: "创建文件夹" }));
+  expect(fileCommands.create).toHaveBeenCalledWith(
+    "session-1",
+    "transport-1",
+    expect.any(String),
+    [46],
+    "归档",
+    "zh-Hans",
+  );
+});
+
+it.each([file, directory])("renames only listed regular items using their opaque source path", async (entry) => {
+  fileCommands.list.mockResolvedValueOnce({ status: "ok", data: { entries: [entry, other] } });
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: `Rename ${entry.name}` }));
+  expect(screen.getByText(/a simultaneous remote change may be replaced on some servers/i)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Rename socket" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Delete socket" })).toBeNull();
+  const field = screen.getByRole("textbox", { name: "Name" });
+  expect((field as HTMLInputElement).value).toBe("");
+  await userEvent.type(field, "new-name");
+  await userEvent.click(screen.getByRole("button", { name: "Rename" }));
+  expect(fileCommands.rename).toHaveBeenCalledWith(
+    "session-1",
+    "transport-1",
+    expect.any(String),
+    [46],
+    entry.path,
+    "new-name",
+    "en",
+  );
+  expect(await screen.findByText("Remote item renamed.")).toBeTruthy();
+  await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(2));
+});
+
+it("sends deletion directly to Rust for native confirmation and keeps a cancelled listing", async () => {
+  fileCommands.list.mockResolvedValueOnce({ status: "ok", data: { entries: [file, directory] } });
+  fileCommands.delete.mockResolvedValueOnce({ status: "ok", data: { status: "cancelled", message: null } });
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Delete raw.bin" }));
+  expect(fileCommands.delete).toHaveBeenCalledWith(
+    "session-1",
+    "transport-1",
+    expect.any(String),
+    [46],
+    file.path,
+    "en",
+  );
+  expect(await screen.findByText("Remote operation cancelled.")).toBeTruthy();
+  expect(fileCommands.list).toHaveBeenCalledTimes(1);
+  await userEvent.click(screen.getByRole("button", { name: "Delete logs" }));
+  expect(fileCommands.delete).toHaveBeenCalledWith(
+    "session-1",
+    "transport-1",
+    expect.any(String),
+    [46],
+    directory.path,
+    "en",
+  );
+  expect(fileCommands.delete).toHaveBeenCalledTimes(2);
+});
+
+it("deletes a nested file with the current directory and entry paths kept separate", async () => {
+  const nested = { ...file, path: [...directory.path, 47, 255, 46, 98, 105, 110] };
+  fileCommands.list
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [directory] } })
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [nested] } });
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "logs" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Delete raw.bin" }));
+  expect(fileCommands.delete).toHaveBeenCalledWith(
+    "session-1",
+    "transport-1",
+    expect.any(String),
+    directory.path,
+    nested.path,
+    "en",
+  );
+});
+
+it("keeps a mutation inside the single-operation fence until Rust returns", async () => {
+  const pending = deferred<{ status: "ok"; data: { status: "cancelled"; message: null } }>();
+  fileCommands.list.mockResolvedValueOnce({ status: "ok", data: { entries: [file] } });
+  fileCommands.delete.mockReturnValueOnce(pending.promise);
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Delete raw.bin" }));
+  expect(screen.getByRole("button", { name: "Upload file" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "New folder" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Rename raw.bin" }).hasAttribute("disabled")).toBe(true);
+  const operationId = fileCommands.delete.mock.calls[0]?.[2];
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(fileCommands.cancel).toHaveBeenCalledWith("session-1", "transport-1", operationId);
+  await act(async () => pending.resolve({ status: "ok", data: { status: "cancelled", message: null } }));
+  expect(await screen.findByText("Remote operation cancelled.")).toBeTruthy();
+  expect(fileCommands.delete).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  ["conflict", "The remote item changed or the target name already exists. Refresh the directory before trying again."],
+  ["unsupported", "This type of remote directory or item cannot be changed here. Refresh to check it."],
+  ["failed", "Could not complete the remote operation. Refresh the directory and check before trying again."],
+])("shows a %s mutation without refreshing or retrying", async (status, copy) => {
+  fileCommands.list.mockResolvedValueOnce({ status: "ok", data: { entries: [file] } });
+  fileCommands.delete.mockResolvedValueOnce({ status: "ok", data: { status, message: "untrusted detail" } });
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Delete raw.bin" }));
+  expect(await screen.findByText(copy)).toBeTruthy();
+  expect(screen.queryByText("untrusted detail")).toBeNull();
+  expect(fileCommands.list).toHaveBeenCalledTimes(1);
+  expect(fileCommands.delete).toHaveBeenCalledTimes(1);
+});
+
+it("keeps an uncertain old-transport mutation in the session outcome channel", async () => {
+  const pending = deferred<{ status: "ok"; data: { status: "unknown"; message: null } }>();
+  fileCommands.rename.mockReturnValueOnce(pending.promise);
+  fileCommands.list
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [file] } })
+    .mockResolvedValueOnce({ status: "ok", data: { entries: [directory] } });
+  const onFileOutcome = vi.fn();
+  const rendered = render(view("old-transport", vi.fn(), onFileOutcome));
+  await userEvent.click(await screen.findByRole("button", { name: "Rename raw.bin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Name" }), "new.bin");
+  await userEvent.click(screen.getByRole("button", { name: "Rename" }));
+  const oldOperation = fileCommands.rename.mock.calls[0]?.[2];
+  rendered.rerender(view("new-transport", vi.fn(), onFileOutcome));
+  await waitFor(() => expect(fileCommands.cancel).toHaveBeenCalledWith("session-1", "old-transport", oldOperation));
+  await screen.findByRole("button", { name: "logs" });
+  await act(async () => pending.resolve({ status: "ok", data: { status: "unknown", message: null } }));
+  expect(onFileOutcome).toHaveBeenCalledWith({
+    transportId: "old-transport",
+    operationId: oldOperation,
+    status: "unknown",
+    stagingMayRemain: false,
+  });
+  expect(fileCommands.rename).toHaveBeenCalledTimes(1);
+  expect(fileCommands.list).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole("button", { name: "logs" })).toBeTruthy();
+});
+
+it("treats a rejected mutation IPC promise as unknown without an automatic retry", async () => {
+  fileCommands.list.mockResolvedValueOnce({ status: "ok", data: { entries: [file] } });
+  fileCommands.delete.mockRejectedValueOnce(new Error("untrusted bridge detail"));
+  const onFileOutcome = vi.fn();
+  render(view("transport-1", vi.fn(), onFileOutcome));
+  await userEvent.click(await screen.findByRole("button", { name: "Delete raw.bin" }));
+  await waitFor(() => expect(onFileOutcome).toHaveBeenCalledTimes(1));
+  expect(onFileOutcome.mock.calls[0]?.[0]).toMatchObject({ status: "unknown", stagingMayRemain: false });
+  expect(screen.queryByText("untrusted bridge detail")).toBeNull();
+  expect(fileCommands.list).toHaveBeenCalledTimes(1);
+  expect(fileCommands.delete).toHaveBeenCalledTimes(1);
 });

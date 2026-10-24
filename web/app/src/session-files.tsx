@@ -1,16 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, IconButton } from "@scoplen/ui";
-import { Download, File, Folder, RefreshCw, Upload, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Button, Dialog, Field, IconButton } from "@scoplen/ui";
+import { Download, File, Folder, FolderPlus, Pencil, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
-import { commands, type RemoteFileEntry, type SessionUploadResult } from "./ipc/bindings";
+import {
+  commands,
+  type RemoteFileEntry,
+  type SessionFileMutationResult,
+  type SessionUploadResult,
+} from "./ipc/bindings";
 
 type Location = { name: string; path: number[] };
-type Activity = "listing" | "downloading" | "uploading" | "cancelling" | "waiting" | null;
+type Activity =
+  "listing" | "downloading" | "uploading" | "creating" | "renaming" | "deleting" | "cancelling" | "waiting" | null;
 type FileError = { message: string; listing: boolean };
 type UploadFeedback = Pick<SessionUploadResult, "status" | "stagingMayRemain">;
+type MutationKind = "create" | "rename" | "delete";
+type MutationFeedback = { kind: MutationKind; status: SessionFileMutationResult["status"] };
+type NameDialog = { kind: "create" } | { kind: "rename"; entry: RemoteFileEntry };
 
-export type UploadOutcome = UploadFeedback & {
+export type FileOperationOutcome = UploadFeedback & {
   transportId: string;
   operationId: string;
 };
@@ -24,20 +33,24 @@ export function SessionFiles({
   sessionId,
   transportId,
   onClose,
-  onUploadOutcome,
+  onFileOutcome,
 }: {
   sessionId: string;
   transportId: string;
   onClose: () => void;
-  onUploadOutcome: (outcome: UploadOutcome) => void;
+  onFileOutcome: (outcome: FileOperationOutcome) => void;
 }) {
   const { t, locale } = useI18n();
+  const formId = useId();
   const [locations, setLocations] = useState<Location[]>([{ name: "", path: [46] }]);
   const [entries, setEntries] = useState<RemoteFileEntry[]>([]);
   const [activity, setActivity] = useState<Activity>("listing");
   const [error, setError] = useState<FileError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(null);
+  const [mutationFeedback, setMutationFeedback] = useState<MutationFeedback | null>(null);
+  const [nameDialog, setNameDialog] = useState<NameDialog | null>(null);
+  const [name, setName] = useState("");
   const [reload, setReload] = useState(0);
   const operation = useRef<string | null>(null);
   const cancelled = useRef<string | null>(null);
@@ -112,6 +125,7 @@ export function SessionFiles({
     setError(null);
     setNotice(null);
     setUploadFeedback(null);
+    setMutationFeedback(null);
     void commands
       .sessionDownloadFile(sessionId, transportId, id, entry.path)
       .then((result) => {
@@ -142,10 +156,11 @@ export function SessionFiles({
     setError(null);
     setNotice(null);
     setUploadFeedback(null);
+    setMutationFeedback(null);
     const report = (result: SessionUploadResult) => {
       const current = mounted.current && operation.current === id;
       if (result.status === "unknown" || result.stagingMayRemain) {
-        onUploadOutcome({
+        onFileOutcome({
           transportId,
           operationId: id,
           status: result.status,
@@ -168,6 +183,80 @@ export function SessionFiles({
         cancelled.current = null;
         setActivity(null);
       });
+  };
+
+  const mutate = (
+    kind: MutationKind,
+    execute: (
+      id: string,
+    ) => Promise<{ status: "ok"; data: SessionFileMutationResult } | { status: "error"; error: string }>,
+  ) => {
+    if (activity || operation.current) return;
+    const id = crypto.randomUUID();
+    operation.current = id;
+    setActivity(kind === "create" ? "creating" : kind === "rename" ? "renaming" : "deleting");
+    setError(null);
+    setNotice(null);
+    setUploadFeedback(null);
+    setMutationFeedback(null);
+    const report = (result: SessionFileMutationResult) => {
+      if (result.status === "unknown") {
+        onFileOutcome({ transportId, operationId: id, status: "unknown", stagingMayRemain: false });
+      }
+      if (!mounted.current || operation.current !== id || result.status === "unknown") return;
+      setMutationFeedback({ kind, status: result.status });
+      if (result.status === "saved") setReload((value) => value + 1);
+    };
+    void execute(id)
+      .then((result) => report(result.status === "ok" ? result.data : { status: "failed", message: null }))
+      .catch(() => report({ status: "unknown", message: null }))
+      .finally(() => {
+        if (!mounted.current || operation.current !== id) return;
+        operation.current = null;
+        cancelled.current = null;
+        setActivity(null);
+      });
+  };
+
+  const submitName = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!nameDialog || !name.trim() || activity || operation.current) return;
+    const target = nameDialog;
+    const newName = name;
+    setNameDialog(null);
+    setName("");
+    const language = locale === "zh-Hans" ? "zh-Hans" : "en";
+    if (target.kind === "create") {
+      mutate("create", (id) =>
+        commands.sessionCreateRemoteDirectory(sessionId, transportId, id, currentPath, newName, language),
+      );
+    } else {
+      mutate("rename", (id) =>
+        commands.sessionRenameRemoteEntry(
+          sessionId,
+          transportId,
+          id,
+          currentPath,
+          target.entry.path,
+          newName,
+          language,
+        ),
+      );
+    }
+  };
+
+  const deleteEntry = (entry: RemoteFileEntry) => {
+    if (entry.kind !== "file" && entry.kind !== "directory") return;
+    mutate("delete", (id) =>
+      commands.sessionDeleteRemoteEntry(
+        sessionId,
+        transportId,
+        id,
+        currentPath,
+        entry.path,
+        locale === "zh-Hans" ? "zh-Hans" : "en",
+      ),
+    );
   };
 
   const cancel = () => {
@@ -197,6 +286,16 @@ export function SessionFiles({
             <Upload aria-hidden="true" className="size-4" />
             {t("session.files.upload.action")}
           </Button>
+          <IconButton
+            label={t("session.files.create.action")}
+            disabled={activity !== null}
+            onClick={() => {
+              setName("");
+              setNameDialog({ kind: "create" });
+            }}
+          >
+            <FolderPlus aria-hidden="true" className="size-4" />
+          </IconButton>
           <IconButton
             label={t("session.files.refresh")}
             disabled={activity !== null}
@@ -233,6 +332,7 @@ export function SessionFiles({
               className="max-w-40 shrink-0 px-2"
               onClick={() => {
                 setUploadFeedback(null);
+                setMutationFeedback(null);
                 setLocations((current) => current.slice(0, index + 1));
               }}
             >
@@ -274,6 +374,18 @@ export function SessionFiles({
           {uploadFeedback.stagingMayRemain ? <p className="m-0 mt-1">{t("session.files.upload.staging")}</p> : null}
         </div>
       ) : null}
+      {mutationFeedback ? (
+        <p
+          role={mutationFeedback.status === "saved" || mutationFeedback.status === "cancelled" ? "status" : "alert"}
+          className={`m-0 px-3 py-2 text-xs ${mutationFeedback.status === "saved" || mutationFeedback.status === "cancelled" ? "" : "text-attention"}`}
+        >
+          {t(
+            mutationFeedback.status === "saved"
+              ? `session.files.operation.saved.${mutationFeedback.kind}`
+              : `session.files.operation.${mutationFeedback.status}`,
+          )}
+        </p>
+      ) : null}
       <div className="min-h-0 flex-1 overflow-auto px-2 pb-2">
         {!activity && !error && entries.length === 0 ? (
           <p className="m-0 px-1 py-2 text-xs text-muted-foreground">{t("session.files.empty")}</p>
@@ -297,6 +409,7 @@ export function SessionFiles({
                   className="min-w-0 flex-1 truncate text-left text-sm text-foreground underline-offset-2 hover:underline focus-visible:rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-50"
                   onClick={() => {
                     setUploadFeedback(null);
+                    setMutationFeedback(null);
                     setLocations((current) => [...current, { name: entry.name, path: entry.path }]);
                   }}
                 >
@@ -316,10 +429,64 @@ export function SessionFiles({
                   <Download aria-hidden="true" className="size-4" />
                 </IconButton>
               ) : null}
+              {entry.kind === "file" || entry.kind === "directory" ? (
+                <>
+                  <IconButton
+                    label={t("session.files.rename.action", { name: entry.name })}
+                    disabled={activity !== null}
+                    onClick={() => {
+                      setName("");
+                      setNameDialog({ kind: "rename", entry });
+                    }}
+                  >
+                    <Pencil aria-hidden="true" className="size-4" />
+                  </IconButton>
+                  <IconButton
+                    label={t("session.files.delete.action", { name: entry.name })}
+                    disabled={activity !== null}
+                    className="hover:bg-[color-mix(in_srgb,var(--attention)_10%,transparent)] hover:text-attention"
+                    onClick={() => deleteEntry(entry)}
+                  >
+                    <Trash2 aria-hidden="true" className="size-4" />
+                  </IconButton>
+                </>
+              ) : null}
             </li>
           ))}
         </ul>
       </div>
+      <Dialog
+        open={nameDialog !== null}
+        onOpenChange={(open) => {
+          if (!open) setNameDialog(null);
+        }}
+        title={t(nameDialog?.kind === "rename" ? "session.files.rename.title" : "session.files.create.title")}
+        description={
+          nameDialog?.kind === "rename"
+            ? t("session.files.rename.description", { name: nameDialog.entry.name })
+            : undefined
+        }
+        closeLabel={t("session.files.cancel")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setNameDialog(null)}>
+              {t("session.files.cancel")}
+            </Button>
+            <Button variant="primary" type="submit" form={formId} disabled={!name.trim()}>
+              {t(nameDialog?.kind === "rename" ? "session.files.rename.submit" : "session.files.create.submit")}
+            </Button>
+          </>
+        }
+      >
+        <form id={formId} onSubmit={submitName}>
+          <Field
+            label={t("session.files.name")}
+            autoFocus
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </form>
+      </Dialog>
     </section>
   );
 }
