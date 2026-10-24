@@ -43,7 +43,10 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   source snapshot or upload, cross-transport or durable continuation. Ordinary UTF-8 files up
   to 256 KiB have a complete, cancellable read-only preview with literal transient display
   and fixed localized refusals; its metadata checks do not establish a snapshot or remote
-  path confinement. Drag and drop and the remaining C6 workflows are incomplete.
+  path confinement. Native file drops use path-free application events and a single-use
+  30-second Rust ticket bound to the current window, Files view, queue and remote directory.
+  Whole-batch capacity and source checks precede FIFO admission. Scaled Windows and Retina
+  macOS native drop acceptance and the remaining C6 workflows are incomplete.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.
 - The Windows TPM path of key storage cannot run on hosted CI runners, which have no TPM; only its DPAPI fallback is exercised there.

@@ -21,6 +21,58 @@ fn complete(state: SessionTransferState) -> TransferCompletion {
     TransferCompletion { state, issue: None, staging_may_remain: false }
 }
 
+#[test]
+fn batch_reservation_holds_every_slot_and_appends_contiguously_in_order() {
+    let mut queue = TransferQueue::default();
+    let transport = Uuid::now_v7();
+    queued(&mut queue, transport, 0);
+    let selection = queue.reserve_selections(transport, 15).unwrap();
+    assert_eq!(queue.snapshot("session").outstanding, 16);
+    assert_eq!(queue.reserve_selection(transport), Err(SessionTransferIssue::QueueFull));
+    queue
+        .enqueue_upload_batch(
+            selection,
+            (1..16).map(|value| (format!("{value}.bin"), 64, value)).collect(),
+        )
+        .unwrap();
+    assert_eq!(queue.snapshot("session").outstanding, 16);
+    for value in 0..16 {
+        let selected = queue.take_next(transport).unwrap();
+        assert_eq!(selected.resources, value);
+        queue.finish(selected.identity, complete(SessionTransferState::Saved));
+    }
+    assert!(queue.take_next(transport).is_none());
+}
+
+#[test]
+fn failed_or_obsolete_batch_reservations_add_nothing_and_release_every_slot() {
+    let mut queue = TransferQueue::<usize>::default();
+    let transport = Uuid::now_v7();
+    assert_eq!(queue.reserve_selections(transport, 0), Err(SessionTransferIssue::InvalidSelection));
+    assert_eq!(
+        queue.reserve_selections(transport, 17),
+        Err(SessionTransferIssue::InvalidSelection)
+    );
+    let reservation = queue.reserve_selections(transport, 16).unwrap();
+    assert_eq!(
+        queue.enqueue_upload_batch(reservation, vec![("short".into(), 1, 0)]),
+        Err(SessionTransferIssue::InvalidSelection)
+    );
+    assert!(queue.snapshot("session").items.is_empty());
+    queue.release_selection(reservation);
+    assert_eq!(queue.snapshot("session").outstanding, 0);
+    let reservation = queue.reserve_selections(transport, 16).unwrap();
+    queue.interrupt_transport(transport);
+    assert_eq!(
+        queue.enqueue_upload_batch(
+            reservation,
+            (0..16).map(|value| ("file".into(), 1, value)).collect()
+        ),
+        Err(SessionTransferIssue::TransportEnded)
+    );
+    assert_eq!(queue.snapshot("session").outstanding, 0);
+}
+
 fn paused(queue: &mut TransferQueue<usize>, transport: Uuid, resource: usize) -> TransferIdentity {
     let selection = queue.reserve_selection(transport).unwrap();
     queue

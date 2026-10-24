@@ -6,6 +6,7 @@
 
 pub mod commands;
 pub mod events;
+pub mod file_drop;
 pub mod frames;
 pub mod inventory;
 pub mod local_data;
@@ -44,6 +45,10 @@ pub fn ipc() -> Builder<tauri::Wry> {
             session_transfers::session_pause_transfer,
             session_transfers::session_resume_transfer,
             session_transfers::session_acknowledge_transfer,
+            file_drop::session_arm_file_drop,
+            file_drop::session_revoke_file_drop,
+            file_drop::session_consume_file_drop,
+            file_drop::session_cancel_file_drop,
             ssh::session_create_remote_directory,
             ssh::session_rename_remote_entry,
             ssh::session_delete_remote_entry,
@@ -128,7 +133,8 @@ pub fn ipc() -> Builder<tauri::Wry> {
         .events(collect_events![
             events::StoreChanged,
             events::SessionChanged,
-            events::PersonalSyncChanged
+            events::PersonalSyncChanged,
+            file_drop::SessionFileDrag
         ])
 }
 
@@ -199,6 +205,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            file_drop::on_window_event(window, event);
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 let app = window.app_handle();
                 if let (Some(store), Some(main)) = (

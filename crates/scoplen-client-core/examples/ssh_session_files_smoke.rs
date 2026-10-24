@@ -966,7 +966,7 @@ async fn exercise_queue(
     assert_eq!(cancelled.state, SessionTransferState::Cancelled);
     assert!(!cancelled.staging_may_remain);
     let entries = manager
-        .list_files("fixture-terminal", transport, &Uuid::now_v7().to_string(), directory)
+        .list_files("fixture-terminal", transport, &Uuid::now_v7().to_string(), directory.clone())
         .await?;
     assert!(
         entries.entries.iter().all(|entry| entry.name != "cancel-upload.bin"
@@ -981,6 +981,244 @@ async fn exercise_queue(
         b"printf '%s%s\\n' SCOPLEN- QUEUE-ALIVE\n".to_vec(),
     )?;
     wait_for(output, b"SCOPLEN-QUEUE-ALIVE").await?;
+    exercise_native_drops(manager, local, transport, directory, output).await?;
+    Ok(())
+}
+
+async fn exercise_native_drops(
+    manager: &SessionManager,
+    local: &std::path::Path,
+    transport: &str,
+    directory: Vec<u8>,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = Uuid::now_v7().to_string();
+    manager.arm_file_drop(
+        "fixture-window",
+        &context,
+        "fixture-terminal",
+        transport,
+        &manager.transfer_queue_snapshot("fixture-terminal")?.queue_id,
+        directory.clone(),
+    )?;
+    let first = local.join("drop-first.bin");
+    let second = local.join("drop-second.bin");
+    fs::write(&first, b"native first\0\xff")?;
+    fs::write(&second, b"native second\0\xfe")?;
+    let capture = |paths| {
+        manager
+            .capture_file_drop(
+                &tokio::runtime::Handle::current(),
+                "fixture-window",
+                paths,
+                Some((0.8, 0.5)),
+            )
+            .and_then(|event| event.ticket_id)
+            .ok_or("native fixture did not produce a ticket")
+    };
+    let ticket = capture(vec![first.clone(), second])?;
+    assert_eq!(
+        manager
+            .consume_file_drop("fixture-window", &context, &ticket, |_| async {
+                panic!("new drop cannot require replacement")
+            })
+            .await?
+            .accepted,
+        2
+    );
+    let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+    let added = snapshot
+        .recent
+        .iter()
+        .chain(&snapshot.items)
+        .filter(|item| item.name.starts_with("drop-"))
+        .map(|item| item.item_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(added.len(), 2);
+    for id in &added {
+        assert_eq!(wait_queue_item(manager, id).await?.state, SessionTransferState::Saved);
+    }
+    let recent = manager.transfer_queue_snapshot("fixture-terminal")?.recent;
+    assert_eq!(
+        recent
+            .iter()
+            .filter(|item| added.contains(&item.item_id))
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>(),
+        ["drop-first.bin", "drop-second.bin"]
+    );
+    assert_drop_bytes(
+        manager,
+        local,
+        transport,
+        &directory,
+        "drop-first.bin",
+        b"native first\0\xff",
+    )
+    .await?;
+    assert_drop_bytes(
+        manager,
+        local,
+        transport,
+        &directory,
+        "drop-second.bin",
+        b"native second\0\xfe",
+    )
+    .await?;
+
+    let refused = local.join("drop-refused.bin");
+    fs::write(&refused, b"must never upload")?;
+    let before = manager.transfer_queue_snapshot("fixture-terminal")?;
+    let ticket = capture(vec![refused.clone(), local.join("missing-drop-source")])?;
+    assert!(
+        manager
+            .consume_file_drop("fixture-window", &context, &ticket, |_| async { Ok(true) })
+            .await
+            .is_err()
+    );
+    let after = manager.transfer_queue_snapshot("fixture-terminal")?;
+    assert_eq!(before.items, after.items);
+    assert_eq!(before.recent, after.recent);
+    assert_eq!(after.outstanding, 0);
+
+    fs::write(&first, b"confirmed native replacement\0\xfd")?;
+    let retained = local.join("drop-retained.bin");
+    let cancelled = local.join("drop-cancelled.bin");
+    fs::write(&retained, b"retained source\0\xfc")?;
+    fs::write(&cancelled, b"cancel before dispatch")?;
+    let release = Arc::new(tokio::sync::Notify::new());
+    let review_gate = release.clone();
+    let ticket = capture(vec![first.clone(), retained.clone(), cancelled])?;
+    manager
+        .consume_file_drop("fixture-window", &context, &ticket, move |review| {
+            let release = review_gate.clone();
+            async move {
+                assert_eq!(review.host, "disposable file fixture");
+                assert_eq!(review.username, "smoke");
+                assert_eq!(review.name, "drop-first.bin");
+                release.notified().await;
+                Ok(false)
+            }
+        })
+        .await?;
+    let items = manager.transfer_queue_snapshot("fixture-terminal")?.items;
+    assert_eq!(items.len(), 3);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if manager.transfer_queue_snapshot("fixture-terminal")?.items[0].state
+                == SessionTransferState::AwaitingConfirmation
+            {
+                return Ok::<_, Box<dyn std::error::Error>>(());
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await??;
+    fs::rename(&retained, local.join("moved-drop-source.bin"))?;
+    fs::write(&retained, b"replacement path must not redirect retained handle")?;
+    let cancel = &items[2];
+    manager.cancel_transfer(
+        "fixture-terminal",
+        &manager.transfer_queue_snapshot("fixture-terminal")?.queue_id,
+        &cancel.item_id,
+        &cancel.execution_id,
+    )?;
+    release.notify_one();
+    for (item, state) in items.iter().zip([
+        SessionTransferState::Cancelled,
+        SessionTransferState::Saved,
+        SessionTransferState::Cancelled,
+    ]) {
+        assert_eq!(wait_queue_item(manager, &item.item_id).await?.state, state);
+    }
+    assert_drop_bytes(
+        manager,
+        local,
+        transport,
+        &directory,
+        "drop-first.bin",
+        b"native first\0\xff",
+    )
+    .await?;
+    assert_drop_bytes(
+        manager,
+        local,
+        transport,
+        &directory,
+        "drop-retained.bin",
+        b"retained source\0\xfc",
+    )
+    .await?;
+    let ticket = capture(vec![first])?;
+    let previous = manager
+        .transfer_queue_snapshot("fixture-terminal")?
+        .recent
+        .into_iter()
+        .map(|row| row.item_id)
+        .collect::<Vec<_>>();
+    manager.consume_file_drop("fixture-window", &context, &ticket, |_| async { Ok(true) }).await?;
+    let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+    let item = snapshot
+        .recent
+        .iter()
+        .chain(&snapshot.items)
+        .find(|row| row.name == "drop-first.bin" && !previous.contains(&row.item_id))
+        .ok_or("replacement drop missing")?;
+    assert_eq!(wait_queue_item(manager, &item.item_id).await?.state, SessionTransferState::Saved);
+    assert_drop_bytes(
+        manager,
+        local,
+        transport,
+        &directory,
+        "drop-first.bin",
+        b"confirmed native replacement\0\xfd",
+    )
+    .await?;
+    manager.revoke_file_drop("fixture-window", &context);
+    let entries = manager
+        .list_files("fixture-terminal", transport, &Uuid::now_v7().to_string(), directory)
+        .await?
+        .entries;
+    assert!(entries.iter().all(|entry| entry.name != "drop-refused.bin"
+        && entry.name != "drop-cancelled.bin"
+        && !entry.name.starts_with(".scoplen-upload-")));
+    manager.input(
+        "fixture-terminal",
+        transport,
+        b"printf '%s%s\\n' SCOPLEN- DROP-ALIVE\n".to_vec(),
+    )?;
+    manager.resize("fixture-terminal", transport, 108, 34)?;
+    wait_for(output, b"SCOPLEN-DROP-ALIVE").await?;
+    println!(
+        "native drop queue: FIFO bytes, whole-batch refusal, retained handles, replacement refusal/acceptance, queued cancellation and cleanup passed"
+    );
+    Ok(())
+}
+
+async fn assert_drop_bytes(
+    manager: &SessionManager,
+    local: &std::path::Path,
+    transport: &str,
+    directory: &[u8],
+    name: &str,
+    expected: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut remote = directory.to_vec();
+    remote.push(b'/');
+    remote.extend(name.as_bytes());
+    let destination = local.join(format!("readback-{}-{name}", Uuid::now_v7()));
+    let result = manager
+        .download_file_with_picker(
+            "fixture-terminal",
+            transport,
+            &Uuid::now_v7().to_string(),
+            remote,
+            || async { Ok(Some(destination.clone())) },
+            |_| {},
+        )
+        .await?;
+    assert_eq!(result.status, SessionDownloadStatus::Saved);
+    assert_eq!(fs::read(destination)?, expected);
     Ok(())
 }
 

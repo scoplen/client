@@ -12,6 +12,7 @@ import {
 } from "./ipc/bindings";
 import { SessionTransferQueue } from "./session-transfer-queue";
 import { SessionFilePreview } from "./session-file-preview";
+import { useSessionFileDrop } from "./use-session-file-drop";
 
 type Location = { name: string; path: number[] };
 type Activity = "listing" | "creating" | "renaming" | "deleting" | "cancelling" | "waiting" | null;
@@ -61,6 +62,7 @@ export function SessionFiles({
   const formId = useId();
   const [locations, setLocations] = useState<Location[]>([{ name: "", path: [46] }]);
   const [entries, setEntries] = useState<RemoteFileEntry[]>([]);
+  const [loadedLocation, setLoadedLocation] = useState<string | null>(null);
   const [activity, setActivity] = useState<Activity>(null);
   const [error, setError] = useState<FileError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -78,6 +80,7 @@ export function SessionFiles({
   const mounted = useRef(true);
   const previewFocus = useRef<{ owner: string; path: string } | null>(null);
   const previewButtons = useRef(new Map<string, HTMLButtonElement>());
+  const dropList = useRef<HTMLDivElement>(null);
   const translator = useRef(t);
   const currentPath = locations[locations.length - 1]!.path;
   const previewOwner = `${sessionId}:${transportId}:${currentPath.join(",")}`;
@@ -94,6 +97,25 @@ export function SessionFiles({
     selecting ||
     !!queue?.pickerBusy ||
     (queue !== null && queue.outstanding >= queue.capacity);
+  const dropEnabled =
+    active &&
+    loadedLocation === previewOwner &&
+    activity === null &&
+    !error &&
+    !selecting &&
+    !nameDialog &&
+    !previewOpen;
+  const drop = useSessionFileDrop({
+    sessionId,
+    transportId,
+    queueId: queue?.sessionId === sessionId ? queue.queueId : null,
+    directoryPath: currentPath,
+    enabled: dropEnabled,
+    pickerBusy: queue?.pickerBusy ?? true,
+    list: dropList,
+    locale: locale === "zh-Hans" ? "zh-Hans" : "en",
+    onEnqueueFeedback,
+  });
 
   useEffect(() => {
     translator.current = t;
@@ -141,6 +163,7 @@ export function SessionFiles({
       await pendingCancellation.current;
       if (!current || !mounted.current) return;
       setActivity("listing");
+      setLoadedLocation(null);
       setError(null);
       setNotice(null);
       setEntries([]);
@@ -152,7 +175,10 @@ export function SessionFiles({
         if (result.status === "error") {
           if (cancelled.current === id) setNotice(translator.current("session.files.cancelled"));
           else setError({ message: result.error, listing: true });
-        } else setEntries(result.data.entries);
+        } else {
+          setEntries(result.data.entries);
+          setLoadedLocation(previewOwner);
+        }
       } catch (cause) {
         if (!current || !mounted.current || operation.current !== id) return;
         if (cancelled.current === id) setNotice(translator.current("session.files.cancelled"));
@@ -169,7 +195,7 @@ export function SessionFiles({
       current = false;
       if (operation.current === id) cancelCurrent();
     };
-  }, [cancelCurrent, sessionId, transportId, currentPath, reload, queueBlocked, previewOpen]);
+  }, [cancelCurrent, sessionId, transportId, currentPath, reload, queueBlocked, previewOpen, previewOwner]);
 
   const enqueue = (entry?: RemoteFileEntry) => {
     if (selectionDisabled || selectionPending.current || !transportId || (entry && entry.kind !== "file")) return;
@@ -400,12 +426,12 @@ export function SessionFiles({
           )}
         </p>
       ) : null}
-      {queueBlocked || !transportId ? (
-        <p role="status" className="m-0 px-3 pb-2 text-xs text-muted">
-          {t(!transportId ? "session.transfers.disconnected" : "session.transfers.browsingBlocked")}
-        </p>
-      ) : null}
-      <div className="min-h-16 flex-1 overflow-auto px-2 pb-2">
+      <div
+        ref={dropList}
+        role="region"
+        aria-label={t("session.files.drop.list")}
+        className={`min-h-16 flex-1 overflow-auto px-2 pb-2 ${drop?.phase === "over" ? "ring-2 ring-primary ring-inset" : ""}`}
+      >
         {!activity && !error && entries.length === 0 ? (
           <p className="m-0 px-1 py-2 text-xs text-muted-foreground">{t("session.files.empty")}</p>
         ) : null}
@@ -490,7 +516,33 @@ export function SessionFiles({
           ))}
         </ul>
       </div>
-      <SessionTransferQueue snapshot={queue} issue={enqueueIssue ?? queueIssue} />
+      <div
+        role="status"
+        aria-live="polite"
+        className="h-16 shrink-0 overflow-y-auto px-3 py-2 text-xs text-muted-foreground"
+      >
+        {drop
+          ? t(
+              drop.count === null
+                ? drop.phase === "over"
+                  ? "session.files.drop.overUnknown"
+                  : "session.files.drop.invalid"
+                : `session.files.drop.${drop.phase}`,
+              {
+                count: drop.count ?? 0,
+              },
+            )
+          : queueBlocked || !transportId
+            ? t(!transportId ? "session.transfers.disconnected" : "session.transfers.browsingBlocked")
+            : dropEnabled
+              ? t("session.files.drop.hint")
+              : null}
+      </div>
+      <SessionTransferQueue
+        snapshot={queue}
+        issue={drop?.issue ?? enqueueIssue ?? queueIssue}
+        admittingDrop={drop?.phase === "checking"}
+      />
       {previewOpen && preview && transportId ? (
         <SessionFilePreview
           key={preview.id}

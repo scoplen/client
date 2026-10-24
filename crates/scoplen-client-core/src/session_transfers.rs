@@ -261,6 +261,7 @@ pub(crate) struct TransferIdentity {
 pub(crate) struct SelectionReservation {
     id: Uuid,
     transport: Uuid,
+    count: usize,
 }
 
 enum NativeInteraction {
@@ -397,7 +398,10 @@ impl<T> TransferQueue<T> {
     }
 
     fn selection_count(&self) -> usize {
-        usize::from(matches!(self.native, Some(NativeInteraction::Selection { .. })))
+        match self.native {
+            Some(NativeInteraction::Selection { reservation, .. }) => reservation.count,
+            _ => 0,
+        }
     }
 
     pub fn snapshot(&self, session_id: &str) -> SessionTransferQueueSnapshot {
@@ -418,13 +422,24 @@ impl<T> TransferQueue<T> {
         &mut self,
         transport: Uuid,
     ) -> Result<SelectionReservation, SessionTransferIssue> {
-        if self.items.len() + self.selection_count() >= TRANSFER_CAPACITY {
+        self.reserve_selections(transport, 1)
+    }
+
+    pub fn reserve_selections(
+        &mut self,
+        transport: Uuid,
+        count: usize,
+    ) -> Result<SelectionReservation, SessionTransferIssue> {
+        if count == 0 || count > TRANSFER_CAPACITY {
+            return Err(SessionTransferIssue::InvalidSelection);
+        }
+        if self.items.len() + self.selection_count() + count > TRANSFER_CAPACITY {
             return Err(SessionTransferIssue::QueueFull);
         }
         if self.native.is_some() {
             return Err(SessionTransferIssue::NativeDialogBusy);
         }
-        let reservation = SelectionReservation { id: Uuid::now_v7(), transport };
+        let reservation = SelectionReservation { id: Uuid::now_v7(), transport, count };
         self.native = Some(NativeInteraction::Selection { reservation, current: true });
         self.changed();
         Ok(reservation)
@@ -446,6 +461,38 @@ impl<T> TransferQueue<T> {
         total: Option<u64>,
         resources: T,
     ) -> Result<SessionTransferEnqueueResult, SessionTransferIssue> {
+        if selected.count != 1 {
+            return Err(SessionTransferIssue::InvalidSelection);
+        }
+        self.accept_selection(selected)?;
+        Ok(self.append_selected(selected.transport, name, direction, total, resources))
+    }
+
+    pub fn enqueue_upload_batch(
+        &mut self,
+        selected: SelectionReservation,
+        resources: Vec<(String, u64, T)>,
+    ) -> Result<(), SessionTransferIssue> {
+        if resources.len() != selected.count {
+            return Err(SessionTransferIssue::InvalidSelection);
+        }
+        self.accept_selection(selected)?;
+        for (name, total, resource) in resources {
+            self.append_selected(
+                selected.transport,
+                &name,
+                SessionTransferDirection::Upload,
+                Some(total),
+                resource,
+            );
+        }
+        Ok(())
+    }
+
+    fn accept_selection(
+        &mut self,
+        selected: SelectionReservation,
+    ) -> Result<(), SessionTransferIssue> {
         let current = match &self.native {
             Some(NativeInteraction::Selection { reservation, current })
                 if *reservation == selected =>
@@ -459,11 +506,19 @@ impl<T> TransferQueue<T> {
         if !current {
             return Err(SessionTransferIssue::TransportEnded);
         }
-        let identity = TransferIdentity {
-            item: Uuid::now_v7(),
-            execution: Uuid::now_v7(),
-            transport: selected.transport,
-        };
+        Ok(())
+    }
+
+    fn append_selected(
+        &mut self,
+        transport: Uuid,
+        name: &str,
+        direction: SessionTransferDirection,
+        total: Option<u64>,
+        resources: T,
+    ) -> SessionTransferEnqueueResult {
+        let identity =
+            TransferIdentity { item: Uuid::now_v7(), execution: Uuid::now_v7(), transport };
         let name = display_text(name, MAX_NAME_CHARACTERS);
         self.items.push_back(TransferRecord {
             identity,
@@ -477,11 +532,11 @@ impl<T> TransferQueue<T> {
             publication_started: false,
             resources: Some(resources),
         });
-        Ok(SessionTransferEnqueueResult::Queued {
+        SessionTransferEnqueueResult::Queued {
             queue_id: self.id.to_string(),
             item_id: identity.item.to_string(),
             execution_id: identity.execution.to_string(),
-        })
+        }
     }
 
     pub fn take_next(&mut self, transport: Uuid) -> Option<DispatchedTransfer<T>> {

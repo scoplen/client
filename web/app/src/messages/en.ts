@@ -332,6 +332,17 @@ export const en = {
   "session.files.retry": "Try again",
   "session.files.refresh": "Refresh files",
   "session.files.empty": "This directory is empty.",
+  "session.files.drop.list": "Remote directory files",
+  "session.files.drop.hint": "Drop 1–16 files into this list, or choose Upload file.",
+  "session.files.drop.over": "{count, plural, one {Drop # file to upload here} other {Drop # files to upload here}}",
+  "session.files.drop.overUnknown": "Drop files to upload to this directory.",
+  "session.files.drop.checking": "{count, plural, one {Checking # dropped file…} other {Checking # dropped files…}}",
+  "session.files.drop.accepted":
+    "{count, plural, one {# file added to the upload queue.} other {# files added to the upload queue.}}",
+  "session.files.drop.refused":
+    "{count, plural, one {# dropped file was not added.} other {# dropped files were not added.}} Try again or choose Upload file.",
+  "session.files.drop.invalid":
+    "No files were added. Drop 1–16 ordinary files into this directory list, or choose Upload file.",
   "session.files.download": "Download {name}",
   "session.files.preview.action": "Preview {name}",
   "session.files.preview.title": "Preview: {name}",

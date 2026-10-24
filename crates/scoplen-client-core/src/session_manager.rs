@@ -45,6 +45,7 @@ const FILE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(60);
 const STABLE_READY: Duration = Duration::from_secs(30);
 const RETRY_DELAYS: [u8; 5] = [1, 2, 4, 8, 16];
 
+pub mod file_drop;
 mod transfers;
 
 /// Display-safe state of one logical terminal. Output is delivered as binary frames.
@@ -303,6 +304,7 @@ fn interrupt_transfers(entry: &mut SessionEntry, transport: Uuid) {
 #[derive(Clone, Default)]
 pub struct SessionManager {
     sessions: Arc<Mutex<HashMap<String, SessionEntry>>>,
+    drops: Arc<Mutex<HashMap<String, file_drop::DropContext>>>,
 }
 
 struct Registration<'a> {

@@ -40,6 +40,14 @@ export const commands = {
 	sessionResumeTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_resume_transfer", { sessionId, queueId, itemId, executionId })),
 	/**  Clear one unknown-result reminder without retrying or asserting a successful save. */
 	sessionAcknowledgeTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_acknowledge_transfer", { sessionId, queueId, itemId, executionId })),
+	/**  Arm an exact current Files destination for the invoking native window. */
+	sessionArmFileDrop: (sessionId: string, transportId: string, queueId: string, directoryPath: number[], contextId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_arm_file_drop", { sessionId, transportId, queueId, directoryPath, contextId })),
+	/**  Cleanup cannot revoke a newer Files context. */
+	sessionRevokeFileDrop: (contextId: string) => __TAURI_INVOKE<void>("session_revoke_file_drop", { contextId }),
+	/**  Only the opaque native ticket can choose sources and its frozen destination. */
+	sessionConsumeFileDrop: (contextId: string, ticketId: string, locale: Locale) => typedError<FileDropAccepted, SessionTransferIssue>(__TAURI_INVOKE("session_consume_file_drop", { contextId, ticketId, locale })),
+	/**  Refuse a hit outside the current list without exposing the native selection. */
+	sessionCancelFileDrop: (contextId: string, ticketId: string) => __TAURI_INVOKE<void>("session_cancel_file_drop", { contextId, ticketId }),
 	/**  Create one directory inside the current remote Files directory. */
 	sessionCreateRemoteDirectory: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], name: string, locale: Locale) => typedError<SessionFileMutationResult, string>(__TAURI_INVOKE("session_create_remote_directory", { sessionId, transportId, operationId, directoryPath, name, locale })),
 	/**  Rename one ordinary remote entry without offering replacement. */
@@ -241,6 +249,7 @@ export const commands = {
 export const events = {
 	personalSyncChanged: makeEvent<PersonalSyncChanged>("personal-sync-changed"),
 	sessionChanged: makeEvent<SessionChanged>("session-changed"),
+	sessionFileDrag: makeEvent<SessionFileDrag>("session-file-drag"),
 	storeChanged: makeEvent<StoreChanged>("store-changed"),
 };
 
@@ -532,6 +541,23 @@ export type Failure =
 { kind: "failed";
 /**  A diagnostic reference safe to show for retryable failures. */
 reference: string };
+
+/**  Path-free phases emitted by the application, independently of framework drag events. */
+export type FileDragPhase =
+/**  Native pointer movement over the webview. */
+"over" |
+/**  Native drag left the webview; a completed drop is unaffected. */
+"leave" |
+/**  A bounded selection is waiting for destination hit testing. */
+"drop" |
+/**  Native admission refused the selection or its geometry. */
+"refused";
+
+/**  Whole-batch admission result, without native paths or display filenames. */
+export type FileDropAccepted = {
+	/**  Number of items appended together to the existing queue. */
+	accepted: number,
+};
 
 /**  The direction of a saved tunnel. */
 export type ForwardKindInput =
@@ -1630,6 +1656,22 @@ error: string } |
 error: string;
 /**  All five automatic attempts have been consumed. */
 exhausted: boolean };
+
+/**  Application-owned drag feedback; framework path-bearing drag events are never subscribed to. */
+export type SessionFileDrag = {
+	/**  Current Files view identity. */
+	contextId: string,
+	/**  Native transition. */
+	phase: FileDragPhase,
+	/**  One-use selection identity, present only on Drop. */
+	ticketId: string | null,
+	/**  Bounded selection count (17 also represents an oversized selection). */
+	count: number,
+	/**  Horizontal fraction of matching native webview bounds. */
+	x: number | null,
+	/**  Vertical fraction of matching native webview bounds. */
+	y: number | null,
+};
 
 /**  A file change never retries an unknown remote result automatically. */
 export type SessionFileMutationResult = {

@@ -51,9 +51,11 @@ function actionStillCurrent(snapshot: SessionTransferQueueSnapshot | null, actio
 export function SessionTransferQueue({
   snapshot,
   issue,
+  admittingDrop = false,
 }: {
   snapshot: SessionTransferQueueSnapshot | null;
   issue: SessionTransferIssue | null;
+  admittingDrop?: boolean;
 }) {
   const { t, locale } = useI18n();
   const headingId = useId();
@@ -132,7 +134,7 @@ export function SessionTransferQueue({
           {t("session.transfers.loading")}
         </p>
       ) : null}
-      {snapshot?.pickerBusy ? (
+      {snapshot?.pickerBusy && !admittingDrop ? (
         <p role="status" className="m-0 px-3 pb-2 text-xs">
           {t("session.transfers.nativeDialog")}
         </p>

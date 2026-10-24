@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added bounded native multi-file drop upload to the visible Files directory list. Rust
+  retains one window/context-bound 30-second ticket, reserves capacity for the whole batch,
+  rejects invalid sources or duplicate names together, and appends accepted files in order
+  through the existing transfer queue. Product drag events contain no native paths. Stale
+  views and changed geometry refuse pending drops. Native scaled-platform acceptance remains
+  unverified.
+
 - Added explicit read-only preview for complete ordinary UTF-8 files up to 256 KiB in Files.
   Rust checks metadata and EOF over the current SSH transport; typed refusals guide larger or
   non-text files to Download. The English/Chinese dialog keeps literal text transient, supports
@@ -24,8 +31,8 @@ All notable changes to the Scoplen desktop client are recorded here.
   results. Unknown saves retain a reminder until explicitly acknowledged, without retrying or
   claiming success. Reconnection retains results but never replays old transfers. Native
   replacement review identifies the bound host, login and selected filename. Closing the
-  logical tab releases pending work and settles a local save already in progress. Drag and drop
-  and recovery after closing the tab remain separate work.
+  logical tab releases pending work and settles a local save already in progress. Recovery
+  after closing the tab remains separate work.
 
 - Added terminal-owned SFTP create-directory, rename, and delete actions in connected Files.
   Rust accepts only one direct child with its original remote filename bytes, checks ordinary
