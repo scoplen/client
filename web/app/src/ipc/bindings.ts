@@ -24,10 +24,16 @@ export const commands = {
 	sessionResize: (sessionId: string, transportId: string, columns: number, rows: number) => typedError<null, string>(__TAURI_INVOKE("session_resize", { sessionId, transportId, columns, rows })),
 	/**  Browse files on the terminal's authenticated SSH connection. */
 	sessionListFiles: (sessionId: string, transportId: string, operationId: string, path: number[]) => typedError<RemoteDirectory, string>(__TAURI_INVOKE("session_list_files", { sessionId, transportId, operationId, path })),
-	/**  Download a regular remote file to a destination chosen in the native picker. */
-	sessionDownloadFile: (sessionId: string, transportId: string, operationId: string, remotePath: number[], progress: Channel<SessionFileTransferProgress>) => typedError<SessionDownloadResult, string>(__TAURI_INVOKE("session_download_file", { sessionId, transportId, operationId, remotePath, progress })),
-	/**  Select one regular local file and publish it in the terminal's remote directory. */
-	sessionUploadFile: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], locale: Locale, progress: Channel<SessionFileTransferProgress>) => typedError<SessionUploadResult, string>(__TAURI_INVOKE("session_upload_file", { sessionId, transportId, operationId, directoryPath, locale, progress })),
+	/**  Read a complete queue snapshot without changing any transfer's lifetime. */
+	sessionTransferQueue: (sessionId: string) => typedError<SessionTransferQueueSnapshot, SessionTransferIssue>(__TAURI_INVOKE("session_transfer_queue", { sessionId })),
+	/**  Select a local source, then leave its transfer owned by the logical session. */
+	sessionEnqueueUpload: (sessionId: string, transportId: string, directoryPath: number[], locale: Locale) => typedError<SessionTransferEnqueueResult, SessionTransferIssue>(__TAURI_INVOKE("session_enqueue_upload", { sessionId, transportId, directoryPath, locale })),
+	/**  Select a native destination without sending its path to the renderer. */
+	sessionEnqueueDownload: (sessionId: string, transportId: string, remotePath: number[], locale: Locale) => typedError<SessionTransferEnqueueResult, SessionTransferIssue>(__TAURI_INVOKE("session_enqueue_download", { sessionId, transportId, remotePath, locale })),
+	/**  Cancel only the queue item and execution the person selected. */
+	sessionCancelTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_cancel_transfer", { sessionId, queueId, itemId, executionId })),
+	/**  Clear one unknown-result reminder without retrying or asserting a successful save. */
+	sessionAcknowledgeTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_acknowledge_transfer", { sessionId, queueId, itemId, executionId })),
 	/**  Create one directory inside the current remote Files directory. */
 	sessionCreateRemoteDirectory: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], name: string, locale: Locale) => typedError<SessionFileMutationResult, string>(__TAURI_INVOKE("session_create_remote_directory", { sessionId, transportId, operationId, directoryPath, name, locale })),
 	/**  Rename one ordinary remote entry without offering replacement. */
@@ -1532,25 +1538,6 @@ export type SessionChanged = {
 	change: SessionChangeKind,
 };
 
-/**  A download is saved only after its local rename returns successfully. */
-export type SessionDownloadResult = {
-	/**  Whether the local destination was saved, untouched, or has an unknown final state. */
-	status: SessionDownloadStatus,
-	/**  A bounded operational detail; the interface uses localized status text. */
-	message: string | null,
-};
-
-/**  The result of one native, terminal-owned download intent. */
-export type SessionDownloadStatus =
-/**  The complete file replaced the selected local destination. */
-"saved" |
-/**  The person cancelled before the local commit began. */
-"cancelled" |
-/**  The local commit began, but its result was lost. */
-"unknown" |
-/**  The transfer or local commit failed with a known result. */
-"failed";
-
 /**  Why a device-local session event could not be applied. */
 export type SessionError =
 /**  The profile identifier was not a UUID. */
@@ -1630,29 +1617,6 @@ export type SessionFileMutationStatus =
 /**  The server refused the change or preparation failed. */
 "failed";
 
-/**  Data transfer is complete only after a separate file publication step succeeds. */
-export type SessionFileTransferPhase =
-/**  Contiguous bytes are moving through the temporary local or remote file. */
-"transferring" |
-/**  All bytes moved; final verification and save are still pending. */
-"finalizing";
-
-/**  Transfer progress for one file operation on one authenticated transport. */
-export type SessionFileTransferProgress = {
-	/**  Logical terminal session owning the transfer. */
-	sessionId: string,
-	/**  Exact authenticated connection attempt. */
-	transportId: string,
-	/**  Exact file operation within that connection. */
-	operationId: string,
-	/**  Decimal text preserves the full 64-bit byte count in JavaScript. */
-	transferredBytes: string,
-	/**  Expected total as decimal text, when available. */
-	totalBytes: string | null,
-	/**  Data transfer or final save stage; neither implies success. */
-	phase: SessionFileTransferPhase,
-};
-
 /**  A one-time response to the current attempt's preparation prompt. */
 export type SessionPreparationIntent =
 /**  Accept only the exact host key retained by Rust. */
@@ -1662,30 +1626,139 @@ export type SessionPreparationIntent =
 /**  One-time secret input. */
 value: string };
 
-/**  A lost publish acknowledgement must never be presented as a retryable failure. */
-export type SessionUploadResult = {
-	/**  Whether the target was saved, untouched, or has an unknown final state. */
-	status: SessionUploadStatus,
-	/**  A bounded operational detail; the interface uses localized status text. */
-	message: string | null,
-	/**  A private remote staging file might remain after interrupted cleanup. */
+/**  The direction of a terminal-owned transfer. */
+export type SessionTransferDirection =
+/**  Publish one native-selected local file on the remote host. */
+"upload" |
+/**  Save one remote file to a native-selected local destination. */
+"download";
+
+/**  Native selection either queued a Rust-owned item or was cancelled. */
+export type SessionTransferEnqueueResult =
+/**  Selected resources now belong to the queue independently of this request. */
+{ status: "queued";
+/**  Owning queue lifetime. */
+queueId: string;
+/**  Stable transfer identity. */
+itemId: string;
+/**  Exact execution allocated for this transfer. */
+executionId: string } |
+/**  The person closed native selection without choosing a file. */
+{ status: "cancelled" };
+
+/**  Fixed operational categories; native paths and underlying errors stay in Rust. */
+export type SessionTransferIssue =
+/**  An opaque identifier was malformed. */
+"invalidIdentifier" |
+/**  The remote path violated the file-access boundary. */
+"invalidPath" |
+/**  The logical session owner is unavailable. */
+"sessionUnavailable" |
+/**  The authenticated transport selected for this item ended. */
+"transportEnded" |
+/**  All outstanding slots are occupied, including unresolved unknown results. */
+"queueFull" |
+/**  A native selection or confirmation is already open for this queue. */
+"nativeDialogBusy" |
+/**  The native picker or replacement dialog could not finish. */
+"selectionFailed" |
+/**  The selected source or destination is not an ordinary usable local file. */
+"invalidSelection" |
+/**  The selected local or remote source changed before publication. */
+"sourceChanged" |
+/**  The reviewed destination changed before publication. */
+"targetChanged" |
+/**  The peer cannot safely perform the requested operation. */
+"unsupported" |
+/**  The remote server explicitly refused the operation. */
+"remoteRefused" |
+/**  A native source read, temporary file or destination operation failed. */
+"localIo" |
+/**  A file exchange failed without a confirmed publication. */
+"transferFailed" |
+/**  Confirmed-owned temporary material could not be removed. */
+"cleanupIncomplete" |
+/**  A publication acknowledgement was lost or could not be interpreted. */
+"publicationUnknown" |
+/**  Cancellation arrived after the irreversible publication boundary. */
+"publicationStarted" |
+/**  The item or execution no longer matches the caller's snapshot. */
+"staleItem";
+
+/**  One bounded projection. It contains no native path or open file handle. */
+export type SessionTransferItem = {
+	/**  Stable queue item identity. */
+	itemId: string,
+	/**  Exact execution identity, allocated before dispatch. */
+	executionId: string,
+	/**  Authenticated transport selected when this item was added. */
+	transportId: string,
+	/**  A bounded display filename, never the local source or destination path. */
+	name: string,
+	/**  Upload or download. */
+	direction: SessionTransferDirection,
+	/**  Current state or confirmed terminal result. */
+	state: SessionTransferState,
+	/**  Decimal text preserves the complete unsigned 64-bit count. */
+	transferredBytes: string,
+	/**  Expected total as decimal text, when known. */
+	totalBytes: string | null,
+	/**  Whether this exact execution can accept an explicit cancellation. */
+	canCancel: boolean,
+	/**  Whether acknowledgement can clear an unresolved publication reminder. */
+	canAcknowledge: boolean,
+	/**  A fixed category for localized interface feedback. */
+	issue: SessionTransferIssue | null,
+	/**  Temporary-file cleanup could not be confirmed. */
 	stagingMayRemain: boolean,
 };
 
-/**  The result of one native, terminal-owned upload intent. */
-export type SessionUploadStatus =
-/**  The server acknowledged publication of the complete file. */
+/**  A complete on-demand snapshot of one logical session's transfer queue. */
+export type SessionTransferQueueSnapshot = {
+	/**  Logical terminal owning this queue. */
+	sessionId: string,
+	/**  Queue lifetime identity; a replacement owner has a different identity. */
+	queueId: string,
+	/**  Monotonic decimal revision fences late snapshot replies. */
+	revision: string,
+	/**  Maximum outstanding items, including native-picker reservations. */
+	capacity: number,
+	/**  Outstanding items and native-picker reservations currently using capacity. */
+	outstanding: number,
+	/**  A native selection or replacement confirmation is already open. */
+	pickerBusy: boolean,
+	/**  Browsing and remote mutations must wait for queued file work to settle. */
+	blocksFileOperations: boolean,
+	/**  Outstanding rows, including every unacknowledged unknown result. */
+	items: SessionTransferItem[],
+	/**  Latest confirmed terminal results, oldest first, limited to 32 rows. */
+	recent: SessionTransferItem[],
+};
+
+/**  Current state or confirmed result of one transfer. */
+export type SessionTransferState =
+/**  Waiting behind another transfer. */
+"queued" |
+/**  Waiting for a native replacement decision. */
+"awaitingConfirmation" |
+/**  Preparing or moving file data; publication has not succeeded. */
+"transferring" |
+/**  Checking and saving the completed byte stream. */
+"finalizing" |
+/**  Cancellation or disconnection cleanup is still settling. */
+"cancelling" |
+/**  Publication was confirmed. */
 "saved" |
-/**  The person cancelled before publication began. */
+/**  Explicit cancellation settled before publication. */
 "cancelled" |
-/**  Safe replacement is unavailable for an existing target. */
-"unsupported" |
-/**  The target changed after preflight; no replacement was attempted. */
+/**  The reviewed source or destination no longer matches. */
 "conflict" |
-/**  Publication began, but the final acknowledgement was lost. */
-"unknown" |
-/**  Upload failed before publication or received an explicit refusal. */
-"failed";
+/**  The operation failed without an unknown publication. */
+"failed" |
+/**  The bound transport ended; this item will not be replayed. */
+"interrupted" |
+/**  Publication may have happened; explicit acknowledgement is required. */
+"unknown";
 
 /**  How a new host authenticates. */
 export type SignIn =

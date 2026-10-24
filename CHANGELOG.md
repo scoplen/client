@@ -4,6 +4,14 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added a bounded per-terminal upload/download queue that keeps running while Files is hidden.
+  Typed snapshots show contiguous byte progress, finalizing, conflicts, cancellation and known
+  results. Unknown saves retain a reminder until explicitly acknowledged, without retrying or
+  claiming success. Reconnection retains results but never replays old transfers. Native
+  replacement review identifies the bound host, login and selected filename. Closing the
+  logical tab releases pending work and settles a local save already in progress. Pause,
+  resume, drag and drop, and recovery after closing the tab remain separate work.
+
 - Added terminal-owned SFTP create-directory, rename, and delete actions in connected Files.
   Rust accepts only one direct child with its original remote filename bytes, checks ordinary
   file or directory type and destination absence before dispatch, and requires native deletion

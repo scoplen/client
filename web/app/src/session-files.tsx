@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 import { Button, Dialog, Field, IconButton } from "@scoplen/ui";
-import { Channel } from "@tauri-apps/api/core";
 import { Download, File, Folder, FolderPlus, Pencil, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
@@ -8,56 +7,28 @@ import {
   commands,
   type RemoteFileEntry,
   type SessionFileMutationResult,
-  type SessionFileTransferProgress,
-  type SessionUploadResult,
+  type SessionTransferIssue,
+  type SessionTransferQueueSnapshot,
 } from "./ipc/bindings";
+import { SessionTransferQueue } from "./session-transfer-queue";
 
 type Location = { name: string; path: number[] };
-type Activity =
-  "listing" | "downloading" | "uploading" | "creating" | "renaming" | "deleting" | "cancelling" | "waiting" | null;
+type Activity = "listing" | "creating" | "renaming" | "deleting" | "cancelling" | "waiting" | null;
 type FileError = { message: string; listing: boolean };
-type UploadFeedback = Pick<SessionUploadResult, "status" | "stagingMayRemain">;
 type MutationKind = "create" | "rename" | "delete";
 type MutationFeedback = { kind: MutationKind; status: SessionFileMutationResult["status"] };
 type NameDialog = { kind: "create" } | { kind: "rename"; entry: RemoteFileEntry };
-type TransferProgress = Pick<SessionFileTransferProgress, "sessionId" | "transportId" | "operationId" | "phase"> & {
-  transferredBytes: bigint;
-  totalBytes: bigint | null;
-  percent: number | null;
-};
-
-const MAX_U64 = 18_446_744_073_709_551_615n;
-
-function byteCount(value: string): bigint | null {
-  if (typeof value !== "string" || !/^(0|[1-9]\d{0,19})$/.test(value)) return null;
-  const bytes = BigInt(value);
-  return bytes <= MAX_U64 ? bytes : null;
-}
-
-function transferProgress(event: SessionFileTransferProgress): TransferProgress | null {
-  if (event.phase !== "transferring" && event.phase !== "finalizing") return null;
-  const transferredBytes = byteCount(event.transferredBytes);
-  const totalBytes = event.totalBytes === null ? null : byteCount(event.totalBytes);
-  if (transferredBytes === null || (event.totalBytes !== null && totalBytes === null)) return null;
-  if (totalBytes !== null && transferredBytes > totalBytes) return null;
-  const percent = totalBytes === null ? null : totalBytes === 0n ? 100 : Number((transferredBytes * 100n) / totalBytes);
-  return {
-    sessionId: event.sessionId,
-    transportId: event.transportId,
-    operationId: event.operationId,
-    phase: event.phase,
-    transferredBytes,
-    totalBytes,
-    percent,
-  };
-}
-
-type OutcomeIdentity = {
+export type FileOperationOutcome = {
   transportId: string;
   operationId: string;
+  status: SessionFileMutationResult["status"];
+  stagingMayRemain: boolean;
 };
-export type RemoteFileOutcome = OutcomeIdentity & UploadFeedback;
-export type FileOperationOutcome = (OutcomeIdentity & { kind: "download"; status: "unknown" }) | RemoteFileOutcome;
+export type EnqueueFeedback = {
+  requestId: string;
+  phase: "started" | "settled";
+  issue: SessionTransferIssue | null;
+};
 
 function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
@@ -69,24 +40,29 @@ export function SessionFiles({
   transportId,
   onClose,
   onFileOutcome,
+  onEnqueueFeedback,
+  queue,
+  queueIssue,
 }: {
   sessionId: string;
-  transportId: string;
+  transportId: string | null;
+  queue: SessionTransferQueueSnapshot | null;
+  queueIssue: SessionTransferIssue | null;
   onClose: () => void;
   onFileOutcome: (outcome: FileOperationOutcome) => void;
+  onEnqueueFeedback: (feedback: EnqueueFeedback) => void;
 }) {
   const { t, locale } = useI18n();
   const formId = useId();
   const [locations, setLocations] = useState<Location[]>([{ name: "", path: [46] }]);
   const [entries, setEntries] = useState<RemoteFileEntry[]>([]);
-  const [activity, setActivity] = useState<Activity>("listing");
+  const [activity, setActivity] = useState<Activity>(null);
   const [error, setError] = useState<FileError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [downloadUnknown, setDownloadUnknown] = useState(false);
-  const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(null);
+  const [enqueueIssue, setEnqueueIssue] = useState<SessionTransferIssue | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const selectionPending = useRef(false);
   const [mutationFeedback, setMutationFeedback] = useState<MutationFeedback | null>(null);
-  const [progress, setProgress] = useState<TransferProgress | null>(null);
-  const [transferOperationId, setTransferOperationId] = useState<string | null>(null);
   const [nameDialog, setNameDialog] = useState<NameDialog | null>(null);
   const [name, setName] = useState("");
   const [reload, setReload] = useState(0);
@@ -96,23 +72,16 @@ export function SessionFiles({
   const mounted = useRef(true);
   const translator = useRef(t);
   const currentPath = locations[locations.length - 1]!.path;
-  const visibleProgress =
-    progress?.sessionId === sessionId &&
-    progress.transportId === transportId &&
-    progress.operationId === transferOperationId &&
-    (activity === "downloading" || activity === "uploading" || activity === "cancelling" || activity === "waiting")
-      ? progress
-      : null;
-  const numberFormat = new Intl.NumberFormat(locale);
-  const progressText = visibleProgress
-    ? visibleProgress.totalBytes === null
-      ? t("session.files.transfer.unknownTotal", { transferred: numberFormat.format(visibleProgress.transferredBytes) })
-      : t("session.files.transfer.knownTotal", {
-          transferred: numberFormat.format(visibleProgress.transferredBytes),
-          total: numberFormat.format(visibleProgress.totalBytes),
-          percent: visibleProgress.percent ?? 0,
-        })
-    : null;
+  const queueReady = queue !== null;
+  const queueBlocked = !queueReady || !!queue?.blocksFileOperations;
+  const fileOperationsDisabled = activity !== null || queueBlocked || !transportId || selecting;
+  const selectionDisabled =
+    activity !== null ||
+    !transportId ||
+    !queueReady ||
+    selecting ||
+    !!queue?.pickerBusy ||
+    (queue !== null && queue.outstanding >= queue.capacity);
 
   useEffect(() => {
     translator.current = t;
@@ -120,7 +89,7 @@ export function SessionFiles({
 
   const cancelCurrent = useCallback(() => {
     const id = operation.current;
-    if (!id) return;
+    if (!id || !transportId) return;
     operation.current = null;
     pendingCancellation.current = commands
       .sessionCancelFileOperation(sessionId, transportId, id)
@@ -136,6 +105,7 @@ export function SessionFiles({
   }, [cancelCurrent]);
 
   useEffect(() => {
+    if (queueBlocked || !transportId) return;
     let current = true;
     let id: string | null = null;
     void (async () => {
@@ -145,8 +115,6 @@ export function SessionFiles({
       setError(null);
       setNotice(null);
       setEntries([]);
-      setProgress(null);
-      setTransferOperationId(null);
       id = crypto.randomUUID();
       operation.current = id;
       try {
@@ -172,134 +140,34 @@ export function SessionFiles({
       current = false;
       if (operation.current === id) cancelCurrent();
     };
-  }, [cancelCurrent, sessionId, transportId, currentPath, reload]);
+  }, [cancelCurrent, sessionId, transportId, currentPath, reload, queueBlocked]);
 
-  const progressChannel = (id: string): Channel<SessionFileTransferProgress> => {
-    const messages = new Channel<SessionFileTransferProgress>();
-    messages.onmessage = (event) => {
-      if (
-        !mounted.current ||
-        operation.current !== id ||
-        cancelled.current === id ||
-        event.sessionId !== sessionId ||
-        event.transportId !== transportId ||
-        event.operationId !== id
-      )
-        return;
-      const next = transferProgress(event);
-      if (!next) return;
-      setProgress((current) => {
-        if (
-          current?.operationId === id &&
-          (current.transferredBytes > next.transferredBytes ||
-            (current.phase === "finalizing" && next.phase === "transferring"))
-        )
-          return current;
-        return next;
-      });
-    };
-    return messages;
-  };
-
-  const download = (entry: RemoteFileEntry) => {
-    if (activity || operation.current || entry.kind !== "file") return;
-    const id = crypto.randomUUID();
-    operation.current = id;
-    setActivity("downloading");
-    setTransferOperationId(id);
-    setError(null);
-    setNotice(null);
-    setDownloadUnknown(false);
-    setUploadFeedback(null);
-    setMutationFeedback(null);
-    setProgress(null);
-    void commands
-      .sessionDownloadFile(sessionId, transportId, id, entry.path, progressChannel(id))
+  const enqueue = (entry?: RemoteFileEntry) => {
+    if (selectionDisabled || selectionPending.current || !transportId || (entry && entry.kind !== "file")) return;
+    selectionPending.current = true;
+    setSelecting(true);
+    setEnqueueIssue(null);
+    const requestId = crypto.randomUUID();
+    onEnqueueFeedback({ requestId, phase: "started", issue: null });
+    const language = locale === "zh-Hans" ? "zh-Hans" : "en";
+    const pending = entry
+      ? commands.sessionEnqueueDownload(sessionId, transportId, entry.path, language)
+      : commands.sessionEnqueueUpload(sessionId, transportId, currentPath, language);
+    void pending
       .then((result) => {
-        if (result.status === "ok" && result.data.status === "unknown") {
-          onFileOutcome({ kind: "download", transportId, operationId: id, status: "unknown" });
-        }
-        if (!mounted.current || operation.current !== id) return;
-        setProgress(null);
-        setTransferOperationId(null);
-        if (result.status === "error") {
-          if (cancelled.current === id) setNotice(translator.current("session.files.cancelled"));
-          else setError({ message: result.error, listing: false });
-        } else if (result.data.status === "saved") setNotice(translator.current("session.files.saved"));
-        else if (result.data.status === "cancelled") setNotice(translator.current("session.files.saveCancelled"));
-        else if (result.data.status === "unknown") setDownloadUnknown(true);
-        else
-          setError({
-            message: result.data.message ?? translator.current("session.files.download.failed"),
-            listing: false,
-          });
+        onEnqueueFeedback({ requestId, phase: "settled", issue: result.status === "error" ? result.error : null });
+        if (!mounted.current) return;
+        if (result.status === "error") setEnqueueIssue(result.error);
+        else if (result.data.status === "cancelled")
+          setNotice(translator.current("session.transfers.selectionCancelled"));
       })
       .catch(() => {
-        onFileOutcome({ kind: "download", transportId, operationId: id, status: "unknown" });
-        if (!mounted.current || operation.current !== id) return;
-        setProgress(null);
-        setTransferOperationId(null);
-        setDownloadUnknown(true);
+        onEnqueueFeedback({ requestId, phase: "settled", issue: "transferFailed" });
+        if (mounted.current) setEnqueueIssue("transferFailed");
       })
       .finally(() => {
-        if (!mounted.current || operation.current !== id) return;
-        operation.current = null;
-        cancelled.current = null;
-        setProgress(null);
-        setTransferOperationId(null);
-        setActivity(null);
-      });
-  };
-
-  const upload = () => {
-    if (activity || operation.current) return;
-    const id = crypto.randomUUID();
-    operation.current = id;
-    setActivity("uploading");
-    setTransferOperationId(id);
-    setError(null);
-    setNotice(null);
-    setUploadFeedback(null);
-    setMutationFeedback(null);
-    setProgress(null);
-    const report = (result: SessionUploadResult) => {
-      const current = mounted.current && operation.current === id;
-      if (current) {
-        setProgress(null);
-        setTransferOperationId(null);
-      }
-      if (result.status === "unknown" || result.stagingMayRemain) {
-        onFileOutcome({
-          transportId,
-          operationId: id,
-          status: result.status,
-          stagingMayRemain: result.stagingMayRemain,
-        });
-      }
-      if (!current || result.status === "unknown") return;
-      setUploadFeedback({ status: result.status, stagingMayRemain: result.stagingMayRemain });
-      if (result.status === "saved") setReload((value) => value + 1);
-    };
-    void commands
-      .sessionUploadFile(
-        sessionId,
-        transportId,
-        id,
-        currentPath,
-        locale === "zh-Hans" ? "zh-Hans" : "en",
-        progressChannel(id),
-      )
-      .then((result) =>
-        report(result.status === "ok" ? result.data : { status: "failed", message: null, stagingMayRemain: false }),
-      )
-      .catch(() => report({ status: "unknown", message: null, stagingMayRemain: true }))
-      .finally(() => {
-        if (!mounted.current || operation.current !== id) return;
-        operation.current = null;
-        cancelled.current = null;
-        setProgress(null);
-        setTransferOperationId(null);
-        setActivity(null);
+        selectionPending.current = false;
+        if (mounted.current) setSelecting(false);
       });
   };
 
@@ -309,16 +177,13 @@ export function SessionFiles({
       id: string,
     ) => Promise<{ status: "ok"; data: SessionFileMutationResult } | { status: "error"; error: string }>,
   ) => {
-    if (activity || operation.current) return;
+    if (fileOperationsDisabled || operation.current || !transportId) return;
     const id = crypto.randomUUID();
     operation.current = id;
     setActivity(kind === "create" ? "creating" : kind === "rename" ? "renaming" : "deleting");
     setError(null);
     setNotice(null);
-    setUploadFeedback(null);
     setMutationFeedback(null);
-    setProgress(null);
-    setTransferOperationId(null);
     const report = (result: SessionFileMutationResult) => {
       if (result.status === "unknown") {
         onFileOutcome({ transportId, operationId: id, status: "unknown", stagingMayRemain: false });
@@ -340,7 +205,7 @@ export function SessionFiles({
 
   const submitName = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!nameDialog || !name.trim() || activity || operation.current) return;
+    if (!nameDialog || !name.trim() || fileOperationsDisabled || operation.current || !transportId) return;
     const target = nameDialog;
     const newName = name;
     setNameDialog(null);
@@ -366,7 +231,7 @@ export function SessionFiles({
   };
 
   const deleteEntry = (entry: RemoteFileEntry) => {
-    if (entry.kind !== "file" && entry.kind !== "directory") return;
+    if (!transportId || (entry.kind !== "file" && entry.kind !== "directory")) return;
     mutate("delete", (id) =>
       commands.sessionDeleteRemoteEntry(
         sessionId,
@@ -381,10 +246,8 @@ export function SessionFiles({
 
   const cancel = () => {
     const id = operation.current;
-    if (!id || activity === "cancelling" || activity === "waiting") return;
+    if (!id || !transportId || activity === "cancelling" || activity === "waiting") return;
     cancelled.current = id;
-    setProgress(null);
-    setTransferOperationId(null);
     setActivity("cancelling");
     void commands
       .sessionCancelFileOperation(sessionId, transportId, id)
@@ -405,18 +268,18 @@ export function SessionFiles({
   return (
     <section
       aria-label={t("session.files.title")}
-      className="flex h-56 min-h-0 min-w-0 shrink-0 flex-col border-t border-border bg-background lg:h-auto lg:w-80 lg:border-t-0 lg:border-l"
+      className="flex h-[min(28rem,60vh)] min-h-0 min-w-0 shrink-0 flex-col overflow-y-auto border-t border-border bg-background lg:h-auto lg:w-80 lg:border-t-0 lg:border-l"
     >
       <header className="flex shrink-0 items-center justify-between gap-2 px-3 py-2">
         <h2 className="m-0 text-sm font-semibold">{t("session.files.title")}</h2>
         <div className="flex min-w-0 items-center gap-1">
-          <Button variant="ghost" className="gap-1 px-2" disabled={activity !== null} onClick={upload}>
+          <Button variant="ghost" className="gap-1 px-2" disabled={selectionDisabled} onClick={() => enqueue()}>
             <Upload aria-hidden="true" className="size-4" />
             {t("session.files.upload.action")}
           </Button>
           <IconButton
             label={t("session.files.create.action")}
-            disabled={activity !== null}
+            disabled={fileOperationsDisabled}
             onClick={() => {
               setName("");
               setNameDialog({ kind: "create" });
@@ -426,7 +289,7 @@ export function SessionFiles({
           </IconButton>
           <IconButton
             label={t("session.files.refresh")}
-            disabled={activity !== null}
+            disabled={fileOperationsDisabled}
             onClick={() => setReload((value) => value + 1)}
           >
             <RefreshCw aria-hidden="true" className="size-4" />
@@ -455,11 +318,10 @@ export function SessionFiles({
             <Button
               key={`${index}-${item.path.join(",")}`}
               variant="ghost"
-              disabled={activity !== null}
+              disabled={fileOperationsDisabled}
               title={name}
               className="max-w-40 shrink-0 px-2"
               onClick={() => {
-                setUploadFeedback(null);
                 setMutationFeedback(null);
                 setLocations((current) => current.slice(0, index + 1));
               }}
@@ -477,29 +339,16 @@ export function SessionFiles({
           </Button>
         </div>
       ) : null}
-      {visibleProgress && progressText ? (
-        <div className="min-w-0 shrink-0 px-3 pb-2 text-xs">
-          <p className="m-0 break-all tabular-nums">{progressText}</p>
-          {visibleProgress.phase === "finalizing" ? (
-            <p className="m-0 mt-1" role="status">
-              {t("session.files.transfer.finalizing")}
-            </p>
-          ) : null}
-          <progress
-            aria-label={t("session.files.transfer.progress")}
-            aria-valuetext={progressText}
-            className="mt-2 block h-1.5 w-full min-w-0 accent-primary"
-            max={100}
-            value={visibleProgress.percent ?? undefined}
-          />
-        </div>
-      ) : null}
       {error ? (
         <div role="alert" className="px-3 py-2 text-xs text-attention">
           <p className="m-0">{t("session.files.error")}</p>
           <p className="m-0 mt-1 break-words">{error.message}</p>
           {error.listing ? (
-            <Button variant="ghost" onClick={() => setReload((current) => current + 1)}>
+            <Button
+              variant="ghost"
+              disabled={fileOperationsDisabled}
+              onClick={() => setReload((current) => current + 1)}
+            >
               {t("session.files.retry")}
             </Button>
           ) : null}
@@ -509,20 +358,6 @@ export function SessionFiles({
         <p role="status" className="m-0 px-3 py-2 text-xs">
           {notice}
         </p>
-      ) : null}
-      {downloadUnknown ? (
-        <p role="alert" className="m-0 px-3 py-2 text-xs text-attention">
-          {t("session.files.download.unknown")}
-        </p>
-      ) : null}
-      {uploadFeedback ? (
-        <div
-          role={uploadFeedback.status === "saved" || uploadFeedback.status === "cancelled" ? "status" : "alert"}
-          className={`px-3 py-2 text-xs ${uploadFeedback.status === "saved" || uploadFeedback.status === "cancelled" ? "" : "text-attention"}`}
-        >
-          <p className="m-0">{t(`session.files.upload.${uploadFeedback.status}`)}</p>
-          {uploadFeedback.stagingMayRemain ? <p className="m-0 mt-1">{t("session.files.upload.staging")}</p> : null}
-        </div>
       ) : null}
       {mutationFeedback ? (
         <p
@@ -536,7 +371,12 @@ export function SessionFiles({
           )}
         </p>
       ) : null}
-      <div className="min-h-0 flex-1 overflow-auto px-2 pb-2">
+      {queueBlocked || !transportId ? (
+        <p role="status" className="m-0 px-3 pb-2 text-xs text-muted">
+          {t(!transportId ? "session.transfers.disconnected" : "session.transfers.browsingBlocked")}
+        </p>
+      ) : null}
+      <div className="min-h-16 flex-1 overflow-auto px-2 pb-2">
         {!activity && !error && entries.length === 0 ? (
           <p className="m-0 px-1 py-2 text-xs text-muted-foreground">{t("session.files.empty")}</p>
         ) : null}
@@ -554,11 +394,10 @@ export function SessionFiles({
               {entry.kind === "directory" ? (
                 <button
                   type="button"
-                  disabled={activity !== null}
+                  disabled={fileOperationsDisabled}
                   title={entry.name}
                   className="min-w-0 flex-1 truncate text-left text-sm text-foreground underline-offset-2 hover:underline focus-visible:rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-50"
                   onClick={() => {
-                    setUploadFeedback(null);
                     setMutationFeedback(null);
                     setLocations((current) => [...current, { name: entry.name, path: entry.path }]);
                   }}
@@ -573,8 +412,8 @@ export function SessionFiles({
               {entry.kind === "file" ? (
                 <IconButton
                   label={t("session.files.download", { name: entry.name })}
-                  disabled={activity !== null}
-                  onClick={() => download(entry)}
+                  disabled={selectionDisabled}
+                  onClick={() => enqueue(entry)}
                 >
                   <Download aria-hidden="true" className="size-4" />
                 </IconButton>
@@ -583,7 +422,7 @@ export function SessionFiles({
                 <>
                   <IconButton
                     label={t("session.files.rename.action", { name: entry.name })}
-                    disabled={activity !== null}
+                    disabled={fileOperationsDisabled}
                     onClick={() => {
                       setName("");
                       setNameDialog({ kind: "rename", entry });
@@ -593,7 +432,7 @@ export function SessionFiles({
                   </IconButton>
                   <IconButton
                     label={t("session.files.delete.action", { name: entry.name })}
-                    disabled={activity !== null}
+                    disabled={fileOperationsDisabled}
                     className="hover:bg-[color-mix(in_srgb,var(--attention)_10%,transparent)] hover:text-attention"
                     onClick={() => deleteEntry(entry)}
                   >
@@ -605,6 +444,7 @@ export function SessionFiles({
           ))}
         </ul>
       </div>
+      <SessionTransferQueue snapshot={queue} issue={enqueueIssue ?? queueIssue} />
       <Dialog
         open={nameDialog !== null}
         onOpenChange={(open) => {
@@ -622,7 +462,7 @@ export function SessionFiles({
             <Button variant="ghost" onClick={() => setNameDialog(null)}>
               {t("session.files.cancel")}
             </Button>
-            <Button variant="primary" type="submit" form={formId} disabled={!name.trim()}>
+            <Button variant="primary" type="submit" form={formId} disabled={!name.trim() || fileOperationsDisabled}>
               {t(nameDialog?.kind === "rename" ? "session.files.rename.submit" : "session.files.create.submit")}
             </Button>
           </>

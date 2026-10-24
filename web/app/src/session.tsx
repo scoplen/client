@@ -22,10 +22,12 @@ import {
   type PreparationEvent,
   type PreparationContext,
   type HostKeyTrustSource,
+  type SessionTransferIssue,
 } from "./ipc/bindings";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
-import { SessionFiles, type FileOperationOutcome } from "./session-files";
+import { SessionFiles, type EnqueueFeedback, type FileOperationOutcome } from "./session-files";
 import { dismissUploadAttention, initialUploadAttention, recordUploadAttention } from "./session-upload-attention";
+import { useSessionTransfers } from "./use-session-transfers";
 
 export type SessionState =
   "verifying" | "trusting" | "passphrase" | "connecting" | "reconnecting" | "connected" | "closed" | "failed";
@@ -86,8 +88,9 @@ export function SessionTerminal({
   const [verified, setVerified] = useState<Array<Extract<PreparationEvent, { kind: "verified" }>>>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [enqueueIssue, setEnqueueIssue] = useState<SessionTransferIssue | null>(null);
+  const latestEnqueue = useRef<string | null>(null);
   const [uploadAttention, setUploadAttention] = useState(initialUploadAttention);
-  const [downloadUnknown, setDownloadUnknown] = useState(false);
   const filesToggle = useRef<HTMLButtonElement>(null);
   const [context, setContext] = useState<PreparationContext | null>(null);
   const [passphrasePrompt, setPassphrasePrompt] = useState<string | null>(null);
@@ -98,7 +101,9 @@ export function SessionTerminal({
   const [source, setSource] = useState<TerminalSource | null>(null);
   const [hasOutput, setHasOutput] = useState(!!savedOutput);
   const [transportPending, setTransportPending] = useState(false);
-  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+  const [sessionId] = useState(() => crypto.randomUUID());
+  const [runRevision, setRunRevision] = useState(0);
+  const transfers = useSessionTransfers(sessionId, active && !offline);
   const [transportId, setTransportId] = useState<string | null>(null);
   const currentTransport = useRef<string | null>(null);
   const [automatic, setAutomatic] = useState(false);
@@ -125,8 +130,11 @@ export function SessionTerminal({
   }, [active]);
 
   const reportFileOutcome = useCallback((outcome: FileOperationOutcome) => {
-    if ("kind" in outcome) setDownloadUnknown(true);
-    else setUploadAttention((current) => recordUploadAttention(current, outcome));
+    setUploadAttention((current) => recordUploadAttention(current, outcome));
+  }, []);
+  const reportEnqueue = useCallback((feedback: EnqueueFeedback) => {
+    if (feedback.phase === "started") latestEnqueue.current = feedback.requestId;
+    if (latestEnqueue.current === feedback.requestId) setEnqueueIssue(feedback.issue);
   }, []);
 
   const connectSession = useCallback(() => {
@@ -145,7 +153,7 @@ export function SessionTerminal({
         const stop = () => {
           if (!active) return;
           active = false;
-          void commands.sessionCloseTransport(sessionId).catch(() => undefined);
+          if (!ended) void commands.sessionCloseTransport(sessionId).catch(() => undefined);
         };
         signal.addEventListener("abort", stop, { once: true });
 
@@ -459,6 +467,13 @@ export function SessionTerminal({
 
   useEffect(() => {
     if (offline) return;
+    return () => {
+      void commands.sessionCloseTransport(sessionId).catch(() => undefined);
+    };
+  }, [offline, profileId, sessionId]);
+
+  useEffect(() => {
+    if (offline) return;
     let active = true;
     const current = ++generation.current;
     mounted.current = true;
@@ -485,9 +500,8 @@ export function SessionTerminal({
     return () => {
       active = false;
       mounted.current = false;
-      void commands.sessionCloseTransport(sessionId).catch(() => undefined);
     };
-  }, [connectSession, profileId, sessionId, offline]);
+  }, [connectSession, profileId, sessionId, offline, runRevision]);
 
   const interruptTransport = (failure: boolean, message: string | null) => {
     const current = generation.current;
@@ -570,7 +584,7 @@ export function SessionTerminal({
     if (!connecting.current) {
       retrying.current = true;
       setTransportPending(true);
-      setSessionId(crypto.randomUUID());
+      setRunRevision((revision) => revision + 1);
       return;
     }
     retrying.current = true;
@@ -643,6 +657,10 @@ export function SessionTerminal({
                   : t("session.failed");
 
   const face = sessionFaces[state];
+  const unknownTransfer = transfers.snapshot?.items.some((item) => item.state === "unknown") ?? false;
+  const transferCleanup =
+    transfers.snapshot?.items.some((item) => item.stagingMayRemain) ||
+    transfers.snapshot?.recent.some((item) => item.stagingMayRemain);
   return (
     <main className="flex h-full min-h-0 flex-col bg-background text-foreground" aria-labelledby={titleId}>
       <header className="flex shrink-0 flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
@@ -677,7 +695,9 @@ export function SessionTerminal({
               {t("session.reconnect")}
             </Button>
           ) : null}
-          {state === "connected" && transportId && !offline && !closingView ? (
+          {!offline &&
+          !closingView &&
+          (state === "connected" || !!transfers.snapshot?.items.length || !!transfers.snapshot?.recent.length) ? (
             <IconButton
               ref={filesToggle}
               label={t(filesOpen ? "session.files.close" : "session.files.open")}
@@ -730,14 +750,34 @@ export function SessionTerminal({
           {error}
         </p>
       ) : null}
-      {downloadUnknown ? (
-        <div
-          role="alert"
-          className="mx-3 mb-2 flex flex-wrap items-start gap-2 rounded-md border-(length:--scoplen-border-width) border-attention p-3"
-        >
-          <p className="m-0 min-w-0 flex-1 text-xs text-attention">{t("session.files.download.attentionUnknown")}</p>
-          <Button variant="ghost" className="shrink-0 px-2" onClick={() => setDownloadUnknown(false)}>
+      {!filesOpen && enqueueIssue ? (
+        <div role="alert" className="mx-3 mb-2 flex flex-wrap items-center gap-2 text-xs text-attention">
+          <p className="m-0 min-w-0 flex-1">{t(`session.transfers.issue.${enqueueIssue}`)}</p>
+          <Button variant="ghost" onClick={() => setFilesOpen(true)}>
+            {t("session.transfers.review")}
+          </Button>
+          <Button variant="ghost" onClick={() => setEnqueueIssue(null)}>
             {t("session.files.upload.dismiss")}
+          </Button>
+        </div>
+      ) : null}
+      {!filesOpen && transfers.snapshot && (transfers.snapshot.outstanding > 0 || transferCleanup) ? (
+        <div
+          role={unknownTransfer || transferCleanup ? "alert" : "status"}
+          className="mx-3 mb-2 flex flex-wrap items-center gap-2 text-xs"
+        >
+          <p className="m-0 min-w-0 flex-1">
+            {t(
+              unknownTransfer
+                ? "session.transfers.attentionUnknown"
+                : transferCleanup
+                  ? "session.transfers.attentionCleanup"
+                  : "session.transfers.pending",
+              { count: transfers.snapshot.outstanding },
+            )}
+          </p>
+          <Button variant="ghost" onClick={() => setFilesOpen(true)}>
+            {t("session.transfers.review")}
           </Button>
         </div>
       ) : null}
@@ -813,11 +853,14 @@ export function SessionTerminal({
             ) : null}
           </div>
         </div>
-        {filesOpen && state === "connected" && transportId && !offline && !closingView ? (
+        {filesOpen && !offline && !closingView ? (
           <SessionFiles
-            key={transportId}
+            key={transportId ?? "disconnected"}
             sessionId={sessionId}
-            transportId={transportId}
+            transportId={state === "connected" ? transportId : null}
+            queue={transfers.snapshot}
+            queueIssue={enqueueIssue ?? transfers.issue}
+            onEnqueueFeedback={reportEnqueue}
             onClose={() => {
               setFilesOpen(false);
               filesToggle.current?.focus();

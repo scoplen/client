@@ -12,6 +12,7 @@ pub mod local_data;
 pub mod personal_inventory;
 pub mod personal_pairing;
 pub mod personal_server;
+pub mod session_transfers;
 mod smoke;
 pub mod ssh;
 mod window_state;
@@ -35,8 +36,11 @@ pub fn ipc() -> Builder<tauri::Wry> {
             ssh::session_input,
             ssh::session_resize,
             ssh::session_list_files,
-            ssh::session_download_file,
-            ssh::session_upload_file,
+            session_transfers::session_transfer_queue,
+            session_transfers::session_enqueue_upload,
+            session_transfers::session_enqueue_download,
+            session_transfers::session_cancel_transfer,
+            session_transfers::session_acknowledge_transfer,
             ssh::session_create_remote_directory,
             ssh::session_rename_remote_entry,
             ssh::session_delete_remote_entry,

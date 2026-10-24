@@ -90,25 +90,29 @@ the current directory, rename a regular file or directory after checking that
 the new name is unused, and delete a regular file or empty directory after native
 confirmation. Standard SFTP v3 rename may still replace a concurrently created
 target on some servers. Other remote entry types are shown but cannot be changed here.
-Cancel and closing Files request cancellation without closing the terminal.
-For one upload or download, Files shows the contiguous bytes transferred
-through SFTP and the known total on that exact operation. After all bytes
-transfer, it shows a finalizing state while the remote publication or local
-save is still pending; only the final result confirms that the file was saved.
-For uploads, once final remote rename starts, the client waits for its result;
-reconnect fences off the old operation. A download that fails or is cancelled
-before the final local save leaves the selected destination unchanged. Once the
-local save starts, cancellation is refused and its result is retained even if
-the terminal disconnects or closes. If that result is lost, Files reports an
-unknown outcome and asks you to check the selected local location before trying
-again; it never automatically repeats the save. An upload whose final remote
-rename has started may have
-an unknown outcome if its reply is lost. The terminal keeps that warning across
-reconnects and asks you to refresh and check the remote directory before trying
-again. It also keeps a warning when the operation may
-have left a temporary remote upload file. It never retries automatically. Drag
-and drop, transfer queues, resume, and preview remain
-separate C6 work.
+Uploads and downloads join a FIFO queue owned by the logical terminal session.
+Up to 16 selections, queued files, running transfers and unacknowledged unknown
+results may be outstanding; the latest 32 known results remain visible. Hiding
+Files leaves transfers running. You can add files from the current listing while
+a transfer runs; directory navigation and remote changes wait until the queue is
+settled. One native picker or replacement review is open per queue.
+
+Files shows confirmed contiguous bytes and a separate finalizing state. Only a
+confirmed remote publication or local save shows Saved. Cancellation stops an
+unstarted item or waits for cleanup of its running attempt; once final save has
+started it cannot report a successful cancellation. Replacement review names
+the bound Host and Login. A queued upload rechecks its retained source; a download
+rechecks its local destination before replacing it. Metadata checks cannot detect
+content changes that preserve all compared metadata or eliminate a change between
+check and rename.
+
+Disconnect interrupts unstarted items and never sends them over a new transport.
+Unknown results stay visible across hiding Files and reconnecting. Check the
+destination before adding the file again; Dismiss reminder releases its queue
+slot without verifying or retrying the transfer. Cleanup warnings state when an
+incomplete file may remain. Closing the logical tab cancels pending work and
+settles a save already in progress. The queue has no recovery after tab or process
+closure. Drag and drop, pause, resume and preview remain separate C6 work.
 
 When a session closes or fails, choose Reconnect in its header to connect again
 in the same tab. Its displayed terminal output stays available. Reconnect waits

@@ -41,28 +41,37 @@ absence before dispatch, but standard SFTP v3 rename can still replace a target
 created concurrently on some servers. Delete is available only for listed regular
 files and directories. Rust checks the current remote type and asks for native
 confirmation before removing a regular file or empty directory. Other entry
-types remain visible but cannot be changed here. One file operation runs per
-terminal at a time. A typed channel reports contiguous transferred bytes, total
-bytes, and transfer or finalizing phase for that exact session, transport, and
-operation.
-The panel presents finalizing after data transfer reaches the total; it reports
-saved only after Rust confirms the remote publication or local destination commit.
-Cancel and closing the panel request cancellation without ending the terminal;
-Rust rejects cancellation after an upload's final remote rename or a download's
-final local rename begins and waits for the outcome. A started local commit
-keeps ownership of its temporary file and result through terminal disconnect or
-tab close. If its result is lost, the panel and terminal show an unknown local
-outcome and ask the person to inspect the selected local location before another
-download. The client never automatically repeats that save. Tab close and
-reconnect fence old operations from new transports. A directory error offers another list; a
-download or upload error leaves the directory visible. If final remote rename
-has started and its reply cannot be confirmed, or if a temporary upload file
-may remain, an attention notice stays on the terminal after Files unmounts or
-reconnects. It asks the person to refresh and inspect the remote
-directory and never retries automatically. An uncertain create, rename, or
-delete also keeps that reminder across Files closure or reconnect. The panel
-refreshes after a confirmed change; conflicts require a manual refresh. Drag
-and drop, queues, resume, and other remote edits remain separate work.
+types remain visible but cannot be changed here.
+
+Upload and download intents enqueue Rust-owned work instead of waiting for the
+transfer in a mounted panel. `use-session-transfers.ts` reads typed snapshots with
+at most one request in flight. Session, queue identity and decimal revision fence
+stale replies. Snapshots contain bounded names, exact item/execution/transport
+identity, direction, fixed issue categories and decimal byte counts. Native paths
+and selected handles remain in Rust. The queue allows 16 outstanding slots,
+including native selection reservations and unacknowledged Unknown results, and
+retains the latest 32 known terminal records.
+
+Closing Files hides transfers; it never cancels or replays them. The existing
+listing can add files while transfers run, but navigation, refresh and remote
+changes are disabled during actual queue work. Unknown results alone allow
+browsing so the destination can be inspected. Cancellation and acknowledgement
+identify the exact queue, item and execution. Reaching the byte total shows
+finalizing, and only confirmed publication shows Saved. Cancellation is refused
+after publication starts. Native replacement review identifies the authenticated
+Host and Login from Rust's bound connection. Source and destination metadata are
+rechecked before execution and local publication; this is not an atomic filesystem
+compare-and-swap or a detector for content changes preserving that metadata.
+
+Disconnect interrupts unstarted items. Reconnect keeps the logical queue and its
+results while creating a new authenticated transport; old items never run there.
+The terminal offers Review transfers even after disconnect. Unknown results
+require explicit acknowledgement, which clears a reminder without retrying or
+claiming success. Cleanup uncertainty remains explicit. A directory error offers
+another list; an uncertain create, rename or delete keeps the existing terminal
+attention notice. Closing the logical tab settles its current save and releases
+pending work. Queue recovery after tab/process closure, drag and drop, pause,
+resume and other remote edits remain separate work.
 
 
 `web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 92 px for the window controls, which sit centered in it, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.

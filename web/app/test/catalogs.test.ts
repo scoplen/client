@@ -9,6 +9,7 @@ const sample = {
   platform: "windows",
   reference: "E-1",
   count: 3,
+  capacity: 16,
   skipped: 2,
   line: 5,
   directive: "Include",

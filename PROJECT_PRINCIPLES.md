@@ -35,7 +35,9 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   creates folders, checks for an unused target before renaming regular files or directories, and
   deletes regular files or empty directories after native confirmation. A concurrent remote rename
   target may still be replaced on some servers; uncertain results require manual review.
-  Drag and drop, transfer queues, resume, and the remaining C6 workflows are incomplete.
+  Rust owns a bounded per-session transfer queue across Files visibility and transport
+  replacement, with explicit cancellation, conflict handling and unknown-result acknowledgement.
+  Drag and drop, pause, resume, and the remaining C6 workflows are incomplete.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.
 - The Windows TPM path of key storage cannot run on hosted CI runners, which have no TPM; only its DPAPI fallback is exercised there.

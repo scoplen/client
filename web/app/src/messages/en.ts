@@ -927,6 +927,75 @@ export const en = {
   "session.output.closeWithoutSaving": "Close without saving",
   "session.output.windowCloseFailed":
     "The window could not finish closing. Close the session tabs, then try closing the window again.",
+  "session.transfers.title": "Transfers",
+  "session.transfers.direction.upload": "Upload",
+  "session.transfers.direction.download": "Download",
+  "session.transfers.capacity": "{count} / {capacity} pending",
+  "session.transfers.background": "Transfers continue when you hide Files.",
+  "session.transfers.browsingBlocked":
+    "Directory navigation and file changes are paused while transfers are pending. You can add files from this listing.",
+  "session.transfers.disconnected":
+    "This connection has ended. Review retained transfer results below; reconnect to browse files or add transfers.",
+  "session.transfers.pending": "{count} file transfers pending.",
+  "session.transfers.attentionUnknown":
+    "A transfer result is unknown. Check the destination before adding the file again.",
+  "session.transfers.review": "Review transfers",
+  "session.transfers.selectionCancelled": "No transfer was added.",
+  "session.transfers.attentionCleanup":
+    "Temporary file cleanup could not be confirmed. Review the transfer result and check the destination.",
+  "session.transfers.loading": "Loading transfers…",
+  "session.transfers.nativeDialog": "Finish the open file selection or replacement confirmation.",
+  "session.transfers.empty": "Upload a file or choose Download to add a transfer.",
+  "session.transfers.unknownHelp":
+    "Check the destination before adding the file again. Dismiss only clears this reminder; it does not verify or retry the transfer.",
+  "session.transfers.dismiss": "Dismiss reminder",
+  "session.transfers.dismissNamed": "Dismiss unknown-result reminder for {name}",
+  "session.transfers.cancelNamed": "Cancel transfer of {name}",
+  "session.transfers.progressNamed": "Transfer progress for {name}",
+  "session.transfers.state.queued": "Queued",
+  "session.transfers.state.awaitingConfirmation": "Waiting for replacement confirmation",
+  "session.transfers.state.transferring": "Transferring",
+  "session.transfers.state.finalizing": "Verifying and saving",
+  "session.transfers.state.cancelling": "Stopping and cleaning up",
+  "session.transfers.state.saved": "Saved",
+  "session.transfers.state.cancelled": "Cancelled",
+  "session.transfers.state.conflict": "File changed · Transfer stopped",
+  "session.transfers.state.failed": "Failed",
+  "session.transfers.state.interrupted": "Connection ended · Not retried",
+  "session.transfers.state.unknown": "Save result unknown",
+  "session.transfers.issue.invalidIdentifier": "This transfer reference is invalid. Refresh Files before trying again.",
+  "session.transfers.issue.invalidPath":
+    "This remote path cannot be used. Refresh the directory and choose the file again.",
+  "session.transfers.issue.sessionUnavailable":
+    "This terminal session is unavailable. Open a connected session to add files.",
+  "session.transfers.issue.transportEnded":
+    "The SSH connection ended. Unstarted transfers were not sent. Reconnect, then add them again.",
+  "session.transfers.issue.queueFull":
+    "The transfer queue is full. Wait for transfers to finish or review unknown results.",
+  "session.transfers.issue.nativeDialogBusy":
+    "Finish the current file selection or replacement confirmation before adding another file.",
+  "session.transfers.issue.selectionFailed":
+    "The file selection or replacement confirmation could not finish. Check the queue before trying the action again.",
+  "session.transfers.issue.invalidSelection":
+    "Choose an ordinary local file or file destination. Links and special files cannot be used.",
+  "session.transfers.issue.sourceChanged": "The selected source changed. Check the local file before adding it again.",
+  "session.transfers.issue.targetChanged":
+    "The destination changed. It was not replaced by this attempt. Review it before adding the transfer again.",
+  "session.transfers.issue.unsupported":
+    "This server does not support the required file operation. Check its SFTP capabilities.",
+  "session.transfers.issue.remoteRefused":
+    "The server refused the file operation. Check the destination and your permissions.",
+  "session.transfers.issue.localIo":
+    "The local file could not be read or saved. Check its availability and permissions before adding it again.",
+  "session.transfers.issue.transferFailed":
+    "The transfer or status request failed. Refresh Files and check the result before adding the file again.",
+  "session.transfers.issue.cleanupIncomplete":
+    "Temporary file cleanup could not be confirmed. An incomplete file may remain at the destination.",
+  "session.transfers.issue.publicationUnknown":
+    "The file may have been saved. Check the destination before starting another transfer.",
+  "session.transfers.issue.publicationStarted":
+    "Saving has started and can no longer be cancelled. Wait for the result.",
+  "session.transfers.issue.staleItem": "This transfer changed or ended. Refresh Files to see its current result.",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };
