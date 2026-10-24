@@ -28,6 +28,12 @@ export const commands = {
 	sessionDownloadFile: (sessionId: string, transportId: string, operationId: string, remotePath: number[]) => typedError<boolean, string>(__TAURI_INVOKE("session_download_file", { sessionId, transportId, operationId, remotePath })),
 	/**  Select one regular local file and publish it in the terminal's remote directory. */
 	sessionUploadFile: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], locale: Locale) => typedError<SessionUploadResult, string>(__TAURI_INVOKE("session_upload_file", { sessionId, transportId, operationId, directoryPath, locale })),
+	/**  Create one directory inside the current remote Files directory. */
+	sessionCreateRemoteDirectory: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], name: string, locale: Locale) => typedError<SessionFileMutationResult, string>(__TAURI_INVOKE("session_create_remote_directory", { sessionId, transportId, operationId, directoryPath, name, locale })),
+	/**  Rename one ordinary remote entry without offering replacement. */
+	sessionRenameRemoteEntry: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], entryPath: number[], newName: string, locale: Locale) => typedError<SessionFileMutationResult, string>(__TAURI_INVOKE("session_rename_remote_entry", { sessionId, transportId, operationId, directoryPath, entryPath, newName, locale })),
+	/**  Delete one ordinary remote file or empty directory after native confirmation. */
+	sessionDeleteRemoteEntry: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], entryPath: number[], locale: Locale) => typedError<SessionFileMutationResult, string>(__TAURI_INVOKE("session_delete_remote_entry", { sessionId, transportId, operationId, directoryPath, entryPath, locale })),
 	/**  Stop only the matching SFTP operation, leaving the terminal connected. */
 	sessionCancelFileOperation: (sessionId: string, transportId: string, operationId: string) => typedError<null, string>(__TAURI_INVOKE("session_cancel_file_operation", { sessionId, transportId, operationId })),
 	/**  Begin an explicit reconnect with a fresh automatic retry budget. */
@@ -1581,6 +1587,29 @@ error: string } |
 error: string;
 /**  All five automatic attempts have been consumed. */
 exhausted: boolean };
+
+/**  A file change never retries an unknown remote result automatically. */
+export type SessionFileMutationResult = {
+	/**  The acknowledged or uncertain outcome. */
+	status: SessionFileMutationStatus,
+	/**  A bounded operational detail for diagnostics. */
+	message: string | null,
+};
+
+/**  The outcome of one terminal-owned remote file change. */
+export type SessionFileMutationStatus =
+/**  The server acknowledged the change. */
+"saved" |
+/**  The person cancelled before the request was sent. */
+"cancelled" |
+/**  The selected entry type cannot be changed by this action. */
+"unsupported" |
+/**  The source or destination changed before the request was sent. */
+"conflict" |
+/**  The request might have run, but its acknowledgement was lost. */
+"unknown" |
+/**  The server refused the change or preparation failed. */
+"failed";
 
 /**  A one-time response to the current attempt's preparation prompt. */
 export type SessionPreparationIntent =

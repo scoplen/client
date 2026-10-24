@@ -89,6 +89,125 @@ pub enum SessionUploadStatus {
     Failed,
 }
 
+/// The outcome of one terminal-owned remote file change.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionFileMutationStatus {
+    /// The server acknowledged the change.
+    Saved,
+    /// The person cancelled before the request was sent.
+    Cancelled,
+    /// The selected entry type cannot be changed by this action.
+    Unsupported,
+    /// The source or destination changed before the request was sent.
+    Conflict,
+    /// The request might have run, but its acknowledgement was lost.
+    Unknown,
+    /// The server refused the change or preparation failed.
+    Failed,
+}
+
+/// A file change never retries an unknown remote result automatically.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionFileMutationResult {
+    /// The acknowledged or uncertain outcome.
+    pub status: SessionFileMutationStatus,
+    /// A bounded operational detail for diagnostics.
+    pub message: Option<String>,
+}
+
+impl SessionFileMutationResult {
+    pub(crate) fn new(status: SessionFileMutationStatus, message: Option<String>) -> Self {
+        Self { status, message }
+    }
+
+    pub(crate) fn from_error(error: FileAccessError) -> Self {
+        let status = match error {
+            FileAccessError::Cancelled => SessionFileMutationStatus::Cancelled,
+            FileAccessError::Conflict => SessionFileMutationStatus::Conflict,
+            FileAccessError::UnsupportedEntry => SessionFileMutationStatus::Unsupported,
+            FileAccessError::PublicationUnknown => SessionFileMutationStatus::Unknown,
+            _ => SessionFileMutationStatus::Failed,
+        };
+        Self::new(status, Some(error.to_string()))
+    }
+}
+
+/// A path-bounded action on one immediate child of the visible directory.
+#[derive(Clone)]
+pub(crate) enum RemoteMutation {
+    CreateDirectory { directory: Vec<u8>, target: Vec<u8> },
+    RenameEntry { directory: Vec<u8>, source: Vec<u8>, target: Vec<u8> },
+    DeleteEntry { directory: Vec<u8>, source: Vec<u8> },
+}
+
+impl RemoteMutation {
+    pub(crate) fn create_directory(
+        directory: Vec<u8>,
+        name: &str,
+    ) -> Result<Self, FileAccessError> {
+        validate_path(&directory)?;
+        let target = child_path(&directory, name.as_bytes())?;
+        Ok(Self::CreateDirectory { directory, target })
+    }
+
+    pub(crate) fn rename_entry(
+        directory: Vec<u8>,
+        entry: Vec<u8>,
+        new_name: &str,
+    ) -> Result<Self, FileAccessError> {
+        validate_child(&directory, &entry)?;
+        let target = child_path(&directory, new_name.as_bytes())?;
+        if target == entry {
+            return Err(FileAccessError::Conflict);
+        }
+        Ok(Self::RenameEntry { directory, source: entry, target })
+    }
+
+    pub(crate) fn delete_entry(
+        directory: Vec<u8>,
+        entry: Vec<u8>,
+    ) -> Result<Self, FileAccessError> {
+        validate_child(&directory, &entry)?;
+        Ok(Self::DeleteEntry { directory, source: entry })
+    }
+
+    fn directory(&self) -> &[u8] {
+        match self {
+            Self::CreateDirectory { directory, .. }
+            | Self::RenameEntry { directory, .. }
+            | Self::DeleteEntry { directory, .. } => directory,
+        }
+    }
+
+    fn source(&self) -> Option<&[u8]> {
+        match self {
+            Self::CreateDirectory { .. } => None,
+            Self::RenameEntry { source, .. } | Self::DeleteEntry { source, .. } => Some(source),
+        }
+    }
+
+    fn target(&self) -> Option<&[u8]> {
+        match self {
+            Self::CreateDirectory { target, .. } | Self::RenameEntry { target, .. } => Some(target),
+            Self::DeleteEntry { .. } => None,
+        }
+    }
+
+    pub(crate) fn display_name(&self) -> Option<String> {
+        self.source().map(|source| {
+            display_name(source.rsplit(|byte| *byte == b'/').next().unwrap_or_default())
+        })
+    }
+}
+
+pub(crate) struct MutationPreflight {
+    pub(crate) directory_attributes: SftpAttributes,
+    pub(crate) source_attributes: Option<SftpAttributes>,
+    pub source_kind: Option<RemoteFileKind>,
+}
+
 /// A lost publish acknowledgement must never be presented as a retryable failure.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -114,7 +233,7 @@ impl SessionUploadResult {
 /// State retained across worker loss so the caller can distinguish uncertain publication.
 #[derive(Default)]
 pub(crate) struct UploadState {
-    pub publication_started: AtomicBool,
+    pub effect_started: AtomicBool,
     pub staging_may_remain: AtomicBool,
 }
 
@@ -195,10 +314,11 @@ pub enum FileAccessError {
     /// An existing target cannot be replaced atomically on this server.
     #[error("this SSH server cannot safely replace the existing remote file")]
     ReplacementUnsupported,
-    /// The final remote rename may have happened, but its response was lost.
-    #[error(
-        "the upload result is unknown; refresh the remote directory before deciding what to do"
-    )]
+    /// The remote entry is a link or another unsupported file type.
+    #[error("only ordinary files and directories can be changed")]
+    UnsupportedEntry,
+    /// The remote effect may have happened, but its response was lost.
+    #[error("the remote file result is unknown; refresh the directory before deciding what to do")]
     PublicationUnknown,
     /// The owning terminal transport ended before local commit.
     #[error("this connection ended before the file could be saved")]
@@ -261,6 +381,16 @@ fn child_path(parent: &[u8], name: &[u8]) -> Result<Vec<u8>, FileAccessError> {
     path.extend_from_slice(name);
     validate_path(&path)?;
     Ok(path)
+}
+
+fn validate_child(directory: &[u8], entry: &[u8]) -> Result<(), FileAccessError> {
+    validate_path(directory)?;
+    validate_path(entry)?;
+    let name = entry.rsplit(|byte| *byte == b'/').next().ok_or(FileAccessError::InvalidPath)?;
+    if child_path(directory, name)? != entry {
+        return Err(FileAccessError::InvalidPath);
+    }
+    Ok(())
 }
 
 fn kind(attributes: &SftpAttributes) -> RemoteFileKind {
@@ -411,6 +541,123 @@ pub(crate) async fn preflight_upload(
     let replacement_supported = supports_extension(&session, b"posix-rename@openssh.com");
     let target_attributes = inspect_target(&mut session, target).await?;
     Ok(UploadPreflight { target_attributes, replacement_supported })
+}
+
+async fn inspect_mutation(
+    session: &mut SftpSession,
+    mutation: &RemoteMutation,
+) -> Result<MutationPreflight, FileAccessError> {
+    let directory_attributes =
+        inspect_target(session, mutation.directory()).await?.ok_or(FileAccessError::Conflict)?;
+    if kind(&directory_attributes) != RemoteFileKind::Directory {
+        return Err(FileAccessError::UnsupportedEntry);
+    }
+    let source_attributes = if let Some(source) = mutation.source() {
+        let attributes = inspect_target(session, source).await?.ok_or(FileAccessError::Conflict)?;
+        if kind(&attributes) == RemoteFileKind::Other {
+            return Err(FileAccessError::UnsupportedEntry);
+        }
+        Some(attributes)
+    } else {
+        None
+    };
+    if let Some(target) = mutation.target()
+        && inspect_target(session, target).await?.is_some()
+    {
+        return Err(FileAccessError::Conflict);
+    }
+    let source_kind = source_attributes.as_ref().map(kind);
+    Ok(MutationPreflight { directory_attributes, source_attributes, source_kind })
+}
+
+/// Check the exact parent, child and destination before a native confirmation.
+pub(crate) async fn preflight_mutation(
+    connection: &SshConnection,
+    mutation: &RemoteMutation,
+) -> Result<MutationPreflight, FileAccessError> {
+    let mut session = tokio::time::timeout(
+        SFTP_STEP_TIMEOUT,
+        SftpSession::open(connection.authenticated_connection()?, SFTP_PIPELINE),
+    )
+    .await
+    .map_err(|_| FileAccessError::Timeout)??;
+    inspect_mutation(&mut session, mutation).await
+}
+
+async fn dispatch_mutation<F>(
+    connection: &SshConnection,
+    mutation: &RemoteMutation,
+    preflight: &MutationPreflight,
+    cancel: &mut watch::Receiver<bool>,
+    authorize_effect: F,
+) -> Result<(), FileAccessError>
+where
+    F: FnOnce() -> Result<(), FileAccessError>,
+{
+    let mut session = until_cancelled(cancel, async {
+        tokio::time::timeout(
+            SFTP_STEP_TIMEOUT,
+            SftpSession::open(connection.authenticated_connection()?, SFTP_PIPELINE),
+        )
+        .await
+        .map_err(|_| FileAccessError::Timeout)?
+        .map_err(FileAccessError::Sftp)
+    })
+    .await?;
+    let current = until_cancelled(cancel, inspect_mutation(&mut session, mutation)).await?;
+    if current.directory_attributes != preflight.directory_attributes
+        || current.source_attributes != preflight.source_attributes
+    {
+        return Err(FileAccessError::Conflict);
+    }
+    let request = match mutation {
+        RemoteMutation::CreateDirectory { target, .. } => session.client_mut().mkdir(
+            target.clone(),
+            SftpAttributes { permissions: Some(0o777), ..SftpAttributes::default() },
+        )?,
+        RemoteMutation::RenameEntry { source, target, .. } => {
+            session.client_mut().rename(source.clone(), target.clone())?
+        }
+        RemoteMutation::DeleteEntry { source, .. } => match preflight.source_kind {
+            Some(RemoteFileKind::File) => session.client_mut().remove(source.clone())?,
+            Some(RemoteFileKind::Directory) => session.client_mut().rmdir(source.clone())?,
+            _ => return Err(FileAccessError::UnsupportedEntry),
+        },
+    };
+    authorize_effect()?;
+    // Dispatch and acknowledgement are inseparable from the remote point of view.
+    tokio::time::timeout(SFTP_STEP_TIMEOUT, session.send_request(&request))
+        .await
+        .map_err(|_| FileAccessError::PublicationUnknown)?
+        .map_err(|_| FileAccessError::PublicationUnknown)?;
+    let acknowledgement = tokio::time::timeout(SFTP_STEP_TIMEOUT, session.read_response())
+        .await
+        .map_err(|_| FileAccessError::PublicationUnknown)?
+        .map_err(|_| FileAccessError::PublicationUnknown)?;
+    match acknowledgement {
+        SftpPacket::Status { code: 0, .. } => Ok(()),
+        SftpPacket::Status { code: 2 | 11, .. } => Err(FileAccessError::Conflict),
+        SftpPacket::Status { code, .. } => Err(FileAccessError::RemoteStatus(code)),
+        _ => Err(FileAccessError::PublicationUnknown),
+    }
+}
+
+/// Change one immediate remote child on the authenticated terminal connection.
+pub(crate) async fn mutate_entry<F>(
+    connection: &SshConnection,
+    mutation: RemoteMutation,
+    preflight: MutationPreflight,
+    mut cancel: watch::Receiver<bool>,
+    authorize_effect: F,
+) -> SessionFileMutationResult
+where
+    F: FnOnce() -> Result<(), FileAccessError>,
+{
+    match dispatch_mutation(connection, &mutation, &preflight, &mut cancel, authorize_effect).await
+    {
+        Ok(()) => SessionFileMutationResult::new(SessionFileMutationStatus::Saved, None),
+        Err(error) => SessionFileMutationResult::from_error(error),
+    }
 }
 
 async fn until_cancelled<T>(
@@ -1018,6 +1265,45 @@ mod tests {
         assert!(child_path(b".", b"x/y").is_err());
         assert!(validate_path(&[b'a'; MAX_REMOTE_PATH + 1]).is_err());
         assert!(display_name(&[b'a'; MAX_DISPLAY_CHARS + 3]).ends_with('…'));
+    }
+
+    #[test]
+    fn remote_mutations_accept_opaque_child_bytes_and_reject_path_escape() {
+        let directory = b"./files".to_vec();
+        let source = b"./files/\xffname".to_vec();
+        assert!(matches!(
+            RemoteMutation::delete_entry(directory.clone(), source.clone()).unwrap(),
+            RemoteMutation::DeleteEntry { source: kept, .. } if kept == source
+        ));
+        assert!(matches!(
+            RemoteMutation::rename_entry(directory.clone(), source, "renamed").unwrap(),
+            RemoteMutation::RenameEntry { target, .. } if target == b"./files/renamed"
+        ));
+        assert!(
+            RemoteMutation::delete_entry(directory.clone(), b"./other/child".to_vec()).is_err()
+        );
+        assert!(
+            RemoteMutation::delete_entry(directory.clone(), b"./files/sub/child".to_vec()).is_err()
+        );
+        assert!(RemoteMutation::delete_entry(directory.clone(), b"./files/..".to_vec()).is_err());
+        assert!(RemoteMutation::create_directory(directory.clone(), "../escape").is_err());
+        assert!(RemoteMutation::create_directory(directory.clone(), "a/b").is_err());
+        assert!(RemoteMutation::create_directory(directory.clone(), "a\0b").is_err());
+        assert!(RemoteMutation::create_directory(directory.clone(), ".").is_err());
+        assert!(
+            RemoteMutation::rename_entry(directory, b"./files/existing".to_vec(), "existing")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn only_regular_files_and_directories_are_mutable() {
+        let file = SftpAttributes { permissions: Some(0o100600), ..Default::default() };
+        let directory = SftpAttributes { permissions: Some(0o040700), ..Default::default() };
+        let link = SftpAttributes { permissions: Some(0o120777), ..Default::default() };
+        assert_eq!(kind(&file), RemoteFileKind::File);
+        assert_eq!(kind(&directory), RemoteFileKind::Directory);
+        assert_eq!(kind(&link), RemoteFileKind::Other);
     }
 
     #[tokio::test]
