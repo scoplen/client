@@ -21,6 +21,149 @@ fn complete(state: SessionTransferState) -> TransferCompletion {
     TransferCompletion { state, issue: None, staging_may_remain: false }
 }
 
+fn paused(queue: &mut TransferQueue<usize>, transport: Uuid, resource: usize) -> TransferIdentity {
+    let selection = queue.reserve_selection(transport).unwrap();
+    queue
+        .enqueue_selected(
+            selection,
+            "source.bin",
+            SessionTransferDirection::Download,
+            Some(64),
+            resource,
+        )
+        .unwrap();
+    let selected = queue.take_next(transport).unwrap();
+    queue.progress(
+        selected.identity,
+        FileTransferProgress {
+            transferred: 32,
+            total: Some(64),
+            phase: SessionFileTransferPhase::Transferring,
+        },
+    );
+    queue.pause(queue.id(), selected.identity.item, selected.identity.execution).unwrap();
+    queue.retain_paused(selected.identity, selected.resources).unwrap();
+    selected.identity
+}
+
+#[test]
+fn paused_download_releases_execution_and_explicit_resume_enters_fifo_with_a_fresh_execution() {
+    let mut queue = TransferQueue::default();
+    let transport = Uuid::now_v7();
+    let checkpoint = paused(&mut queue, transport, 10);
+    assert!(!queue.blocks_file_operations());
+    assert_eq!(queue.snapshot("session").outstanding, 1);
+    assert!(queue.snapshot("session").items[0].can_resume);
+    let second = queued(&mut queue, transport, 20);
+    let third = queued(&mut queue, transport, 30);
+    assert_eq!(queue.take_next(transport).unwrap().identity, second);
+    queue.resume(queue.id(), checkpoint.item, checkpoint.execution, transport).unwrap();
+    assert!(queue.finish(second, complete(SessionTransferState::Saved)));
+    assert_eq!(queue.take_next(transport).unwrap().identity, third);
+    assert!(queue.finish(third, complete(SessionTransferState::Saved)));
+    let resumed = queue.take_next(transport).unwrap();
+    assert_eq!(resumed.identity.item, checkpoint.item);
+    assert_ne!(resumed.identity.execution, checkpoint.execution);
+    assert_eq!(resumed.resources, 10);
+    assert_eq!(queue.snapshot("session").items[0].state, SessionTransferState::Validating);
+    assert!(!queue.finish(checkpoint, complete(SessionTransferState::Saved)));
+    assert!(matches!(
+        queue.cancel(queue.id(), checkpoint.item, checkpoint.execution),
+        Err(SessionTransferIssue::StaleItem)
+    ));
+    assert!(queue.resume(queue.id(), checkpoint.item, checkpoint.execution, transport).is_err());
+}
+
+#[test]
+fn paused_download_capacity_is_not_released_until_owned_cleanup_settles() {
+    let mut queue = TransferQueue::default();
+    let transport = Uuid::now_v7();
+    let first = paused(&mut queue, transport, 0);
+    for value in 1..TRANSFER_CAPACITY {
+        paused(&mut queue, transport, value);
+    }
+    assert_eq!(queue.reserve_selection(transport), Err(SessionTransferIssue::QueueFull));
+    let CancelTransfer::Cleanup(identity, resources) =
+        queue.cancel(queue.id(), first.item, first.execution).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(identity, first);
+    assert_eq!(resources, 0);
+    assert_eq!(queue.snapshot("session").outstanding, 16);
+    queue.finish_cleanup(identity, complete(SessionTransferState::Cancelled));
+    assert_eq!(queue.snapshot("session").outstanding, 15);
+    queue.reserve_selection(transport).unwrap();
+}
+
+#[test]
+fn transport_expiry_collects_paused_checkpoints_for_cleanup_without_replay() {
+    let mut queue = TransferQueue::default();
+    let transport = Uuid::now_v7();
+    let first = paused(&mut queue, transport, 41);
+    queue.interrupt_transport(transport);
+    assert_eq!(queue.snapshot("session").outstanding, 1);
+    assert!(!queue.snapshot("session").items[0].can_resume);
+    assert!(queue.resume(queue.id(), first.item, first.execution, Uuid::now_v7()).is_err());
+    let (cleanup, interrupted) = queue.take_cleanup().unwrap();
+    assert!(interrupted);
+    assert_eq!(cleanup.resources, 41);
+    queue.finish_cleanup(cleanup.identity, complete(SessionTransferState::Interrupted));
+    assert_eq!(queue.snapshot("session").outstanding, 0);
+    assert!(queue.take_next(Uuid::now_v7()).is_none());
+}
+
+#[test]
+fn an_accepted_pause_survives_replacement_confirmation_before_dispatch() {
+    let mut queue = TransferQueue::default();
+    let transport = Uuid::now_v7();
+    let selection = queue.reserve_selection(transport).unwrap();
+    queue
+        .enqueue_selected(selection, "source.bin", SessionTransferDirection::Download, Some(64), 1)
+        .unwrap();
+    let selected = queue.take_next(transport).unwrap();
+    let identity = selected.identity;
+    queue.pause(queue.id(), identity.item, identity.execution).unwrap();
+    queue.begin_confirmation(identity).unwrap();
+    assert!(queue.snapshot("session").picker_busy);
+    assert_eq!(queue.snapshot("session").items[0].state, SessionTransferState::Pausing);
+    queue.end_confirmation(identity);
+    assert!(queue.is_pausing(identity));
+    assert!(!queue.snapshot("session").picker_busy);
+    queue.retain_paused(identity, selected.resources).unwrap();
+    assert!(queue.snapshot("session").items[0].can_resume);
+}
+
+#[test]
+fn a_late_pause_request_does_not_hide_finalization_or_cross_publication() {
+    let mut queue = TransferQueue::default();
+    let transport = Uuid::now_v7();
+    let selection = queue.reserve_selection(transport).unwrap();
+    queue
+        .enqueue_selected(selection, "source.bin", SessionTransferDirection::Download, Some(64), 1)
+        .unwrap();
+    let identity = queue.take_next(transport).unwrap().identity;
+    queue.pause(queue.id(), identity.item, identity.execution).unwrap();
+    queue.progress(
+        identity,
+        FileTransferProgress {
+            transferred: 64,
+            total: Some(64),
+            phase: SessionFileTransferPhase::Finalizing,
+        },
+    );
+    let row = &queue.snapshot("session").items[0];
+    assert_eq!(row.state, SessionTransferState::Finalizing);
+    assert!(!row.can_pause);
+    assert!(row.can_cancel);
+    queue.begin_publication(identity).unwrap();
+    assert!(!queue.snapshot("session").items[0].can_cancel);
+    assert_eq!(
+        queue.pause(queue.id(), identity.item, identity.execution),
+        Err(SessionTransferIssue::PublicationStarted)
+    );
+}
+
 #[test]
 fn selection_reserves_capacity_and_uses_one_native_dialog() {
     let mut queue = TransferQueue::default();

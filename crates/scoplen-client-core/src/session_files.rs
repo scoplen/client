@@ -22,6 +22,12 @@ use uuid::Uuid;
 
 use crate::connection::{SshConnection, SshConnectionError};
 
+pub(crate) mod downloads;
+pub(crate) use downloads::{
+    DownloadCheckpoint, DownloadControl, DownloadExecution, DownloadInput, continue_download,
+    prepare_download,
+};
+
 const MAX_REMOTE_PATH: usize = 4096;
 const MAX_DIRECTORY_ENTRIES: usize = 1024;
 const MAX_DIRECTORY_BYTES: usize = 1024 * 1024;
@@ -125,6 +131,16 @@ impl<'a, F: FnMut(FileTransferProgress)> TransferReporter<'a, F> {
             total: Some(total),
             phase: SessionFileTransferPhase::Finalizing,
         });
+    }
+
+    fn checkpoint(&mut self, transferred: u64, total: u64) {
+        (self.notify)(FileTransferProgress {
+            transferred,
+            total: Some(total),
+            phase: SessionFileTransferPhase::Transferring,
+        });
+        self.last_transferred = Some(transferred);
+        self.last_emit = Some(Instant::now());
     }
 }
 
@@ -1089,7 +1105,45 @@ pub async fn list_directory(
 struct TemporaryDownload {
     path: PathBuf,
     file: Option<File>,
+    identity: std::fs::File,
     committed: bool,
+}
+
+fn check_partial_identity(path: &Path, identity: &std::fs::File) -> Result<(), FileAccessError> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(FileAccessError::FileChanged);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(FileAccessError::FileChanged);
+        }
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT.
+    }
+    let current = options.open(path)?;
+    if !current.metadata()?.is_file()
+        || !scoplen_client_platform::file_identity::same_file(identity, &current)?
+    {
+        return Err(FileAccessError::FileChanged);
+    }
+    Ok(())
+}
+
+fn remove_owned_partial(path: &Path, identity: &std::fs::File) -> bool {
+    if check_partial_identity(path, identity).is_err() {
+        return false;
+    }
+    std::fs::remove_file(path).is_ok()
 }
 
 /// The synchronized local file and destination, owned until commit or cleanup.
@@ -1100,10 +1154,20 @@ pub(crate) struct PreparedDownload {
 
 impl PreparedDownload {
     pub(crate) fn commit(mut self) -> Result<(), FileAccessError> {
+        self.commit_retained()
+    }
+
+    pub(crate) fn commit_retained(&mut self) -> Result<(), FileAccessError> {
+        check_partial_identity(&self.temporary.path, &self.temporary.identity)?;
         std::fs::rename(&self.temporary.path, &self.destination)
             .map_err(FileAccessError::LocalIo)?;
         self.temporary.committed = true;
         Ok(())
+    }
+
+    pub(crate) fn discard(mut self) -> bool {
+        self.temporary.committed = true;
+        remove_owned_partial(&self.temporary.path, &self.temporary.identity)
     }
 }
 
@@ -1115,24 +1179,44 @@ struct CreatedDownload {
 impl CreatedDownload {
     fn create(path: PathBuf) -> Result<Self, std::io::Error> {
         let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
+        options.read(true).write(true).create_new(true);
         #[cfg(unix)]
         options.mode(0o600);
         let file = options.open(&path)?;
         Ok(Self { path, file: Some(file) })
     }
 
-    fn into_async(mut self) -> TemporaryDownload {
+    fn into_async(self) -> Result<TemporaryDownload, (std::io::Error, bool)> {
+        self.into_async_with(std::fs::File::try_clone)
+    }
+
+    fn into_async_with(
+        mut self,
+        clone: impl FnOnce(&std::fs::File) -> Result<std::fs::File, std::io::Error>,
+    ) -> Result<TemporaryDownload, (std::io::Error, bool)> {
+        let identity = match clone(self.file.as_ref().expect("created file is open")) {
+            Ok(identity) => identity,
+            Err(error) => {
+                let file = self.file.take().expect("created file is open");
+                let clean = remove_owned_partial(&self.path, &file);
+                return Err((error, !clean));
+            }
+        };
         let file = File::from_std(self.file.take().expect("created file is open"));
-        TemporaryDownload { path: self.path.clone(), file: Some(file), committed: false }
+        Ok(TemporaryDownload {
+            path: self.path.clone(),
+            file: Some(file),
+            identity,
+            committed: false,
+        })
     }
 }
 
 impl Drop for CreatedDownload {
     fn drop(&mut self) {
         if let Some(file) = self.file.take() {
+            remove_owned_partial(&self.path, &file);
             drop(file);
-            let _ = std::fs::remove_file(&self.path);
         }
     }
 }
@@ -1143,24 +1227,25 @@ impl Drop for TemporaryDownload {
             return;
         }
         let Some(file) = self.file.take() else {
-            let _ = std::fs::remove_file(&self.path);
+            remove_owned_partial(&self.path, &self.identity);
             return;
         };
         match file.try_into_std() {
             Ok(file) => {
                 drop(file);
-                let _ = std::fs::remove_file(&self.path);
+                remove_owned_partial(&self.path, &self.identity);
             }
             Err(file) => {
                 if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                     let path = self.path.clone();
+                    let Ok(identity) = self.identity.try_clone() else { return };
                     drop(runtime.spawn(async move {
                         drop(file.into_std().await);
-                        let _ = tokio::fs::remove_file(path).await;
+                        remove_owned_partial(&path, &identity);
                     }));
                 } else {
                     drop(file);
-                    let _ = std::fs::remove_file(&self.path);
+                    remove_owned_partial(&self.path, &self.identity);
                 }
             }
         }
@@ -1178,9 +1263,19 @@ async fn temporary_download_with<F>(
 where
     F: FnOnce(PathBuf) -> Result<CreatedDownload, std::io::Error> + Send + 'static,
 {
-    let parent = destination.parent().ok_or(FileAccessError::InvalidDestination)?;
+    temporary_download_owned_with(destination, create).await.map_err(|(error, _)| error)
+}
+
+async fn temporary_download_owned_with<F>(
+    destination: &Path,
+    create: F,
+) -> Result<TemporaryDownload, (FileAccessError, bool)>
+where
+    F: FnOnce(PathBuf) -> Result<CreatedDownload, std::io::Error> + Send + 'static,
+{
+    let parent = destination.parent().ok_or((FileAccessError::InvalidDestination, false))?;
     if destination.file_name().is_none() {
-        return Err(FileAccessError::InvalidDestination);
+        return Err((FileAccessError::InvalidDestination, false));
     }
     let parent = parent.to_path_buf();
     let path = parent.join(format!(".scoplen-download-{}.part", Uuid::now_v7()));
@@ -1191,8 +1286,16 @@ where
         create(path).map_err(FileAccessError::LocalIo)
     })
     .await
-    .map_err(|_| std::io::Error::other("temporary file creation was interrupted"))??;
-    Ok(created.into_async())
+    .map_err(|_| {
+        (
+            FileAccessError::LocalIo(std::io::Error::other(
+                "temporary file creation was interrupted",
+            )),
+            true,
+        )
+    })?
+    .map_err(|error| (error, false))?;
+    created.into_async().map_err(|(error, residue)| (FileAccessError::LocalIo(error), residue))
 }
 
 /// Download an opened regular file into a private temporary file for its commit owner.
@@ -1516,6 +1619,52 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(std::fs::read(destination).unwrap(), b"keep original");
+    }
+
+    #[tokio::test]
+    async fn replaced_partial_is_preserved_by_drop_and_refused_by_publication() {
+        let folder = tempfile::tempdir().unwrap();
+        let destination = folder.path().join("destination.bin");
+        std::fs::write(&destination, b"original destination").unwrap();
+        let mut temporary = temporary_download(&destination).await.unwrap();
+        let path = temporary.path.clone();
+        let retained = folder.path().join("retained-original-partial");
+        std::fs::rename(&path, &retained).unwrap();
+        std::fs::write(&path, b"replacement belongs to someone else").unwrap();
+        temporary.file.take();
+        assert!(matches!(
+            PreparedDownload { temporary, destination: destination.clone() }.commit(),
+            Err(FileAccessError::FileChanged)
+        ));
+        assert_eq!(std::fs::read(destination).unwrap(), b"original destination");
+        assert_eq!(std::fs::read(path).unwrap(), b"replacement belongs to someone else");
+        assert!(retained.exists());
+    }
+
+    #[test]
+    fn failed_identity_clone_keeps_the_creation_guard_until_owned_cleanup() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("partial.bin");
+        let created = CreatedDownload::create(path.clone()).unwrap();
+        let result =
+            created.into_async_with(|_| Err(std::io::Error::other("injected clone failure")));
+        assert!(matches!(result, Err((_, false))));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn failed_identity_clone_preserves_replacement_and_reports_uncertain_cleanup() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("partial.bin");
+        let retained = folder.path().join("retained-original-partial");
+        let created = CreatedDownload::create(path.clone()).unwrap();
+        std::fs::rename(&path, &retained).unwrap();
+        std::fs::write(&path, b"replacement belongs to someone else").unwrap();
+        let result =
+            created.into_async_with(|_| Err(std::io::Error::other("injected clone failure")));
+        assert!(matches!(result, Err((_, true))));
+        assert_eq!(std::fs::read(path).unwrap(), b"replacement belongs to someone else");
+        assert!(retained.exists());
     }
 
     #[tokio::test]

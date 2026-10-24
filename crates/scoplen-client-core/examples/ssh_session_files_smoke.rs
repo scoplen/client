@@ -83,7 +83,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         result
     };
     let (terminal, exercise) =
-        tokio::time::timeout(Duration::from_secs(60), async { tokio::join!(terminal, exercise) })
+        tokio::time::timeout(Duration::from_secs(120), async { tokio::join!(terminal, exercise) })
             .await?;
     exercise?;
     terminal?;
@@ -634,6 +634,129 @@ async fn exercise(
         .await?;
     exercise_queue(manager, local, &transport, folder.path.clone(), file.path.clone(), output)
         .await?;
+    exercise_download_resume(manager, local, &transport, folder.path.clone(), output).await?;
+    Ok(())
+}
+
+async fn exercise_download_resume(
+    manager: &SessionManager,
+    local: &std::path::Path,
+    transport: &str,
+    directory: Vec<u8>,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let source = local.join("resume-source.bin");
+    let bytes = (0_u64..(16 * 1024 * 1024 + 17_u64).div_ceil(8))
+        .flat_map(u64::to_le_bytes)
+        .take(16 * 1024 * 1024 + 17)
+        .collect::<Vec<_>>();
+    fs::write(&source, &bytes)?;
+    let uploaded = queue_upload(manager, transport, directory.clone(), source).await?;
+    assert_eq!(
+        wait_queue_item(manager, &queue_identity(&uploaded).1).await?.state,
+        SessionTransferState::Saved
+    );
+    let mut remote = directory.clone();
+    remote.extend_from_slice(b"/resume-source.bin");
+    let destination = local.join("resume-result.bin");
+    fs::write(&destination, b"destination remains until publication")?;
+    let selected = destination.clone();
+    let download = manager
+        .enqueue_download_with_picker(
+            "fixture-terminal",
+            transport,
+            remote.clone(),
+            move || async move { Ok(Some(selected)) },
+            |_| async { Ok(true) },
+        )
+        .await?;
+    let (queue, item, execution) = queue_identity(&download);
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+            if snapshot.items.iter().any(|row| row.item_id == item && row.can_pause) {
+                manager.pause_transfer("fixture-terminal", &queue, &item, &execution)?;
+                return Ok::<_, Box<dyn std::error::Error>>(());
+            }
+            if let Some(row) = snapshot.recent.iter().find(|row| row.item_id == item) {
+                return Err(format!(
+                    "download ended before Pause: {:?}, {:?}",
+                    row.state, row.issue
+                )
+                .into());
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await??;
+    let paused = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+            if let Some(row) = snapshot
+                .items
+                .into_iter()
+                .find(|row| row.item_id == item && row.state == SessionTransferState::Paused)
+            {
+                return Ok::<_, Box<dyn std::error::Error>>(row);
+            }
+            if let Some(row) = snapshot.recent.iter().find(|row| row.item_id == item) {
+                return Err(format!(
+                    "download ended while pausing: {:?}, {:?}",
+                    row.state, row.issue
+                )
+                .into());
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await??;
+    let offset = paused.transferred_bytes.parse::<usize>()?;
+    assert!(offset > 0 && offset < bytes.len());
+    assert!(paused.can_resume);
+    assert_eq!(fs::read(&destination)?, b"destination remains until publication");
+    let partials = fs::read_dir(local)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(".scoplen-download-"))
+        .collect::<Vec<_>>();
+    assert_eq!(partials.len(), 1);
+    let partial = partials[0].path();
+    assert_eq!(fs::read(&partial)?, bytes[..offset]);
+
+    let follower = local.join("resume-follower.bin");
+    fs::write(&follower, b"following work runs while download is paused")?;
+    let follow = queue_upload(manager, transport, directory, follower).await?;
+    assert_eq!(
+        wait_queue_item(manager, &queue_identity(&follow).1).await?.state,
+        SessionTransferState::Saved
+    );
+    let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+    assert_eq!(snapshot.outstanding, 1);
+    assert!(!snapshot.blocks_file_operations);
+    assert!(
+        snapshot
+            .items
+            .iter()
+            .any(|row| row.item_id == item && row.state == SessionTransferState::Paused)
+    );
+    manager.input(
+        "fixture-terminal",
+        transport,
+        b"printf '%s%s\\n' SCOPLEN- RESUME-ALIVE\n".to_vec(),
+    )?;
+    manager.resize("fixture-terminal", transport, 103, 31)?;
+    wait_for(output, b"SCOPLEN-RESUME-ALIVE").await?;
+    manager.resume_transfer("fixture-terminal", &queue, &item, &execution)?;
+    let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+    let resumed =
+        snapshot.items.iter().find(|row| row.item_id == item).ok_or("resumed item disappeared")?;
+    assert_ne!(resumed.execution_id, execution);
+    assert_eq!(resumed.transferred_bytes.parse::<usize>()?, offset);
+    assert!(manager.resume_transfer("fixture-terminal", &queue, &item, &execution).is_err());
+    let saved = wait_queue_item(manager, &item).await?;
+    assert_eq!(saved.state, SessionTransferState::Saved);
+    assert_eq!(saved.transferred_bytes.parse::<usize>()?, bytes.len());
+    assert_eq!(fs::read(destination)?, bytes);
+    assert!(!partial.exists());
     Ok(())
 }
 

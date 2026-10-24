@@ -37,7 +37,11 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   target may still be replaced on some servers; uncertain results require manual review.
   Rust owns a bounded per-session transfer queue across Files visibility and transport
   replacement, with explicit cancellation, conflict handling and unknown-result acknowledgement.
-  Drag and drop, pause, resume, and the remaining C6 workflows are incomplete.
+  Downloads can pause and explicitly continue on their original live transport after local
+  and remote confirmed-prefix verification; paused checkpoints retain capacity and release
+  execution. Native partial identity gates publication and cleanup. This does not provide a
+  source snapshot or upload, cross-transport or durable continuation. Drag and drop and the
+  remaining C6 workflows are incomplete.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.
 - The Windows TPM path of key storage cannot run on hosted CI runners, which have no TPM; only its DPAPI fallback is exercised there.
