@@ -766,4 +766,11 @@ export const zhHans: Messages = {
   "settings.personal.history.restored": "已创建新的本地副本。请在清单中检查，如需同步，请明确选择该副本。",
   "settings.personal.history.restoredRefreshFailed":
     "已创建新的本地副本，但清单刷新失败。请点击「刷新本地状态」查看副本，无需再次恢复。",
+  "session.output.view": "查看输出",
+  "session.output.offline": "已保存输出 · 离线，只读",
+  "session.output.saveFailed": "无法在本机保存输出，之前保存的内容仍会保留。请重试关闭，或选择不保存并关闭。",
+  "session.output.restoreFailed": "无法显示已保存的输出。请关闭此标签页，再次选择查看输出。",
+  "session.output.unavailable": "已保存的输出不可用或无法读取。请刷新最近会话后重试。",
+  "session.output.closeWithoutSaving": "不保存并关闭",
+  "session.output.windowCloseFailed": "窗口未能完成关闭。请先关闭会话标签页，再重试关闭窗口。",
 };

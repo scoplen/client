@@ -11,11 +11,12 @@ function show(
   api: InventoryApi,
   locale: "en" | "zh-Hans" = "en",
   onConnect?: (profileId: string, label: string) => void,
+  onViewOutput?: (output: import("../src/ipc/bindings").SavedTerminalOutput) => void,
 ) {
   return render(
     <I18nProvider locale={locale}>
       <InventoryContext.Provider value={api}>
-        <HostsHome onConnect={onConnect} />
+        <HostsHome onConnect={onConnect} onViewOutput={onViewOutput} />
       </InventoryContext.Provider>
     </I18nProvider>,
   );
@@ -28,6 +29,37 @@ const names = () =>
     .map((b) => b.textContent);
 
 describe("the host list", () => {
+  it("reads saved output only after an explicit action, with local unavailable handling", async () => {
+    const api = sampleInventory(sampleHosts());
+    const recent = api.recentSessions;
+    api.recentSessions = async () => {
+      const result = await recent();
+      return result.status === "ok"
+        ? { ...result, data: result.data.map((entry) => ({ ...entry, hasSavedOutput: true })) }
+        : result;
+    };
+    const output = {
+      target: { profileId: "l-1", hostName: "prod-api-01", loginName: "deploy" },
+      snapshot: { version: 1, columns: 80, rows: 24, data: "saved terminal screen" },
+    };
+    api.savedOutput = vi.fn().mockResolvedValue({ status: "ok", data: output });
+    const onView = vi.fn();
+    const onConnect = vi.fn();
+    show(api, "en", onConnect, onView);
+    await screen.findByText("7 hosts");
+    await userEvent.click(
+      within(screen.getByRole("navigation", { name: "Hosts" })).getByRole("button", { name: "Recent" }),
+    );
+    expect(api.savedOutput).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: "View output" })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "View output" }));
+    expect(onView).toHaveBeenCalledWith(output);
+    expect(onConnect).not.toHaveBeenCalled();
+    api.savedOutput = vi.fn().mockResolvedValue({ status: "error", error: "unavailable" });
+    await userEvent.click(screen.getByRole("button", { name: "View output" }));
+    expect(await screen.findByText(/Saved output is unavailable/)).toBeTruthy();
+    expect(onView).toHaveBeenCalledTimes(1);
+  });
   it("lists hosts with favorites first and shows the count", async () => {
     const { container } = show(sampleInventory(sampleHosts()));
     expect(await screen.findByText("7 hosts")).toBeTruthy();

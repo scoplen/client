@@ -423,7 +423,7 @@ mod device_local {
         let (_dir, store) = open();
         let profile = scoplen_model::new_uuid_v7().unwrap();
         let active = store.record_session_start(profile, SessionKind::Terminal).unwrap();
-        store.save_scrollback(active, b"secret terminal output").unwrap();
+        store.save_scrollback(active, &terminal_snapshot("secret terminal output")).unwrap();
         assert!(
             matches!(store.forget_session(active), Err(StoreError::SessionActive(id)) if id == active)
         );
@@ -443,27 +443,91 @@ mod device_local {
         let (_dir, store) = open();
         let profile = scoplen_model::new_uuid_v7().unwrap();
         let first = store.record_session_start(profile, SessionKind::Terminal).unwrap();
+        store.save_scrollback(first, &terminal_snapshot("old output")).unwrap();
         for _ in 0..SESSION_HISTORY_LIMIT {
             store.record_session_start(profile, SessionKind::Terminal).unwrap();
         }
         let recent = store.recent_sessions(SESSION_HISTORY_LIMIT + 10).unwrap();
         assert_eq!(recent.len(), SESSION_HISTORY_LIMIT);
         assert!(!recent.iter().any(|e| e.id == first), "the oldest entry was removed");
+        assert!(store.scrollback(first).unwrap().is_none());
+        assert!(store.save_scrollback(first, &terminal_snapshot("late")).is_err());
     }
 
     #[test]
     fn scrollback_and_window_state_are_saved_and_replaced() {
         let (_dir, store) = open();
-        let session = scoplen_model::new_uuid_v7().unwrap();
-        store.save_scrollback(session, b"$ ls\r\n").unwrap();
-        store.save_scrollback(session, b"$ ls\r\nREADME\r\n").unwrap();
-        assert_eq!(store.scrollback(session).unwrap().unwrap(), b"$ ls\r\nREADME\r\n");
+        let session = store
+            .record_session_start(scoplen_model::new_uuid_v7().unwrap(), SessionKind::Terminal)
+            .unwrap();
+        store.save_scrollback(session, &terminal_snapshot("$ ls\r\n")).unwrap();
+        store.save_scrollback(session, &terminal_snapshot("$ ls\r\nREADME\r\n")).unwrap();
+        assert_eq!(
+            store.scrollback(session).unwrap().unwrap(),
+            terminal_snapshot("$ ls\r\nREADME\r\n")
+        );
         store.remove_scrollback(session).unwrap();
         assert!(store.scrollback(session).unwrap().is_none());
 
         assert!(store.window_state("main").unwrap().is_none());
         store.save_window_state("main", b"{\"width\":1200}").unwrap();
         assert_eq!(store.window_state("main").unwrap().unwrap(), b"{\"width\":1200}");
+    }
+
+    fn terminal_snapshot(data: &str) -> crate::terminal_output::TerminalSnapshot {
+        crate::terminal_output::TerminalSnapshot {
+            version: 1,
+            columns: 80,
+            rows: 24,
+            data: data.into(),
+        }
+    }
+
+    #[test]
+    fn snapshots_reject_invalid_owners_and_bounds_without_replacing_saved_state() {
+        use crate::terminal_output::{MAX_SNAPSHOT_BYTES, SavedOutputError};
+        let (_dir, store) = open();
+        let profile = scoplen_model::new_uuid_v7().unwrap();
+        let terminal = store.record_session_start(profile, SessionKind::Terminal).unwrap();
+        let files = store.record_session_start(profile, SessionKind::Files).unwrap();
+        let valid = terminal_snapshot("last valid output");
+        assert_eq!(store.save_scrollback(files, &valid), Err(SavedOutputError::Unavailable));
+        store.save_scrollback(terminal, &valid).unwrap();
+        for bad in [
+            terminal_snapshot(&"x".repeat(MAX_SNAPSHOT_BYTES)),
+            crate::terminal_output::TerminalSnapshot { columns: 0, ..valid.clone() },
+        ] {
+            assert_eq!(
+                store.save_scrollback(terminal, &bad),
+                Err(SavedOutputError::InvalidSnapshot)
+            );
+            assert_eq!(store.scrollback(terminal).unwrap().unwrap(), valid);
+        }
+        store.record_session_end(terminal, SessionOutcome::Closed).unwrap();
+        store.forget_session(terminal).unwrap();
+        assert_eq!(store.save_scrollback(terminal, &valid), Err(SavedOutputError::Unavailable));
+    }
+
+    #[test]
+    fn snapshot_retention_evicts_oldest_output_but_keeps_history() {
+        use crate::terminal_output::MAX_SAVED_OUTPUT_BYTES;
+        let (_dir, store) = open();
+        let profile = scoplen_model::new_uuid_v7().unwrap();
+        let payload = terminal_snapshot(&"x".repeat(1024 * 1024 - 100));
+        let mut ids = Vec::new();
+        for _ in 0..65 {
+            let id = store.record_session_start(profile, SessionKind::Terminal).unwrap();
+            store.save_scrollback(id, &payload).unwrap();
+            ids.push(id);
+        }
+        assert!(store.scrollback(ids[0]).unwrap().is_none());
+        assert!(store.session(ids[0]).unwrap().is_some());
+        assert!(store.scrollback(ids[64]).unwrap().is_some());
+        let size: i64 = store
+            .conn()
+            .query_row("SELECT sum(length(data)) FROM scrollback", [], |row| row.get(0))
+            .unwrap();
+        assert!(size <= MAX_SAVED_OUTPUT_BYTES as i64);
     }
 
     #[test]

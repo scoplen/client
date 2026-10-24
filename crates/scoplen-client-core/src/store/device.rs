@@ -9,6 +9,9 @@ use scoplen_crypto::SecretVec;
 use uuid::Uuid;
 
 use super::{Store, StoreError, uuid_from};
+use crate::terminal_output::{
+    MAX_SAVED_OUTPUT_BYTES, MAX_SNAPSHOT_BYTES, SavedOutputError, TerminalSnapshot,
+};
 
 /// How many sessions the history keeps; older ones are removed.
 pub const SESSION_HISTORY_LIMIT: usize = 1_000;
@@ -170,6 +173,10 @@ impl Store {
              (SELECT id FROM session_history ORDER BY started_at DESC, id DESC LIMIT ?1)",
             params![SESSION_HISTORY_LIMIT as i64],
         )?;
+        tx.execute(
+            "DELETE FROM scrollback WHERE session NOT IN (SELECT id FROM session_history)",
+            [],
+        )?;
         tx.commit()?;
         Ok(id)
     }
@@ -247,25 +254,67 @@ impl Store {
 
     /// Keeps a session's serialized terminal contents, for restoring it after
     /// a reconnect or restart.
-    pub fn save_scrollback(&self, session: Uuid, data: &[u8]) -> Result<(), StoreError> {
-        self.conn().execute(
+    pub fn save_scrollback(
+        &self,
+        session: Uuid,
+        snapshot: &TerminalSnapshot,
+    ) -> Result<(), SavedOutputError> {
+        let data = snapshot.encode()?;
+        let mut conn = self.conn();
+        let tx = conn.transaction().map_err(|_| SavedOutputError::Storage)?;
+        let terminal: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM session_history WHERE id = ?1 AND kind = 1)",
+                params![session.as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .map_err(|_| SavedOutputError::Storage)?;
+        if !terminal {
+            return Err(SavedOutputError::Unavailable);
+        }
+        tx.execute(
             "INSERT INTO scrollback (session, data, updated_at) VALUES (?1, ?2, ?3)
              ON CONFLICT (session) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
-            params![session.as_bytes().as_slice(), data, now()?],
-        )?;
+            params![session.as_bytes().as_slice(), data, tx.query_row(
+                "SELECT max(?1, coalesce(max(updated_at), 0) + 1) FROM scrollback",
+                params![now().map_err(|_| SavedOutputError::Storage)?], |row| row.get::<_, i64>(0),
+            ).map_err(|_| SavedOutputError::Storage)?],
+        ).map_err(|_| SavedOutputError::Storage)?;
+        loop {
+            let size: i64 = tx
+                .query_row("SELECT coalesce(sum(length(data)), 0) FROM scrollback", [], |row| {
+                    row.get(0)
+                })
+                .map_err(|_| SavedOutputError::Storage)?;
+            if size <= MAX_SAVED_OUTPUT_BYTES as i64 {
+                break;
+            }
+            tx.execute("DELETE FROM scrollback WHERE session IN (SELECT session FROM scrollback ORDER BY updated_at, session LIMIT 1)", [])
+                .map_err(|_| SavedOutputError::Storage)?;
+        }
+        tx.commit().map_err(|_| SavedOutputError::Storage)?;
         Ok(())
     }
 
     /// A session's saved terminal contents.
-    pub fn scrollback(&self, session: Uuid) -> Result<Option<Vec<u8>>, StoreError> {
-        Ok(self
+    pub fn scrollback(&self, session: Uuid) -> Result<Option<TerminalSnapshot>, SavedOutputError> {
+        let bytes: Option<Vec<u8>> = self
             .conn()
             .query_row(
-                "SELECT data FROM scrollback WHERE session = ?1",
-                params![session.as_bytes().as_slice()],
+                "SELECT s.data FROM scrollback s JOIN session_history h ON h.id = s.session WHERE s.session = ?1 AND h.kind = 1 AND length(s.data) <= ?2",
+                params![session.as_bytes().as_slice(), MAX_SNAPSHOT_BYTES as i64],
                 |row| row.get(0),
             )
-            .optional()?)
+            .optional().map_err(|_| SavedOutputError::Storage)?;
+        bytes.map(|bytes| TerminalSnapshot::decode(&bytes)).transpose()
+    }
+
+    /// Whether retention still holds an output snapshot, without reading its content.
+    pub fn has_scrollback(&self, session: Uuid) -> Result<bool, StoreError> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM scrollback s JOIN session_history h ON s.session = h.id WHERE s.session = ?1 AND h.kind = 1 AND length(s.data) <= ?2)",
+            params![session.as_bytes().as_slice(), MAX_SNAPSHOT_BYTES as i64], |row| row.get(0),
+        )?)
     }
 
     /// Forgets a session's terminal contents.

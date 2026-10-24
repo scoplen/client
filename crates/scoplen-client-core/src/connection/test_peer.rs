@@ -44,6 +44,41 @@ impl server::Handler for Handler {
             server::Auth::reject()
         })
     }
+
+    async fn channel_open_session(
+        &mut self,
+        _channel: russh::Channel<server::Msg>,
+        reply: server::ChannelOpenHandle,
+        _session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        reply.accept().await;
+        Ok(())
+    }
+
+    async fn pty_request(
+        &mut self,
+        channel: russh::ChannelId,
+        _term: &str,
+        _columns: u32,
+        _rows: u32,
+        _width: u32,
+        _height: u32,
+        _modes: &[(russh::Pty, u32)],
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_success(channel)?;
+        Ok(())
+    }
+
+    async fn shell_request(
+        &mut self,
+        channel: russh::ChannelId,
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_success(channel)?;
+        session.data(channel, b"\x1b[32mactual SSH saved-output fixture\x1b[0m\r\n".to_vec())?;
+        Ok(())
+    }
 }
 
 impl Peer {

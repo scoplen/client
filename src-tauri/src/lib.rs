@@ -38,6 +38,8 @@ pub fn ipc() -> Builder<tauri::Wry> {
             ssh::session_stop_reconnecting,
             ssh::session_fail_transport,
             ssh::session_close_transport,
+            ssh::session_save_output,
+            inventory::session_saved_output,
             inventory::inventory_areas,
             inventory::inventory_groups,
             inventory::inventory_hosts,
@@ -197,6 +199,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("the application failed to start")
         .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code: None, .. } = &event
+                && let Some(window) = window_state::main_window(app)
+            {
+                api.prevent_exit();
+                // Route an ordinary application quit through the same final-checkpoint close.
+                let _ = window.close();
+                return;
+            }
             if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
                 app.state::<std::sync::Arc<scoplen_client_core::personal_server::PersonalSyncRuntime>>().shutdown();
             }

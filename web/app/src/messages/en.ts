@@ -849,6 +849,15 @@ export const en = {
     "Created a new local copy. Review it in your inventory; select it explicitly if you want to sync it.",
   "settings.personal.history.restoredRefreshFailed":
     "Created a new local copy, but the inventory list could not be refreshed. Choose Refresh local status to view it; you do not need to restore it again.",
+  "session.output.view": "View output",
+  "session.output.offline": "Saved output · Offline, read-only",
+  "session.output.saveFailed":
+    "Output could not be saved locally. The previous saved output is kept. Try closing again, or close without saving.",
+  "session.output.restoreFailed": "Saved output could not be displayed. Close this tab and try View output again.",
+  "session.output.unavailable": "Saved output is unavailable or could not be read. Refresh Recent and try again.",
+  "session.output.closeWithoutSaving": "Close without saving",
+  "session.output.windowCloseFailed":
+    "The window could not finish closing. Close the session tabs, then try closing the window again.",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };

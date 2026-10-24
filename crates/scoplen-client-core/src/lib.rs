@@ -17,6 +17,7 @@ pub mod repository;
 pub mod session_lifecycle;
 pub mod session_manager;
 pub mod store;
+pub mod terminal_output;
 
 #[cfg(test)]
 mod testing;

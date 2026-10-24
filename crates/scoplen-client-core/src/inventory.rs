@@ -28,6 +28,7 @@ use crate::repository::{
 };
 use crate::store::device::{SESSION_HISTORY_LIMIT, SessionKind, SessionOutcome};
 use crate::store::{LocalWrite, NewObject, Store, StoreError};
+use crate::terminal_output::{SavedOutputError, TerminalSnapshot};
 
 const UNDO_LIFETIME: Duration = Duration::from_secs(5 * 60);
 const MAX_OPEN_SSH_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -241,6 +242,18 @@ pub struct RecentSession {
     pub ended_at: Option<String>,
     /// End status, if it has ended.
     pub outcome: Option<RecentSessionOutcome>,
+    /// A bounded local snapshot is retained for explicit offline viewing.
+    pub has_saved_output: bool,
+}
+
+/// Offline terminal output with its current saved Login, without opening a transport.
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedTerminalOutput {
+    /// Current display-safe reconnect target.
+    pub target: ReconnectTarget,
+    /// Local rendered state, never replicated.
+    pub snapshot: TerminalSnapshot,
 }
 
 /// A live, display-safe terminal target resolved from an ended session.
@@ -1954,6 +1967,11 @@ impl Inventory {
         let hosts = self.host_records()?;
         let profiles = self.profiles()?;
         let sessions = self.store.recent_sessions(SESSION_HISTORY_LIMIT).map_err(failure)?;
+        let saved = sessions
+            .iter()
+            .map(|session| self.store.has_scrollback(session.id).map(|saved| (session.id, saved)))
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(failure)?;
         Ok(sessions
             .into_iter()
             .filter_map(|session| {
@@ -1970,6 +1988,7 @@ impl Inventory {
                     started_at: session.started_at.to_string(),
                     ended_at: session.ended_at.map(|value| value.to_string()),
                     outcome: session.outcome.map(recent_session_outcome),
+                    has_saved_output: saved.get(&session.id).copied().unwrap_or(false),
                 })
             })
             .collect())
@@ -2052,6 +2071,41 @@ impl Inventory {
             Err(StoreError::SessionActive(_)) => Err(SessionError::ActiveSession),
             Err(error) => Err(session_failure(error)),
         }
+    }
+
+    /// Read a retained terminal snapshot locally; never dial or create history.
+    pub fn saved_terminal_output(
+        &self,
+        session_id: String,
+    ) -> Result<SavedTerminalOutput, SavedOutputError> {
+        let id = Uuid::parse_str(&session_id).map_err(|_| SavedOutputError::Unavailable)?;
+        let session = self
+            .store
+            .session(id)
+            .map_err(|_| SavedOutputError::Storage)?
+            .ok_or(SavedOutputError::Unavailable)?;
+        if session.kind != SessionKind::Terminal {
+            return Err(SavedOutputError::Unavailable);
+        }
+        let snapshot = self.store.scrollback(id)?.ok_or(SavedOutputError::Unavailable)?;
+        let profiles = self.profiles().map_err(|_| SavedOutputError::Storage)?;
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.meta.id == session.profile)
+            .ok_or(SavedOutputError::Unavailable)?;
+        let hosts = self.host_records().map_err(|_| SavedOutputError::Storage)?;
+        let host = hosts
+            .iter()
+            .find(|host| host.meta.id == profile.host)
+            .ok_or(SavedOutputError::Unavailable)?;
+        Ok(SavedTerminalOutput {
+            target: ReconnectTarget {
+                profile_id: crate::inventory::id(profile.meta.id),
+                host_name: host.name.clone(),
+                login_name: profile.name.clone().unwrap_or_else(|| profile.username.clone()),
+            },
+            snapshot,
+        })
     }
 
     /// Resolves an ended terminal session to its current live login and Host.

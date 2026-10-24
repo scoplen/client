@@ -3,5 +3,11 @@
   "identifier": "main",
   "description": "What the main window may do: the application's own commands and core events, and moving the window by its tab strip.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-start-dragging", "dialog:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "dialog:default"
+  ]
 }

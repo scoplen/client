@@ -2,6 +2,7 @@
 /* eslint-disable @typescript-eslint/no-invalid-void-type */
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { Terminal as XtermTerminal, type ITerminalOptions } from "@xterm/xterm";
 import {
   TerminalBackpressureError,
@@ -16,6 +17,7 @@ import {
   type TerminalProfile,
   type TerminalSink,
   type TerminalSize,
+  type TerminalSnapshot,
   type TerminalSource,
   type TerminalSubscription,
 } from "./types";
@@ -148,6 +150,10 @@ export class ScoplenTerminalElement extends HTMLElementBase {
   private terminal: XtermTerminal | null = null;
   private searchAddon: SearchAddon | null = null;
   private fitAddon: FitAddon | null = null;
+  private serializeAddon: SerializeAddon | null = null;
+  private readonly flushWaiters = new Set<(error: Error) => void>();
+  private restoring = false;
+  private _readOnly = false;
   private resizeObserver: ResizeObserver | null = null;
   private fitFrame = 0;
   private terminalDisposables: Array<{ dispose(): void }> = [];
@@ -200,7 +206,87 @@ export class ScoplenTerminalElement extends HTMLElementBase {
     return this._source;
   }
 
+  /** Suppress keyboard input, paste, broadcast and parser replies for offline viewing. */
+  get readOnly(): boolean {
+    return this._readOnly;
+  }
+  set readOnly(value: boolean) {
+    if (this._readOnly === value) return;
+    this._readOnly = value;
+    this.sinkGeneration += 1;
+    if (this.terminal) this.terminal.options.disableStdin = value;
+  }
+
+  private flushTerminal(): Promise<XtermTerminal> {
+    const terminal = this.terminal;
+    if (!terminal || !this.connected)
+      return Promise.reject(new TerminalError("renderer", "terminal renderer is unavailable"));
+    return new Promise((resolve, reject) => {
+      const cancelled = (error: Error) => reject(error);
+      this.flushWaiters.add(cancelled);
+      terminal.write("", () => {
+        this.flushWaiters.delete(cancelled);
+        if (this.terminal !== terminal || !this.connected) reject(new TerminalDisconnectedError());
+        else resolve(terminal);
+      });
+    });
+  }
+
+  /** Serialize only output already processed by the renderer. */
+  async serialize(): Promise<TerminalSnapshot> {
+    const terminal = await this.flushTerminal();
+    if (!this.serializeAddon || this.restoring)
+      throw new TerminalError("snapshot", "terminal restoration is still pending");
+    const snapshot: TerminalSnapshot = {
+      version: 1,
+      columns: terminal.cols,
+      rows: terminal.rows,
+      data: this.serializeAddon.serialize(),
+    };
+    this.validateSnapshot(snapshot);
+    return snapshot;
+  }
+
+  /** Restore offline state; no transport or parser-generated reply may participate. */
+  async restore(snapshot: TerminalSnapshot): Promise<void> {
+    this.validateSnapshot(snapshot);
+    if (this._source || this._sink || this.restoring)
+      throw new TerminalError("snapshot", "restore requires an offline terminal");
+    const terminal = this.terminal;
+    if (!terminal) throw new TerminalError("renderer", "terminal renderer is unavailable");
+    this.restoring = true;
+    this.sinkGeneration += 1;
+    try {
+      await this.flushTerminal();
+      terminal.reset();
+      terminal.resize(snapshot.columns, snapshot.rows);
+      this.outputBytes = toBinary(snapshot.data).slice(-this._maxOutputBytes);
+      terminal.write(snapshot.data);
+      await this.flushTerminal();
+    } finally {
+      this.restoring = false;
+      this.scheduleFit();
+    }
+  }
+
+  private validateSnapshot(snapshot: TerminalSnapshot): void {
+    if (
+      snapshot.version !== 1 ||
+      !Number.isSafeInteger(snapshot.columns) ||
+      !Number.isSafeInteger(snapshot.rows) ||
+      snapshot.columns < 1 ||
+      snapshot.columns > 1000 ||
+      snapshot.rows < 1 ||
+      snapshot.rows > 1000 ||
+      typeof snapshot.data !== "string" ||
+      new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > DEFAULT_MAX_OUTPUT_BYTES
+    ) {
+      throw new TerminalError("snapshot", "terminal snapshot has invalid dimensions or exceeds 1 MiB");
+    }
+  }
+
   set source(source: TerminalSource | null) {
+    if (this.restoring && source) throw new TerminalError("snapshot", "wait for restoration before attaching a source");
     this._source = source;
     if (this.connected) {
       this.attachSource();
@@ -212,6 +298,7 @@ export class ScoplenTerminalElement extends HTMLElementBase {
   }
 
   set sink(sink: TerminalSink | null) {
+    if (this.restoring && sink) throw new TerminalError("snapshot", "wait for restoration before attaching a sink");
     if (this._sink === sink) return;
     this.releaseSinkWriter();
     this._sink = sink;
@@ -341,6 +428,7 @@ export class ScoplenTerminalElement extends HTMLElementBase {
 
   /** Send one binary input frame to the configured sink. */
   send(chunk: TerminalBytes): Promise<void> {
+    if (this._readOnly || this.restoring) return Promise.resolve();
     if (!isBytes(chunk)) {
       return Promise.reject(new TypeError("terminal input must be a Uint8Array"));
     }
@@ -510,14 +598,19 @@ export class ScoplenTerminalElement extends HTMLElementBase {
       terminal.loadAddon(this.searchAddon);
       this.fitAddon = new FitAddon();
       terminal.loadAddon(this.fitAddon);
+      this.serializeAddon = new SerializeAddon();
+      terminal.loadAddon(this.serializeAddon);
+      terminal.options.disableStdin = this._readOnly;
       this.terminalDisposables = [
         terminal.onResize(({ cols, rows }) => {
           this.dispatchEvent(new CustomEvent<TerminalSize>("terminal-resize", { detail: { columns: cols, rows } }));
         }),
         terminal.onData((data) => {
+          if (this.restoring || this._readOnly) return;
           void this.send(toBinary(data)).catch(() => undefined);
         }),
         terminal.onBinary((data) => {
+          if (this.restoring || this._readOnly) return;
           void this.send(toLatin1(data)).catch(() => undefined);
         }),
       ];
@@ -559,6 +652,10 @@ export class ScoplenTerminalElement extends HTMLElementBase {
   }
 
   private teardownTerminal(): void {
+    for (const cancel of this.flushWaiters) cancel(new TerminalDisconnectedError());
+    this.flushWaiters.clear();
+    this.serializeAddon?.dispose();
+    this.serializeAddon = null;
     if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(this.fitFrame);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;

@@ -44,10 +44,12 @@ type Toast = { message: string; undo?: string } | null;
 export function HostsHome({
   manage = false,
   onConnect,
+  onViewOutput,
 }: {
   /** Whether the logins, keys, and routes editors are offered. */
   manage?: boolean;
   onConnect?: (profileId: Id, label: string) => void;
+  onViewOutput?: (output: import("../ipc/bindings").SavedTerminalOutput) => void;
 } = {}) {
   const { t } = useI18n();
   const api = useInventory();
@@ -112,6 +114,20 @@ export function HostsHome({
             : t("hosts.recentSessions.reconnectFailed");
         setToast({ message });
       }
+    } finally {
+      setReconnectBusy(null);
+    }
+  };
+
+  const viewOutput = async (sessionId: Id) => {
+    if (reconnectBusy || !onViewOutput) return;
+    setReconnectBusy(sessionId);
+    try {
+      const outcome = await api.savedOutput(sessionId);
+      if (outcome.status === "ok") onViewOutput(outcome.data);
+      else setToast({ message: t("session.output.unavailable") });
+    } catch {
+      setToast({ message: t("session.output.unavailable") });
     } finally {
       setReconnectBusy(null);
     }
@@ -247,6 +263,7 @@ export function HostsHome({
                   sessions={recentSessions}
                   onSelect={setSelected}
                   onReconnect={onConnect ? reconnect : undefined}
+                  onViewOutput={onViewOutput ? viewOutput : undefined}
                   reconnectBusy={reconnectBusy}
                 />
               ) : null}
@@ -521,11 +538,13 @@ function RecentSessionSection({
   sessions,
   onSelect,
   onReconnect,
+  onViewOutput,
   reconnectBusy,
 }: {
   sessions: Loaded<RecentSession[]>;
   onSelect: (id: Id) => void;
   onReconnect?: (id: Id) => void;
+  onViewOutput?: (id: Id) => void;
   reconnectBusy: Id | null;
 }) {
   const { t } = useI18n();
@@ -558,6 +577,7 @@ function RecentSessionSection({
               session={session}
               onSelect={onSelect}
               onReconnect={onReconnect}
+              onViewOutput={onViewOutput}
               reconnectBusy={reconnectBusy}
             />
           ))}
@@ -571,11 +591,13 @@ function RecentSessionRow({
   session,
   onSelect,
   onReconnect,
+  onViewOutput,
   reconnectBusy,
 }: {
   session: RecentSession;
   onSelect: (id: Id) => void;
   onReconnect?: (id: Id) => void;
+  onViewOutput?: (id: Id) => void;
   reconnectBusy: Id | null;
 }) {
   const { t } = useI18n();
@@ -611,6 +633,16 @@ function RecentSessionRow({
           </time>
         ) : null}
       </button>
+      {onViewOutput && session.kind === "terminal" && session.hasSavedOutput ? (
+        <Button
+          variant="ghost"
+          disabled={reconnectBusy !== null}
+          onClick={() => onViewOutput(session.id)}
+          className="mr-1 shrink-0 px-2 text-xs"
+        >
+          {t("session.output.view")}
+        </Button>
+      ) : null}
       {onReconnect && session.kind === "terminal" && session.outcome !== null && session.endedAt !== null ? (
         <IconButton
           label={t("hosts.recentSessions.reconnect", { name: session.hostName })}

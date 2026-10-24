@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useI18n } from "./i18n";
-import type { AppInfo, Status } from "./ipc/bindings";
+import type { AppInfo, Status, SavedTerminalOutput, TerminalSnapshot } from "./ipc/bindings";
 import { Frame } from "./frame";
 import { HostsHome } from "./inventory/home";
 import { InventoryContext } from "./inventory/api";
@@ -11,7 +13,7 @@ import { SettingsView, type SettingsSection } from "./settings";
 
 type View = "hosts" | "settings";
 
-type OpenSession = { id: string; profileId: string; label: string };
+type OpenSession = { id: string; profileId: string; label: string; snapshot?: TerminalSnapshot };
 
 /** The application once its local data is open. */
 export function Shell({
@@ -30,6 +32,10 @@ export function Shell({
   const [states, setStates] = useState<Record<string, SessionState>>({});
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const inventory = useMemo(() => createInventoryApi(), []);
+  const closeControllers = useRef(new Map<string, (discard?: boolean) => Promise<boolean>>());
+  const closingTabs = useRef(false);
+  const allowWindowClose = useRef(false);
+  const [windowError, setWindowError] = useState(false);
 
   const openSession = (profileId: string, label: string) => {
     const id = `session-${Date.now()}-${sessions.length}`;
@@ -38,22 +44,95 @@ export function Shell({
     setView("hosts");
   };
 
-  const closeSession = (id: string) => closeSessions([id]);
+  const viewOutput = (output: SavedTerminalOutput) => {
+    const id = `output-${crypto.randomUUID()}`;
+    const { target, snapshot } = output;
+    setSessions((current) => [
+      ...current,
+      { id, profileId: target.profileId, label: `${target.hostName} · ${target.loginName}`, snapshot },
+    ]);
+    setActiveTab(id);
+    setView("hosts");
+  };
+
+  const closeSession = (id: string, discard = false) => {
+    void closeSessions([id], discard);
+  };
 
   // Closing tabs ends their sessions; if the open tab goes, its left neighbor opens.
-  const closeSessions = (ids: string[]) => {
+  const closeSessions = async (ids: string[], discard = false) => {
+    if (closingTabs.current) return;
+    closingTabs.current = true;
+    const closed: string[] = [];
+    let failed: string | undefined;
+    try {
+      for (const id of ids) {
+        const controller = closeControllers.current.get(id);
+        if (controller && !(await controller(discard))) {
+          failed ??= id;
+          continue;
+        }
+        closed.push(id);
+      }
+    } finally {
+      closingTabs.current = false;
+    }
     const order = ["hosts", ...sessions.map((session) => session.id)];
-    if (ids.includes(activeTab)) {
+    if (closed.includes(activeTab)) {
       const index = order.indexOf(activeTab);
       const next =
         order
           .slice(0, index)
           .reverse()
-          .find((id) => !ids.includes(id)) ?? "hosts";
+          .find((id) => !closed.includes(id)) ?? "hosts";
       setActiveTab(next);
     }
-    setSessions((current) => current.filter((session) => !ids.includes(session.id)));
+    setSessions((current) => current.filter((session) => !closed.includes(session.id)));
+    if (failed) {
+      setActiveTab(failed);
+      setView("hosts");
+    }
   };
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    const window = getCurrentWindow();
+    let active = true;
+    const subscription = window.onCloseRequested((event) => {
+      if (allowWindowClose.current) return;
+      event.preventDefault();
+      if (closingTabs.current) return;
+      closingTabs.current = true;
+      void (async () => {
+        for (const [id, close] of closeControllers.current) {
+          if (!(await close())) {
+            if (active) {
+              setActiveTab(id);
+              setView("hosts");
+            }
+            return;
+          }
+        }
+        allowWindowClose.current = true;
+        // Request normal native close again, preserving geometry and shutdown hooks.
+        await window.close();
+      })()
+        .catch(() => {
+          allowWindowClose.current = false;
+          if (active) setWindowError(true);
+        })
+        .finally(() => {
+          closingTabs.current = false;
+        });
+    });
+    void subscription.catch(() => {
+      if (active) setWindowError(true);
+    });
+    return () => {
+      active = false;
+      void subscription.then((unlisten) => unlisten()).catch(() => undefined);
+    };
+  }, []);
 
   const tabs = [
     { id: "hosts", label: t("frame.hosts") },
@@ -79,18 +158,25 @@ export function Shell({
         setView(view === "settings" ? "hosts" : "settings");
       }}
       settingsActive={view === "settings"}
-      onCloseTabs={closeSessions}
+      onCloseTabs={(ids) => {
+        void closeSessions(ids);
+      }}
       onDuplicate={(id) => {
         const session = sessions.find((candidate) => candidate.id === id);
         if (session) openSession(session.profileId, session.label);
       }}
     >
+      {windowError ? (
+        <p role="alert" className="m-0 px-4 py-2 text-sm text-attention">
+          {t("session.output.windowCloseFailed")}
+        </p>
+      ) : null}
       {view === "settings" ? (
         <SettingsView key={settingsSection} status={status} onStatus={onStatus} section={settingsSection} />
       ) : activeTab !== "hosts" ? null : (
         <InventoryContext.Provider value={inventory}>
           <main id="main" tabIndex={-1} className="h-full min-h-0 focus:outline-none">
-            <HostsHome manage onConnect={openSession} />
+            <HostsHome manage onConnect={openSession} onViewOutput={viewOutput} />
           </main>
         </InventoryContext.Provider>
       )}
@@ -101,7 +187,14 @@ export function Shell({
             profileId={session.profileId}
             label={session.label}
             active={view !== "settings" && session.id === activeTab}
-            onClose={() => closeSession(session.id)}
+            savedOutput={session.snapshot}
+            onClose={(discard) => closeSession(session.id, discard)}
+            registerClose={(close) => {
+              closeControllers.current.set(session.id, close);
+              return () => {
+                if (closeControllers.current.get(session.id) === close) closeControllers.current.delete(session.id);
+              };
+            }}
             onStateChange={(state) => setStates((current) => ({ ...current, [session.id]: state }))}
             onOpenColors={() => {
               setSettingsSection("terminal");

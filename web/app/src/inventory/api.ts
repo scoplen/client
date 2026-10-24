@@ -6,6 +6,7 @@
 // returned as typed. Nothing here carries a secret back to the interface.
 
 import { createContext, useContext } from "react";
+import type { SavedTerminalOutput, SavedOutputError } from "../ipc/bindings";
 
 export type Id = string;
 
@@ -91,6 +92,7 @@ export interface RecentSession {
   startedAt: string;
   endedAt: string | null;
   outcome: RecentSessionOutcome | null;
+  hasSavedOutput: boolean;
 }
 
 /** A current, display-safe login resolved from an ended terminal session. */
@@ -362,6 +364,7 @@ export interface InventoryApi {
   hosts(source: HostSource, query: string): Promise<Outcome<HostSummary[], Failure>>;
   /** The newest live device-local sessions, newest first. */
   recentSessions(): Promise<Outcome<RecentSession[], Failure>>;
+  savedOutput(id: Id): Promise<Outcome<SavedTerminalOutput, SavedOutputError>>;
   /** Records a lifecycle open event from a real connection owner. */
   openSession(profileId: Id, kind: RecentSessionKind): Promise<Outcome<RecentSession, SessionError>>;
   /** Records the outcome from a real connection owner. */

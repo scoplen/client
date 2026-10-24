@@ -21,6 +21,7 @@ use crate::connection::{MAX_SSH_INPUT, SshConnectionError, SshSession, terminal_
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
 use crate::session_lifecycle::SessionHistoryLease;
 use crate::store::Store;
+use crate::terminal_output::{SavedOutputError, TerminalSnapshot};
 
 const COMMAND_QUEUE: usize = 64;
 const STABLE_READY: Duration = Duration::from_secs(30);
@@ -114,6 +115,14 @@ struct SessionEntry {
     intent: watch::Sender<Intent>,
     receiver: Option<watch::Receiver<Intent>>,
     active: Option<ActiveAttempt>,
+    checkpoint: Option<CheckpointOwner>,
+}
+
+struct CheckpointOwner {
+    store: Arc<Store>,
+    history: Uuid,
+    transport: Uuid,
+    sequence: u32,
 }
 
 /// Owns logical terminal lifetimes independently of renderer visibility.
@@ -254,6 +263,7 @@ impl SessionManager {
                 intent,
                 receiver: Some(receiver),
                 active: None,
+                checkpoint: None,
             },
         );
         Ok(())
@@ -262,6 +272,32 @@ impl SessionManager {
     /// Cancel the complete logical session, including timers and prompts.
     pub fn close(&self, session_id: &str) -> Result<(), String> {
         self.intent(session_id, Intent::Close)
+    }
+
+    /// Save only a rendered checkpoint belonging to the exact current local owner.
+    pub fn save_output(
+        &self,
+        store: &Arc<Store>,
+        session_id: &str,
+        transport_id: &str,
+        sequence: u32,
+        snapshot: &TerminalSnapshot,
+    ) -> Result<(), SavedOutputError> {
+        let transport =
+            Uuid::parse_str(transport_id).map_err(|_| SavedOutputError::StaleCheckpoint)?;
+        let mut sessions = self.sessions.lock().map_err(|_| SavedOutputError::Storage)?;
+        let entry = sessions.get_mut(session_id).ok_or(SavedOutputError::StaleCheckpoint)?;
+        let owner = entry.checkpoint.as_mut().ok_or(SavedOutputError::StaleCheckpoint)?;
+        if !Arc::ptr_eq(&owner.store, store)
+            || owner.transport != transport
+            || sequence <= owner.sequence
+            || *entry.intent.borrow() == Intent::Close
+        {
+            return Err(SavedOutputError::StaleCheckpoint);
+        }
+        store.save_scrollback(owner.history, snapshot)?;
+        owner.sequence = sequence;
+        Ok(())
     }
 
     /// Start a fresh manual budget after the preceding attempt has ended.
@@ -380,6 +416,7 @@ impl SessionManager {
         if matches!(requested, Intent::None | Intent::Retry) {
             entry.intent.send_replace(Intent::None);
             entry.phase = Phase::Running;
+            entry.checkpoint = None;
             entry.active = Some(ActiveAttempt {
                 id: transport,
                 control: control.clone(),
@@ -577,6 +614,23 @@ impl SessionManager {
             move |id| closed(id, HistoryChange::Closed),
         )
         .map_err(|error| AttemptError::Local(error.to_string()))?;
+        {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| AttemptError::Local("session manager is unavailable".into()))?;
+            let entry = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| AttemptError::Local("session is closed".into()))?;
+            if entry.active.as_ref().is_some_and(|active| active.id == transport) {
+                entry.checkpoint = Some(CheckpointOwner {
+                    store: store.clone(),
+                    history: Uuid::parse_str(history.id()).expect("store UUID"),
+                    transport,
+                    sequence: 0,
+                });
+            }
+        }
         history_changed(history.id(), HistoryChange::Opened);
         let connection = prepare_connection(store, id, control, |event| {
             emit(SessionEvent::Preparation {

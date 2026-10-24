@@ -10,7 +10,7 @@ import {
   useContextMenu,
   type MarkMood,
 } from "@scoplen/ui";
-import type { ScoplenTerminalElement } from "@scoplen/terminal";
+import type { ScoplenTerminalElement, TerminalSnapshot } from "@scoplen/terminal";
 import { Palette } from "lucide-react";
 import { Channel } from "@tauri-apps/api/core";
 import { Terminal, type TerminalSink, type TerminalSource } from "@scoplen/terminal/react";
@@ -48,12 +48,16 @@ export function SessionTerminal({
   onClose,
   onStateChange,
   onOpenColors,
+  savedOutput,
+  registerClose,
 }: {
   profileId: string;
   label: string;
   /** Only the selected session may display its pending prompt. */
   active?: boolean;
-  onClose: () => void;
+  onClose: (discardOutput?: boolean) => void;
+  savedOutput?: TerminalSnapshot;
+  registerClose?: (close: (discard?: boolean) => Promise<boolean>) => () => void;
   /** Told whenever the connection state changes, so the window can show it on the tab. */
   onStateChange?: (state: SessionState) => void;
   /** Opens the terminal color settings. */
@@ -61,7 +65,19 @@ export function SessionTerminal({
 }) {
   const { t } = useI18n();
   const titleId = useId();
-  const [state, setState] = useState<SessionState>("verifying");
+  const [state, setState] = useState<SessionState>(savedOutput ? "closed" : "verifying");
+  const [offline, setOffline] = useState(!!savedOutput);
+  const [restored, setRestored] = useState(!savedOutput);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [closeFailed, setCloseFailed] = useState(false);
+  const [closingView, setClosingView] = useState(false);
+  const closing = useRef(false);
+  const checkpointTransport = useRef<string | null>(null);
+  const checkpointSequence = useRef(0);
+  const outputRevision = useRef(0);
+  const savedRevision = useRef(0);
+  const quietWaiters = useRef(new Set<() => void>());
+  const checkpointTail = useRef<Promise<void>>(Promise.resolve());
   const [error, setError] = useState<string | null>(null);
   const [hostPrompt, setHostPrompt] = useState<Extract<PreparationEvent, { kind: "trust" }> | null>(null);
   const hostKey = hostPrompt?.hostKey ?? null;
@@ -74,7 +90,7 @@ export function SessionTerminal({
   const [trustBusy, setTrustBusy] = useState(false);
   const [passphraseError, setPassphraseError] = useState<string | null>(null);
   const [source, setSource] = useState<TerminalSource | null>(null);
-  const [hasOutput, setHasOutput] = useState(false);
+  const [hasOutput, setHasOutput] = useState(!!savedOutput);
   const [transportPending, setTransportPending] = useState(false);
   const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
   const [transportId, setTransportId] = useState<string | null>(null);
@@ -143,6 +159,7 @@ export function SessionTerminal({
               if (chunk[index] !== Number.parseInt(expected.slice(index * 2, index * 2 + 2), 16)) return;
             }
             const data = chunk.subarray(16);
+            if (data.length) outputRevision.current++;
             if (data.length) setHasOutput(true);
             onChunk(data);
             return;
@@ -157,6 +174,7 @@ export function SessionTerminal({
             return;
           switch (event.kind) {
             case "starting":
+              checkpointTransport.current = event.transportId;
               clearPreparation();
               currentTransport.current = event.transportId;
               setTransportId(event.transportId);
@@ -221,6 +239,8 @@ export function SessionTerminal({
             case "failed":
               clearPreparation();
               connectionEnded.current = true;
+              for (const resolve of quietWaiters.current) resolve();
+              quietWaiters.current.clear();
               currentTransport.current = null;
               setTransportId(null);
               setTransportPending(false);
@@ -235,7 +255,13 @@ export function SessionTerminal({
           .sessionReserveTransport(sessionId, true)
           .then((reservation) => {
             if (reservation.status === "error") return reservation;
-            if (!active || connectionEnded.current || !mounted.current || current !== generation.current) {
+            if (
+              !active ||
+              closing.current ||
+              connectionEnded.current ||
+              !mounted.current ||
+              current !== generation.current
+            ) {
               void commands.sessionCloseTransport(sessionId).catch(() => undefined);
               return { status: "ok" as const, data: null };
             }
@@ -266,7 +292,10 @@ export function SessionTerminal({
             setError(cause instanceof Error ? cause.message : String(cause));
           })
           .finally(() => {
-            if (!mounted.current || current !== generation.current) return;
+            if (!active || !mounted.current || current !== generation.current) return;
+            connectionEnded.current = true;
+            for (const resolve of quietWaiters.current) resolve();
+            quietWaiters.current.clear();
             connecting.current = false;
             setTransportPending(false);
           });
@@ -309,7 +338,115 @@ export function SessionTerminal({
     void commands.sessionCloseTransport(sessionId).catch(() => undefined);
   }, [sessionId]);
 
+  const checkpoint = useCallback(
+    (force = false) => {
+      const ownerGeneration = generation.current;
+      const transport = checkpointTransport.current;
+      const operation = checkpointTail.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (!mounted.current || ownerGeneration !== generation.current || checkpointTransport.current !== transport)
+            return;
+          if (
+            !transport ||
+            !terminal.current ||
+            !outputRevision.current ||
+            (!force && savedRevision.current === outputRevision.current)
+          )
+            return;
+          const revision = outputRevision.current;
+          const snapshot = await terminal.current.serialize();
+          if (!mounted.current || ownerGeneration !== generation.current || checkpointTransport.current !== transport)
+            return;
+          const result = await commands.sessionSaveOutput(sessionId, transport, ++checkpointSequence.current, snapshot);
+          if (mounted.current && ownerGeneration === generation.current && checkpointTransport.current === transport) {
+            if (result.status === "error") throw new Error(result.error);
+            savedRevision.current = revision;
+            setSaveError(null);
+          }
+        });
+      checkpointTail.current = operation;
+      return operation;
+    },
+    [sessionId],
+  );
+
+  const prepareClose = useCallback(
+    async (discard = false) => {
+      if (closing.current) return false;
+      if (discard) return true;
+      closing.current = true;
+      setClosingView(true);
+      try {
+        if (!offline && connecting.current && !connectionEnded.current) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          let resolveQuiet!: () => void;
+          const quiet = new Promise<void>((resolve, reject) => {
+            resolveQuiet = resolve;
+            quietWaiters.current.add(resolve);
+            timer = setTimeout(() => reject(new Error("terminal close timed out")), 10_000);
+          });
+          try {
+            await Promise.all([
+              quiet,
+              commands.sessionStopReconnecting(sessionId).then((result) => {
+                if (result.status === "error" && checkpointTransport.current) throw new Error(result.error);
+              }),
+            ]);
+          } finally {
+            clearTimeout(timer);
+            quietWaiters.current.delete(resolveQuiet);
+          }
+        }
+        if (!offline) await checkpoint(true);
+        return true;
+      } catch {
+        setSaveError(translate.current("session.output.saveFailed"));
+        setCloseFailed(true);
+        return false;
+      } finally {
+        closing.current = false;
+        setClosingView(false);
+      }
+    },
+    [offline, sessionId, checkpoint],
+  );
+  useEffect(() => registerClose?.(prepareClose), [registerClose, prepareClose]);
+
   useEffect(() => {
+    if (offline) return;
+    const timer = setInterval(() => {
+      if (closing.current) return;
+      const current = generation.current;
+      const transport = checkpointTransport.current;
+      void checkpoint().catch(() => {
+        if (mounted.current && current === generation.current && checkpointTransport.current === transport)
+          setSaveError(translate.current("session.output.saveFailed"));
+      });
+    }, 5_000);
+    return () => clearInterval(timer);
+  }, [offline, checkpoint]);
+
+  useEffect(() => {
+    if (!savedOutput) return;
+    let active = true;
+    void Promise.resolve()
+      .then(async () => {
+        if (active) await terminal.current?.restore(savedOutput);
+      })
+      .then(() => {
+        if (active) setRestored(true);
+      })
+      .catch(() => {
+        if (active) setSaveError(translate.current("session.output.restoreFailed"));
+      });
+    return () => {
+      active = false;
+    };
+  }, [savedOutput]);
+
+  useEffect(() => {
+    if (offline) return;
     let active = true;
     const current = ++generation.current;
     mounted.current = true;
@@ -338,7 +475,7 @@ export function SessionTerminal({
       mounted.current = false;
       void commands.sessionCloseTransport(sessionId).catch(() => undefined);
     };
-  }, [connectSession, profileId, sessionId]);
+  }, [connectSession, profileId, sessionId, offline]);
 
   const interruptTransport = (failure: boolean, message: string | null) => {
     const current = generation.current;
@@ -411,6 +548,12 @@ export function SessionTerminal({
   };
 
   const reconnect = () => {
+    if (closing.current || !restored) return;
+    if (offline) {
+      setOffline(false);
+      setSaveError(null);
+      return;
+    }
     if (!mounted.current || transportPending || retrying.current || (state !== "closed" && state !== "failed")) return;
     if (!connecting.current) {
       retrying.current = true;
@@ -503,7 +646,7 @@ export function SessionTerminal({
                 aria-hidden="true"
                 className={`size-1.5 rounded-full ${state === "connected" ? "bg-primary" : state === "failed" ? "bg-attention" : "bg-muted-foreground"}`}
               />
-              {status}
+              {offline ? t("session.output.offline") : status}
             </p>
           </div>
         </div>
@@ -519,7 +662,7 @@ export function SessionTerminal({
             </Button>
           ) : null}
           {state === "closed" || state === "failed" ? (
-            <Button variant="primary" disabled={transportPending} onClick={reconnect}>
+            <Button variant="primary" disabled={transportPending || !restored || closingView} onClick={reconnect}>
               {t("session.reconnect")}
             </Button>
           ) : null}
@@ -530,18 +673,34 @@ export function SessionTerminal({
           ) : null}
           <Button
             variant="ghost"
+            disabled={closingView}
             onClick={() => {
-              mounted.current = false;
-              generation.current++;
-              if (passphraseInput.current) passphraseInput.current.value = "";
-              closeTransport();
-              onClose();
+              if (registerClose) onClose();
+              else
+                void prepareClose().then((saved) => {
+                  if (saved) {
+                    closeTransport();
+                    onClose();
+                  }
+                });
             }}
           >
             {t("session.close")}
           </Button>
         </div>
       </header>
+      {saveError ? (
+        <div className="mx-4 mb-2 flex flex-wrap items-center gap-2">
+          <p role="alert" className="m-0 text-sm text-attention">
+            {saveError}
+          </p>
+          {closeFailed ? (
+            <Button variant="ghost" disabled={closingView} onClick={() => onClose(true)}>
+              {t("session.output.closeWithoutSaving")}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {automatic ? (
         <p className="mx-4 mt-0 mb-2 text-xs text-muted-foreground">{t("session.reconnecting.newShell")}</p>
       ) : null}
@@ -578,6 +737,7 @@ export function SessionTerminal({
             ref={terminal}
             source={source}
             sink={state === "connected" ? inputSink : null}
+            readOnly={offline || closingView || state !== "connected"}
             aria-label={t("session.output")}
             className={`h-full min-h-0 transition-opacity duration-(--duration-overlay) ${state === "connected" || hasOutput ? "opacity-100" : "opacity-40"}`}
             profile={terminalProfile}

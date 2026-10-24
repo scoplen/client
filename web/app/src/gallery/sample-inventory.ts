@@ -266,6 +266,7 @@ const seededRecentSessions: RecentSession[] = [
     startedAt: String(Date.UTC(2026, 9, 7, 9, 15)),
     endedAt: String(Date.UTC(2026, 9, 7, 10, 2)),
     outcome: "closed",
+    hasSavedOutput: false,
   },
   {
     id: "s-db-1",
@@ -278,6 +279,7 @@ const seededRecentSessions: RecentSession[] = [
     startedAt: String(Date.UTC(2026, 9, 6, 16, 40)),
     endedAt: null,
     outcome: null,
+    hasSavedOutput: false,
   },
 ];
 
@@ -491,6 +493,7 @@ export function sampleInventory(
                 .sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name)),
             ),
           ),
+    savedOutput: () => wait({ status: "error" as const, error: "unavailable" as const }),
     recentSessions: () =>
       options.failRecentSessions
         ? wait({
@@ -516,6 +519,7 @@ export function sampleInventory(
         startedAt: now,
         endedAt: null,
         outcome: null,
+        hasSavedOutput: false,
       };
       sessions.unshift(session);
       sessionProfiles.set(session.id, profileId);

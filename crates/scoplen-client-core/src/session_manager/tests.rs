@@ -11,6 +11,141 @@ fn store() -> (tempfile::TempDir, Arc<Store>) {
     (dir, Arc::new(store))
 }
 
+fn snapshot(data: &str) -> TerminalSnapshot {
+    TerminalSnapshot { version: 1, columns: 80, rows: 24, data: data.into() }
+}
+
+#[test]
+fn checkpoint_ownership_rejects_cross_store_attempt_sequence_and_forgotten_history() {
+    use crate::store::device::{SessionKind, SessionOutcome};
+    let (_dir, local) = store();
+    let (_other_dir, other) = store();
+    let history = local.record_session_start(Uuid::now_v7(), SessionKind::Terminal).unwrap();
+    let manager = SessionManager::default();
+    manager.reserve("logical", true).unwrap();
+    let transport = Uuid::now_v7();
+    manager.sessions.lock().unwrap().get_mut("logical").unwrap().checkpoint =
+        Some(CheckpointOwner { store: local.clone(), history, transport, sequence: 0 });
+    let saved = snapshot("last valid rendered screen");
+    manager.save_output(&local, "logical", &transport.to_string(), 1, &saved).unwrap();
+    for result in [
+        manager.save_output(&other, "logical", &transport.to_string(), 2, &saved),
+        manager.save_output(&local, "other", &transport.to_string(), 2, &saved),
+        manager.save_output(&local, "logical", &Uuid::now_v7().to_string(), 2, &saved),
+        manager.save_output(&local, "logical", &transport.to_string(), 1, &saved),
+    ] {
+        assert_eq!(result, Err(SavedOutputError::StaleCheckpoint));
+    }
+    assert_eq!(local.scrollback(history).unwrap(), Some(saved.clone()));
+    local.record_session_end(history, SessionOutcome::Closed).unwrap();
+    local.forget_session(history).unwrap();
+    assert_eq!(
+        manager.save_output(&local, "logical", &transport.to_string(), 2, &saved),
+        Err(SavedOutputError::Unavailable)
+    );
+    manager.close("logical").unwrap();
+    assert_eq!(
+        manager.save_output(&local, "logical", &transport.to_string(), 3, &saved),
+        Err(SavedOutputError::StaleCheckpoint)
+    );
+}
+
+#[tokio::test]
+async fn real_ssh_output_checkpoint_survives_encrypted_reopen_and_offline_read() {
+    use crate::connection::preparation::{PreparationEvent, PreparationResponse};
+    let peer = crate::connection::test_peer::Peer::start().await;
+    let (dir, local) = store();
+    let inventory = Inventory::new(local.clone());
+    let host = inventory
+        .add_host(NewHost {
+            name: Some("saved-output peer".into()),
+            address: "127.0.0.1".into(),
+            port: Some(peer.port),
+            username: "trust-fixture".into(),
+            sign_in: SignIn::Password { password: "disposable-trust-password".into() },
+        })
+        .unwrap();
+    let manager = SessionManager::default();
+    manager.reserve("terminal", true).unwrap();
+    let bytes = Mutex::new(Vec::new());
+    let transport = Mutex::new(None);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        manager.run(
+            "terminal",
+            &host.logins[0].id,
+            None,
+            true,
+            local.clone(),
+            |event| {
+                match event {
+                    SessionEvent::Starting { transport_id, .. } => {
+                        *transport.lock().unwrap() = Some(transport_id)
+                    }
+                    SessionEvent::Preparation { event, .. } => {
+                        if let PreparationEvent::Trust { prompt_id, .. } = *event {
+                            assert_eq!(peer.authentications.load(Ordering::SeqCst), 0);
+                            manager.respond(
+                                "terminal",
+                                &prompt_id,
+                                PreparationResponse::AcceptHostKey,
+                            )?;
+                        }
+                    }
+                    SessionEvent::Closed => {
+                        let data = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+                        // The core accepts a rendered snapshot supplied by its renderer boundary.
+                        manager
+                            .save_output(
+                                &local,
+                                "terminal",
+                                transport.lock().unwrap().as_ref().unwrap(),
+                                1,
+                                &snapshot(&data),
+                            )
+                            .unwrap();
+                        manager.close("terminal")?;
+                    }
+                    _ => {}
+                }
+                Ok(())
+            },
+            |_, output| {
+                bytes.lock().unwrap().extend(output);
+                manager.stop("terminal")?;
+                Ok(())
+            },
+            |_, _| {},
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(peer.authentications.load(Ordering::SeqCst), 1);
+    let recents = inventory.recent_sessions().unwrap();
+    assert_eq!(recents.len(), 1);
+    assert!(recents[0].has_saved_output);
+    let saved = inventory.saved_terminal_output(recents[0].id.clone()).unwrap();
+    assert!(saved.snapshot.data.contains("actual SSH saved-output fixture"));
+    drop(saved);
+    drop(inventory);
+    drop(local);
+    drop(peer);
+    let file = std::fs::read(dir.path().join("local.db")).unwrap();
+    assert!(
+        !file
+            .windows(b"actual SSH saved-output fixture".len())
+            .any(|window| window == b"actual SSH saved-output fixture")
+    );
+    let reopened = Arc::new(
+        Store::open(&dir.path().join("local.db"), &LocalDatabaseKey::new([7; 32])).unwrap(),
+    );
+    let offline = Inventory::new(reopened);
+    let restored = offline.saved_terminal_output(recents[0].id.clone()).unwrap();
+    assert!(restored.snapshot.data.contains("actual SSH saved-output fixture"));
+    assert_eq!(offline.recent_sessions().unwrap().len(), 1, "offline viewing creates no attempt");
+}
+
 #[test]
 fn only_ready_sessions_receive_five_exponential_retries() {
     let mut budget = RetryBudget::default();

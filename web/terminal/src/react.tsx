@@ -26,6 +26,7 @@ export interface TerminalProps extends Omit<HTMLAttributes<ScoplenTerminalElemen
   maxOutputBytes?: number;
   maxInputBytes?: number;
   maxPendingWrites?: number;
+  readOnly?: boolean;
   onTerminalInput?: (bytes: TerminalBytes) => void;
   onTerminalBroadcastInput?: (bytes: TerminalBytes) => void;
   onTerminalBroadcastState?: (enabled: boolean) => void;
@@ -55,6 +56,7 @@ export const Terminal = forwardRef<ScoplenTerminalElement, TerminalProps>(functi
     maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
     maxInputBytes = DEFAULT_MAX_INPUT_BYTES,
     maxPendingWrites = DEFAULT_MAX_PENDING_WRITES,
+    readOnly = false,
     onTerminalInput,
     onTerminalBroadcastInput,
     onTerminalBroadcastState,
@@ -124,6 +126,7 @@ export const Terminal = forwardRef<ScoplenTerminalElement, TerminalProps>(functi
       return;
     }
     element.sink = sink;
+    element.readOnly = readOnly;
     element.broadcastSink = broadcastSink;
     element.clipboard = clipboard;
     if (profile) {
@@ -132,7 +135,7 @@ export const Terminal = forwardRef<ScoplenTerminalElement, TerminalProps>(functi
     element.maxOutputBytes = maxOutputBytes;
     element.maxInputBytes = maxInputBytes;
     element.maxPendingWrites = maxPendingWrites;
-  }, [sink, broadcastSink, clipboard, profile, maxOutputBytes, maxInputBytes, maxPendingWrites]);
+  }, [sink, broadcastSink, clipboard, profile, maxOutputBytes, maxInputBytes, maxPendingWrites, readOnly]);
 
   return (
     <scoplen-terminal
