@@ -243,7 +243,7 @@ it("opens and closes preview by keyboard and returns focus to its action", async
   action.focus();
   await userEvent.keyboard("{Enter}");
   await screen.findByLabelText("Remote file text");
-  expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+  await waitFor(() => expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true));
   await userEvent.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await waitFor(() => expect(document.activeElement).toBe(action));
