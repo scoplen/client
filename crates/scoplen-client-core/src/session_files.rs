@@ -24,12 +24,13 @@ use crate::connection::{SshConnection, SshConnectionError};
 
 pub(crate) mod downloads;
 mod preview;
+pub(crate) mod uploads;
 pub(crate) use downloads::{
-    DownloadCheckpoint, DownloadControl, DownloadExecution, DownloadInput, continue_download,
-    prepare_download,
+    DownloadCheckpoint, DownloadExecution, DownloadInput, continue_download, prepare_download,
 };
 pub(crate) use preview::preview_file;
 pub use preview::{RemoteTextPreview, RemoteTextPreviewIssue};
+pub(crate) use uploads::{UploadCheckpoint, UploadExecution, UploadInput, transfer_upload};
 
 const MAX_REMOTE_PATH: usize = 4096;
 const MAX_DIRECTORY_ENTRIES: usize = 1024;
@@ -98,6 +99,32 @@ pub(crate) struct FileTransferProgress {
     pub transferred: u64,
     pub total: Option<u64>,
     pub phase: SessionFileTransferPhase,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum TransferControl {
+    Run,
+    Pause,
+    Cancel,
+}
+
+async fn transfer_controlled<T>(
+    control: &mut watch::Receiver<TransferControl>,
+    work: impl Future<Output = Result<T, FileAccessError>>,
+) -> Result<T, FileAccessError> {
+    tokio::pin!(work);
+    loop {
+        if *control.borrow() == TransferControl::Cancel {
+            return Err(FileAccessError::Cancelled);
+        }
+        tokio::select! {
+            biased;
+            result = &mut work => return result,
+            changed = control.changed() => {
+                if changed.is_err() { return Err(FileAccessError::Cancelled); }
+            }
+        }
+    }
 }
 
 struct TransferReporter<'a, F> {

@@ -49,8 +49,33 @@ try {
         Start-Sleep -Milliseconds 500
     }
     if (-not $ready) { throw 'OpenSSH fixture did not become ready' }
+    $captureSftp = @'
+set -eu
+test -x /usr/lib/ssh/sftp-server
+printf '#!/bin/sh\nexec /usr/lib/ssh/sftp-server -e -l DEBUG3 2>>/tmp/scoplen-files-sftp.log\n' > /tmp/scoplen-files-sftp
+chmod 755 /tmp/scoplen-files-sftp
+sed -i 's|^Subsystem[[:space:]]\+sftp.*|Subsystem sftp /tmp/scoplen-files-sftp|' /config/sshd/sshd_config
+/usr/sbin/sshd.pam -t -f /config/sshd/sshd_config
+pkill -HUP -o sshd
+'@
+    & docker exec $container sh -c $captureSftp
+    Check-LastExit 'enable disposable SFTP offset evidence'
     & $smoke '127.0.0.1' $port $passwordFile
     Check-LastExit 'real SSH terminal and SFTP file session'
+    $sftpLog = (& docker exec $container cat /tmp/scoplen-files-sftp.log) -join "`n"
+    Check-LastExit 'read disposable SFTP offset evidence'
+    if ($sftpLog -notmatch '(?s)SCOPLEN-UPLOAD-RESUME (\d+)\r?\n(.*)') {
+        throw 'upload continuation marker was not captured'
+    }
+    $confirmedOffset = [uint64]$Matches[1]
+    $resumedLog = $Matches[2]
+    if ($confirmedOffset -eq 0 -or $resumedLog -notmatch 'write .* off (\d+) len (\d+)') {
+        throw 'no actual resumed SFTP WRITE offset was captured'
+    }
+    if ([uint64]$Matches[1] -ne $confirmedOffset) {
+        throw 'first resumed SFTP WRITE did not continue from the confirmed offset'
+    }
+    Write-Output "OpenSSH upload continuation WRITE starts at confirmed nonzero offset $confirmedOffset"
 } finally {
     & docker rm -f $container 2>$null | Out-Null
     if (Test-Path -LiteralPath $scratch) {

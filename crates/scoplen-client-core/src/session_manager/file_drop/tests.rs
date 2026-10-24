@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::session_files::FileAccessError;
 
 fn ready() -> (SessionManager, String, mpsc::Receiver<FileCommand>) {
     let manager = SessionManager::default();
@@ -600,11 +601,12 @@ async fn admitted_drop_uses_the_existing_worker_and_unknown_results_are_never_re
         panic!()
     };
     reply.send(Ok(UploadPreflight { target_attributes: None, replacement_supported: true })).ok();
-    let FileCommand::Upload { reply, .. } = requests.recv().await.unwrap() else { panic!() };
+    let FileCommand::TransferUpload { reply, .. } = requests.recv().await.unwrap() else {
+        panic!()
+    };
     reply
-        .send(SessionUploadResult {
-            status: SessionUploadStatus::Unknown,
-            message: None,
+        .send(UploadExecution::Failed {
+            error: FileAccessError::PublicationUnknown,
             staging_may_remain: false,
         })
         .ok();

@@ -141,9 +141,9 @@ it("does not turn invalid byte counts into a broken or misleading progress displ
   expect(screen.queryByText(/NaN/)).toBeNull();
 });
 
-it("requests Pause for the exact running download without claiming it is already paused", async () => {
-  render(view(snapshot([row({ direction: "download", state: "transferring", canPause: true })])));
-  await userEvent.click(screen.getByRole("button", { name: "Pause download of archive.bin" }));
+it.each(["upload", "download"] as const)("requests Pause for the exact running %s", async (direction) => {
+  render(view(snapshot([row({ direction, state: "transferring", canPause: true })])));
+  await userEvent.click(screen.getByRole("button", { name: "Pause transfer of archive.bin" }));
   expect(actions.pause).toHaveBeenCalledExactlyOnceWith("session-1", "queue-1", "item-1", "execution-1");
   expect(actions.cancel).not.toHaveBeenCalled();
   expect(actions.resume).not.toHaveBeenCalled();
@@ -160,7 +160,7 @@ it("permits Cancel after a Pausing snapshot even if the Pause reply has been los
   );
   const download = row({ direction: "download", state: "transferring", canPause: true });
   const rendered = render(view(snapshot([download])));
-  await userEvent.click(screen.getByRole("button", { name: "Pause download of archive.bin" }));
+  await userEvent.click(screen.getByRole("button", { name: "Pause transfer of archive.bin" }));
   rendered.rerender(view(snapshot([{ ...download, state: "pausing", canPause: false }])));
   expect(screen.getByText("Finishing the current part before pausing")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "Cancel transfer of archive.bin" }));
@@ -173,7 +173,7 @@ it("permits Cancel after a Pausing snapshot even if the Pause reply has been los
 it("allows Cancel to supersede a pending Pause before another snapshot arrives", async () => {
   actions.pause.mockReturnValueOnce(new Promise(() => {}));
   render(view(snapshot([row({ direction: "download", state: "transferring", canPause: true })])));
-  await userEvent.click(screen.getByRole("button", { name: "Pause download of archive.bin" }));
+  await userEvent.click(screen.getByRole("button", { name: "Pause transfer of archive.bin" }));
   await userEvent.click(screen.getByRole("button", { name: "Cancel transfer of archive.bin" }));
   expect(actions.cancel).toHaveBeenCalledExactlyOnceWith("session-1", "queue-1", "item-1", "execution-1");
   expect(actions.pause).toHaveBeenCalledTimes(1);
@@ -187,7 +187,7 @@ it("allows Cancel to supersede a pending Resume and ignores its late failure", a
     }),
   );
   render(view(snapshot([row({ direction: "download", state: "paused", canResume: true })])));
-  await userEvent.click(screen.getByRole("button", { name: "Resume download of archive.bin" }));
+  await userEvent.click(screen.getByRole("button", { name: "Resume transfer of archive.bin" }));
   const cancel = screen.getByRole("button", { name: "Cancel transfer of archive.bin" });
   expect(cancel.hasAttribute("disabled")).toBe(false);
   await userEvent.click(cancel);
@@ -206,7 +206,7 @@ it("does not let a late Resume success clear a newer Cancel failure", async () =
   );
   actions.cancel.mockResolvedValueOnce({ status: "error", error: "localIo" });
   render(view(snapshot([row({ direction: "download", state: "paused", canResume: true })])));
-  await userEvent.click(screen.getByRole("button", { name: "Resume download of archive.bin" }));
+  await userEvent.click(screen.getByRole("button", { name: "Resume transfer of archive.bin" }));
   await userEvent.click(screen.getByRole("button", { name: "Cancel transfer of archive.bin" }));
   expect((await screen.findByRole("alert")).textContent).toContain("The local file could not be read or saved");
   await act(async () => finishResume({ status: "ok", data: null }));
@@ -219,7 +219,7 @@ it("resumes a retained download by keyboard using its existing item and executio
   render(view(snapshot([row({ direction: "download", state: "paused", canResume: true, transferredBytes: "1024" })])));
   expect(screen.getByText(/Resume joins the end of the queue/)).toBeTruthy();
   await user.tab();
-  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Resume download of archive.bin" }));
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Resume transfer of archive.bin" }));
   await user.keyboard("{Enter}");
   expect(actions.resume).toHaveBeenCalledExactlyOnceWith("session-1", "queue-1", "item-1", "execution-1");
   expect(actions.pause).not.toHaveBeenCalled();
@@ -236,11 +236,11 @@ it("releases a lost Resume reply on the new execution and ignores its late failu
   );
   const download = row({ direction: "download", state: "paused", canResume: true, transferredBytes: "1024" });
   const rendered = render(view(snapshot([download])));
-  await userEvent.click(screen.getByRole("button", { name: "Resume download of archive.bin" }));
+  await userEvent.click(screen.getByRole("button", { name: "Resume transfer of archive.bin" }));
   rendered.rerender(
     view(snapshot([{ ...download, executionId: "execution-2", state: "validating", canResume: false }])),
   );
-  expect(screen.getByText("Checking downloaded bytes")).toBeTruthy();
+  expect(screen.getByText("Checking transferred bytes")).toBeTruthy();
   expect(screen.getByRole("progressbar").getAttribute("value")).toBe("25");
   await userEvent.click(screen.getByRole("button", { name: "Cancel transfer of archive.bin" }));
   expect(actions.cancel).toHaveBeenCalledExactlyOnceWith("session-1", "queue-1", "item-1", "execution-2");
@@ -253,18 +253,18 @@ it("retains absolute progress while a resumed download waits at the queue tail",
   render(view(snapshot([row({ direction: "download", state: "queued", transferredBytes: "1024" })])));
   expect(screen.getByText("Queued")).toBeTruthy();
   expect(screen.getByRole("progressbar").getAttribute("value")).toBe("25");
-  expect(screen.queryByRole("button", { name: /Resume download/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Resume transfer/ })).toBeNull();
 });
 
-it.each(["upload", "unknown", "interrupted", "finalizing"] as const)(
+it.each(["unknown", "interrupted", "finalizing"] as const)(
   "does not expose pause or resume for %s even with inconsistent action flags",
   (kind) => {
     render(
       view(
         snapshot([
           row({
-            direction: kind === "upload" ? "upload" : "download",
-            state: kind === "upload" ? "transferring" : kind,
+            direction: "upload",
+            state: kind,
             canPause: true,
             canResume: true,
             canCancel: false,
@@ -272,18 +272,24 @@ it.each(["upload", "unknown", "interrupted", "finalizing"] as const)(
         ]),
       ),
     );
-    expect(screen.queryByRole("button", { name: /Pause download|Resume download/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Pause transfer|Resume transfer/ })).toBeNull();
     expect(actions.pause).not.toHaveBeenCalled();
     expect(actions.resume).not.toHaveBeenCalled();
   },
 );
 
-it("localizes paused-download controls and failures without including native error text", async () => {
+it.each(["upload", "download"] as const)("localizes paused-%s controls and failures", async (direction) => {
   actions.resume.mockRejectedValueOnce(new Error("synthetic private checkpoint path"));
-  render(view(snapshot([row({ direction: "download", state: "paused", canResume: true })]), "zh-Hans"));
+  render(view(snapshot([row({ direction, state: "paused", canResume: true })]), "zh-Hans"));
   expect(screen.getByText("已暂停")).toBeTruthy();
-  await userEvent.click(screen.getByRole("button", { name: "继续下载 archive.bin" }));
+  await userEvent.click(screen.getByRole("button", { name: "继续传输 archive.bin" }));
   expect(actions.resume).toHaveBeenCalledTimes(1);
   await screen.findByRole("alert");
   expect(screen.queryByText(/synthetic private/)).toBeNull();
+});
+
+it("keeps ordinary uploads available without an admitted Pause capability", () => {
+  render(view(snapshot([row({ direction: "upload", state: "transferring", canPause: false })])));
+  expect(screen.queryByRole("button", { name: /Pause transfer|Resume transfer/ })).toBeNull();
+  expect(screen.getByRole("button", { name: "Cancel transfer of archive.bin" })).toBeTruthy();
 });

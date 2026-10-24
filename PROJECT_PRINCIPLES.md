@@ -39,8 +39,12 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   replacement, with explicit cancellation, conflict handling and unknown-result acknowledgement.
   Downloads can pause and explicitly continue on their original live transport after local
   and remote confirmed-prefix verification; paused checkpoints retain capacity and release
-  execution. Native partial identity gates publication and cleanup. This does not provide a
-  source snapshot or upload, cross-transport or durable continuation. Ordinary UTF-8 files up
+  execution. Native partial identity gates publication and cleanup. Uploads can pause after
+  separate staging read capability admission, retaining original source and write/read handles;
+  first Pause and every Resume verify both confirmed prefixes and the original target.
+  An associated read refusal preserves ordinary upload. SFTP has no inode identity proof,
+  and neither workflow provides source snapshots, cross-transport or durable continuation.
+  Ordinary UTF-8 files up
   to 256 KiB have a complete, cancellable read-only preview with literal transient display
   and fixed localized refusals; its metadata checks do not establish a snapshot or remote
   path confinement. Native file drops use path-free application events and a single-use

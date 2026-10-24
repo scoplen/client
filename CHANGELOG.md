@@ -4,6 +4,14 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added upload pause and explicit continuation on the same live SSH transport. Private staging
+  keeps exclusive write creation and admits a separate read handle before enabling Pause;
+  an associated read refusal preserves ordinary upload. Pausing settles a bounded segment
+  and verifies both confirmed prefixes. Resume keeps the original handles, checks source,
+  staging and destination, and joins the FIFO tail with a new execution. Changed files refuse
+  continuation; uncertain publication remains Unknown. SFTP attributes and hashes do not
+  establish immutable files or inode identity. Cross-transport and durable recovery remain open.
+
 - Added bounded native multi-file drop upload to the visible Files directory list. Rust
   retains one window/context-bound 30-second ticket, reserves capacity for the whole batch,
   rejects invalid sources or duplicate names together, and appends accepted files in order
@@ -23,8 +31,8 @@ All notable changes to the Scoplen desktop client are recorded here.
   the current bounded segment before retaining the original remote handle and local partial;
   the paused item retains capacity while later queued work can run. Resume verifies both
   confirmed prefixes and the destination, then continues from that offset under a fresh FIFO
-  execution. Partial cleanup and publication check native file identity. Upload continuation,
-  cross-transport continuation and recovery after session/process closure remain incomplete.
+  execution. Partial cleanup and publication check native file identity. Cross-transport
+  continuation and recovery after session/process closure remain incomplete.
 
 - Added a bounded per-terminal upload/download queue that keeps running while Files is hidden.
   Typed snapshots show contiguous byte progress, finalizing, conflicts, cancellation and known

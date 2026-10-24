@@ -22,6 +22,75 @@ fn complete(state: SessionTransferState) -> TransferCompletion {
 }
 
 #[test]
+fn upload_pause_requires_admitted_read_capability_and_keeps_fifo_and_execution_fences() {
+    let mut queue = TransferQueue::default();
+    let transport = Uuid::now_v7();
+    let original = queued(&mut queue, transport, 10);
+    queue.take_next(transport).unwrap();
+    assert!(!queue.snapshot("session").items[0].can_pause);
+    assert!(queue.pause(queue.id(), original.item, original.execution).is_err());
+    queue.admit_upload_pause(original);
+    assert!(queue.snapshot("session").items[0].can_pause);
+    queue.progress(
+        original,
+        FileTransferProgress {
+            transferred: 32,
+            total: Some(64),
+            phase: SessionFileTransferPhase::Transferring,
+        },
+    );
+    queue.pause(queue.id(), original.item, original.execution).unwrap();
+    queue.retain_paused(original, 10).unwrap();
+    let later = queued(&mut queue, transport, 20);
+    queue.resume(queue.id(), original.item, original.execution, transport).unwrap();
+    assert_eq!(queue.snapshot("session").outstanding, 2);
+    assert_eq!(queue.take_next(transport).unwrap().identity, later);
+    queue.finish(later, complete(SessionTransferState::Saved));
+    let resumed = queue.take_next(transport).unwrap();
+    assert_eq!(resumed.identity.item, original.item);
+    assert_ne!(resumed.identity.execution, original.execution);
+    queue.progress(
+        original,
+        FileTransferProgress {
+            transferred: 64,
+            total: Some(64),
+            phase: SessionFileTransferPhase::Finalizing,
+        },
+    );
+    queue.admit_upload_pause(original);
+    let row = &queue.snapshot("session").items[0];
+    assert_eq!(row.state, SessionTransferState::Validating);
+    assert_eq!(row.transferred_bytes, "32");
+    assert!(!row.can_pause);
+    assert!(!queue.finish(original, complete(SessionTransferState::Saved)));
+}
+
+#[test]
+fn paused_uploads_keep_all_capacity_until_cleanup_settlement() {
+    let mut queue = TransferQueue::default();
+    let transport = Uuid::now_v7();
+    let mut first = None;
+    for value in 0..TRANSFER_CAPACITY {
+        let identity = queued(&mut queue, transport, value);
+        queue.take_next(transport).unwrap();
+        queue.admit_upload_pause(identity);
+        queue.pause(queue.id(), identity.item, identity.execution).unwrap();
+        queue.retain_paused(identity, value).unwrap();
+        first.get_or_insert(identity);
+    }
+    assert_eq!(queue.reserve_selection(transport), Err(SessionTransferIssue::QueueFull));
+    let first = first.unwrap();
+    let CancelTransfer::Cleanup(identity, _) =
+        queue.cancel(queue.id(), first.item, first.execution).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(queue.snapshot("session").outstanding, TRANSFER_CAPACITY as u32);
+    queue.finish_cleanup(identity, complete(SessionTransferState::Cancelled));
+    assert!(queue.reserve_selection(transport).is_ok());
+}
+
+#[test]
 fn batch_reservation_holds_every_slot_and_appends_contiguously_in_order() {
     let mut queue = TransferQueue::default();
     let transport = Uuid::now_v7();

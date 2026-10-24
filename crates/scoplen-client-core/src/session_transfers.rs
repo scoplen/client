@@ -197,7 +197,7 @@ pub struct SessionTransferItem {
     pub total_bytes: Option<String>,
     /// Whether this exact execution can accept an explicit cancellation.
     pub can_cancel: bool,
-    /// Whether this download execution can request a checkpoint.
+    /// Whether this execution has admitted the handles required for a checkpoint.
     pub can_pause: bool,
     /// Whether explicit continuation can queue this retained checkpoint.
     pub can_resume: bool,
@@ -279,6 +279,7 @@ struct TransferRecord<T> {
     issue: Option<SessionTransferIssue>,
     staging_may_remain: bool,
     publication_started: bool,
+    pause_supported: bool,
     resources: Option<T>,
 }
 
@@ -305,7 +306,7 @@ impl<T> TransferRecord<T> {
                         | SessionTransferState::Validating
                 ),
             can_pause: !self.publication_started
-                && self.direction == SessionTransferDirection::Download
+                && self.pause_supported
                 && self.state == SessionTransferState::Transferring,
             can_resume: self.state == SessionTransferState::Paused,
             can_acknowledge: self.state == SessionTransferState::Unknown,
@@ -530,6 +531,7 @@ impl<T> TransferQueue<T> {
             issue: None,
             staging_may_remain: false,
             publication_started: false,
+            pause_supported: direction == SessionTransferDirection::Download,
             resources: Some(resources),
         });
         SessionTransferEnqueueResult::Queued {
@@ -597,6 +599,14 @@ impl<T> TransferQueue<T> {
             {
                 record.state = SessionTransferState::Transferring;
             }
+            self.changed();
+        }
+    }
+
+    pub fn admit_upload_pause(&mut self, identity: TransferIdentity) {
+        let Some(record) = self.running_mut(identity) else { return };
+        if record.direction == SessionTransferDirection::Upload && !record.pause_supported {
+            record.pause_supported = true;
             self.changed();
         }
     }
