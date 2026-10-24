@@ -13,6 +13,7 @@ use crate::{personal_inventory::PersonalInventorySettings, store::LocalWrite};
 
 mod history;
 mod pairing;
+mod three_device;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -255,10 +256,12 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
         1
     );
     assert_eq!(reopened.list(ObjectType::HOST).expect("local host copies").len(), 2);
-    let (paired_account, unshared) =
+    let (paired, unshared) =
         pairing::verify(&deployment, &manager, reopened.clone(), object.id).await;
     let paired_host = reopened.get(object.id).expect("original-device synchronized host");
     let historical_copy = history::verify(&manager, reopened.clone(), &object).await;
+    let (paired_account, converged, cursor) =
+        three_device::verify(&deployment, &manager, reopened.clone(), paired).await;
     drop(reopened);
     let reopened = Store::open(&path, &key).expect("reopen original paired-account device");
     assert!(
@@ -277,4 +280,14 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
         reopened.get(historical_copy.id).expect("offline historical copy"),
         Some(historical_copy)
     );
+    for expected in converged {
+        assert_eq!(
+            reopened.get(expected.id).expect("original-device offline convergence"),
+            Some(expected)
+        );
+    }
+    let progress = settings.status(&reopened).expect("original-device offline converged progress");
+    assert_eq!(progress.pending, 0);
+    assert_eq!(progress.applied_cursor, cursor);
+    assert_eq!(progress.acknowledged_cursor, cursor);
 }

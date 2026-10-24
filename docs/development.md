@@ -96,6 +96,17 @@ signature, without exposing host addresses or advancing local cursors. An explic
 restore creates exactly one unadopted copy of the oldest version, preserves the current
 object and server history, consumes its review ticket, and survives SQLCipher reopen.
 
+A third independent device then completes the same public pairing ceremony, and all devices
+verify the signed three-device list. Two separate hosts are explicitly adopted for an offline
+round with every background owner stopped. Each store changes the same name and a different
+field; the second device also edits and then tombstones the other host. Before reconnecting,
+each durable outbox and cursor must reflect only its own changes. One parallel synchronization
+round and one fixed catch-up round must succeed within 30 seconds, without retrying any failed
+or uncertain operation. All three devices must retain the merged fields, hide the deletion,
+acknowledge the same cursor, preserve unadopted local contents and reopen offline with the same
+objects and signed membership. The original three-version history object is unchanged. This
+does not exercise server retention or cursor expiry.
+
 The deployment must expose the production pairing endpoints. Repeating the test requires a
 fresh disposable deployment and invitation. Run it separately for SQLite and PostgreSQL.
 Remove the private descriptor, test server and its temporary data after verification. This
