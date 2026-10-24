@@ -30,7 +30,7 @@ export function PersonalHistorySettings({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<PersonalInventoryError | null>(null);
-  const [restored, setRestored] = useState(false);
+  const [restored, setRestored] = useState<"complete" | "refreshFailed" | null>(null);
   const pending = useRef(false);
   const mounted = useRef(false);
   useEffect(() => {
@@ -46,7 +46,7 @@ export function PersonalHistorySettings({
     pending.current = true;
     setBusy(true);
     setFailed(null);
-    setRestored(false);
+    setRestored(null);
     onBusyChange(true);
     try {
       const result = restore
@@ -57,8 +57,12 @@ export function PersonalHistorySettings({
       if (restore) {
         setHistory(null);
         setConfirming(false);
-        setRestored(true);
-        await onRestored();
+        setRestored("complete");
+        try {
+          await onRestored();
+        } catch {
+          if (mounted.current) setRestored("refreshFailed");
+        }
       } else {
         setHistory(result.data as PersonalInventoryHistory);
         setSequence(null);
@@ -124,7 +128,11 @@ export function PersonalHistorySettings({
       ) : null}
       {restored ? (
         <p role="status" className="mt-3 text-sm">
-          {t("settings.personal.history.restored")}
+          {t(
+            restored === "refreshFailed"
+              ? "settings.personal.history.restoredRefreshFailed"
+              : "settings.personal.history.restored",
+          )}
         </p>
       ) : null}
       <Dialog

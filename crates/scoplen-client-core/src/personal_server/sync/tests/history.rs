@@ -11,6 +11,8 @@ use scoplen_model::{
     cbor::{self, Value},
 };
 
+mod signer;
+
 async fn fixture(peer: &Peer) -> (tempfile::TempDir, Arc<Store>, PersonalServer, Object) {
     let dir = tempfile::tempdir().unwrap();
     let store = local(&dir);

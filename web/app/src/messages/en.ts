@@ -812,6 +812,8 @@ export const en = {
     "This review expired or no longer matches local data. Nothing was adopted by this attempt. Review the selected objects again.",
   "settings.personal.inventory.error.historyNotFound":
     "The server has no retained versions for this object. Local data was kept. Refresh sync and query its history again.",
+  "settings.personal.inventory.error.historySignerUnavailable":
+    "This history includes a version signed by a revoked device. This client cannot prove that the write preceded revocation, so no history was shown or copy created. Local data was kept.",
   "settings.personal.history.title": "Version history",
   "settings.personal.history.body":
     "Query the verified versions of an object already in your Personal vault. Opening this page does not contact the server.",
@@ -830,6 +832,8 @@ export const en = {
     "This version includes shared credential content. It stays in the encrypted local copy and needs separate consent before upload.",
   "settings.personal.history.restored":
     "Created a new local copy. Review it in your inventory; select it explicitly if you want to sync it.",
+  "settings.personal.history.restoredRefreshFailed":
+    "Created a new local copy, but the inventory list could not be refreshed. Choose Refresh local status to view it; you do not need to restore it again.",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };

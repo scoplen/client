@@ -734,6 +734,8 @@ export const zhHans: Messages = {
     "预览已过期或与本地数据不再一致，此次操作未改变对象归属。请重新检查所选对象。",
   "settings.personal.inventory.error.historyNotFound":
     "服务器未保留此对象的版本，本地数据已保留。请刷新同步后重新查询版本历史。",
+  "settings.personal.inventory.error.historySignerUnavailable":
+    "版本历史中包含已撤销设备签署的版本。当前客户端无法验证写入发生于撤销之前，因此未显示历史或创建副本，本地数据已保留。",
   "settings.personal.history.title": "版本历史",
   "settings.personal.history.body": "查询已加入个人保管库的对象的已验证版本。打开此页面不会访问服务器。",
   "settings.personal.history.object": "已同步对象",
@@ -749,4 +751,6 @@ export const zhHans: Messages = {
     "将创建新的本地对象，原对象和当前改动均会保留。此次操作不上传数据；如需同步副本，请另行检查并明确选择。",
   "settings.personal.history.secret": "此版本包含共享凭据内容，会保存在加密的本地副本中，上传前仍需另行确认。",
   "settings.personal.history.restored": "已创建新的本地副本。请在清单中检查，如需同步，请明确选择该副本。",
+  "settings.personal.history.restoredRefreshFailed":
+    "已创建新的本地副本，但清单刷新失败。请点击「刷新本地状态」查看副本，无需再次恢复。",
 };

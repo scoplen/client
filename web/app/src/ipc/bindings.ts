@@ -994,7 +994,9 @@ export type PersonalInventoryError =
 /**  The review expired or local objects changed after it. */
 "previewExpired" |
 /**  The server has no retained history for this object. */
-"historyNotFound";
+"historyNotFound" |
+/**  A revoked device signed a version whose historical authorization cannot be proven. */
+"historySignerUnavailable";
 
 /**  Complete verified history, retained in Rust behind one short-lived review ticket. */
 export type PersonalInventoryHistory = {

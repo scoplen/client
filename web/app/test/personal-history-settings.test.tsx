@@ -175,6 +175,54 @@ it("requires authentication for a query and respects account activity", async ()
   }
 });
 
+it.each(["en", "zh-Hans"] as const)(
+  "preserves the committed copy when the %s inventory refresh fails",
+  async (locale) => {
+    const f = fixture({ locale });
+    f.restored.mockRejectedValue(new Error("sensitive refresh diagnostic"));
+    render(f.view());
+    await userEvent.selectOptions(screen.getByRole("combobox"), object.id);
+    await userEvent.click(
+      screen.getByRole("button", { name: locale === "en" ? "View version history" : "查看版本历史" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const create = locale === "en" ? "Create local copy" : "创建本地副本";
+    await userEvent.click(within(dialog).getByRole("radio", { name: /9007199254740993/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: create }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: create }));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain(
+        locale === "en" ? "you do not need to restore it again" : "无需再次恢复",
+      ),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/sensitive refresh diagnostic/)).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(f.calls.filter((call) => call.command === "restore_personal_inventory_history")).toHaveLength(1);
+    expect(f.restored).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each(["en", "zh-Hans"] as const)(
+  "explains the %s revoked-signer boundary without a partial preview",
+  async (locale) => {
+    const f = fixture({ locale });
+    f.handlers.set("query_personal_inventory_history", () => Promise.reject("historySignerUnavailable"));
+    render(f.view());
+    await userEvent.selectOptions(screen.getByRole("combobox"), object.id);
+    await userEvent.click(
+      screen.getByRole("button", { name: locale === "en" ? "View version history" : "查看版本历史" }),
+    );
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      locale === "en" ? "cannot prove that the write preceded revocation" : "无法验证写入发生于撤销之前",
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(f.calls).toHaveLength(1);
+    expect(f.restored).not.toHaveBeenCalled();
+  },
+);
+
 it("localizes restoration errors and clears the consumed review instead of retrying", async () => {
   const f = fixture({ locale: "zh-Hans" });
   f.handlers.set("restore_personal_inventory_history", () => Promise.reject("previewExpired"));

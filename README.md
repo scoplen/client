@@ -216,6 +216,14 @@ adoption and shared-secret review before synchronization. The single-use review 
 five minutes and cannot be reused after reopening the store. Device-local credentials and
 hardware handles are never copied. Malformed or over-budget history leaves inventory and
 sync cursors unchanged.
+Every signer must currently remain active. If the verified account bundle revokes a historical
+signer, the entire query stops with a specific explanation and creates no review or copy.
+An unrecognized signer, unverifiable former root, or damaged signature still fails validation.
+The signed revocation timestamp cannot be compared to a trusted envelope write time: server
+sequences are not signed, and field clocks belong to the signer. Restoration of pre-revocation
+history remains incomplete until verifiable historical authorization and rotation are supported.
+After a copy is created, a failed inventory refresh preserves the confirmed copy result and
+asks for Refresh local status; it does not retry restoration or report a failed copy.
 
 An expired cursor downloads and verifies a complete, bounded snapshot before one atomic local
 reconciliation. Missing clean objects are removed; missing local edits, including new selections

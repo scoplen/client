@@ -2,6 +2,7 @@
 //! Complete, authenticated history reads; querying never changes inventory or cursors.
 
 use scoplen_api::{ProblemDetails, sync::SyncVersionsResponse};
+use scoplen_crypto::{DeviceCertificate, RevocationStatement};
 
 use super::*;
 
@@ -40,10 +41,46 @@ impl PersonalServer {
                     Ok(history)
                 })
                 .map_err(invalid)?;
+        // Bootstrap already authenticated the complete statement set against retained roots.
+        // A revoked certificate can identify this limit, but cannot authorize an old write:
+        // neither server sequence nor signer-controlled field clocks prove its write time.
+        let bundle =
+            scoplen_api::sync::SyncAccountKeyBundle::from_cbor(context.account_keys.as_bytes())
+                .map_err(invalid)?;
+        let revoked = bundle
+            .revocations
+            .iter()
+            .map(|bytes| RevocationStatement::decode(bytes))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(invalid)?;
+        let revoked_certificates = bundle
+            .certificates
+            .iter()
+            .map(|bytes| DeviceCertificate::decode(bytes))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(invalid)?
+            .into_iter()
+            .filter(|certificate| {
+                revoked.iter().any(|statement| statement.device_id == certificate.device_id)
+            })
+            .collect::<Vec<_>>();
         let versions = history
             .versions
             .iter()
             .map(|version| {
+                let envelope = ObjectEnvelope::decode(&version.payload).map_err(invalid)?;
+                if version.signer_device_id != Some(envelope.signer_device_id) {
+                    return Err(PersonalSyncError::InvalidResponse);
+                }
+                if let Some(certificate) = revoked_certificates
+                    .iter()
+                    .find(|certificate| certificate.device_id == envelope.signer_device_id)
+                {
+                    envelope
+                        .verify_signature(vault, id, &certificate.signing_public_key)
+                        .map_err(invalid)?;
+                    return Err(PersonalSyncError::HistorySignerUnavailable);
+                }
                 let remote = context.decrypt(version)?;
                 if remote.object.object_type != source.object_type
                     || remote.object.schema != source.schema

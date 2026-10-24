@@ -169,6 +169,8 @@ pub enum PersonalInventoryError {
     PreviewExpired,
     /// The server has no retained history for this object.
     HistoryNotFound,
+    /// A revoked device signed a version whose historical authorization cannot be proven.
+    HistorySignerUnavailable,
 }
 
 impl From<PersonalSyncError> for PersonalInventoryError {
@@ -202,6 +204,7 @@ impl From<PersonalSyncError> for PersonalInventoryError {
             PersonalSyncError::Selection => Self::Selection,
             PersonalSyncError::ResourceLimit => Self::ResourceLimit,
             PersonalSyncError::TrustReviewRequired => Self::TrustReviewRequired,
+            PersonalSyncError::HistorySignerUnavailable => Self::HistorySignerUnavailable,
         }
     }
 }
