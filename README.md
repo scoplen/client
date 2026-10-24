@@ -105,6 +105,15 @@ a transfer runs; directory navigation and remote changes wait until the queue is
 settled; paused downloads release execution so later queued work and file navigation can run.
 One native picker or replacement review is open per queue.
 
+Files also accepts a native drop of 1 to 16 ordinary local files onto its visible remote
+directory list, including an empty list. The entire selection must fit the queue and pass
+local source/name checks before any item is added. A rejected batch starts no upload; an
+accepted batch keeps native selection order and its original remote directory. Each item
+then uses the ordinary replacement review, cancellation and publication rules. Leaving Files
+does not cancel admitted items. Folders, links and special files are refused. The Upload file
+button remains the keyboard alternative. Native scaled Windows and Retina macOS drag/drop
+acceptance remains unverified.
+
 Files shows confirmed contiguous bytes and a separate finalizing state. Only a
 confirmed remote publication or local save shows Saved. Cancellation stops an
 unstarted item or waits for cleanup of its running attempt; once final save has
@@ -128,7 +137,7 @@ cost grows with that prefix and does not increase displayed payload progress. Me
 open handle do not provide an immutable source snapshot: unread suffix changes or concurrent
 writes after verification can still affect a download. Keep the source stable until it saves.
 Cancellation and disconnect settle owned partial cleanup; a detected replacement is preserved.
-Upload continuation, continuation after reconnect or tab/process closure, and drag and drop
+Upload continuation and continuation after reconnect or tab/process closure
 remain separate C6 work.
 
 Preview reads one complete ordinary UTF-8 file of at most 256 KiB through the current

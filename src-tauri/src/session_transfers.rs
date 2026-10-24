@@ -148,7 +148,7 @@ async fn pick_file(
     .map_err(|_| SessionTransferIssue::SelectionFailed)?
 }
 
-async fn confirm_replace(
+pub(crate) async fn confirm_replace(
     app: tauri::AppHandle,
     locale: Locale,
     review: SessionTransferReview,

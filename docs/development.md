@@ -257,6 +257,25 @@ late cancellation, queue admission and keyboard focus after delayed directory lo
 Rendered English and Chinese checks cover literal text, empty/error/retry states, long file
 and connection names, narrow-window content scrolling and visible keyboard closing controls.
 
+## Native drop checks
+
+```bash
+cargo test -p scoplen-client-core --lib file_drop
+cargo test -p scoplen-client-core --lib session_transfers
+cargo test -p scoplen-client-app --lib file_drop
+```
+
+Core regressions exercise whole-batch capacity, FIFO order, invalid later sources, duplicate
+names, file-type refusal, expiry/replay and context/transport races while local opening is
+blocked. The absolute-deadline regression returns a refusal and re-reserves every queue slot
+before releasing the blocked opener. The disposable OpenSSH Files fixture exercises admitted
+batches through the public session manager and ordinary per-item transfer behavior. Frontend
+component tests cover path-free event hit testing, stale views, modal refusal and localized
+feedback. Synthetic coordinates and direct manager calls do not establish native drag
+acceptance. Before marking the native-drop roadmap outcome complete, perform real file drops
+on scaled Windows and Retina macOS, including empty directories, resizing, zoom and refusal
+outside the Files list.
+
 ## Generated files
 
 | File | Regenerate with | When |

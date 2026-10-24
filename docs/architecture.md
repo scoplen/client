@@ -487,6 +487,34 @@ exclude writers or provide an immutable snapshot. Existing size and modification
 checks can detect some changes while queued or transferring, but edits preserving
 the compared metadata can escape them, and writes can race later checks.
 
+## Native file-drop uploads
+
+The native window event is the only drop source-path entry. The application emits its own
+typed `SessionFileDrag` event with a view identity, bounded count, normalized position and
+optional opaque ticket. The frontend never subscribes to Tauri's path-bearing drag events.
+This describes normal product IPC, not framework-wide isolation of a compromised renderer.
+Native paths and selected handles stay transiently in Rust and never enter status or storage.
+
+One armed context per window freezes the logical session, ready transport, queue, remote
+directory bytes and Files view identity. A Drop replaces any earlier ticket and expires after
+30 seconds. Consuming it takes the native paths once and atomically reserves every required
+queue slot before opening sources through `open_upload_source`. All files and target names
+must validate, and duplicate target bytes reject the batch. The final append rechecks ticket,
+deadline and connection under the same context/queue locks, appends every item contiguously,
+then starts the existing worker. Rejection drops every selected handle and reservation without
+dispatching that batch. Admission is atomic; later remote execution remains per item.
+Source preparation shares the ticket's absolute deadline: even if a local filesystem call
+remains blocked, expiry returns a refusal and releases every reserved slot and completed
+source handle. A later result from that call is discarded without queue admission.
+
+The current single full-window webview must match native bounds at origin zero. Wry's macOS
+points and Windows physical coordinates are normalized against bounds in that same platform
+space; the frontend multiplies by its current viewport and hit-tests only the visible list.
+Resize, scale, viewport, layout, modal and view changes revoke pending intent. Cleanup and
+expiry identify their own context/ticket, and cannot erase a replacement. Leave after Drop
+does not cancel consumption. Admitted items preserve their destination after Files is hidden.
+Real scaled desktop drops on both supported platforms remain required acceptance evidence.
+
 ## Session download checkpoints
 
 The Rust session transfer queue owns selected resources and paused download checkpoints.

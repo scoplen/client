@@ -14,10 +14,10 @@ use crate::session_transfers::{
 
 use super::*;
 
-struct SelectionLease {
-    manager: SessionManager,
-    session: String,
-    reservation: SelectionReservation,
+pub(super) struct SelectionLease {
+    pub(super) manager: SessionManager,
+    pub(super) session: String,
+    pub(super) reservation: SelectionReservation,
 }
 
 impl Drop for SelectionLease {
@@ -909,7 +909,7 @@ fn transfer_ids(
     ))
 }
 
-fn file_issue(error: FileAccessError) -> SessionTransferIssue {
+pub(super) fn file_issue(error: FileAccessError) -> SessionTransferIssue {
     match error {
         FileAccessError::InvalidPath => SessionTransferIssue::InvalidPath,
         FileAccessError::InvalidSource | FileAccessError::InvalidDestination => {
