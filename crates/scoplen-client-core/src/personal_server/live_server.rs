@@ -34,9 +34,25 @@ fn bounded_file(path: &Path, limit: u64) -> Vec<u8> {
     bytes
 }
 
+fn trusted_transport(ca: &[u8]) -> Transport {
+    let certificate = reqwest::Certificate::from_pem(ca).expect("test CA certificate");
+    let mut transport = Transport::fixture(certificate, Duration::from_secs(15));
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(rustls::pki_types::CertificateDer::from_pem_slice(ca).expect("notification CA"))
+        .expect("trusted notification CA");
+    let mut tls = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    tls.alpn_protocols = vec![b"h2".to_vec()];
+    transport.notification_tls = Arc::new(tls);
+    transport
+}
+
 async fn rotate_live_session(
     manager: &PersonalServer,
     store: &Arc<Store>,
+    context: &'static str,
 ) -> PersonalAccountSnapshot {
     let mut before = record(store).expect("retained authenticated identity");
     let access = store
@@ -49,10 +65,10 @@ async fn rotate_live_session(
     store
         .set_personal_session_metadata_for_test(&before)
         .expect("conservatively expire the cached access lifetime");
-    let account = manager
-        .query_account(store.clone())
-        .await
-        .expect("rotate the real native session before an explicit account query");
+    let account = manager.query_account(store.clone()).await.unwrap_or_else(|error| {
+        let scheduled = record(store).is_ok_and(|identity| identity.refresh_retry_at.is_some());
+        panic!("{context}: {error:?}; local refresh retry is scheduled: {scheduled}")
+    });
     assert_eq!(account.account_id, before.account_id.to_string());
     assert_eq!(account.email, None);
     assert_eq!(account.devices.len(), 1);
@@ -96,20 +112,9 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
         "the live check is restricted to a loopback HTTPS deployment"
     );
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
-    let certificate = reqwest::Certificate::from_pem(&ca).expect("test CA certificate");
-    let mut transport = Transport::fixture(certificate, Duration::from_secs(15));
-    let mut roots = rustls::RootCertStore::empty();
-    roots
-        .add(rustls::pki_types::CertificateDer::from_pem_slice(&ca).expect("notification CA"))
-        .expect("trusted notification CA");
-    let mut tls = rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    tls.alpn_protocols = vec![b"h2".to_vec()];
-    transport.notification_tls = Arc::new(tls);
     let manager = Arc::new(PersonalServer {
         operation: Mutex::new(()),
-        transport: Ok(transport),
+        transport: Ok(trusted_transport(&ca)),
         pairing: Default::default(),
     });
     let directory = tempfile::tempdir().expect("private local store directory");
@@ -138,7 +143,9 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
         .await
         .expect("verify server K-4 bundle and unwrap the real account and Personal keys");
     assert_eq!(bootstrap.session().vaults.len(), 1);
-    let account = rotate_live_session(&manager, &store).await;
+    let account =
+        rotate_live_session(&manager, &store, "rotate the initial native session before transfer")
+            .await;
 
     let object = store
         .write(LocalWrite {
@@ -231,7 +238,12 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
         offline.account_snapshot(&reopened).expect("offline signed account revalidation"),
         Some(account)
     );
-    rotate_live_session(&manager, &reopened).await;
+    rotate_live_session(
+        &manager,
+        &reopened,
+        "rotate the native session after encrypted-store reopen",
+    )
+    .await;
     assert_eq!(
         settings.status(&reopened).expect("offline durable progress").applied_cursor,
         saved.applied_cursor
@@ -243,7 +255,8 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
         1
     );
     assert_eq!(reopened.list(ObjectType::HOST).expect("local host copies").len(), 2);
-    let paired_account = pairing::verify(&deployment, &manager, reopened.clone(), object.id).await;
+    let (paired_account, unshared) =
+        pairing::verify(&deployment, &manager, reopened.clone(), object.id).await;
     let paired_host = reopened.get(object.id).expect("original-device synchronized host");
     let historical_copy = history::verify(&manager, reopened.clone(), &object).await;
     drop(reopened);
@@ -256,6 +269,10 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
         Some(paired_account)
     );
     assert_eq!(reopened.get(object.id).expect("original-device offline host"), paired_host);
+    assert_eq!(
+        reopened.get(unshared.id).expect("original-device offline local-only host"),
+        Some(unshared)
+    );
     assert_eq!(
         reopened.get(historical_copy.id).expect("offline historical copy"),
         Some(historical_copy)
