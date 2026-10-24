@@ -24,12 +24,19 @@ import type { Locale, Platform, Status } from "../ipc/bindings";
 import { CreatePassphraseScreen, UnlockScreen, UnreadableScreen } from "../local-data";
 import { Menus } from "../menus";
 import { SettingsView } from "../settings";
+import { SessionTerminal, type SessionState } from "../session";
 import { TerminalColorsProvider } from "../terminal-colors";
 import { sampleHosts, sampleInventory } from "./sample-inventory";
 
+const remotePath = (path: string) => Array.from(new TextEncoder().encode(path));
+
 // The local-data screens call the core; answer them as a core would.
 mockIPC((cmd, args) => {
-  const payload = (args ?? {}) as { passphrase?: string };
+  const payload = (args ?? {}) as {
+    passphrase?: string;
+    path?: number[];
+    messages?: { onmessage: (event: { kind: "starting" | "ready"; transportId: string; automatic?: boolean }) => void };
+  };
   if (cmd === "unlock_local_data") {
     return payload.passphrase === "scoplen"
       ? { state: "open", protection: "keystoreAndPassphrase" }
@@ -39,6 +46,28 @@ mockIPC((cmd, args) => {
     return { state: "open", protection: "keystoreAndPassphrase" };
   if (cmd === "remove_local_passphrase" || cmd === "start_with_empty_local_data")
     return { state: "open", protection: "keystore" };
+  if (cmd === "session_connect") {
+    const transportId = crypto.randomUUID();
+    queueMicrotask(() => {
+      payload.messages?.onmessage({ kind: "starting", transportId, automatic: false });
+      payload.messages?.onmessage({ kind: "ready", transportId });
+    });
+    return new Promise(() => undefined);
+  }
+  if (cmd === "session_list_files") {
+    const root = remotePath(".");
+    const logs = remotePath("./logs");
+    return {
+      entries:
+        payload.path?.length === root.length
+          ? [
+              { name: "logs", path: logs, kind: "directory", sizeBytes: null },
+              { name: "deploy.log", path: remotePath("./deploy.log"), kind: "file", sizeBytes: "1280" },
+            ]
+          : [{ name: "today.log", path: remotePath("./logs/today.log"), kind: "file", sizeBytes: "896" }],
+    };
+  }
+  if (cmd === "session_download_file") return false;
   return null;
 });
 
@@ -47,6 +76,7 @@ const screens = {
   firstRun: "Hosts: first run",
   failed: "Hosts: failed to load",
   settings: "Settings",
+  files: "Session: files",
   unlock: "Unlock",
   create: "Choose a passphrase",
   unreadable: "Unreadable data",
@@ -167,16 +197,21 @@ function Screen({
   onSettings: (screen: Screen) => void;
 }) {
   const { t } = useI18n();
+  const [filesState, setFilesState] = useState<SessionState>("connecting");
   if (screen === "unlock") return <UnlockScreen onStatus={onStatus} />;
   if (screen === "create") return <CreatePassphraseScreen onStatus={onStatus} />;
   if (screen === "unreadable") return <UnreadableScreen reason="keyMissing" onStatus={onStatus} />;
   const settings = screen === "settings";
+  const files = screen === "files";
   return (
     <Frame
       platform={platform}
-      tabs={[{ id: "hosts", label: t("frame.hosts") }]}
-      active="hosts"
-      onTab={() => onSettings("hosts")}
+      tabs={[
+        { id: "hosts", label: t("frame.hosts") },
+        ...(files ? [{ id: "files", label: "api-01", state: filesState, seed: "gallery-api-01" }] : []),
+      ]}
+      active={files ? "files" : "hosts"}
+      onTab={(id) => onSettings(id === "files" ? "files" : "hosts")}
       onSettings={() => onSettings(settings ? "hosts" : "settings")}
       settingsActive={settings}
     >
@@ -184,6 +219,13 @@ function Screen({
         <SettingsView
           status={status.state === "open" ? status : { state: "open", protection: "keystore" }}
           onStatus={onStatus}
+        />
+      ) : files ? (
+        <SessionTerminal
+          profileId="gallery-api-01"
+          label="api-01"
+          onClose={() => onSettings("hosts")}
+          onStateChange={setFilesState}
         />
       ) : (
         <HostsHome manage />

@@ -79,6 +79,15 @@ Interactive SSH sessions become ready after authentication and shell setup,
 even when the server sends no initial output. Terminal input and PTY resizing
 are available without waiting for a welcome message or prompt.
 
+A connected terminal's Files button opens an SFTP browser on that terminal's
+authenticated SSH connection. It starts in the server's initial SFTP directory,
+opens subdirectories, and downloads regular files to a location selected in the
+native Save dialog. Cancel and closing Files stop the current file operation
+without closing the terminal; reconnect invalidates the old operation. A download
+that fails or is cancelled before the final save leaves the selected destination
+unchanged. Upload, drag and drop, remote file operations, transfer queues,
+resume, and preview remain separate C6 work.
+
 When a session closes or fails, choose Reconnect in its header to connect again
 in the same tab. Its displayed terminal output stays available. Reconnect waits
 for the previous connection task to finish, rechecks the host key, resolves the
@@ -327,6 +336,11 @@ fresh successful connection after failures.
 runner and checks the complete saved-key path through the real Microsoft agent,
 using a disposable loopback Rust SSH protocol peer. That peer does not establish
 Windows OpenSSH-server interoperability. Each fixture cleans up its own resources.
+`scripts/test-ssh-session-files.ps1` runs a connected terminal and Files operations
+against a disposable OpenSSH server. It checks directory browsing and binary
+download on the same authenticated connection, plus cancellation and failure
+recovery while terminal input and resizing remain available. It requires
+PowerShell 7 and Docker, and removes its container and temporary files afterward.
 
 On macOS, `scripts/check-offline.sh target/release/bundle/macos/Scoplen.app` verifies that a built application makes no network connection while sync is disabled.
 

@@ -23,6 +23,18 @@ Right-click menus are the application's own (`web/ui/src/components/context-menu
 
 The terminal has its own colors, chosen in Settings → Terminal (`web/app/src/terminal-colors.tsx`, `terminal-settings.tsx`): "Match the theme" (the default) takes the interface theme's surface, text, and accent, and a set of fixed schemes uses their projects' published palettes. Each of the four surface colors and sixteen ANSI colors can be changed; an edit makes the colors the person's own scheme. They are applied to running sessions at once and kept like the theme. The session header has a shortcut to these settings, and sessions stay mounted and connected while another tab or Settings is shown.
 
+Files opens beside a connected terminal, or below it in a narrow window. Each
+IPC request carries the logical session, exact transport, operation identifier,
+and remote path bytes to Rust. The panel keeps display-safe names and raw path
+arrays for navigation. It sends no SSH traffic itself. Rust lists the
+server's initial SFTP directory, opens subdirectories, and permits download of
+regular files through the native Save dialog. One file operation runs per
+terminal at a time. Cancel and closing the panel stop the file operation without
+ending the terminal. Tab close and reconnect invalidate the old result as part
+of the normal session lifecycle. A directory error offers another list;
+a download error leaves the directory visible so the person can select the file
+again. The interface does not claim upload, queue, resume, or remote edits yet.
+
 
 `web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 92 px for the window controls, which sit centered in it, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.
 
