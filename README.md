@@ -85,8 +85,13 @@ opens subdirectories, and downloads regular files to a location selected in the
 native Save dialog. Upload file selects one regular local file through the native
 Open dialog and sends it to the current remote directory. An existing regular
 file requires explicit overwrite confirmation; if the server cannot safely
-replace it, the original stays unchanged. Cancel and closing Files request
-cancellation without closing the terminal. Once final remote rename starts,
+replace it, the original stays unchanged. Files can also create one folder in
+the current directory, rename a regular file or directory after checking that
+the new name is unused, and delete a regular file or empty directory after native
+confirmation. Standard SFTP v3 rename may still replace a concurrently created
+target on some servers. Other remote entry types are shown but cannot be changed here.
+Cancel and closing Files request cancellation without closing the terminal.
+For uploads, once final remote rename starts,
 the client waits for its result; reconnect fences off the old operation. A
 download that fails or is cancelled before the final save leaves the selected
 destination unchanged. An upload whose final remote rename has started may have
@@ -94,7 +99,7 @@ an unknown outcome if its reply is lost. The terminal keeps that warning across
 reconnects and asks you to refresh and check the remote directory before trying
 again. It also keeps a warning when the operation may
 have left a temporary remote upload file. It never retries automatically. Drag
-and drop, other file operations, transfer queues, resume, and preview remain
+and drop, transfer queues, resume, and preview remain
 separate C6 work.
 
 When a session closes or fails, choose Reconnect in its header to connect again
@@ -347,8 +352,9 @@ using a disposable loopback Rust SSH protocol peer. That peer does not establish
 Windows OpenSSH-server interoperability. Each fixture cleans up its own resources.
 `scripts/test-ssh-session-files.ps1` runs a connected terminal and Files operations
 against a disposable OpenSSH server. It checks directory browsing and binary
-download on the same authenticated connection, plus cancellation and failure
-recovery while terminal input and resizing remain available. It requires
+download on the same authenticated connection, plus folder creation, file rename
+and collision handling, delete-confirmation outcomes, empty-directory deletion,
+cancellation and failure recovery while terminal input and resizing remain available. It requires
 PowerShell 7 and Docker, and removes its container and temporary files afterward.
 
 On macOS, `scripts/check-offline.sh target/release/bundle/macos/Scoplen.app` verifies that a built application makes no network connection while sync is disabled.
