@@ -207,6 +207,24 @@ Applied and acknowledged positions are displayed separately without JavaScript i
 Original local copies can be selected and restored while offline; this creates new local
 objects and does not undo server changes or restore device-only secrets and handles.
 
+Version history queries one explicitly selected Personal object and verifies the complete
+retained list before showing names, categories, sequences, and content flags. Opening Settings
+does not query history. After selecting a version, a separate confirmation creates a fresh
+local copy with a new identifier and field clocks. The original object and concurrent edits
+stay intact. This does not upload or overwrite anything; the new copy needs the usual explicit
+adoption and shared-secret review before synchronization. The single-use review expires after
+five minutes and cannot be reused after reopening the store. Device-local credentials and
+hardware handles are never copied. Malformed or over-budget history leaves inventory and
+sync cursors unchanged.
+Every signer must currently remain active. If the verified account bundle revokes a historical
+signer, the entire query stops with a specific explanation and creates no review or copy.
+An unrecognized signer, unverifiable former root, or damaged signature still fails validation.
+The signed revocation timestamp cannot be compared to a trusted envelope write time: server
+sequences are not signed, and field clocks belong to the signer. Restoration of pre-revocation
+history remains incomplete until verifiable historical authorization and rotation are supported.
+After a copy is created, a failed inventory refresh preserves the confirmed copy result and
+asks for Refresh local status; it does not retry restoration or report a failed copy.
+
 An expired cursor downloads and verifies a complete, bounded snapshot before one atomic local
 reconciliation. Missing clean objects are removed; missing local edits, including new selections
 that never uploaded, become immutable encrypted recovery copies requiring attention. They never

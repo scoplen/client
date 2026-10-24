@@ -767,6 +767,7 @@ fn retained_identity_and_cached_snapshot_are_revalidated() {
     ));
 }
 
+mod history;
 mod inventory;
 mod notification;
 mod pairing;

@@ -21,6 +21,9 @@ use crate::{
     store::{Store, StoreError},
 };
 
+mod history;
+pub use history::{PersonalInventoryHistory, PersonalInventoryVersion};
+
 /// Display categories, never object fields or credential content.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -164,6 +167,10 @@ pub enum PersonalInventoryError {
     TrustReviewRequired,
     /// The review expired or local objects changed after it.
     PreviewExpired,
+    /// The server has no retained history for this object.
+    HistoryNotFound,
+    /// A revoked device signed a version whose historical authorization cannot be proven.
+    HistorySignerUnavailable,
 }
 
 impl From<PersonalSyncError> for PersonalInventoryError {
@@ -197,6 +204,7 @@ impl From<PersonalSyncError> for PersonalInventoryError {
             PersonalSyncError::Selection => Self::Selection,
             PersonalSyncError::ResourceLimit => Self::ResourceLimit,
             PersonalSyncError::TrustReviewRequired => Self::TrustReviewRequired,
+            PersonalSyncError::HistorySignerUnavailable => Self::HistorySignerUnavailable,
         }
     }
 }
@@ -221,6 +229,7 @@ struct Review {
 #[derive(Default)]
 pub struct PersonalInventorySettings {
     review: Mutex<Option<Review>>,
+    history: Mutex<Option<history::HistoryReview>>,
 }
 
 impl PersonalInventorySettings {

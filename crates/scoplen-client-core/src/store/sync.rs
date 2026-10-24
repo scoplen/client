@@ -233,6 +233,48 @@ impl Store {
         self.restore_personal_copies(vault, selected, true)
     }
 
+    pub(crate) fn personal_history_object(
+        &self,
+        vault: Uuid,
+        id: Uuid,
+    ) -> Result<Object, StoreError> {
+        let conn = self.conn();
+        require_identity(&conn, vault)?;
+        if object_vault(&conn, id)? != Some(vault) {
+            return Err(StoreError::SyncSelection);
+        }
+        read_object(&conn, id)?.ok_or(StoreError::NotFound(id))
+    }
+
+    pub(crate) fn restore_personal_history(
+        &self,
+        account: Uuid,
+        vault: Uuid,
+        source: Object,
+    ) -> Result<(), StoreError> {
+        let changes = {
+            let mut conn = self.conn();
+            conn.pragma_update(None, "synchronous", "FULL")?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            require_identity(&tx, vault)?;
+            let matches: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM personal_server WHERE account_id=?1 AND personal_vault_id=?2)",
+                params![account.as_bytes().as_slice(), vault.as_bytes().as_slice()],
+                |row| row.get(0),
+            )?;
+            if !matches || object_vault(&tx, source.id)? != Some(vault) {
+                return Err(StoreError::SyncSelection);
+            }
+            let (_, changes) = insert_restored_objects(&tx, self.device_id, vec![source])?;
+            tx.commit()?;
+            changes
+        };
+        for change in changes {
+            self.notify(&change);
+        }
+        Ok(())
+    }
+
     fn restore_personal_copies(
         &self,
         vault: Uuid,
@@ -245,7 +287,7 @@ impl Store {
         if selected.iter().collect::<HashSet<_>>().len() != selected.len() {
             return Err(StoreError::SyncSelection);
         }
-        let mut ids = BTreeMap::new();
+        let ids;
         let changes = {
             let mut conn = self.conn();
             conn.pragma_update(None, "synchronous", "FULL")?;
@@ -262,31 +304,10 @@ impl Store {
                     original.ok_or(StoreError::NotFound(*id))
                 })
                 .collect::<Result<Vec<_>, StoreError>>()?;
-            for object in &originals {
-                if ids.insert(object.id, scoplen_model::new_uuid_v7()?).is_some() {
-                    return Err(StoreError::SyncSelection);
-                }
-            }
-            let mut changed = Vec::with_capacity(selected.len());
-            for mut object in originals {
-                object.id = ids[&object.id];
-                object.tombstone = None;
-                let clock = super::next_clock(&tx)?;
-                let mut fields = BTreeMap::new();
-                for (mut path, mut entry) in std::mem::take(&mut object.fields) {
-                    remap_reference(object.object_type, &mut path, &mut entry.value, &ids);
-                    entry.clock = clock;
-                    entry.origin = self.device_id;
-                    fields.insert(path, entry);
-                }
-                object.fields = fields;
-                object.validate()?;
-                super::ensure_vault_capacity(&tx, None)?;
-                store_object(&tx, &object, None)?;
-                changed.push((object.object_type, object.id));
-            }
+            let (restored, changes) = insert_restored_objects(&tx, self.device_id, originals)?;
+            ids = restored;
             tx.commit()?;
-            super::grouped_changes_from_pairs(changed)
+            changes
         };
         for change in changes {
             self.notify(&change);
@@ -442,6 +463,38 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+}
+
+fn insert_restored_objects(
+    tx: &Connection,
+    device: Uuid,
+    originals: Vec<Object>,
+) -> Result<(BTreeMap<Uuid, Uuid>, Vec<super::Change>), StoreError> {
+    let mut ids = BTreeMap::new();
+    for object in &originals {
+        if ids.insert(object.id, scoplen_model::new_uuid_v7()?).is_some() {
+            return Err(StoreError::SyncSelection);
+        }
+    }
+    let mut changed = Vec::with_capacity(originals.len());
+    for mut object in originals {
+        object.id = ids[&object.id];
+        object.tombstone = None;
+        let clock = super::next_clock(tx)?;
+        let mut fields = BTreeMap::new();
+        for (mut path, mut entry) in std::mem::take(&mut object.fields) {
+            remap_reference(object.object_type, &mut path, &mut entry.value, &ids);
+            entry.clock = clock;
+            entry.origin = device;
+            fields.insert(path, entry);
+        }
+        object.fields = fields;
+        object.validate()?;
+        super::ensure_vault_capacity(tx, None)?;
+        store_object(tx, &object, None)?;
+        changed.push((object.object_type, object.id));
+    }
+    Ok((ids, super::grouped_changes_from_pairs(changed)))
 }
 
 fn read_adoption_backup(

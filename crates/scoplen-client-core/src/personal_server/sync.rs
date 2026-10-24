@@ -69,6 +69,9 @@ pub enum PersonalSyncError {
     /// A trust record has no verified same-user provenance for automatic replication.
     #[error("Confirm the source of these host keys before synchronizing their trust records.")]
     TrustReviewRequired,
+    /// A history signer is verifiably revoked, without proof of historical authorization.
+    #[error("This history contains a revoked signer. Historical authorization cannot be verified.")]
+    HistorySignerUnavailable,
 }
 
 /// Verified session metadata and an unwrapped Personal key, kept entirely inside Rust.
