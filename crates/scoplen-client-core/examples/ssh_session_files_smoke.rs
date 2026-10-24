@@ -4,16 +4,18 @@
 
 use std::env;
 use std::fs;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use scoplen_client_core::connection::preparation::{PreparationEvent, PreparationResponse};
 use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
 use scoplen_client_core::session_files::{
-    RemoteFileKind, SessionFileMutationStatus, SessionUploadStatus,
+    RemoteFileKind, SessionFileMutationStatus, SessionFileTransferPhase, SessionUploadStatus,
 };
-use scoplen_client_core::session_manager::{SessionEvent, SessionManager};
+use scoplen_client_core::session_manager::{
+    SessionEvent, SessionFileTransferProgress, SessionManager,
+};
 use scoplen_client_core::store::Store;
 use scoplen_crypto::LocalDatabaseKey;
 use tokio::sync::{mpsc, oneshot};
@@ -138,12 +140,15 @@ async fn exercise(
     let destination = local.join("downloaded.bin");
     fs::write(&destination, b"original")?;
     let download_id = Uuid::now_v7().to_string();
+    let download_progress = Arc::new(Mutex::new(Vec::new()));
+    let observed_download = download_progress.clone();
     let download = manager.download_file_with_picker(
         "fixture-terminal",
         &transport,
         &download_id,
         file.path.clone(),
         || async { Ok(Some(destination.clone())) },
+        move |update| observed_download.lock().unwrap().push(update),
     );
     let terminal_during_download = async {
         manager.input(
@@ -156,6 +161,7 @@ async fn exercise(
     let (downloaded, sent) = tokio::join!(download, terminal_during_download);
     sent?;
     assert!(downloaded?);
+    assert_transfer_progress(&download_progress.lock().unwrap(), &transport, &download_id, 262149);
     wait_for(output, b"SCOPLEN-DOWNLOAD-ALIVE").await?;
     let downloaded = fs::read(&destination)?;
     assert_eq!(downloaded.len(), 262149);
@@ -167,17 +173,22 @@ async fn exercise(
 
     let upload_source = local.join("upload.bin");
     fs::write(&upload_source, b"first\0\xffupload")?;
+    let upload_id = Uuid::now_v7().to_string();
+    let upload_progress = Arc::new(Mutex::new(Vec::new()));
+    let observed_upload = upload_progress.clone();
     let uploaded = manager
         .upload_file_with_picker(
             "fixture-terminal",
             &transport,
-            &Uuid::now_v7().to_string(),
+            &upload_id,
             folder.path.clone(),
             || async { Ok(Some(upload_source.clone())) },
             |_| async { Err("new target unexpectedly requested replacement".into()) },
+            move |update| observed_upload.lock().unwrap().push(update),
         )
         .await?;
     assert_eq!(uploaded.status, SessionUploadStatus::Saved);
+    assert_transfer_progress(&upload_progress.lock().unwrap(), &transport, &upload_id, 13);
     assert!(!uploaded.staging_may_remain);
     let remote_upload = manager
         .list_files(
@@ -199,6 +210,7 @@ async fn exercise(
             &Uuid::now_v7().to_string(),
             remote_upload.path.clone(),
             || async { Ok(Some(first_download.clone())) },
+            |_| {},
         )
         .await?;
     assert_eq!(fs::read(&first_download)?, b"first\0\xffupload");
@@ -217,6 +229,7 @@ async fn exercise(
                 confirmations.fetch_add(1, Ordering::SeqCst);
                 async { Ok(false) }
             },
+            |_| {},
         )
         .await?;
     assert_eq!(declined.status, SessionUploadStatus::Cancelled);
@@ -229,6 +242,7 @@ async fn exercise(
             &Uuid::now_v7().to_string(),
             remote_upload.path.clone(),
             || async { Ok(Some(declined_download.clone())) },
+            |_| {},
         )
         .await?;
     assert_eq!(fs::read(&declined_download)?, b"first\0\xffupload");
@@ -244,6 +258,7 @@ async fn exercise(
                 confirmations.fetch_add(1, Ordering::SeqCst);
                 async { Ok(true) }
             },
+            |_| {},
         )
         .await?;
     assert_eq!(replaced.status, SessionUploadStatus::Saved);
@@ -256,6 +271,7 @@ async fn exercise(
             &Uuid::now_v7().to_string(),
             remote_upload.path,
             || async { Ok(Some(replacement_download.clone())) },
+            |_| {},
         )
         .await?;
     assert_eq!(fs::read(&replacement_download)?, b"replacement\0\xfe");
@@ -448,6 +464,7 @@ async fn exercise(
         folder.path.clone(),
         || async { Ok(Some(cancelled_source.clone())) },
         |_| async { Err("new target unexpectedly requested replacement".into()) },
+        |_| {},
     );
     let cancel_after_staging = async {
         tokio::time::timeout(
@@ -483,18 +500,28 @@ async fn exercise(
 
     let blocked_destination = local.join("existing-directory");
     fs::create_dir(&blocked_destination)?;
+    let failed_download_id = Uuid::now_v7().to_string();
+    let failed_progress = Arc::new(Mutex::new(Vec::new()));
+    let observed_failure = failed_progress.clone();
     assert!(
         manager
             .download_file_with_picker(
                 "fixture-terminal",
                 &transport,
-                &Uuid::now_v7().to_string(),
+                &failed_download_id,
                 file.path.clone(),
                 || async { Ok(Some(blocked_destination.clone())) },
+                move |update| observed_failure.lock().unwrap().push(update),
             )
             .await
             .unwrap_err()
             .contains("local file could not be saved")
+    );
+    assert_transfer_progress(
+        &failed_progress.lock().unwrap(),
+        &transport,
+        &failed_download_id,
+        262149,
     );
     assert!(blocked_destination.is_dir());
     assert!(fs::read_dir(local)?.all(|entry| {
@@ -515,6 +542,7 @@ async fn exercise(
         &cancel_transfer_id,
         large.path.clone(),
         || async { Ok(Some(cancelled_destination.clone())) },
+        |_| {},
     );
     let cancel_transfer = async {
         let part = tokio::time::timeout(Duration::from_secs(10), async {
@@ -582,6 +610,7 @@ async fn exercise(
             let _ = entered_tx.send(());
             Ok(Some(chosen_rx.await.map_err(|_| "picker closed")?))
         },
+        |_| {},
     );
     let cancel = async {
         entered_rx.await.map_err(|_| "picker did not start")?;
@@ -616,4 +645,29 @@ async fn wait_for(
             return Err("terminal fixture produced too much output".into());
         }
     }
+}
+
+fn assert_transfer_progress(
+    updates: &[SessionFileTransferProgress],
+    transport: &str,
+    operation: &str,
+    total: u64,
+) {
+    assert!(updates.len() >= 2, "transfer should report data and finalization");
+    assert_eq!(updates[0].transferred_bytes, "0");
+    assert_eq!(updates[0].phase, SessionFileTransferPhase::Transferring);
+    let mut previous = 0;
+    let expected_total = total.to_string();
+    for update in updates {
+        assert_eq!(update.session_id, "fixture-terminal");
+        assert_eq!(update.transport_id, transport);
+        assert_eq!(update.operation_id, operation);
+        assert_eq!(update.total_bytes.as_deref(), Some(expected_total.as_str()));
+        let transferred = update.transferred_bytes.parse::<u64>().unwrap();
+        assert!(transferred >= previous && transferred <= total);
+        previous = transferred;
+    }
+    let last = updates.last().unwrap();
+    assert_eq!(last.phase, SessionFileTransferPhase::Finalizing);
+    assert_eq!(last.transferred_bytes, total.to_string());
 }

@@ -10,7 +10,7 @@ use scoplen_client_core::locale::Locale;
 use scoplen_client_core::session_files::{
     RemoteDirectory, RemoteFileKind, SessionFileMutationResult, SessionUploadResult,
 };
-use scoplen_client_core::session_manager::HistoryChange;
+use scoplen_client_core::session_manager::{HistoryChange, SessionFileTransferProgress};
 use scoplen_crypto::SecretVec;
 use serde::Deserialize;
 use specta::Type;
@@ -177,6 +177,7 @@ pub async fn session_download_file(
     transport_id: String,
     operation_id: String,
     remote_path: Vec<u8>,
+    progress: Channel<SessionFileTransferProgress>,
 ) -> Result<bool, String> {
     let suggested = suggested_download_name(&remote_path);
     manager
@@ -202,11 +203,15 @@ pub async fn session_download_file(
                     })
                     .transpose()
             },
+            move |update| {
+                let _ = progress.send(update);
+            },
         )
         .await
 }
 
 /// Select one regular local file and publish it in the terminal's remote directory.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 #[specta::specta]
 pub async fn session_upload_file(
@@ -217,6 +222,7 @@ pub async fn session_upload_file(
     operation_id: String,
     directory_path: Vec<u8>,
     locale: Locale,
+    progress: Channel<SessionFileTransferProgress>,
 ) -> Result<SessionUploadResult, String> {
     let confirm_app = app.clone();
     let picker_title = match locale {
@@ -270,6 +276,9 @@ pub async fn session_upload_file(
                 })
                 .await
                 .map_err(|_| "the overwrite confirmation failed".to_owned())
+            },
+            move |update| {
+                let _ = progress.send(update);
             },
         )
         .await

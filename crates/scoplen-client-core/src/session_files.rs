@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use scoplen_ssh::{SftpAttributes, SftpChannelError, SftpError, SftpPacket, SftpSession};
+use scoplen_ssh::{
+    SftpAttributes, SftpChannelError, SftpError, SftpPacket, SftpSession, SftpTransferProgress,
+};
 use serde::Serialize;
 use specta::Type;
 use tokio::fs::File;
@@ -28,6 +30,7 @@ const MAX_DISPLAY_CHARS: usize = 128;
 const SFTP_PIPELINE: usize = 4;
 const READ_CHUNK: u32 = 32 * 1024;
 const WRITE_CHUNK: u32 = 32 * 1024;
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const EXCLUSIVE_WRITE_OPEN: u32 = 2 | 8 | 32; // SFTP v3 WRITE | CREAT | EXCL.
 const SFTP_STEP_TIMEOUT: Duration = Duration::from_secs(15);
 const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -69,6 +72,60 @@ pub enum RemoteFileKind {
 pub struct RemoteDirectory {
     /// Entries safe to render or submit using their opaque paths.
     pub entries: Vec<RemoteFileEntry>,
+}
+
+/// Data transfer is complete only after a separate file publication step succeeds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionFileTransferPhase {
+    /// Contiguous bytes are moving through the temporary local or remote file.
+    Transferring,
+    /// All bytes moved; final verification and save are still pending.
+    Finalizing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FileTransferProgress {
+    pub transferred: u64,
+    pub total: Option<u64>,
+    pub phase: SessionFileTransferPhase,
+}
+
+struct TransferReporter<'a, F> {
+    notify: &'a mut F,
+    last_emit: Option<Instant>,
+    last_transferred: Option<u64>,
+}
+
+impl<'a, F: FnMut(FileTransferProgress)> TransferReporter<'a, F> {
+    fn new(notify: &'a mut F) -> Self {
+        Self { notify, last_emit: None, last_transferred: None }
+    }
+
+    fn transferring(&mut self, progress: SftpTransferProgress) {
+        let now = Instant::now();
+        let complete = progress.total.is_some_and(|total| progress.transferred == total);
+        let due = self
+            .last_emit
+            .is_none_or(|last| now.saturating_duration_since(last) >= PROGRESS_INTERVAL);
+        if self.last_transferred != Some(progress.transferred) && (due || complete) {
+            (self.notify)(FileTransferProgress {
+                transferred: progress.transferred,
+                total: progress.total,
+                phase: SessionFileTransferPhase::Transferring,
+            });
+            self.last_transferred = Some(progress.transferred);
+            self.last_emit = Some(now);
+        }
+    }
+
+    fn finalizing(&mut self, transferred: u64, total: u64) {
+        (self.notify)(FileTransferProgress {
+            transferred,
+            total: Some(total),
+            phase: SessionFileTransferPhase::Finalizing,
+        });
+    }
 }
 
 /// The result of one native, terminal-owned upload intent.
@@ -711,7 +768,7 @@ fn confirm_staging_open(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn upload_staged<F>(
+async fn upload_staged<F, P>(
     connection: &SshConnection,
     source: &mut UploadSource,
     directory: &[u8],
@@ -720,10 +777,12 @@ async fn upload_staged<F>(
     cancel: &mut watch::Receiver<bool>,
     state: &UploadState,
     staged_path: &mut Option<Vec<u8>>,
+    progress: &mut P,
     authorize_publish: F,
 ) -> Result<(), FileAccessError>
 where
     F: FnOnce() -> Result<(), FileAccessError>,
+    P: FnMut(FileTransferProgress),
 {
     let mut session = until_cancelled(cancel, async {
         tokio::time::timeout(
@@ -765,6 +824,7 @@ where
     }
     let started = Instant::now();
     let last_progress = AtomicU64::new(0);
+    let mut reporter = TransferReporter::new(progress);
     let transfer = session.upload_from(
         &handle,
         0,
@@ -772,11 +832,12 @@ where
         WRITE_CHUNK,
         SFTP_PIPELINE,
         &mut source.file,
-        |_| {
+        |update| {
             last_progress.store(
                 u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 Ordering::Relaxed,
             );
+            reporter.transferring(update);
         },
     );
     let transferred = until_cancelled(
@@ -787,6 +848,7 @@ where
     if transferred != source.size {
         return Err(FileAccessError::SourceChanged);
     }
+    reporter.finalizing(transferred, source.size);
     let local = source.file.metadata().await.map_err(FileAccessError::LocalSourceIo)?;
     if local.len() != source.size
         || source.modified.is_some_and(|time| local.modified().ok() != Some(time))
@@ -837,7 +899,7 @@ where
 
 /// Upload one opened local file through private staging and publish only after owner authorization.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn upload_file<F>(
+pub(crate) async fn upload_file<F, P>(
     connection: &SshConnection,
     mut source: UploadSource,
     directory: Vec<u8>,
@@ -845,10 +907,12 @@ pub(crate) async fn upload_file<F>(
     preflight: UploadPreflight,
     mut cancel: watch::Receiver<bool>,
     state: Arc<UploadState>,
+    mut progress: P,
     authorize_publish: F,
 ) -> SessionUploadResult
 where
     F: FnOnce() -> Result<(), FileAccessError>,
+    P: FnMut(FileTransferProgress),
 {
     let mut staged_path = None;
     let result = upload_staged(
@@ -860,6 +924,7 @@ where
         &mut cancel,
         &state,
         &mut staged_path,
+        &mut progress,
         authorize_publish,
     )
     .await;
@@ -1069,15 +1134,17 @@ where
 }
 
 /// Download an opened regular file into a private temporary file and commit it through the owner.
-pub async fn download_file<F, Fut>(
+pub(crate) async fn download_file<F, Fut, P>(
     connection: &SshConnection,
     remote_path: Vec<u8>,
     destination: &Path,
+    mut progress: P,
     commit: F,
 ) -> Result<(), FileAccessError>
 where
     F: FnOnce(PathBuf, PathBuf) -> Fut,
     Fut: Future<Output = Result<(), FileAccessError>>,
+    P: FnMut(FileTransferProgress),
 {
     validate_path(&remote_path)?;
     let mut session = tokio::time::timeout(
@@ -1103,6 +1170,7 @@ where
     let mut temporary = temporary_download(destination).await?;
     let started = Instant::now();
     let last_progress = AtomicU64::new(0);
+    let mut reporter = TransferReporter::new(&mut progress);
     let transfer = session.download_to(
         &handle,
         0,
@@ -1110,11 +1178,12 @@ where
         READ_CHUNK,
         SFTP_PIPELINE,
         temporary.file.as_mut().expect("temporary file is open"),
-        |_| {
+        |update| {
             last_progress.store(
                 u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 Ordering::Relaxed,
             );
+            reporter.transferring(update);
         },
     );
     let copied =
@@ -1123,6 +1192,7 @@ where
     if copied != size {
         return Err(FileAccessError::FileChanged);
     }
+    reporter.finalizing(copied, size);
     let request = session.client_mut().fstat(handle.clone())?;
     match response(&mut session, request).await? {
         SftpPacket::Attrs { attrs, .. } if attrs.size == Some(size) => {}
@@ -1140,6 +1210,71 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfer_reporter_throttles_chunks_but_keeps_completion_and_finalization() {
+        let mut updates = Vec::new();
+        {
+            let mut notify = |update| updates.push(update);
+            let mut reporter = TransferReporter::new(&mut notify);
+            reporter.transferring(SftpTransferProgress {
+                offset: 0,
+                transferred: 0,
+                total: Some(64),
+            });
+            reporter.last_emit = Some(Instant::now() + Duration::from_secs(60));
+            reporter.transferring(SftpTransferProgress {
+                offset: 32,
+                transferred: 32,
+                total: Some(64),
+            });
+            reporter.transferring(SftpTransferProgress {
+                offset: 64,
+                transferred: 64,
+                total: Some(64),
+            });
+            reporter.finalizing(64, 64);
+        }
+        assert_eq!(
+            updates,
+            [
+                FileTransferProgress {
+                    transferred: 0,
+                    total: Some(64),
+                    phase: SessionFileTransferPhase::Transferring,
+                },
+                FileTransferProgress {
+                    transferred: 64,
+                    total: Some(64),
+                    phase: SessionFileTransferPhase::Transferring,
+                },
+                FileTransferProgress {
+                    transferred: 64,
+                    total: Some(64),
+                    phase: SessionFileTransferPhase::Finalizing,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_transfer_still_has_a_separate_finalizing_phase() {
+        let mut updates = Vec::new();
+        {
+            let mut notify = |update| updates.push(update);
+            let mut reporter = TransferReporter::new(&mut notify);
+            reporter.transferring(SftpTransferProgress {
+                offset: 0,
+                transferred: 0,
+                total: Some(0),
+            });
+            reporter.finalizing(0, 0);
+        }
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].phase, SessionFileTransferPhase::Transferring);
+        assert_eq!(updates[1].phase, SessionFileTransferPhase::Finalizing);
+        assert!(updates.iter().all(|update| update.transferred == 0 && update.total == Some(0)));
+    }
 
     #[test]
     fn rejected_exclusive_open_never_claims_an_existing_staging_name() {

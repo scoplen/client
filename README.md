@@ -91,9 +91,13 @@ the new name is unused, and delete a regular file or empty directory after nativ
 confirmation. Standard SFTP v3 rename may still replace a concurrently created
 target on some servers. Other remote entry types are shown but cannot be changed here.
 Cancel and closing Files request cancellation without closing the terminal.
-For uploads, once final remote rename starts,
-the client waits for its result; reconnect fences off the old operation. A
-download that fails or is cancelled before the final save leaves the selected
+For one upload or download, Files shows the contiguous bytes transferred
+through SFTP and the known total on that exact operation. After all bytes
+transfer, it shows a finalizing state while the remote publication or local
+save is still pending; only the final result confirms that the file was saved.
+For uploads, once final remote rename starts, the client waits for its result;
+reconnect fences off the old operation. A download that fails or is cancelled
+before the final save leaves the selected
 destination unchanged. An upload whose final remote rename has started may have
 an unknown outcome if its reply is lost. The terminal keeps that warning across
 reconnects and asks you to refresh and check the remote directory before trying
@@ -351,8 +355,9 @@ runner and checks the complete saved-key path through the real Microsoft agent,
 using a disposable loopback Rust SSH protocol peer. That peer does not establish
 Windows OpenSSH-server interoperability. Each fixture cleans up its own resources.
 `scripts/test-ssh-session-files.ps1` runs a connected terminal and Files operations
-against a disposable OpenSSH server. It checks directory browsing and binary
-download on the same authenticated connection, plus folder creation, file rename
+against a disposable OpenSSH server. It checks directory browsing, binary
+transfer progress and finalization, including a failed local save after all bytes
+arrive, on the same authenticated connection, plus folder creation, file rename
 and collision handling, delete-confirmation outcomes, empty-directory deletion,
 cancellation and failure recovery while terminal input and resizing remain available. It requires
 PowerShell 7 and Docker, and removes its container and temporary files afterward.

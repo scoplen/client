@@ -25,9 +25,9 @@ export const commands = {
 	/**  Browse files on the terminal's authenticated SSH connection. */
 	sessionListFiles: (sessionId: string, transportId: string, operationId: string, path: number[]) => typedError<RemoteDirectory, string>(__TAURI_INVOKE("session_list_files", { sessionId, transportId, operationId, path })),
 	/**  Download a regular remote file to a destination chosen in the native picker. */
-	sessionDownloadFile: (sessionId: string, transportId: string, operationId: string, remotePath: number[]) => typedError<boolean, string>(__TAURI_INVOKE("session_download_file", { sessionId, transportId, operationId, remotePath })),
+	sessionDownloadFile: (sessionId: string, transportId: string, operationId: string, remotePath: number[], progress: Channel<SessionFileTransferProgress>) => typedError<boolean, string>(__TAURI_INVOKE("session_download_file", { sessionId, transportId, operationId, remotePath, progress })),
 	/**  Select one regular local file and publish it in the terminal's remote directory. */
-	sessionUploadFile: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], locale: Locale) => typedError<SessionUploadResult, string>(__TAURI_INVOKE("session_upload_file", { sessionId, transportId, operationId, directoryPath, locale })),
+	sessionUploadFile: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], locale: Locale, progress: Channel<SessionFileTransferProgress>) => typedError<SessionUploadResult, string>(__TAURI_INVOKE("session_upload_file", { sessionId, transportId, operationId, directoryPath, locale, progress })),
 	/**  Create one directory inside the current remote Files directory. */
 	sessionCreateRemoteDirectory: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], name: string, locale: Locale) => typedError<SessionFileMutationResult, string>(__TAURI_INVOKE("session_create_remote_directory", { sessionId, transportId, operationId, directoryPath, name, locale })),
 	/**  Rename one ordinary remote entry without offering replacement. */
@@ -1610,6 +1610,29 @@ export type SessionFileMutationStatus =
 "unknown" |
 /**  The server refused the change or preparation failed. */
 "failed";
+
+/**  Data transfer is complete only after a separate file publication step succeeds. */
+export type SessionFileTransferPhase =
+/**  Contiguous bytes are moving through the temporary local or remote file. */
+"transferring" |
+/**  All bytes moved; final verification and save are still pending. */
+"finalizing";
+
+/**  Transfer progress for one file operation on one authenticated transport. */
+export type SessionFileTransferProgress = {
+	/**  Logical terminal session owning the transfer. */
+	sessionId: string,
+	/**  Exact authenticated connection attempt. */
+	transportId: string,
+	/**  Exact file operation within that connection. */
+	operationId: string,
+	/**  Decimal text preserves the full 64-bit byte count in JavaScript. */
+	transferredBytes: string,
+	/**  Expected total as decimal text, when available. */
+	totalBytes: string | null,
+	/**  Data transfer or final save stage; neither implies success. */
+	phase: SessionFileTransferPhase,
+};
 
 /**  A one-time response to the current attempt's preparation prompt. */
 export type SessionPreparationIntent =

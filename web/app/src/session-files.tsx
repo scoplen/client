@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { Button, Dialog, Field, IconButton } from "@scoplen/ui";
+import { Channel } from "@tauri-apps/api/core";
 import { Download, File, Folder, FolderPlus, Pencil, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
@@ -7,6 +8,7 @@ import {
   commands,
   type RemoteFileEntry,
   type SessionFileMutationResult,
+  type SessionFileTransferProgress,
   type SessionUploadResult,
 } from "./ipc/bindings";
 
@@ -18,6 +20,37 @@ type UploadFeedback = Pick<SessionUploadResult, "status" | "stagingMayRemain">;
 type MutationKind = "create" | "rename" | "delete";
 type MutationFeedback = { kind: MutationKind; status: SessionFileMutationResult["status"] };
 type NameDialog = { kind: "create" } | { kind: "rename"; entry: RemoteFileEntry };
+type TransferProgress = Pick<SessionFileTransferProgress, "sessionId" | "transportId" | "operationId" | "phase"> & {
+  transferredBytes: bigint;
+  totalBytes: bigint | null;
+  percent: number | null;
+};
+
+const MAX_U64 = 18_446_744_073_709_551_615n;
+
+function byteCount(value: string): bigint | null {
+  if (typeof value !== "string" || !/^(0|[1-9]\d{0,19})$/.test(value)) return null;
+  const bytes = BigInt(value);
+  return bytes <= MAX_U64 ? bytes : null;
+}
+
+function transferProgress(event: SessionFileTransferProgress): TransferProgress | null {
+  if (event.phase !== "transferring" && event.phase !== "finalizing") return null;
+  const transferredBytes = byteCount(event.transferredBytes);
+  const totalBytes = event.totalBytes === null ? null : byteCount(event.totalBytes);
+  if (transferredBytes === null || (event.totalBytes !== null && totalBytes === null)) return null;
+  if (totalBytes !== null && transferredBytes > totalBytes) return null;
+  const percent = totalBytes === null ? null : totalBytes === 0n ? 100 : Number((transferredBytes * 100n) / totalBytes);
+  return {
+    sessionId: event.sessionId,
+    transportId: event.transportId,
+    operationId: event.operationId,
+    phase: event.phase,
+    transferredBytes,
+    totalBytes,
+    percent,
+  };
+}
 
 export type FileOperationOutcome = UploadFeedback & {
   transportId: string;
@@ -49,6 +82,8 @@ export function SessionFiles({
   const [notice, setNotice] = useState<string | null>(null);
   const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(null);
   const [mutationFeedback, setMutationFeedback] = useState<MutationFeedback | null>(null);
+  const [progress, setProgress] = useState<TransferProgress | null>(null);
+  const [transferOperationId, setTransferOperationId] = useState<string | null>(null);
   const [nameDialog, setNameDialog] = useState<NameDialog | null>(null);
   const [name, setName] = useState("");
   const [reload, setReload] = useState(0);
@@ -58,6 +93,23 @@ export function SessionFiles({
   const mounted = useRef(true);
   const translator = useRef(t);
   const currentPath = locations[locations.length - 1]!.path;
+  const visibleProgress =
+    progress?.sessionId === sessionId &&
+    progress.transportId === transportId &&
+    progress.operationId === transferOperationId &&
+    (activity === "downloading" || activity === "uploading" || activity === "cancelling" || activity === "waiting")
+      ? progress
+      : null;
+  const numberFormat = new Intl.NumberFormat(locale);
+  const progressText = visibleProgress
+    ? visibleProgress.totalBytes === null
+      ? t("session.files.transfer.unknownTotal", { transferred: numberFormat.format(visibleProgress.transferredBytes) })
+      : t("session.files.transfer.knownTotal", {
+          transferred: numberFormat.format(visibleProgress.transferredBytes),
+          total: numberFormat.format(visibleProgress.totalBytes),
+          percent: visibleProgress.percent ?? 0,
+        })
+    : null;
 
   useEffect(() => {
     translator.current = t;
@@ -90,6 +142,8 @@ export function SessionFiles({
       setError(null);
       setNotice(null);
       setEntries([]);
+      setProgress(null);
+      setTransferOperationId(null);
       id = crypto.randomUUID();
       operation.current = id;
       try {
@@ -117,19 +171,50 @@ export function SessionFiles({
     };
   }, [cancelCurrent, sessionId, transportId, currentPath, reload]);
 
+  const progressChannel = (id: string): Channel<SessionFileTransferProgress> => {
+    const messages = new Channel<SessionFileTransferProgress>();
+    messages.onmessage = (event) => {
+      if (
+        !mounted.current ||
+        operation.current !== id ||
+        cancelled.current === id ||
+        event.sessionId !== sessionId ||
+        event.transportId !== transportId ||
+        event.operationId !== id
+      )
+        return;
+      const next = transferProgress(event);
+      if (!next) return;
+      setProgress((current) => {
+        if (
+          current?.operationId === id &&
+          (current.transferredBytes > next.transferredBytes ||
+            (current.phase === "finalizing" && next.phase === "transferring"))
+        )
+          return current;
+        return next;
+      });
+    };
+    return messages;
+  };
+
   const download = (entry: RemoteFileEntry) => {
     if (activity || operation.current || entry.kind !== "file") return;
     const id = crypto.randomUUID();
     operation.current = id;
     setActivity("downloading");
+    setTransferOperationId(id);
     setError(null);
     setNotice(null);
     setUploadFeedback(null);
     setMutationFeedback(null);
+    setProgress(null);
     void commands
-      .sessionDownloadFile(sessionId, transportId, id, entry.path)
+      .sessionDownloadFile(sessionId, transportId, id, entry.path, progressChannel(id))
       .then((result) => {
         if (!mounted.current || operation.current !== id) return;
+        setProgress(null);
+        setTransferOperationId(null);
         if (result.status === "error") {
           if (cancelled.current === id) setNotice(translator.current("session.files.cancelled"));
           else setError({ message: result.error, listing: false });
@@ -137,6 +222,8 @@ export function SessionFiles({
       })
       .catch((cause: unknown) => {
         if (!mounted.current || operation.current !== id) return;
+        setProgress(null);
+        setTransferOperationId(null);
         if (cancelled.current === id) setNotice(translator.current("session.files.cancelled"));
         else setError({ message: message(cause), listing: false });
       })
@@ -144,6 +231,8 @@ export function SessionFiles({
         if (!mounted.current || operation.current !== id) return;
         operation.current = null;
         cancelled.current = null;
+        setProgress(null);
+        setTransferOperationId(null);
         setActivity(null);
       });
   };
@@ -153,12 +242,18 @@ export function SessionFiles({
     const id = crypto.randomUUID();
     operation.current = id;
     setActivity("uploading");
+    setTransferOperationId(id);
     setError(null);
     setNotice(null);
     setUploadFeedback(null);
     setMutationFeedback(null);
+    setProgress(null);
     const report = (result: SessionUploadResult) => {
       const current = mounted.current && operation.current === id;
+      if (current) {
+        setProgress(null);
+        setTransferOperationId(null);
+      }
       if (result.status === "unknown" || result.stagingMayRemain) {
         onFileOutcome({
           transportId,
@@ -172,7 +267,14 @@ export function SessionFiles({
       if (result.status === "saved") setReload((value) => value + 1);
     };
     void commands
-      .sessionUploadFile(sessionId, transportId, id, currentPath, locale === "zh-Hans" ? "zh-Hans" : "en")
+      .sessionUploadFile(
+        sessionId,
+        transportId,
+        id,
+        currentPath,
+        locale === "zh-Hans" ? "zh-Hans" : "en",
+        progressChannel(id),
+      )
       .then((result) =>
         report(result.status === "ok" ? result.data : { status: "failed", message: null, stagingMayRemain: false }),
       )
@@ -181,6 +283,8 @@ export function SessionFiles({
         if (!mounted.current || operation.current !== id) return;
         operation.current = null;
         cancelled.current = null;
+        setProgress(null);
+        setTransferOperationId(null);
         setActivity(null);
       });
   };
@@ -199,6 +303,8 @@ export function SessionFiles({
     setNotice(null);
     setUploadFeedback(null);
     setMutationFeedback(null);
+    setProgress(null);
+    setTransferOperationId(null);
     const report = (result: SessionFileMutationResult) => {
       if (result.status === "unknown") {
         onFileOutcome({ transportId, operationId: id, status: "unknown", stagingMayRemain: false });
@@ -263,6 +369,8 @@ export function SessionFiles({
     const id = operation.current;
     if (!id || activity === "cancelling" || activity === "waiting") return;
     cancelled.current = id;
+    setProgress(null);
+    setTransferOperationId(null);
     setActivity("cancelling");
     void commands
       .sessionCancelFileOperation(sessionId, transportId, id)
@@ -347,6 +455,23 @@ export function SessionFiles({
           <Button variant="ghost" disabled={activity === "cancelling" || activity === "waiting"} onClick={cancel}>
             {t("session.files.cancel")}
           </Button>
+        </div>
+      ) : null}
+      {visibleProgress && progressText ? (
+        <div className="min-w-0 shrink-0 px-3 pb-2 text-xs">
+          <p className="m-0 break-all tabular-nums">{progressText}</p>
+          {visibleProgress.phase === "finalizing" ? (
+            <p className="m-0 mt-1" role="status">
+              {t("session.files.transfer.finalizing")}
+            </p>
+          ) : null}
+          <progress
+            aria-label={t("session.files.transfer.progress")}
+            aria-valuetext={progressText}
+            className="mt-2 block h-1.5 w-full min-w-0 accent-primary"
+            max={100}
+            value={visibleProgress.percent ?? undefined}
+          />
         </div>
       ) : null}
       {error ? (

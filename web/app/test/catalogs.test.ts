@@ -24,6 +24,9 @@ const sample = {
   id: "019a0123-4567-7890-8123-456789abcdef",
   downloaded: 2,
   uploaded: 3,
+  transferred: "1,024",
+  total: "4,096",
+  percent: 25,
   sequence: "9007199254740993",
 };
 

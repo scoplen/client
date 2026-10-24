@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Channel } from "@tauri-apps/api/core";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { StrictMode } from "react";
 import { I18nProvider } from "../src/i18n";
+import type { SessionFileTransferProgress } from "../src/ipc/bindings";
 import { SessionFiles } from "../src/session-files";
 
 const fileCommands = vi.hoisted(() => ({
@@ -30,6 +33,20 @@ vi.mock("../src/ipc/bindings", () => ({
 type Entry = { name: string; path: number[]; kind: "file" | "directory" | "other"; sizeBytes: string | null };
 type Listed = { status: "ok"; data: { entries: Entry[] } } | { status: "error"; error: string };
 type Downloaded = { status: "ok"; data: boolean } | { status: "error"; error: string };
+function progressEvent(
+  operationId: string,
+  changes: Partial<SessionFileTransferProgress> = {},
+): SessionFileTransferProgress {
+  return {
+    sessionId: "session-1",
+    transportId: "transport-1",
+    operationId,
+    transferredBytes: "1024",
+    totalBytes: "4096",
+    phase: "transferring",
+    ...changes,
+  };
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -57,6 +74,7 @@ const file: Entry = { name: "raw.bin", path: [46, 47, 255, 46, 98, 105, 110], ki
 const other: Entry = { name: "socket", path: [46, 47, 115, 111, 99, 107, 101, 116], kind: "other", sizeBytes: null };
 
 beforeEach(() => {
+  mockIPC(() => undefined);
   fileCommands.list.mockReset().mockResolvedValue({ status: "ok", data: { entries: [] } });
   fileCommands.download.mockReset().mockResolvedValue({ status: "ok", data: true });
   fileCommands.upload.mockReset().mockResolvedValue({
@@ -68,6 +86,8 @@ beforeEach(() => {
   fileCommands.delete.mockReset().mockResolvedValue({ status: "ok", data: { status: "saved", message: null } });
   fileCommands.cancel.mockReset().mockResolvedValue({ status: "ok", data: null });
 });
+
+afterEach(() => clearMocks());
 
 it("uploads one native-selected file into the current raw directory and refreshes after success", async () => {
   fileCommands.list
@@ -85,6 +105,7 @@ it("uploads one native-selected file into the current raw directory and refreshe
     expect.any(String),
     directory.path,
     "en",
+    expect.any(Channel),
   );
   expect(await screen.findByText("File uploaded to this directory.")).toBeTruthy();
   await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(3));
@@ -96,7 +117,41 @@ it("passes the current Chinese interface language to the native upload command",
   render(view("transport-1", vi.fn(), vi.fn(), "zh-Hans"));
   await screen.findByText("此目录为空。");
   await userEvent.click(screen.getByRole("button", { name: "上传文件" }));
-  expect(fileCommands.upload).toHaveBeenCalledWith("session-1", "transport-1", expect.any(String), [46], "zh-Hans");
+  expect(fileCommands.upload).toHaveBeenCalledWith(
+    "session-1",
+    "transport-1",
+    expect.any(String),
+    [46],
+    "zh-Hans",
+    expect.any(Channel),
+  );
+});
+
+it("shows an upload with unknown total in Chinese and clears progress for an unknown result", async () => {
+  const pending = deferred<{ status: "ok"; data: { status: "unknown"; message: null; stagingMayRemain: true } }>();
+  fileCommands.upload.mockReturnValueOnce(pending.promise);
+  const onFileOutcome = vi.fn();
+  render(view("transport-1", vi.fn(), onFileOutcome, "zh-Hans"));
+  await screen.findByText("此目录为空。");
+  await userEvent.click(screen.getByRole("button", { name: "上传文件" }));
+  const operationId = fileCommands.upload.mock.calls[0]?.[2] as string;
+  const channel = fileCommands.upload.mock.calls[0]?.[5] as Channel<SessionFileTransferProgress>;
+  await act(() =>
+    channel.onmessage(progressEvent(operationId, { transferredBytes: "18446744073709551615", totalBytes: null })),
+  );
+  expect(screen.getByText("已传输 18,446,744,073,709,551,615 字节")).toBeTruthy();
+  expect(screen.getByRole("progressbar", { name: "文件传输进度" }).getAttribute("value")).toBeNull();
+  expect(screen.queryByText("文件已上传到此目录。")).toBeNull();
+  await act(async () =>
+    pending.resolve({ status: "ok", data: { status: "unknown", message: null, stagingMayRemain: true } }),
+  );
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect(onFileOutcome).toHaveBeenCalledWith({
+    transportId: "transport-1",
+    operationId,
+    status: "unknown",
+    stagingMayRemain: true,
+  });
 });
 
 it.each([
@@ -139,6 +194,36 @@ it("keeps a rejected cancellation pending and reports an uncertain upload before
   expect(screen.queryByText("File operation cancelled.")).toBeNull();
   expect(fileCommands.upload).toHaveBeenCalledTimes(1);
   expect(fileCommands.list).toHaveBeenCalledTimes(1);
+});
+
+it("ignores late transfer progress after cancellation is requested while awaiting an unknown upload", async () => {
+  const pending = deferred<{ status: "ok"; data: { status: "unknown"; message: null; stagingMayRemain: true } }>();
+  fileCommands.upload.mockReturnValueOnce(pending.promise);
+  fileCommands.cancel.mockResolvedValueOnce({ status: "error", error: "publication started" });
+  const onFileOutcome = vi.fn();
+  render(view("transport-1", vi.fn(), onFileOutcome));
+  await screen.findByText("This directory is empty.");
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  const operationId = fileCommands.upload.mock.calls[0]?.[2] as string;
+  const channel = fileCommands.upload.mock.calls[0]?.[5] as Channel<SessionFileTransferProgress>;
+  await act(() => channel.onmessage(progressEvent(operationId)));
+  expect(screen.getByText("1,024 / 4,096 bytes · 25%")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect(await screen.findByText("Waiting for the file operation result…")).toBeTruthy();
+  await act(() => channel.onmessage(progressEvent(operationId, { transferredBytes: "4096", phase: "finalizing" })));
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect(screen.queryByText("Transfer complete. Waiting for save confirmation.")).toBeNull();
+  await act(async () =>
+    pending.resolve({ status: "ok", data: { status: "unknown", message: null, stagingMayRemain: true } }),
+  );
+  expect(onFileOutcome).toHaveBeenCalledWith({
+    transportId: "transport-1",
+    operationId,
+    status: "unknown",
+    stagingMayRemain: true,
+  });
+  expect(fileCommands.upload).toHaveBeenCalledTimes(1);
 });
 
 it("reports an old transport's uncertain result without changing the new directory", async () => {
@@ -258,8 +343,61 @@ it("navigates with raw path bytes and downloads only regular files", async () =>
   await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(3));
   expect(screen.queryByRole("button", { name: "Download socket" })).toBeNull();
   await userEvent.click(await screen.findByRole("button", { name: "Download raw.bin" }));
-  expect(fileCommands.download).toHaveBeenCalledWith("session-1", "transport-1", expect.any(String), file.path);
+  expect(fileCommands.download).toHaveBeenCalledWith(
+    "session-1",
+    "transport-1",
+    expect.any(String),
+    file.path,
+    expect.any(Channel),
+  );
   expect(await screen.findByText("Download saved to the selected location.")).toBeTruthy();
+});
+
+it("shows download bytes and finalizing while native save is still pending", async () => {
+  fileCommands.list.mockResolvedValueOnce({ status: "ok", data: { entries: [file] } });
+  const pending = deferred<Downloaded>();
+  fileCommands.download.mockReturnValueOnce(pending.promise);
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Download raw.bin" }));
+  const operationId = fileCommands.download.mock.calls[0]?.[2] as string;
+  const channel = fileCommands.download.mock.calls[0]?.[4] as Channel<SessionFileTransferProgress>;
+  await act(() => channel.onmessage(progressEvent(operationId)));
+  expect(screen.getByText("1,024 / 4,096 bytes · 25%")).toBeTruthy();
+  expect(screen.getByRole("progressbar", { name: "File transfer progress" }).getAttribute("value")).toBe("25");
+  await act(() => channel.onmessage(progressEvent(operationId, { transferredBytes: "4096", phase: "finalizing" })));
+  expect(screen.getByText("4,096 / 4,096 bytes · 100%")).toBeTruthy();
+  expect(screen.getByText("Transfer complete. Waiting for save confirmation.")).toBeTruthy();
+  expect(screen.queryByText("Download saved to the selected location.")).toBeNull();
+  await act(async () => pending.resolve({ status: "ok", data: true }));
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect(screen.getByText("Download saved to the selected location.")).toBeTruthy();
+  await act(() => channel.onmessage(progressEvent(operationId, { transferredBytes: "4096", phase: "finalizing" })));
+  expect(screen.queryByRole("progressbar")).toBeNull();
+});
+
+it("ignores progress for another operation and invalid byte counts", async () => {
+  fileCommands.list.mockResolvedValueOnce({ status: "ok", data: { entries: [file] } });
+  const pending = deferred<Downloaded>();
+  fileCommands.download.mockReturnValueOnce(pending.promise);
+  render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Download raw.bin" }));
+  const operationId = fileCommands.download.mock.calls[0]?.[2] as string;
+  const channel = fileCommands.download.mock.calls[0]?.[4] as Channel<SessionFileTransferProgress>;
+  await act(() => {
+    channel.onmessage(progressEvent(operationId, { sessionId: "other-session" }));
+    channel.onmessage(progressEvent(operationId, { transportId: "other-transport" }));
+    channel.onmessage(progressEvent(operationId, { operationId: "other-operation" }));
+    channel.onmessage(progressEvent(operationId, { transferredBytes: "4097" }));
+    channel.onmessage(progressEvent(operationId, { transferredBytes: "18446744073709551616", totalBytes: null }));
+  });
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  await act(() => channel.onmessage(progressEvent(operationId)));
+  expect(screen.getByText("1,024 / 4,096 bytes · 25%")).toBeTruthy();
+  await act(() => channel.onmessage(progressEvent(operationId, { transferredBytes: "512" })));
+  expect(screen.getByText("1,024 / 4,096 bytes · 25%")).toBeTruthy();
+  await act(async () => pending.resolve({ status: "error", error: "Remote file changed" }));
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect((screen.getByRole("alert") as HTMLElement).textContent).toContain("Remote file changed");
 });
 
 it("retries a listing error and keeps download errors alongside the file", async () => {
@@ -288,10 +426,13 @@ it("cancels a pending download without disabling the terminal's file panel", asy
   render(view());
   await userEvent.click(await screen.findByRole("button", { name: "Download raw.bin" }));
   const operationId = fileCommands.download.mock.calls[0]?.[2];
+  const channel = fileCommands.download.mock.calls[0]?.[4] as Channel<SessionFileTransferProgress>;
+  await act(() => channel.onmessage(progressEvent(operationId)));
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(fileCommands.cancel).toHaveBeenCalledWith("session-1", "transport-1", operationId);
   await act(async () => pending.resolve({ status: "error", error: "file operation was cancelled" }));
   expect(await screen.findByText("File operation cancelled.")).toBeTruthy();
+  expect(screen.queryByRole("progressbar")).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Download raw.bin" }));
   expect(fileCommands.download).toHaveBeenCalledTimes(2);
   expect(fileCommands.download.mock.calls[1]?.[2]).not.toBe(operationId);
@@ -322,9 +463,17 @@ it("ignores a late download result after the transport changes", async () => {
   const rendered = render(view("old-transport"));
   await userEvent.click(await screen.findByRole("button", { name: "Download raw.bin" }));
   const oldOperation = fileCommands.download.mock.calls[0]?.[2];
+  const oldChannel = fileCommands.download.mock.calls[0]?.[4] as Channel<SessionFileTransferProgress>;
+  await act(() => oldChannel.onmessage(progressEvent(oldOperation, { transportId: "old-transport" })));
+  expect(screen.getByRole("progressbar", { name: "File transfer progress" })).toBeTruthy();
   rendered.rerender(view("new-transport"));
   await waitFor(() => expect(fileCommands.cancel).toHaveBeenCalledWith("session-1", "old-transport", oldOperation));
   await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(2));
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  await act(() =>
+    oldChannel.onmessage(progressEvent(oldOperation, { transportId: "old-transport", transferredBytes: "2048" })),
+  );
+  expect(screen.queryByRole("progressbar")).toBeNull();
   await act(async () => old.resolve({ status: "ok", data: true }));
   expect(screen.getByRole("button", { name: "logs" })).toBeTruthy();
   expect(screen.queryByText("Download saved to the selected location.")).toBeNull();

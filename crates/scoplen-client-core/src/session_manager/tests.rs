@@ -37,6 +37,95 @@ fn ready_file_manager()
     (manager, transport, commands, file_requests)
 }
 
+#[test]
+fn file_progress_is_decimal_and_fenced_to_the_current_operation() {
+    let (manager, transport, _commands, _files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let (abort, _) = AbortHandle::new_pair();
+    let _guard = manager
+        .reserve_file_operation("terminal", &transport.to_string(), &operation.to_string(), abort)
+        .unwrap();
+    let mut updates = Vec::new();
+    let mut report = |update| updates.push(update);
+    let large = 9_007_199_254_740_993_u64;
+    let transfer = FileTransferProgress {
+        transferred: large,
+        total: Some(large + 1),
+        phase: SessionFileTransferPhase::Transferring,
+    };
+    SessionManager::report_file_progress(
+        &manager.sessions,
+        "terminal",
+        Uuid::now_v7(),
+        operation,
+        &mut report,
+        transfer,
+    );
+    SessionManager::report_file_progress(
+        &manager.sessions,
+        "terminal",
+        transport,
+        operation,
+        &mut report,
+        transfer,
+    );
+    manager
+        .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+        .unwrap();
+    SessionManager::report_file_progress(
+        &manager.sessions,
+        "terminal",
+        transport,
+        operation,
+        &mut report,
+        transfer,
+    );
+    let next_operation = Uuid::now_v7();
+    let (next_abort, _) = AbortHandle::new_pair();
+    let _next_guard = manager
+        .reserve_file_operation(
+            "terminal",
+            &transport.to_string(),
+            &next_operation.to_string(),
+            next_abort,
+        )
+        .unwrap();
+    manager.finish_remote_effect("terminal", transport, next_operation);
+    SessionManager::report_file_progress(
+        &manager.sessions,
+        "terminal",
+        transport,
+        next_operation,
+        &mut report,
+        transfer,
+    );
+    let expired_operation = Uuid::now_v7();
+    let (expired_abort, _) = AbortHandle::new_pair();
+    let _expired_guard = manager
+        .reserve_file_operation(
+            "terminal",
+            &transport.to_string(),
+            &expired_operation.to_string(),
+            expired_abort,
+        )
+        .unwrap();
+    manager.expire_ready_transport("terminal", transport).unwrap();
+    SessionManager::report_file_progress(
+        &manager.sessions,
+        "terminal",
+        transport,
+        expired_operation,
+        &mut report,
+        transfer,
+    );
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].session_id, "terminal");
+    assert_eq!(updates[0].transport_id, transport.to_string());
+    assert_eq!(updates[0].operation_id, operation.to_string());
+    assert_eq!(updates[0].transferred_bytes, large.to_string());
+    assert_eq!(updates[0].total_bytes, Some((large + 1).to_string()));
+}
+
 #[tokio::test]
 async fn upload_refuses_existing_target_without_atomic_replace_extension() {
     let (manager, transport, _commands, mut files) = ready_file_manager();
@@ -59,6 +148,7 @@ async fn upload_refuses_existing_target_without_atomic_replace_extension() {
                         confirmed.store(true, Ordering::SeqCst);
                         Ok(true)
                     },
+                    |_| {},
                 )
                 .await
         }
@@ -103,6 +193,7 @@ async fn upload_publication_rejects_cancel_and_lost_worker_is_unknown() {
                     b".".to_vec(),
                     || async { Ok(Some(source)) },
                     |_| async { Ok(true) },
+                    |_| {},
                 )
                 .await
         }
@@ -155,6 +246,7 @@ async fn cancelled_upload_confirmation_cannot_queue_late_transfer() {
                         entered.send(()).unwrap();
                         Ok(decided.await.unwrap())
                     },
+                    |_| {},
                 )
                 .await
         }
@@ -200,6 +292,7 @@ async fn cancel_before_upload_publication_waits_for_worker_cleanup() {
                     b".".to_vec(),
                     || async { Ok(Some(source)) },
                     |_| async { Ok(true) },
+                    |_| {},
                 )
                 .await
         }
@@ -426,6 +519,7 @@ async fn cancelled_picker_cannot_queue_a_late_download() {
                     picker_opened.store(true, Ordering::SeqCst);
                     Ok(None)
                 },
+                |_| {},
             )
             .await
             .is_err()
@@ -447,6 +541,7 @@ async fn cancelled_picker_cannot_queue_a_late_download() {
                         picker_started.send(()).unwrap();
                         Ok(Some(chosen.await.unwrap()))
                     },
+                    |_| {},
                 )
                 .await
         }
@@ -479,6 +574,7 @@ async fn ended_transport_cancels_a_picker_before_its_late_result() {
                         picker_started.send(()).unwrap();
                         Ok(Some(chosen.await.unwrap()))
                     },
+                    |_| {},
                 )
                 .await
         }

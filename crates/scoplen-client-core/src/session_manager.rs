@@ -25,9 +25,9 @@ use crate::connection::preparation::{
 use crate::connection::{MAX_SSH_INPUT, SshConnectionError, SshSession, terminal_size};
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
 use crate::session_files::{
-    self, MutationPreflight, RemoteDirectory, RemoteMutation, SessionFileMutationResult,
-    SessionFileMutationStatus, SessionUploadResult, SessionUploadStatus, UploadPreflight,
-    UploadSource, UploadState,
+    self, FileTransferProgress, MutationPreflight, RemoteDirectory, RemoteMutation,
+    SessionFileMutationResult, SessionFileMutationStatus, SessionFileTransferPhase,
+    SessionUploadResult, SessionUploadStatus, UploadPreflight, UploadSource, UploadState,
 };
 use crate::session_lifecycle::SessionHistoryLease;
 use crate::store::Store;
@@ -82,6 +82,24 @@ pub enum SessionEvent {
     },
 }
 
+/// Transfer progress for one file operation on one authenticated transport.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionFileTransferProgress {
+    /// Logical terminal session owning the transfer.
+    pub session_id: String,
+    /// Exact authenticated connection attempt.
+    pub transport_id: String,
+    /// Exact file operation within that connection.
+    pub operation_id: String,
+    /// Decimal text preserves the full 64-bit byte count in JavaScript.
+    pub transferred_bytes: String,
+    /// Expected total as decimal text, when available.
+    pub total_bytes: Option<String>,
+    /// Data transfer or final save stage; neither implies success.
+    pub phase: SessionFileTransferPhase,
+}
+
 /// A Recent record opened or ended by one transport attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HistoryChange {
@@ -125,6 +143,7 @@ enum FileCommand {
         session_id: String,
         transport: Uuid,
         operation: Uuid,
+        progress: FileProgressSink,
         reply: oneshot::Sender<Result<(), String>>,
     },
     PreflightUpload {
@@ -141,6 +160,7 @@ enum FileCommand {
         session_id: String,
         transport: Uuid,
         operation: Uuid,
+        progress: FileProgressSink,
         reply: oneshot::Sender<SessionUploadResult>,
     },
     PreflightMutation {
@@ -157,6 +177,8 @@ enum FileCommand {
         reply: oneshot::Sender<SessionFileMutationResult>,
     },
 }
+
+type FileProgressSink = Box<dyn FnMut(SessionFileTransferProgress) + Send>;
 
 enum PreparedUpload {
     Done(SessionUploadResult),
@@ -499,17 +521,19 @@ impl SessionManager {
     }
 
     /// Stream one selected regular remote file to a native-picker destination.
-    pub async fn download_file_with_picker<F, Fut>(
+    pub async fn download_file_with_picker<F, Fut, P>(
         &self,
         session_id: &str,
         transport_id: &str,
         operation_id: &str,
         remote_path: Vec<u8>,
         choose_destination: F,
+        progress: P,
     ) -> Result<bool, String>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Option<PathBuf>, String>>,
+        P: FnMut(SessionFileTransferProgress) + Send + 'static,
     {
         session_files::validate_path(&remote_path).map_err(|error| error.to_string())?;
         let (abort, cancellation) = AbortHandle::new_pair();
@@ -526,6 +550,7 @@ impl SessionManager {
                         session_id: session_id.to_owned(),
                         transport: guard.transport,
                         operation: guard.operation,
+                        progress: Box::new(progress),
                         reply,
                     },
                 )?;
@@ -543,7 +568,8 @@ impl SessionManager {
     }
 
     /// Select one local file and upload it only after Rust-owned conflict review.
-    pub async fn upload_file_with_picker<F, Fut, C, ConfirmFut>(
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upload_file_with_picker<F, Fut, C, ConfirmFut, P>(
         &self,
         session_id: &str,
         transport_id: &str,
@@ -551,12 +577,14 @@ impl SessionManager {
         directory: Vec<u8>,
         choose_source: F,
         confirm_replace: C,
+        progress: P,
     ) -> Result<SessionUploadResult, String>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Option<PathBuf>, String>>,
         C: FnOnce(String) -> ConfirmFut,
         ConfirmFut: Future<Output = Result<bool, String>>,
+        P: FnMut(SessionFileTransferProgress) + Send + 'static,
     {
         session_files::validate_path(&directory).map_err(|error| error.to_string())?;
         let (abort, cancellation) = AbortHandle::new_pair();
@@ -645,6 +673,7 @@ impl SessionManager {
                 session_id: session_id.to_owned(),
                 transport: guard.transport,
                 operation: guard.operation,
+                progress: Box::new(progress),
                 reply,
             },
         )?;
@@ -975,6 +1004,39 @@ impl SessionManager {
             && active.file.as_ref().is_some_and(|file| file.id == operation)
         {
             active.file.take();
+        }
+    }
+
+    fn report_file_progress(
+        sessions: &Mutex<HashMap<String, SessionEntry>>,
+        session_id: &str,
+        transport: Uuid,
+        operation: Uuid,
+        progress: &mut dyn FnMut(SessionFileTransferProgress),
+        update: FileTransferProgress,
+    ) {
+        let current = sessions.lock().is_ok_and(|sessions| {
+            sessions.get(session_id).is_some_and(|entry| {
+                entry.active.as_ref().is_some_and(|active| {
+                    active.ready
+                        && active.id == transport
+                        && *entry.intent.borrow() == Intent::None
+                        && active
+                            .file
+                            .as_ref()
+                            .is_some_and(|file| file.id == operation && !file.abort.is_aborted())
+                })
+            })
+        });
+        if current {
+            progress(SessionFileTransferProgress {
+                session_id: session_id.to_owned(),
+                transport_id: transport.to_string(),
+                operation_id: operation.to_string(),
+                transferred_bytes: update.transferred.to_string(),
+                total_bytes: update.total.map(|total| total.to_string()),
+                phase: update.phase,
+            });
         }
     }
 
@@ -1403,12 +1465,24 @@ async fn serve_files(
                 session_id,
                 transport,
                 operation,
+                mut progress,
                 mut reply,
             } => {
                 let sessions = manager.sessions.clone();
+                let progress_sessions = sessions.clone();
+                let progress_session = session_id.clone();
                 tokio::select! { biased;
                     _ = reply.closed() => {},
-                    result = session_files::download_file(connection, remote_path, &destination, move |temporary, destination| async move {
+                    result = session_files::download_file(connection, remote_path, &destination, move |update| {
+                        SessionManager::report_file_progress(
+                            &progress_sessions,
+                            &progress_session,
+                            transport,
+                            operation,
+                            progress.as_mut(),
+                            update,
+                        );
+                    }, move |temporary, destination| async move {
                         tokio::task::spawn_blocking(move || {
                             SessionManager::commit_download(
                                 &sessions,
@@ -1444,10 +1518,13 @@ async fn serve_files(
                 session_id,
                 transport,
                 operation,
+                mut progress,
                 reply,
             } => {
                 let sessions = manager.sessions.clone();
+                let progress_sessions = sessions.clone();
                 let authorized_session = session_id.clone();
+                let progress_session = session_id.clone();
                 let result = session_files::upload_file(
                     connection,
                     *source,
@@ -1456,6 +1533,16 @@ async fn serve_files(
                     preflight,
                     cancel,
                     state,
+                    move |update| {
+                        SessionManager::report_file_progress(
+                            &progress_sessions,
+                            &progress_session,
+                            transport,
+                            operation,
+                            progress.as_mut(),
+                            update,
+                        );
+                    },
                     move || {
                         SessionManager::authorize_remote_effect(
                             &sessions,

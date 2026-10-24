@@ -42,9 +42,14 @@ created concurrently on some servers. Delete is available only for listed regula
 files and directories. Rust checks the current remote type and asks for native
 confirmation before removing a regular file or empty directory. Other entry
 types remain visible but cannot be changed here. One file operation runs per
-terminal at a time. Cancel and closing the panel request cancellation without
-ending the terminal; Rust rejects cancellation after an upload's final remote
-rename begins and waits for the outcome. Tab close and reconnect fence
+terminal at a time. A typed channel reports contiguous transferred bytes, total
+bytes, and transfer or finalizing phase for that exact session, transport, and
+operation.
+The panel presents finalizing after data transfer reaches the total; it reports
+saved only after Rust confirms the remote publication or local destination commit.
+Cancel and closing the panel request cancellation without ending the terminal;
+Rust rejects cancellation after an upload's final remote rename begins and
+waits for the outcome. Tab close and reconnect fence
 old operations from new transports. A directory error offers another list; a
 download or upload error leaves the directory visible. If final remote rename
 has started and its reply cannot be confirmed, or if a temporary upload file
