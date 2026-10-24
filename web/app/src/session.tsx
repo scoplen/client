@@ -25,6 +25,7 @@ import {
 } from "./ipc/bindings";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
 import { SessionFiles, type UploadOutcome } from "./session-files";
+import { dismissUploadAttention, initialUploadAttention, recordUploadAttention } from "./session-upload-attention";
 
 export type SessionState =
   "verifying" | "trusting" | "passphrase" | "connecting" | "reconnecting" | "connected" | "closed" | "failed";
@@ -85,7 +86,7 @@ export function SessionTerminal({
   const [verified, setVerified] = useState<Array<Extract<PreparationEvent, { kind: "verified" }>>>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
-  const [uploadAttention, setUploadAttention] = useState<UploadOutcome[]>([]);
+  const [uploadAttention, setUploadAttention] = useState(initialUploadAttention);
   const filesToggle = useRef<HTMLButtonElement>(null);
   const [context, setContext] = useState<PreparationContext | null>(null);
   const [passphrasePrompt, setPassphrasePrompt] = useState<string | null>(null);
@@ -123,12 +124,7 @@ export function SessionTerminal({
   }, [active]);
 
   const reportUploadOutcome = useCallback((outcome: UploadOutcome) => {
-    if (outcome.status !== "unknown" && !outcome.stagingMayRemain) return;
-    setUploadAttention((current) =>
-      current.some((item) => item.transportId === outcome.transportId && item.operationId === outcome.operationId)
-        ? current
-        : [...current, outcome],
-    );
+    setUploadAttention((current) => recordUploadAttention(current, outcome));
   }, []);
 
   const connectSession = useCallback(() => {
@@ -645,9 +641,6 @@ export function SessionTerminal({
                   : t("session.failed");
 
   const face = sessionFaces[state];
-  const unknownUploads = uploadAttention.filter((item) => item.status === "unknown").length;
-  const uploadStagingMayRemain = uploadAttention.some((item) => item.stagingMayRemain);
-
   return (
     <main className="flex h-full min-h-0 flex-col bg-background text-foreground" aria-labelledby={titleId}>
       <header className="flex shrink-0 flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
@@ -735,20 +728,18 @@ export function SessionTerminal({
           {error}
         </p>
       ) : null}
-      {uploadAttention.length ? (
+      {uploadAttention.unknown || uploadAttention.stagingMayRemain ? (
         <div
           role="alert"
-          className={`mx-3 mb-2 flex flex-wrap items-start gap-2 rounded-md border-(length:--scoplen-border-width) p-3 ${unknownUploads ? "border-attention" : "border-border"}`}
+          className={`mx-3 mb-2 flex flex-wrap items-start gap-2 rounded-md border-(length:--scoplen-border-width) p-3 ${uploadAttention.unknown ? "border-attention" : "border-border"}`}
         >
           <div className="min-w-0 flex-1 text-xs">
-            {unknownUploads ? (
-              <p className="m-0 text-attention">
-                {t("session.files.upload.attentionUnknown", { count: unknownUploads })}
-              </p>
+            {uploadAttention.unknown ? (
+              <p className="m-0 text-attention">{t("session.files.upload.attentionUnknown")}</p>
             ) : null}
-            {uploadStagingMayRemain ? (
+            {uploadAttention.stagingMayRemain ? (
               <p className="m-0 mt-1 text-attention">
-                {t(unknownUploads ? "session.files.upload.staging" : "session.files.upload.attentionStaging")}
+                {t(uploadAttention.unknown ? "session.files.upload.staging" : "session.files.upload.attentionStaging")}
               </p>
             ) : null}
           </div>
@@ -757,7 +748,7 @@ export function SessionTerminal({
               {t("session.files.open")}
             </Button>
           ) : null}
-          <Button variant="ghost" className="shrink-0 px-2" onClick={() => setUploadAttention([])}>
+          <Button variant="ghost" className="shrink-0 px-2" onClick={() => setUploadAttention(dismissUploadAttention)}>
             {t("session.files.upload.dismiss")}
           </Button>
         </div>

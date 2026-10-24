@@ -33,9 +33,14 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function view(transportId = "transport-1", onClose = vi.fn(), onUploadOutcome = vi.fn()) {
+function view(
+  transportId = "transport-1",
+  onClose = vi.fn(),
+  onUploadOutcome = vi.fn(),
+  locale: "en" | "zh-Hans" = "en",
+) {
   return (
-    <I18nProvider locale="en">
+    <I18nProvider locale={locale}>
       <SessionFiles
         sessionId="session-1"
         transportId={transportId}
@@ -70,11 +75,24 @@ it("uploads one native-selected file into the current raw directory and refreshe
   await userEvent.click(await screen.findByRole("button", { name: "logs" }));
   await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(2));
   await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
-  expect(fileCommands.upload).toHaveBeenCalledWith("session-1", "transport-1", expect.any(String), directory.path);
+  expect(fileCommands.upload).toHaveBeenCalledWith(
+    "session-1",
+    "transport-1",
+    expect.any(String),
+    directory.path,
+    "en",
+  );
   expect(await screen.findByText("File uploaded to this directory.")).toBeTruthy();
   await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(3));
   expect(screen.getByRole("button", { name: "Download raw.bin" })).toBeTruthy();
   expect(onUploadOutcome).not.toHaveBeenCalled();
+});
+
+it("passes the current Chinese interface language to the native upload command", async () => {
+  render(view("transport-1", vi.fn(), vi.fn(), "zh-Hans"));
+  await screen.findByText("此目录为空。");
+  await userEvent.click(screen.getByRole("button", { name: "上传文件" }));
+  expect(fileCommands.upload).toHaveBeenCalledWith("session-1", "transport-1", expect.any(String), [46], "zh-Hans");
 });
 
 it.each([

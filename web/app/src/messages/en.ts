@@ -340,7 +340,7 @@ export const en = {
   "session.files.upload.failed": "Upload failed before completion. Check the connection before trying again.",
   "session.files.upload.staging": "A temporary .scoplen-upload-*.part file may remain in the remote directory.",
   "session.files.upload.attentionUnknown":
-    "{count, plural, one {A file upload has} other {# file uploads have}} an unknown result. A remote file may have been saved. Reconnect if needed, open Files, and refresh the remote directory before uploading again.",
+    "One or more file uploads have an unknown result. A remote file may have been saved. Reconnect if needed, open Files, and refresh the remote directory before uploading again.",
   "session.files.upload.attentionStaging":
     "A temporary .scoplen-upload-*.part file may remain in a remote directory. Reconnect if needed, open Files, and refresh the directory to check.",
   "session.files.upload.dismiss": "Dismiss",

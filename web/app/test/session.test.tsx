@@ -269,6 +269,7 @@ it.each(["unknown", "failed"] as const)(
       transportId: connection.transportId,
       operationId: oldOperation,
       directoryPath: [46],
+      locale: "en",
     });
 
     await connection.emit({ kind: "retrying", attempt: 1, delaySeconds: 1, error: "Network connection lost" });

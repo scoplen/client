@@ -298,7 +298,7 @@ export const zhHans: Messages = {
   "session.files.upload.failed": "上传未完成。请检查连接后再试。",
   "session.files.upload.staging": "远端目录中可能留有临时文件 .scoplen-upload-*.part。",
   "session.files.upload.attentionUnknown":
-    "{count, plural, one {有一次文件上传} other {有 # 次文件上传}}的结果无法确认。远端文件可能已保存。必要时重新连接，打开文件并刷新远端目录，核对后再上传。",
+    "有文件上传结果无法确认。远端文件可能已保存。必要时重新连接，打开文件并刷新远端目录，核对后再上传。",
   "session.files.upload.attentionStaging":
     "远端目录中可能留有临时文件 .scoplen-upload-*.part。必要时重新连接，打开文件并刷新目录核对。",
   "session.files.upload.dismiss": "关闭提醒",

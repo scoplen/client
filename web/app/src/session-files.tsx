@@ -31,7 +31,7 @@ export function SessionFiles({
   onClose: () => void;
   onUploadOutcome: (outcome: UploadOutcome) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [locations, setLocations] = useState<Location[]>([{ name: "", path: [46] }]);
   const [entries, setEntries] = useState<RemoteFileEntry[]>([]);
   const [activity, setActivity] = useState<Activity>("listing");
@@ -157,7 +157,7 @@ export function SessionFiles({
       if (result.status === "saved") setReload((value) => value + 1);
     };
     void commands
-      .sessionUploadFile(sessionId, transportId, id, currentPath)
+      .sessionUploadFile(sessionId, transportId, id, currentPath, locale === "zh-Hans" ? "zh-Hans" : "en")
       .then((result) =>
         report(result.status === "ok" ? result.data : { status: "failed", message: null, stagingMayRemain: false }),
       )

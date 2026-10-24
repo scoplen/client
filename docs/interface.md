@@ -32,15 +32,17 @@ regular files through the native Save dialog. Upload file asks Rust to select
 one regular local file through the native Open dialog and upload it into the
 current directory; the frontend never receives its local path or contents.
 Rust checks an existing target and obtains native overwrite confirmation. If
-the server cannot safely replace it, the original remains unchanged. One file
-operation runs per terminal at a time. Cancel and closing the panel request
+the server cannot safely replace it, the original remains unchanged. The upload
+intent passes the current interface locale so Rust can localize the native
+overwrite dialog. One file operation runs per terminal at a time. Cancel and
+closing the panel request
 cancellation without ending the terminal; Rust rejects cancellation after final
 remote rename begins and waits for the outcome. Tab close and reconnect fence
 old operations from new transports. A directory error offers another list; a
 download or upload error leaves the directory visible. If final remote rename
 has started and its reply cannot be confirmed, or if a temporary upload file
-may remain, an attention notice stays on the terminal after Files
-unmounts or reconnects. It asks the person to refresh and inspect the remote
+may remain, an attention notice stays on the terminal after Files unmounts or
+reconnects. It asks the person to refresh and inspect the remote
 directory and never retries automatically. The interface does not claim drag
 and drop, queues, resume, or remote edits yet.
 
