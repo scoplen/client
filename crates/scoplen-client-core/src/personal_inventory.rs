@@ -119,7 +119,7 @@ pub struct PersonalInventoryResult {
     pub downloaded: u32,
     /// Number of writes with confirmed assignments.
     pub uploaded: u32,
-    /// Another explicit cycle is needed; nothing is scheduled automatically.
+    /// Another bounded cycle is needed; the active native owner schedules continuation.
     pub more: bool,
 }
 

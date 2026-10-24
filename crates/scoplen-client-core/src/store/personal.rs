@@ -138,6 +138,7 @@ impl Store {
             ],
         )?;
         tx.commit()?;
+        self.personal_changed();
         Ok(true)
     }
 
@@ -337,6 +338,7 @@ impl Store {
                 scoplen_api::auth::INITIAL_DEVICE_ACCESS_SCOPE,
             ],
         )?;
+        self.personal_changed();
         Ok(())
     }
 }

@@ -177,6 +177,16 @@ export const zhHans: Messages = {
   "settings.personal.sync.unavailable": "无法检查已保存的同步密钥，已有账号数据仍被保留。",
   "settings.personal.sync.authenticate": "请先在上方认证此设备，再连接服务器。",
   "settings.personal.sync.connect": "验证同步密钥",
+  "settings.personal.sync.background.inactive": "本机已保存的个人同步密钥通过验证后，将启动后台同步。",
+  "settings.personal.sync.background.connecting": "正在为已加入个人保险库的对象连接后台同步。",
+  "settings.personal.sync.background.connected": "后台同步已连接。个人保险库内对象的更改会自动同步。",
+  "settings.personal.sync.background.polling": "实时通知暂不可用，个人同步将每 60 秒检查一次更改。",
+  "settings.personal.sync.background.authenticationRequired": "后台同步已暂停。请在账号设置中重新认证此设备以继续。",
+  "settings.personal.sync.background.rotationRequired":
+    "账号或保险库需要当前版本尚不支持的密钥轮换，后台同步已暂停。本地数据仍可使用。",
+  "settings.personal.sync.background.permissionDenied":
+    "后台同步已暂停。请让服务器运营者检查此设备的同步权限，然后重新认证。",
+  "settings.personal.sync.background.failed": "后台同步已暂停。请验证同步密钥并重试同步以查看问题，本地数据仍可使用。",
   "settings.terminal.title": "终端配色",
   "settings.terminal.body": "所有会话都用这套配色。每个颜色都能改，改过之后就成了你自己的配色。",
   "settings.terminal.scheme": "配色方案",
@@ -571,7 +581,8 @@ export const zhHans: Messages = {
   "import.error.inventoryNotEmpty": "只有还没有添加主机时才能导入。",
   "import.error.identityNotFound": "无法读取密钥文件：{path}。请检查配置中的路径后重试。",
   "settings.personal.inventory.title": "清单同步",
-  "settings.personal.inventory.body": "只有点击这里的操作才会同步。未选中和之后新建的本地对象仍留在本机。",
+  "settings.personal.inventory.body":
+    "先选择并确认要加入个人同步的本地对象，之后的修改会自动同步。未选中和之后新建的本地对象仍留在本机。",
   "settings.personal.inventory.content":
     "选中对象会加密后同步到你的个人保险库。共享凭据包含密码或私钥；仅限本机的秘密、密钥库句柄和会话历史不会上传。",
   "settings.personal.inventory.loading": "正在读取本地清单与同步进度…",

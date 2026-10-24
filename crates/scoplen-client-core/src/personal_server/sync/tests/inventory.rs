@@ -22,11 +22,11 @@ use crate::{
 mod reconciliation;
 
 pub(super) struct InventoryPeer {
-    seq: u64,
-    objects: BTreeMap<Uuid, SyncChange>,
-    writes: usize,
+    pub(super) seq: u64,
+    pub(super) objects: BTreeMap<Uuid, SyncChange>,
+    pub(super) writes: usize,
     acks: Vec<u64>,
-    queries: Vec<u64>,
+    pub(super) queries: Vec<u64>,
     uncertain_once: bool,
     lost_once: bool,
     invalid_assignment_once: bool,
@@ -265,7 +265,7 @@ impl InventoryPeer {
     }
 }
 
-fn make_host(store: &Store) -> Object {
+pub(super) fn make_host(store: &Store) -> Object {
     store
         .write(LocalWrite {
             id: None,
@@ -282,7 +282,7 @@ fn intent(store: &Store, ids: Vec<Uuid>) -> PersonalInventoryIntent {
     PersonalInventoryIntent { vault_id: record(store).unwrap().personal_vault_id, adopt: ids }
 }
 
-fn change(store: &Store, object: &Object, seq: u64) -> SyncChange {
+pub(super) fn change(store: &Store, object: &Object, seq: u64) -> SyncChange {
     let identity = record(store).unwrap();
     let secrets = identity::Secrets::parse(&identity.private_material).unwrap();
     let key = SymmetricKey::new(secrets.vault().try_into().unwrap());

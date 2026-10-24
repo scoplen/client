@@ -27,14 +27,17 @@ impl PersonalServer {
         let snapshot = tokio::time::timeout(SNAPSHOT_DEADLINE, self.download_snapshot(context))
             .await
             .map_err(|_| PersonalSyncError::ResourceLimit)??;
-        store
-            .reconcile_personal_snapshot(
-                context.identity.personal_vault_id,
-                progress.applied_cursor,
-                snapshot.cursor,
-                &snapshot.objects,
-            )
-            .map_err(local)?;
+        {
+            let _active = context.active()?;
+            store
+                .reconcile_personal_snapshot(
+                    context.identity.personal_vault_id,
+                    progress.applied_cursor,
+                    snapshot.cursor,
+                    &snapshot.objects,
+                )
+                .map_err(local)?;
+        }
         progress.applied_cursor = snapshot.cursor;
         progress.downloaded += snapshot.objects.len() as u64;
         self.ack_inventory(store, context, progress).await?;

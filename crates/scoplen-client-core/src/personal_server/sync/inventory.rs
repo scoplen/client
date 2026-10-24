@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Explicit, bounded Personal inventory synchronization.
+//! Bounded Personal inventory synchronization with explicit local adoption.
 
 use std::{
     collections::HashMap,
@@ -61,7 +61,7 @@ pub struct PersonalInventoryProgress {
     pub downloaded: u64,
     /// Object writes with validated, durably retained server assignments.
     pub uploaded: u64,
-    /// A bounded cycle completed, but another explicit cycle is needed for remaining work.
+    /// A bounded cycle completed; another cycle is needed for remaining work.
     pub more: bool,
 }
 
@@ -99,30 +99,54 @@ impl PersonalServer {
         self.sync_personal_inventory_expected(store, intent, None).await
     }
 
+    pub(in crate::personal_server) async fn sync_personal_inventory_background(
+        &self,
+        store: Arc<Store>,
+        intent: PersonalInventoryIntent,
+        run: Arc<super::super::background::Run>,
+    ) -> Result<PersonalInventoryProgress, PersonalSyncError> {
+        self.sync_personal_inventory_inner(store, intent, None, Some(run)).await
+    }
+
     pub(crate) async fn sync_personal_inventory_expected(
         &self,
         store: Arc<Store>,
         intent: PersonalInventoryIntent,
         reviewed: Option<HashMap<Uuid, [u8; 32]>>,
     ) -> Result<PersonalInventoryProgress, PersonalSyncError> {
-        let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
+        self.sync_personal_inventory_inner(store, intent, reviewed, None).await
+    }
+
+    async fn sync_personal_inventory_inner(
+        &self,
+        store: Arc<Store>,
+        intent: PersonalInventoryIntent,
+        reviewed: Option<HashMap<Uuid, [u8; 32]>>,
+        run: Option<Arc<super::super::background::Run>>,
+    ) -> Result<PersonalInventoryProgress, PersonalSyncError> {
+        // Preserve the exact confirmed review while another bounded cycle finishes.
+        // Tokio's FIFO mutex gives waiting manual work a turn before the next cycle.
+        let _operation = self.operation.lock().await;
         if record(&store)?.personal_vault_id != intent.vault_id {
             return Err(PersonalSyncError::Selection);
         }
         if intent.adopt.len() > crate::store::MAX_OBJECTS_PER_VAULT as usize {
             return Err(PersonalSyncError::ResourceLimit);
         }
-        let context = self.bootstrap_inner(&store, true).await?;
+        let context = self.bootstrap_inner(&store, true, run).await?;
         for id in &intent.adopt {
             let object = store.get(*id).map_err(local)?.ok_or(PersonalSyncError::Selection)?;
             context.validate_inventory(&object)?;
         }
-        if let Some(reviewed) = reviewed.as_ref() {
-            store
-                .adopt_personal_objects_reviewed(intent.vault_id, &intent.adopt, Some(reviewed))
-                .map_err(local)?;
-        } else {
-            store.adopt_personal_objects(intent.vault_id, &intent.adopt).map_err(local)?;
+        {
+            let _active = context.active()?;
+            if let Some(reviewed) = reviewed.as_ref() {
+                store
+                    .adopt_personal_objects_reviewed(intent.vault_id, &intent.adopt, Some(reviewed))
+                    .map_err(local)?;
+            } else {
+                store.adopt_personal_objects(intent.vault_id, &intent.adopt).map_err(local)?;
+            }
         }
         let mut progress = PersonalInventoryProgress {
             applied_cursor: store.personal_sync_cursor(intent.vault_id).map_err(local)?,
@@ -170,6 +194,7 @@ impl PersonalServer {
                         Ok(assignments)
                     })
                     .map_err(|_| PersonalSyncError::WriteOutcomeUnknown)?;
+                    let _active = context.active()?;
                     store
                         .settle_personal_write(intent.vault_id, &pending, &assignments)
                         .map_err(|_| PersonalSyncError::WriteOutcomeUnknown)?;
@@ -197,6 +222,7 @@ impl PersonalServer {
                             context.decrypt(current)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
+                    let _active = context.active()?;
                     store.merge_personal_conflicts(intent.vault_id, &remote).map_err(local)?;
                     conflicts += 1;
                     if conflicts >= MAX_CONFLICTS {
@@ -269,14 +295,17 @@ impl PersonalServer {
                 .iter()
                 .map(|change| context.decrypt(change))
                 .collect::<Result<Vec<_>, _>>()?;
-            store
-                .apply_personal_page(
-                    context.identity.personal_vault_id,
-                    query.after,
-                    page.next_cursor,
-                    &objects,
-                )
-                .map_err(local)?;
+            {
+                let _active = context.active()?;
+                store
+                    .apply_personal_page(
+                        context.identity.personal_vault_id,
+                        query.after,
+                        page.next_cursor,
+                        &objects,
+                    )
+                    .map_err(local)?;
+            }
             progress.applied_cursor = page.next_cursor;
             progress.downloaded += objects.len() as u64;
             self.ack_inventory(store, context, progress).await?;
@@ -323,6 +352,7 @@ impl PersonalServer {
         SyncAckResponse::from_cbor(ack.body.as_bytes())
             .and_then(|response| response.validate_for_request(&request))
             .map_err(|_| PersonalSyncError::AcknowledgementUnknown)?;
+        let _active = context.active()?;
         store
             .save_personal_acknowledgement(context.identity.personal_vault_id, request.cursor)
             .map_err(|_| PersonalSyncError::AcknowledgementUnknown)?;
@@ -334,6 +364,10 @@ impl PersonalServer {
 }
 
 impl SyncContext {
+    fn active(&self) -> Result<Option<std::sync::MutexGuard<'_, bool>>, PersonalSyncError> {
+        super::super::background::guard(self.run.as_ref()).map_err(Into::into)
+    }
+
     async fn request(
         &self,
         manager: &PersonalServer,
@@ -342,6 +376,10 @@ impl SyncContext {
         body: Option<&[u8]>,
         limit: usize,
     ) -> Result<Response, PersonalSyncError> {
+        self.active()?;
+        if self.store.personal_rotation() != self.rotation {
+            return Err(PersonalSyncError::RotationRequired);
+        }
         if self.expires_at <= now()?
             || !self
                 .store
@@ -374,10 +412,18 @@ impl SyncContext {
             .protected(&self.identity.origin, &request_path, body, token, &proof, limit)
             .await
             .map_err(PersonalSyncError::from)?;
+        let _active = self.active()?;
         if matches!(response.status, 401 | 403) {
             self.store
                 .invalidate_personal_session(&self.identity, &self.access)
                 .map_err(storage)?;
+        }
+        if !self
+            .store
+            .personal_session_current(&self.identity, &self.access, now()?)
+            .map_err(storage)?
+        {
+            return Err(PersonalSyncError::AuthenticationRequired);
         }
         Ok(response)
     }

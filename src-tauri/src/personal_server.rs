@@ -18,6 +18,15 @@ use zeroize::Zeroizing;
 
 use crate::local_data::LocalDataState;
 
+/// Read the native background owner's state without activating network activity.
+#[tauri::command]
+#[specta::specta]
+pub fn personal_sync_background_status(
+    runtime: tauri::State<'_, Arc<scoplen_client_core::personal_server::PersonalSyncRuntime>>,
+) -> scoplen_client_core::personal_server::PersonalBackgroundStatus {
+    runtime.status()
+}
+
 fn store(local: &LocalDataState) -> Result<Arc<Store>, PersonalServerError> {
     local.store().ok_or(PersonalServerError::Storage)
 }

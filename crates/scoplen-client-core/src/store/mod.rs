@@ -144,6 +144,8 @@ pub struct Store {
     device_id: Uuid,
     listeners: Mutex<Vec<(u64, Listener)>>,
     next_listener: Mutex<u64>,
+    personal_changes: tokio::sync::watch::Sender<u64>,
+    personal_rotation: std::sync::atomic::AtomicU64,
 }
 
 impl std::fmt::Debug for Store {
@@ -185,12 +187,31 @@ impl Store {
             device_id,
             listeners: Mutex::new(Vec::new()),
             next_listener: Mutex::new(0),
+            personal_changes: tokio::sync::watch::channel(0).0,
+            personal_rotation: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
     /// The identity of this device, used as the origin of its writes.
     pub fn device_id(&self) -> Uuid {
         self.device_id
+    }
+
+    pub(crate) fn personal_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.personal_changes.subscribe()
+    }
+
+    pub(crate) fn personal_changed(&self) {
+        self.personal_changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+    }
+
+    pub(crate) fn personal_rotation(&self) -> u64 {
+        self.personal_rotation.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) fn require_personal_keys(&self) {
+        self.personal_rotation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        self.personal_changed();
     }
 
     /// Directory used to select this store's platform credential slots.

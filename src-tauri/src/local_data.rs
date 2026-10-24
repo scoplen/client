@@ -76,22 +76,28 @@ pub fn local_data_status(
 #[tauri::command]
 #[specta::specta]
 pub async fn unlock_local_data(
+    app: tauri::AppHandle,
     state: tauri::State<'_, LocalDataState>,
     passphrase: String,
 ) -> Result<Status, LocalDataError> {
     let passphrase = Zeroizing::new(passphrase);
-    blocking(&state, move |data| data.unlock(&passphrase)).await
+    let status = blocking(&state, move |data| data.unlock(&passphrase)).await?;
+    background_store(&app, &state);
+    Ok(status)
 }
 
 /// On a system without a keystore, chooses the passphrase for new local data.
 #[tauri::command]
 #[specta::specta]
 pub async fn create_local_passphrase(
+    app: tauri::AppHandle,
     state: tauri::State<'_, LocalDataState>,
     passphrase: String,
 ) -> Result<Status, LocalDataError> {
     let passphrase = Zeroizing::new(passphrase);
-    blocking(&state, move |data| data.create(&passphrase)).await
+    let status = blocking(&state, move |data| data.create(&passphrase)).await?;
+    background_store(&app, &state);
+    Ok(status)
 }
 
 /// Sets or changes the local passphrase.
@@ -118,7 +124,17 @@ pub async fn remove_local_passphrase(
 #[tauri::command]
 #[specta::specta]
 pub async fn start_with_empty_local_data(
+    app: tauri::AppHandle,
     state: tauri::State<'_, LocalDataState>,
 ) -> Result<Status, LocalDataError> {
-    blocking(&state, |data| data.start_fresh()).await
+    let runtime = app.state::<Arc<scoplen_client_core::personal_server::PersonalSyncRuntime>>();
+    runtime.set_store(None);
+    let result = blocking(&state, |data| data.start_fresh()).await;
+    background_store(&app, &state);
+    result
+}
+
+fn background_store(app: &tauri::AppHandle, local: &LocalDataState) {
+    app.state::<Arc<scoplen_client_core::personal_server::PersonalSyncRuntime>>()
+        .set_store(local.store());
 }

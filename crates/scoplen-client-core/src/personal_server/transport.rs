@@ -14,6 +14,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) struct Transport {
     client: Client,
     sync_client: Client,
+    pub(super) notification_tls: std::sync::Arc<rustls::ClientConfig>,
 }
 
 pub(super) enum PairingCredential<'a> {
@@ -158,7 +159,7 @@ impl Transport {
         let client = builder().build().map_err(|_| PersonalServerError::Network)?;
         let sync_client =
             builder().http2_prior_knowledge().build().map_err(|_| PersonalServerError::Network)?;
-        Ok(Self { client, sync_client })
+        Ok(Self { client, sync_client, notification_tls: notification_tls()? })
     }
 
     #[cfg(test)]
@@ -177,6 +178,7 @@ impl Transport {
         Self {
             client: builder().build().unwrap(),
             sync_client: builder().http2_prior_knowledge().build().unwrap(),
+            notification_tls: notification_tls().unwrap(),
         }
     }
 
@@ -410,6 +412,17 @@ impl Transport {
             pragma,
         })
     }
+}
+
+fn notification_tls() -> Result<std::sync::Arc<rustls::ClientConfig>, PersonalServerError> {
+    use rustls_platform_verifier::BuilderVerifierExt as _;
+    let mut config =
+        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_platform_verifier()
+            .map_err(|_| PersonalServerError::Network)?
+            .with_no_client_auth();
+    config.alpn_protocols = vec![b"h2".to_vec()];
+    Ok(std::sync::Arc::new(config))
 }
 
 async fn read_body(

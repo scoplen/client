@@ -165,7 +165,7 @@ single-use refresh claim and an optional Retry-After deadline, alongside the sav
 expiry. Initial authentication accepts exactly D-107's initial scope set. An explicit
 key-verification or sync action refreshes when the access lifetime received from the server, capped by the verified JWT
 expiry, has at most 60 seconds remaining. Status, offline key reads, inventory reads and recovery
-never initiate refresh. There is no background renewal timer.
+never initiate refresh. The active background owner refreshes before reconnecting near expiry.
 
 A FULL-synchronous IMMEDIATE transaction captures the current credentials and consumes them
 locally before refresh I/O. Other processes cannot claim the same credential. Success verifies
@@ -180,7 +180,7 @@ Cancellation, crash, malformed or unverifiable success, lost response and unknow
 the refresh claim spent. Recovery is an explicit fresh challenge, never an old-token replay.
 Only an exact noncached no-store/no-cache unchanged nonce problem allows one immediate retry
 with a fresh proof; an exact unchanged storage or rate-limit problem restores the claim for a
-later explicit attempt. A rate limit requires a canonical decimal Retry-After between 1 and
+later operation. A rate limit requires a canonical decimal Retry-After between 1 and
 300 seconds and persists its deadline. A connector failure proven to precede transmission also
 restores the claim. Rejected or unverifiable responses never
 restore it. Legacy sessions lacking a verified scope ceiling require fresh authentication;
@@ -260,12 +260,41 @@ Unknown object types and fields retain their K-1 representation.
 
 Only after the page is durable does the client acknowledge its applied cursor. A larger server
 ack maximum cannot move either local cursor. An uncertain acknowledgement retains the applied
-cursor and earlier confirmed ack; the next explicit cycle rechecks the feed before acknowledging.
+cursor and earlier confirmed ack; the next cycle rechecks the feed before acknowledging.
 The complete response budget is 9 MiB, individual envelopes at most 1 MiB, change pages at most
 eight objects, and writes at most eight objects / 4 MiB further limited by session announcements.
 Each cycle bounds pages, batches and conflict retries. `more` reports a safe continuation point.
 The HTTP Date header must be present and the device wall clock within the specified forward-skew
-limit before writes. No background task or automatic retry is started.
+limit before writes. The native background owner schedules bounded continuations and recovery
+cycles only for already adopted Personal objects.
+
+`PersonalSyncRuntime` starts at native startup and follows local-store unlock, creation, reset
+and shutdown independently of Settings. It remains inactive until a saved bootstrap passes
+offline identity/key-anchor verification. Store replacement cancels the old future and its
+HTTP requests, reconnect delays and HTTP/2 driver. A cancellation guard serializes each synchronous
+local commit with store replacement and shutdown; late old responses cannot commit or publish status.
+Store authentication/bootstrap watches wake
+the owner; object subscriptions schedule only a dirty adopted outbox. Remote-only apply and the
+cycle's own bootstrap signals do not create a self-triggered loop. Manual inventory requests
+wait at the same FIFO operation mutex, preserving their exact reviewed object/version selection.
+Background requests always carry an empty adoption list and never consume a review ticket.
+
+Notifications use platform certificate verification, TLS 1.3, negotiated HTTP/2 extended CONNECT
+and the shared D-75 context/auth/ready codecs. A fresh DPoP proof binds the actual CONNECT method,
+canonical HTTPS target, current access token and retained device key. Complete reassembled
+messages are bounded to 16 KiB before CBOR parsing; text, invalid ordering and oversized data
+close safely. Credentials are sent only in the first binary auth message. Control frames and
+bounded close handshakes remain active. Thirty-second Ping/Pong checks detect a silent socket.
+Each reconnect uses fresh credentials/proof and schedules catch-up, with exponential delays
+capped at 60 seconds. An unavailable socket enables polling every 60 seconds.
+
+Hints coalesce; they never advance the durable change cursor. Typed revocation invalidates only
+the captured token/generation and fences further requests; a 1008 close alone does not revoke.
+Rotation hints increment a store key-retrieval fence checked before every next sync request.
+Each new cycle retrieves fresh keys; an unsupported rotation pauses with a safe actionable state.
+Responses are rechecked against current authentication before local apply. Sent writes retain
+the existing unknown-outcome/pull-before-retry rules. Local editing, offline keys and SSH remain
+independent of network or authentication failures.
 
 Writes contain only encrypted signed K-1 objects. Confirmed assignments update bases and clear
 only the exact sent version; a concurrent local edit stays dirty. Write assignments never advance
@@ -280,7 +309,7 @@ pages contain at most 32 objects, each HTTP response at most 9 MiB, and the enti
 extensions. Query-bound cursors, unique ids across pages, signer/epoch bindings, signatures,
 AEAD, tombstones and K-1 validation must all succeed before any inventory mutation. The session's
 announced vault sequence is the fixed baseline: the final snapshot cursor must equal it. A
-newer sequence safely aborts as concurrent activity; another explicit Sync now obtains a fresh
+newer sequence safely aborts as concurrent activity; the next bounded cycle obtains a fresh
 session. There is no unbounded automatic retry and no cross-page snapshot token in this contract.
 
 Migration 7 adds append-only encrypted recovery copies, each with its own id. A single FULL

@@ -67,6 +67,14 @@ pub struct StoreChanged {
     pub ids: Vec<String>,
 }
 
+/// Safe background status; no object content, key material or server diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalSyncChanged {
+    /// The native owner's current state.
+    pub status: scoplen_client_core::personal_server::PersonalBackgroundStatus,
+}
+
 /// Why a device-local session view should reload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]

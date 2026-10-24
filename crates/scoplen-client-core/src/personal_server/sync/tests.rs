@@ -56,11 +56,13 @@ struct PeerState {
     refresh: Option<RefreshPeer>,
     pairing: Option<pairing::PairingPeer>,
     pause: Option<(String, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    notification: Option<notification::NotificationPeer>,
 }
 
 struct Peer {
     origin: String,
     certificate: reqwest::Certificate,
+    certificate_der: rustls::pki_types::CertificateDer<'static>,
     state: Arc<StdMutex<PeerState>>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -76,6 +78,7 @@ impl Peer {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let key = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
         let certificate = reqwest::Certificate::from_der(key.cert.der()).unwrap();
+        let certificate_der = key.cert.der().clone();
         let private = rustls::pki_types::PrivatePkcs8KeyDer::from(key.signing_key.serialize_der());
         let mut config =
             rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -104,7 +107,11 @@ impl Peer {
                         Some(rustls::ProtocolVersion::TLSv1_3)
                     );
                     assert_eq!(stream.get_ref().1.alpn_protocol(), Some(b"h2".as_slice()));
-                    let Ok(mut connection) = h2::server::handshake(stream).await else {
+                    let Ok(mut connection) = h2::server::Builder::new()
+                        .enable_connect_protocol()
+                        .handshake(stream)
+                        .await
+                    else {
                         return;
                     };
                     let mut requests = tokio::task::JoinSet::new();
@@ -112,7 +119,12 @@ impl Peer {
                         let state = state.clone();
                         let origin = origin.clone();
                         requests.spawn(async move {
-                            if let Err(error) = answer(request, respond, &state, &origin).await {
+                            let result = if request.uri().path() == "/sync/v1/notify" {
+                                notification::answer(request, respond, &state, &origin).await
+                            } else {
+                                answer(request, respond, &state, &origin).await
+                            };
+                            if let Err(error) = result {
                                 state.lock().unwrap().errors.push(error);
                             }
                         });
@@ -120,13 +132,23 @@ impl Peer {
                 });
             }
         });
-        Self { origin, certificate, state, task }
+        Self { origin, certificate, certificate_der, state, task }
     }
 
     fn manager(&self) -> PersonalServer {
+        let mut transport =
+            Transport::fixture(self.certificate.clone(), Duration::from_millis(700));
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(self.certificate_der.clone()).unwrap();
+        let mut tls =
+            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+        tls.alpn_protocols = vec![b"h2".to_vec()];
+        transport.notification_tls = Arc::new(tls);
         PersonalServer {
             operation: tokio::sync::Mutex::new(()),
-            transport: Ok(Transport::fixture(self.certificate.clone(), Duration::from_millis(700))),
+            transport: Ok(transport),
             pairing: Default::default(),
         }
     }
@@ -746,6 +768,7 @@ fn retained_identity_and_cached_snapshot_are_revalidated() {
 }
 
 mod inventory;
+mod notification;
 mod pairing;
 mod refresh;
 use inventory::InventoryPeer;

@@ -91,6 +91,8 @@ struct SyncContext {
     device_id: uuid::Uuid,
     account_keys: SecretVec,
     vault_keys: SecretVec,
+    rotation: u64,
+    run: Option<Arc<super::background::Run>>,
 }
 
 pub(super) struct PairingSource {
@@ -117,7 +119,7 @@ impl PersonalServer {
         &self,
         store: &Arc<Store>,
     ) -> Result<PairingSource, PersonalSyncError> {
-        let context = self.bootstrap_inner(store, false).await?;
+        let context = self.bootstrap_inner(store, false, None).await?;
         Ok(PairingSource {
             identity: context.identity,
             certificates: context.bootstrap.active_devices,
@@ -135,15 +137,17 @@ impl PersonalServer {
         store: Arc<Store>,
     ) -> Result<PersonalSyncBootstrap, PersonalSyncError> {
         let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
-        Ok(self.bootstrap_inner(&store, false).await?.bootstrap)
+        Ok(self.bootstrap_inner(&store, false, None).await?.bootstrap)
     }
 
     async fn bootstrap_inner(
         &self,
         store: &Arc<Store>,
         write: bool,
+        run: Option<Arc<super::background::Run>>,
     ) -> Result<SyncContext, PersonalSyncError> {
-        self.refresh_for_operation(store).await.map_err(|error| match error {
+        let rotation = store.personal_rotation();
+        self.refresh_for_run(store, run.as_ref()).await.map_err(|error| match error {
             PersonalServerError::AuthenticationRequired => {
                 PersonalSyncError::AuthenticationRequired
             }
@@ -167,6 +171,7 @@ impl PersonalServer {
         {
             Ok(verified) => verified,
             Err(_) => {
+                let _active = super::background::guard(run.as_ref())?;
                 store.invalidate_personal_session(&pending, &access).map_err(storage)?;
                 return Err(PersonalSyncError::AuthenticationRequired);
             }
@@ -176,6 +181,7 @@ impl PersonalServer {
             || claims.did != store.device_id()
             || claims.cnf_jkt != dpop_jwk_thumbprint(&signing.public_key_sec1()).map_err(invalid)?
         {
+            let _active = super::background::guard(run.as_ref())?;
             store.invalidate_personal_session(&pending, &access).map_err(storage)?;
             return Err(PersonalSyncError::AuthenticationRequired);
         }
@@ -200,6 +206,7 @@ impl PersonalServer {
             ("/sync/v1/keys", None),
             (vault_path.as_str(), None),
         ] {
+            super::background::guard(run.as_ref())?;
             if verified.expires_at() <= now()?
                 || !store.personal_session_current(&pending, &access, now()?).map_err(storage)?
             {
@@ -219,6 +226,7 @@ impl PersonalServer {
             .map_err(invalid)?;
             let response =
                 transport.protected(&pending.origin, path, body, token, &proof, BODY_LIMIT).await?;
+            let _active = super::background::guard(run.as_ref())?;
             match response.status {
                 200 => bodies.push(response.body),
                 401 | 403 => {
@@ -236,19 +244,25 @@ impl PersonalServer {
             vault_keys: bodies.next().ok_or(PersonalSyncError::InvalidResponse)?,
         };
         let bootstrap = validate(store, &pending, &snapshot, previous.as_ref())?;
+        if store.personal_rotation() != rotation {
+            return Err(PersonalSyncError::RotationRequired);
+        }
         if verified.expires_at() <= now()? {
             return Err(PersonalSyncError::AuthenticationRequired);
         }
-        if !store
-            .save_personal_sync(
-                &pending,
-                &access,
-                previous.as_ref().map(|row| row.generation),
-                &snapshot,
-                now()?,
-            )
-            .map_err(storage)?
-        {
+        let saved = {
+            let _active = super::background::guard(run.as_ref())?;
+            store
+                .save_personal_sync(
+                    &pending,
+                    &access,
+                    previous.as_ref().map(|row| row.generation),
+                    &snapshot,
+                    now()?,
+                )
+                .map_err(storage)?
+        };
+        if !saved {
             return Err(PersonalServerError::Storage.into());
         }
         let expires_at = verified.expires_at();
@@ -262,6 +276,8 @@ impl PersonalServer {
             device_id: store.device_id(),
             account_keys: snapshot.account_keys,
             vault_keys: snapshot.vault_keys,
+            rotation,
+            run,
         })
     }
 

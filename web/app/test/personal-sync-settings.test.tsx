@@ -1,35 +1,44 @@
 // SPDX-License-Identifier: Apache-2.0
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "../src/i18n";
-import type { PersonalSyncFailure, PersonalSyncKeyStatus } from "../src/ipc/bindings";
+import { events, type PersonalSyncFailure, type PersonalSyncKeyStatus } from "../src/ipc/bindings";
 import { PersonalSyncSettings } from "../src/personal-sync-settings";
 import { violations } from "../../ui/test/axe";
 
-afterEach(() => clearMocks());
+afterEach(() => {
+  cleanup();
+  clearMocks();
+  vi.restoreAllMocks();
+});
 
 function fixture(saved: PersonalSyncKeyStatus = "notConnected", authenticated = true, locale: "en" | "zh-Hans" = "en") {
   const calls: string[] = [];
   const busy = vi.fn();
   const handlers = new Map<string, () => unknown>();
-  mockIPC((command) => {
-    calls.push(command);
-    if (handlers.has(command)) return handlers.get(command)!();
-    if (command === "personal_sync_key_status") return saved;
-    if (command === "connect_personal_sync") return "verified";
-    if (command === "personal_inventory_status")
-      return {
-        vaultId: "vault",
-        objects: [],
-        backups: [],
-        recovery: [],
-        pending: 0,
-        appliedCursor: "0",
-        acknowledgedCursor: "0",
-      };
-    throw new Error("Unexpected IPC command");
-  });
+  mockIPC(
+    (command) => {
+      if (command === "personal_sync_background_status") return handlers.get(command)?.() ?? "connected";
+      if (command.startsWith("plugin:event|")) return 0;
+      calls.push(command);
+      if (handlers.has(command)) return handlers.get(command)!();
+      if (command === "personal_sync_key_status") return saved;
+      if (command === "connect_personal_sync") return "verified";
+      if (command === "personal_inventory_status")
+        return {
+          vaultId: "vault",
+          objects: [],
+          backups: [],
+          recovery: [],
+          pending: 0,
+          appliedCursor: "0",
+          acknowledgedCursor: "0",
+        };
+      throw new Error("Unexpected IPC command");
+    },
+    { shouldMockEvents: true },
+  );
   const view = () => (
     <I18nProvider locale={locale}>
       <PersonalSyncSettings authenticated={authenticated} disabled={false} onBusyChange={busy} />
@@ -51,6 +60,45 @@ it("checks saved keys locally and connects only after an explicit action", async
   expect(f.calls).toEqual(["personal_sync_key_status", "connect_personal_sync", "personal_inventory_status"]);
   expect(f.busy.mock.calls).toEqual([[true], [false]]);
   expect(await violations(container)).toEqual([]);
+});
+
+it("shows actionable native background state without issuing a sync request", async () => {
+  const f = fixture("verified");
+  f.handlers.set("personal_sync_background_status", () => "rotationRequired");
+  render(f.view());
+  expect((await screen.findByRole("alert")).textContent).toContain("unsupported key rotation");
+  expect(f.calls).toEqual(["personal_sync_key_status", "personal_inventory_status"]);
+});
+
+it("registers the listener before reading state and keeps a newer event over a delayed snapshot", async () => {
+  const f = fixture("verified");
+  let register!: (unlisten: () => void) => void;
+  let snapshot!: (value: "polling") => void;
+  let notify!: Parameters<typeof events.personalSyncChanged.listen>[0];
+  vi.spyOn(events.personalSyncChanged, "listen").mockImplementation((listener) => {
+    notify = listener;
+    return new Promise((resolve) => {
+      register = resolve;
+    });
+  });
+  const read = vi.fn(
+    () =>
+      new Promise((resolve) => {
+        snapshot = resolve;
+      }),
+  );
+  f.handlers.set("personal_sync_background_status", read);
+  const stop = vi.fn();
+  const rendered = render(f.view());
+  await screen.findByText(/Sync keys are verified on this device/);
+  expect(read).not.toHaveBeenCalled();
+  await act(async () => register(stop));
+  await waitFor(() => expect(read).toHaveBeenCalledOnce());
+  act(() => notify({ event: "personal-sync-changed", id: 1, payload: { status: "authenticationRequired" } }));
+  await act(async () => snapshot("polling"));
+  expect((await screen.findByRole("alert")).textContent).toContain("Authenticate this device");
+  rendered.unmount();
+  expect(stop).toHaveBeenCalledOnce();
 });
 
 it("keeps saved keys visible offline while requiring authentication before server access", async () => {
