@@ -11,7 +11,7 @@ import {
   type MarkMood,
 } from "@scoplen/ui";
 import type { ScoplenTerminalElement, TerminalSnapshot } from "@scoplen/terminal";
-import { Palette } from "lucide-react";
+import { FolderOpen, Palette } from "lucide-react";
 import { Channel } from "@tauri-apps/api/core";
 import { Terminal, type TerminalSink, type TerminalSource } from "@scoplen/terminal/react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -24,6 +24,7 @@ import {
   type HostKeyTrustSource,
 } from "./ipc/bindings";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
+import { SessionFiles } from "./session-files";
 
 export type SessionState =
   "verifying" | "trusting" | "passphrase" | "connecting" | "reconnecting" | "connected" | "closed" | "failed";
@@ -83,6 +84,8 @@ export function SessionTerminal({
   const hostKey = hostPrompt?.hostKey ?? null;
   const [verified, setVerified] = useState<Array<Extract<PreparationEvent, { kind: "verified" }>>>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
+  const filesToggle = useRef<HTMLButtonElement>(null);
   const [context, setContext] = useState<PreparationContext | null>(null);
   const [passphrasePrompt, setPassphrasePrompt] = useState<string | null>(null);
   const currentPrompt = useRef<string | null>(null);
@@ -175,6 +178,7 @@ export function SessionTerminal({
           switch (event.kind) {
             case "starting":
               checkpointTransport.current = event.transportId;
+              setFilesOpen(false);
               clearPreparation();
               currentTransport.current = event.transportId;
               setTransportId(event.transportId);
@@ -666,6 +670,16 @@ export function SessionTerminal({
               {t("session.reconnect")}
             </Button>
           ) : null}
+          {state === "connected" && transportId && !offline && !closingView ? (
+            <IconButton
+              ref={filesToggle}
+              label={t(filesOpen ? "session.files.close" : "session.files.open")}
+              pressed={filesOpen}
+              onClick={() => setFilesOpen((open) => !open)}
+            >
+              <FolderOpen aria-hidden="true" className="size-4" />
+            </IconButton>
+          ) : null}
           {onOpenColors ? (
             <IconButton label={t("session.colors")} onClick={onOpenColors}>
               <Palette aria-hidden="true" className="size-4" />
@@ -709,51 +723,64 @@ export function SessionTerminal({
           {error}
         </p>
       ) : null}
-      <div className="min-h-0 flex-1 px-3 pb-3">
-        <div
-          onContextMenu={(event) =>
-            menu(event, [
-              {
-                label: t("menu.copy"),
-                shortcut: `${shortcutModifier}C`,
-                onSelect: () => void terminal.current?.copySelection(),
-              },
-              {
-                label: t("menu.paste"),
-                shortcut: `${shortcutModifier}V`,
-                disabled: state !== "connected",
-                onSelect: () => void terminal.current?.paste(),
-              },
-              "separator",
-              { label: t("menu.copyAll"), onSelect: () => void terminal.current?.copyAll() },
-              { label: t("menu.clear"), onSelect: () => terminal.current?.clearOutput() },
-              ...(onOpenColors ? ["separator" as const, { label: t("session.colors"), onSelect: onOpenColors }] : []),
-            ])
-          }
-          className="relative h-full min-h-0 overflow-hidden rounded-xl border-(length:--scoplen-border-width) border-border p-3 shadow-(--scoplen-shadow-card) transition-colors duration-(--duration-state)"
-          style={{ background: colors.background }}
-        >
-          <Terminal
-            ref={terminal}
-            source={source}
-            sink={state === "connected" ? inputSink : null}
-            readOnly={offline || closingView || state !== "connected"}
-            aria-label={t("session.output")}
-            className={`h-full min-h-0 transition-opacity duration-(--duration-overlay) ${state === "connected" || hasOutput ? "opacity-100" : "opacity-40"}`}
-            profile={terminalProfile}
-            onTerminalResize={(next) => {
-              size.current = next;
-              if (state === "connected") sendSize();
-            }}
-            onTerminalError={(terminalError) => {
-              if (!mounted.current) return;
-              interruptTransport(true, terminalError.message);
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <div className="min-h-0 min-w-0 flex-1 px-3 pb-3">
+          <div
+            onContextMenu={(event) =>
+              menu(event, [
+                {
+                  label: t("menu.copy"),
+                  shortcut: `${shortcutModifier}C`,
+                  onSelect: () => void terminal.current?.copySelection(),
+                },
+                {
+                  label: t("menu.paste"),
+                  shortcut: `${shortcutModifier}V`,
+                  disabled: state !== "connected",
+                  onSelect: () => void terminal.current?.paste(),
+                },
+                "separator",
+                { label: t("menu.copyAll"), onSelect: () => void terminal.current?.copyAll() },
+                { label: t("menu.clear"), onSelect: () => terminal.current?.clearOutput() },
+                ...(onOpenColors ? ["separator" as const, { label: t("session.colors"), onSelect: onOpenColors }] : []),
+              ])
+            }
+            className="relative h-full min-h-0 overflow-hidden rounded-xl border-(length:--scoplen-border-width) border-border p-3 shadow-(--scoplen-shadow-card) transition-colors duration-(--duration-state)"
+            style={{ background: colors.background }}
+          >
+            <Terminal
+              ref={terminal}
+              source={source}
+              sink={state === "connected" ? inputSink : null}
+              readOnly={offline || closingView || state !== "connected"}
+              aria-label={t("session.output")}
+              className={`h-full min-h-0 transition-opacity duration-(--duration-overlay) ${state === "connected" || hasOutput ? "opacity-100" : "opacity-40"}`}
+              profile={terminalProfile}
+              onTerminalResize={(next) => {
+                size.current = next;
+                if (state === "connected") sendSize();
+              }}
+              onTerminalError={(terminalError) => {
+                if (!mounted.current) return;
+                interruptTransport(true, terminalError.message);
+              }}
+            />
+            {state !== "connected" && !hasOutput ? (
+              <Stage state={state} seed={profileId} label={label} status={status} error={error} context={context} />
+            ) : null}
+          </div>
+        </div>
+        {filesOpen && state === "connected" && transportId && !offline && !closingView ? (
+          <SessionFiles
+            key={transportId}
+            sessionId={sessionId}
+            transportId={transportId}
+            onClose={() => {
+              setFilesOpen(false);
+              filesToggle.current?.focus();
             }}
           />
-          {state !== "connected" && !hasOutput ? (
-            <Stage state={state} seed={profileId} label={label} status={status} error={error} context={context} />
-          ) : null}
-        </div>
+        ) : null}
       </div>
       <Dialog
         open={active && hostKey !== null}

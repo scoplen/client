@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { Channel } from "@tauri-apps/api/core";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode, type ComponentProps } from "react";
 import { AppearanceProvider } from "@scoplen/ui";
@@ -30,9 +30,9 @@ function fixture() {
     messages: Channel<SessionEvent | ArrayBuffer>;
     finish: ReturnType<typeof deferred<null>>;
   }> = [];
-  const pending = new Map<string, Array<ReturnType<typeof deferred<null>>>>();
+  const pending = new Map<string, Array<ReturnType<typeof deferred<unknown>>>>();
   const delay = (command: string) => {
-    const reply = deferred<null>();
+    const reply = deferred<unknown>();
     pending.set(command, [...(pending.get(command) ?? []), reply]);
     return reply;
   };
@@ -185,6 +185,69 @@ it("reserves once in StrictMode, routes input/resize to the exact attempt, and c
   await c.emit({ kind: "closed" });
   await waitFor(() => expect(close).toHaveBeenCalledOnce());
   expect(f.matching("session_close_transport").at(-1)?.args.sessionId).toBe(c.sessionId);
+});
+
+it("opens Files only while connected and restores focus after closing its panel", async () => {
+  const f = fixture();
+  const listing = f.delay("session_list_files");
+  render(sessionView());
+  const c = await connect(f);
+  expect(screen.queryByRole("button", { name: "Open files" })).toBeNull();
+  await c.ready();
+  const toggle = screen.getByRole("button", { name: "Open files" });
+  await userEvent.click(toggle);
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(1));
+  expect(f.matching("session_list_files")[0]?.args).toMatchObject({
+    sessionId: c.sessionId,
+    transportId: c.transportId,
+    path: [46],
+  });
+  await userEvent.click(
+    within(screen.getByRole("region", { name: "Files" })).getByRole("button", { name: "Close files" }),
+  );
+  expect(document.activeElement).toBe(toggle);
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  expect(f.matching("session_cancel_file_operation")[0]?.args).toMatchObject({
+    sessionId: c.sessionId,
+    transportId: c.transportId,
+    operationId: f.matching("session_list_files")[0]?.args.operationId,
+  });
+  await act(() => listing.resolve(null));
+});
+
+it("starts Files at home on a replacement transport and ignores old directory results", async () => {
+  const f = fixture();
+  const home = f.delay("session_list_files");
+  render(sessionView());
+  const connection = await connect(f);
+  await connection.ready();
+  await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(1));
+  const logs = [46, 47, 108, 111, 103, 115];
+  await act(() => home.resolve({ entries: [{ name: "logs", path: logs, kind: "directory", sizeBytes: null }] }));
+
+  const oldDirectory = f.delay("session_list_files");
+  await userEvent.click(await screen.findByRole("button", { name: "logs" }));
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(2));
+  expect(f.matching("session_list_files")[1]?.args.path).toEqual(logs);
+  await connection.emit({ kind: "retrying", attempt: 1, delaySeconds: 1, error: "Network connection lost" });
+  const replacement = await connection.start(true);
+  await replacement.ready();
+  expect(screen.getByRole("button", { name: "Open files" }).getAttribute("aria-pressed")).toBe("false");
+
+  const newHome = f.delay("session_list_files");
+  await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(3));
+  expect(f.matching("session_list_files")[2]?.args).toMatchObject({ transportId: replacement.transportId, path: [46] });
+  await act(() =>
+    newHome.resolve({ entries: [{ name: "fresh.bin", path: [46, 47, 102], kind: "file", sizeBytes: "1" }] }),
+  );
+  await act(() =>
+    oldDirectory.resolve({ entries: [{ name: "old.bin", path: [46, 47, 111], kind: "file", sizeBytes: "1" }] }),
+  );
+  expect(screen.getByRole("button", { name: "Download fresh.bin" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Download old.bin" })).toBeNull();
 });
 
 describe("saved terminal output", () => {
