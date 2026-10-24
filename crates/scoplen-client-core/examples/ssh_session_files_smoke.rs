@@ -17,6 +17,10 @@ use scoplen_client_core::session_files::{
 use scoplen_client_core::session_manager::{
     SessionEvent, SessionFileTransferProgress, SessionManager,
 };
+use scoplen_client_core::session_transfers::{
+    SessionTransferDirection, SessionTransferEnqueueResult, SessionTransferItem,
+    SessionTransferState,
+};
 use scoplen_client_core::store::Store;
 use scoplen_crypto::LocalDatabaseKey;
 use tokio::sync::{mpsc, oneshot};
@@ -628,7 +632,191 @@ async fn exercise(
             folder.path.clone(),
         )
         .await?;
+    exercise_queue(manager, local, &transport, folder.path.clone(), file.path.clone(), output)
+        .await?;
     Ok(())
+}
+
+async fn exercise_queue(
+    manager: &SessionManager,
+    local: &std::path::Path,
+    transport: &str,
+    directory: Vec<u8>,
+    binary_path: Vec<u8>,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let first = local.join("queue-first.bin");
+    let second = local.join("queue-second.bin");
+    let downloaded = local.join("queue-downloaded.bin");
+    fs::write(&first, vec![0x91; 4 * 1024 * 1024])?;
+    fs::write(&second, b"queued\0\xffbytes")?;
+    let first_upload = queue_upload(manager, transport, directory.clone(), first.clone()).await?;
+    let second_upload = queue_upload(manager, transport, directory.clone(), second.clone()).await?;
+    let destination = downloaded.clone();
+    let download = manager
+        .enqueue_download_with_picker(
+            "fixture-terminal",
+            transport,
+            binary_path.clone(),
+            move || async move { Ok(Some(destination)) },
+            |_| async { panic!("new queue destination cannot require replacement") },
+        )
+        .await?;
+    let first_id = queue_identity(&first_upload);
+    let second_id = queue_identity(&second_upload);
+    let download_id = queue_identity(&download);
+    assert_eq!(first_id.0, second_id.0);
+    assert_eq!(first_id.0, download_id.0);
+    assert_ne!(first_id.2, second_id.2);
+    for identity in [&first_id, &second_id, &download_id] {
+        let saved = wait_queue_item(manager, &identity.1).await?;
+        assert_eq!(saved.state, SessionTransferState::Saved);
+        assert!(!saved.staging_may_remain);
+        assert_eq!(saved.transferred_bytes, saved.total_bytes.unwrap());
+    }
+    let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+    assert_eq!(
+        snapshot.recent.iter().map(|row| row.item_id.as_str()).collect::<Vec<_>>(),
+        [first_id.1.as_str(), second_id.1.as_str(), download_id.1.as_str(),]
+    );
+    assert_eq!(snapshot.outstanding, 0);
+    assert!(!snapshot.blocks_file_operations);
+    let bytes = fs::read(&downloaded)?;
+    assert_eq!(bytes.len(), 262149);
+    assert_eq!(&bytes[262144..], b"\xff\x01END");
+
+    let entries = manager
+        .list_files("fixture-terminal", transport, &Uuid::now_v7().to_string(), directory.clone())
+        .await?;
+    let remote = entries
+        .entries
+        .iter()
+        .find(|entry| entry.name == "queue-second.bin")
+        .ok_or("queued upload was not listed")?;
+    let copy = local.join("queue-copy.bin");
+    fs::write(&copy, b"reviewed local target")?;
+    let chosen = copy.clone();
+    let confirmations = Arc::new(AtomicUsize::new(0));
+    let confirmed = confirmations.clone();
+    let replacement = manager
+        .enqueue_download_with_picker(
+            "fixture-terminal",
+            transport,
+            remote.path.clone(),
+            move || async move { Ok(Some(chosen)) },
+            move |review| async move {
+                assert_eq!(review.name, "queue-copy.bin");
+                assert_eq!(review.host, "disposable file fixture");
+                assert_eq!(review.username, "smoke");
+                assert_eq!(review.address, "127.0.0.1");
+                assert!(review.port > 0);
+                assert_eq!(review.direction, SessionTransferDirection::Download);
+                confirmed.fetch_add(1, Ordering::SeqCst);
+                Ok(true)
+            },
+        )
+        .await?;
+    assert_eq!(
+        wait_queue_item(manager, &queue_identity(&replacement).1).await?.state,
+        SessionTransferState::Saved
+    );
+    assert_eq!(confirmations.load(Ordering::SeqCst), 1);
+    assert_eq!(fs::read(copy)?, b"queued\0\xffbytes");
+
+    let cancelled =
+        queue_upload(manager, transport, directory.clone(), local.join("cancel-upload.bin"))
+            .await?;
+    let cancelled_id = queue_identity(&cancelled);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+            if snapshot.items.iter().any(|row| {
+                row.item_id == cancelled_id.1 && row.transferred_bytes != "0" && row.can_cancel
+            }) {
+                return Ok::<(), Box<dyn std::error::Error>>(());
+            }
+            if snapshot.recent.iter().any(|row| row.item_id == cancelled_id.1) {
+                return Err("queue cancellation fixture ended before cancellation".into());
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await??;
+    manager.cancel_transfer(
+        "fixture-terminal",
+        &cancelled_id.0,
+        &cancelled_id.1,
+        &cancelled_id.2,
+    )?;
+    let cancelled = wait_queue_item(manager, &cancelled_id.1).await?;
+    assert_eq!(cancelled.state, SessionTransferState::Cancelled);
+    assert!(!cancelled.staging_may_remain);
+    let entries = manager
+        .list_files("fixture-terminal", transport, &Uuid::now_v7().to_string(), directory)
+        .await?;
+    assert!(
+        entries.entries.iter().all(|entry| entry.name != "cancel-upload.bin"
+            && !entry.name.starts_with(".scoplen-upload-"))
+    );
+    assert!(fs::read_dir(local)?.all(|entry| {
+        !entry.unwrap().file_name().to_string_lossy().starts_with(".scoplen-download-")
+    }));
+    manager.input(
+        "fixture-terminal",
+        transport,
+        b"printf '%s%s\\n' SCOPLEN- QUEUE-ALIVE\n".to_vec(),
+    )?;
+    wait_for(output, b"SCOPLEN-QUEUE-ALIVE").await?;
+    Ok(())
+}
+
+async fn queue_upload(
+    manager: &SessionManager,
+    transport: &str,
+    directory: Vec<u8>,
+    source: std::path::PathBuf,
+) -> Result<SessionTransferEnqueueResult, Box<dyn std::error::Error>> {
+    Ok(manager
+        .enqueue_upload_with_picker(
+            "fixture-terminal",
+            transport,
+            directory,
+            move || async move { Ok(Some(source)) },
+            |_| async { panic!("new queued upload cannot require replacement") },
+        )
+        .await?)
+}
+
+fn queue_identity(result: &SessionTransferEnqueueResult) -> (String, String, String) {
+    match result {
+        SessionTransferEnqueueResult::Queued { queue_id, item_id, execution_id } => {
+            (queue_id.clone(), item_id.clone(), execution_id.clone())
+        }
+        SessionTransferEnqueueResult::Cancelled => panic!("queue fixture selection was cancelled"),
+    }
+}
+
+async fn wait_queue_item(
+    manager: &SessionManager,
+    item: &str,
+) -> Result<SessionTransferItem, Box<dyn std::error::Error>> {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+            if let Some(row) = snapshot.recent.into_iter().find(|row| row.item_id == item) {
+                return Ok::<SessionTransferItem, Box<dyn std::error::Error>>(row);
+            }
+            if snapshot
+                .items
+                .iter()
+                .any(|row| row.item_id == item && row.state == SessionTransferState::Unknown)
+            {
+                return Err("queue fixture publication was unknown; no retry was attempted".into());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?
 }
 
 async fn wait_for(

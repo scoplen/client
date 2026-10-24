@@ -154,6 +154,8 @@ pub enum SessionDownloadStatus {
     Saved,
     /// The person cancelled before the local commit began.
     Cancelled,
+    /// The selected local destination changed before publication.
+    Conflict,
     /// The local commit began, but its result was lost.
     Unknown,
     /// The transfer or local commit failed with a known result.
@@ -332,6 +334,21 @@ pub(crate) struct UploadSource {
 }
 
 impl UploadSource {
+    pub(crate) fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub(crate) async fn check_current(&self) -> Result<(), FileAccessError> {
+        let metadata = self.file.metadata().await.map_err(FileAccessError::LocalSourceIo)?;
+        if !metadata.is_file()
+            || metadata.len() != self.size
+            || self.modified.is_some_and(|time| metadata.modified().ok() != Some(time))
+        {
+            return Err(FileAccessError::SourceChanged);
+        }
+        Ok(())
+    }
+
     pub(crate) fn target(&self, directory: &[u8]) -> Result<Vec<u8>, FileAccessError> {
         child_path(directory, &self.name)
     }

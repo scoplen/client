@@ -32,6 +32,7 @@ fn ready_file_manager()
         files,
         file: None,
         ready: true,
+        context: None,
     });
     drop(sessions);
     (manager, transport, commands, file_requests)
@@ -606,6 +607,7 @@ fn old_transport_cannot_commit_a_download() {
             "terminal",
             transport,
             operation,
+            None,
             || std::fs::rename(&temporary, &destination)
                 .map_err(session_files::FileAccessError::LocalIo),
         )
@@ -636,6 +638,7 @@ fn cancellation_before_local_commit_leaves_the_destination_untouched() {
         "terminal",
         transport,
         operation,
+        None,
         || {
             std::fs::rename(&temporary, &destination)
                 .map_err(session_files::FileAccessError::LocalIo)
@@ -669,12 +672,19 @@ async fn started_local_commit_rejects_cancel_and_keeps_its_result_after_disconne
         let (release, released) = std::sync::mpsc::channel();
         let sessions = manager.sessions.clone();
         let commit = tokio::task::spawn_blocking(move || {
-            SessionManager::commit_download(&sessions, "terminal", transport, operation, || {
-                commit_started.send(()).unwrap();
-                released.recv().unwrap();
-                std::fs::rename(&temporary, &destination)
-                    .map_err(session_files::FileAccessError::LocalIo)
-            })
+            SessionManager::commit_download(
+                &sessions,
+                "terminal",
+                transport,
+                operation,
+                None,
+                || {
+                    commit_started.send(()).unwrap();
+                    released.recv().unwrap();
+                    std::fs::rename(&temporary, &destination)
+                        .map_err(session_files::FileAccessError::LocalIo)
+                },
+            )
         });
         started.await.unwrap();
         assert!(
@@ -733,6 +743,7 @@ async fn claimed_download_delivers_saved_after_stop_fail_close_or_registration_d
                 "terminal",
                 transport,
                 operation,
+                None,
                 || {
                     claimed.send(()).unwrap();
                     released.recv().unwrap();
@@ -792,6 +803,7 @@ async fn lost_download_worker_reply_is_unknown_after_commit_and_is_not_requeued(
         "terminal",
         transport,
         operation,
+        None,
         || {
             std::fs::rename(&temporary, &destination)
                 .map_err(session_files::FileAccessError::LocalIo)
@@ -826,10 +838,17 @@ async fn ended_ready_transport_fences_a_delayed_file_commit() {
         move || {
             worker_started.send(()).unwrap();
             released.recv().unwrap();
-            SessionManager::commit_download(&sessions, "terminal", transport, operation, || {
-                std::fs::rename(&temporary, &destination)
-                    .map_err(session_files::FileAccessError::LocalIo)
-            })
+            SessionManager::commit_download(
+                &sessions,
+                "terminal",
+                transport,
+                operation,
+                None,
+                || {
+                    std::fs::rename(&temporary, &destination)
+                        .map_err(session_files::FileAccessError::LocalIo)
+                },
+            )
         }
     });
     started.await.unwrap();
@@ -1259,6 +1278,7 @@ fn input_is_bounded_and_old_transport_input_cannot_reach_the_replacement() {
         files,
         file: None,
         ready: false,
+        context: None,
     });
     assert!(manager.input("logical", &old.to_string(), vec![1]).is_err());
     manager.sessions.lock().unwrap().get_mut("logical").unwrap().active.as_mut().unwrap().ready =
@@ -1281,6 +1301,7 @@ fn input_is_bounded_and_old_transport_input_cannot_reach_the_replacement() {
         files,
         file: None,
         ready: true,
+        context: None,
     });
     assert!(manager.input("logical", &old.to_string(), vec![2]).is_err());
     assert!(new_receiver.try_recv().is_err());
