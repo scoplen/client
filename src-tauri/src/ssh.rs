@@ -6,6 +6,7 @@ use crate::events::{SessionChangeKind, SessionChanged};
 use crate::frames::SessionMessage;
 use crate::local_data::LocalDataState;
 use scoplen_client_core::connection::preparation::PreparationResponse;
+use scoplen_client_core::session_files::RemoteDirectory;
 use scoplen_client_core::session_manager::HistoryChange;
 use scoplen_crypto::SecretVec;
 use serde::Deserialize;
@@ -150,6 +151,90 @@ pub fn session_resize(
     manager.resize(&session_id, &transport_id, columns, rows)
 }
 
+/// Browse files on the terminal's authenticated SSH connection.
+#[tauri::command]
+#[specta::specta]
+pub async fn session_list_files(
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    transport_id: String,
+    operation_id: String,
+    path: Vec<u8>,
+) -> Result<RemoteDirectory, String> {
+    manager.list_files(&session_id, &transport_id, &operation_id, path).await
+}
+
+/// Download a regular remote file to a destination chosen in the native picker.
+#[tauri::command]
+#[specta::specta]
+pub async fn session_download_file(
+    app: tauri::AppHandle,
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    transport_id: String,
+    operation_id: String,
+    remote_path: Vec<u8>,
+) -> Result<bool, String> {
+    let suggested = suggested_download_name(&remote_path);
+    manager
+        .download_file_with_picker(
+            &session_id,
+            &transport_id,
+            &operation_id,
+            remote_path,
+            || async move {
+                let destination = tauri::async_runtime::spawn_blocking(move || {
+                    use tauri_plugin_dialog::DialogExt as _;
+                    app.dialog()
+                        .file()
+                        .set_title("Download remote file")
+                        .set_file_name(&suggested)
+                        .blocking_save_file()
+                })
+                .await
+                .map_err(|_| "the download destination picker failed".to_owned())?;
+                destination
+                    .map(|path| {
+                        path.into_path().map_err(|_| "choose a local file destination".to_owned())
+                    })
+                    .transpose()
+            },
+        )
+        .await
+}
+
+/// Stop only the matching SFTP operation, leaving the terminal connected.
+#[tauri::command]
+#[specta::specta]
+pub fn session_cancel_file_operation(
+    manager: tauri::State<'_, SessionManager>,
+    session_id: String,
+    transport_id: String,
+    operation_id: String,
+) -> Result<(), String> {
+    manager.cancel_file_operation(&session_id, &transport_id, &operation_id)
+}
+
+fn suggested_download_name(remote_path: &[u8]) -> String {
+    let name = remote_path.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
+    let mut suggested: String = String::from_utf8_lossy(name)
+        .chars()
+        .take(128)
+        .map(|character| {
+            if character.is_control()
+                || matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+                || matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect();
+    suggested = suggested.trim_end_matches([' ', '.']).to_owned();
+    if suggested.is_empty() { "download".into() } else { suggested }
+}
+
 /// Begin an explicit reconnect with a fresh automatic retry budget.
 #[tauri::command]
 #[specta::specta]
@@ -188,4 +273,15 @@ pub fn session_close_transport(
     session_id: String,
 ) -> Result<(), String> {
     manager.close(&session_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::suggested_download_name;
+
+    #[test]
+    fn suggested_download_name_replaces_bidi_format_controls() {
+        assert_eq!(suggested_download_name("./report\u{202e}cod.exe".as_bytes()), "report_cod.exe");
+        assert_eq!(suggested_download_name("./\u{2066}name\u{2069}".as_bytes()), "_name_");
+    }
 }

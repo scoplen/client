@@ -15,6 +15,274 @@ fn snapshot(data: &str) -> TerminalSnapshot {
     TerminalSnapshot { version: 1, columns: 80, rows: 24, data: data.into() }
 }
 
+fn ready_file_manager()
+-> (Arc<SessionManager>, Uuid, mpsc::Receiver<TransportCommand>, mpsc::Receiver<FileCommand>) {
+    let manager = Arc::new(SessionManager::default());
+    manager.reserve("terminal", true).unwrap();
+    let transport = Uuid::now_v7();
+    let (sender, commands) = mpsc::channel(COMMAND_QUEUE);
+    let (files, file_requests) = mpsc::channel(FILE_QUEUE);
+    let mut sessions = manager.sessions.lock().unwrap();
+    let entry = sessions.get_mut("terminal").unwrap();
+    entry.phase = Phase::Running;
+    entry.active = Some(ActiveAttempt {
+        id: transport,
+        control: PreparationControl::default(),
+        sender,
+        files,
+        file: None,
+        ready: true,
+    });
+    drop(sessions);
+    (manager, transport, commands, file_requests)
+}
+
+#[tokio::test]
+async fn file_cancellation_and_refusal_preserve_terminal_and_allow_a_new_request() {
+    let (manager, transport, mut commands, mut files) = ready_file_manager();
+    let first = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .list_files("terminal", &transport.to_string(), &first.to_string(), b".".to_vec())
+                .await
+        }
+    });
+    let FileCommand::List { reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected a directory request")
+    };
+    manager.input("terminal", &transport.to_string(), b"pwd\n".to_vec()).unwrap();
+    manager.resize("terminal", &transport.to_string(), 100, 30).unwrap();
+    assert_eq!(commands.recv().await, Some(TransportCommand::Input(b"pwd\n".to_vec())));
+    assert_eq!(commands.recv().await, Some(TransportCommand::Resize { columns: 100, rows: 30 }));
+    manager.cancel_file_operation("terminal", &transport.to_string(), &first.to_string()).unwrap();
+    assert!(pending.await.unwrap().unwrap_err().contains("cancelled"));
+    assert!(reply.is_closed());
+
+    let second = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .list_files("terminal", &transport.to_string(), &second.to_string(), b".".to_vec())
+                .await
+        }
+    });
+    let FileCommand::List { reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected the replacement directory request")
+    };
+    reply.send(Err("remote SFTP was refused".into())).unwrap();
+    assert!(pending.await.unwrap().unwrap_err().contains("refused"));
+    manager.input("terminal", &transport.to_string(), b"still open\n".to_vec()).unwrap();
+    assert_eq!(commands.recv().await, Some(TransportCommand::Input(b"still open\n".to_vec())));
+
+    let third = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .list_files("terminal", &transport.to_string(), &third.to_string(), b".".to_vec())
+                .await
+        }
+    });
+    let FileCommand::List { reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected a fresh directory request")
+    };
+    reply.send(Ok(RemoteDirectory { entries: Vec::new() })).unwrap();
+    assert_eq!(pending.await.unwrap().unwrap(), RemoteDirectory { entries: Vec::new() });
+}
+
+#[tokio::test]
+async fn cancelled_picker_cannot_queue_a_late_download() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let picker_opened = std::sync::atomic::AtomicBool::new(false);
+    assert!(
+        manager
+            .download_file_with_picker(
+                "terminal",
+                &transport.to_string(),
+                &Uuid::now_v7().to_string(),
+                Vec::new(),
+                || async {
+                    picker_opened.store(true, Ordering::SeqCst);
+                    Ok(None)
+                },
+            )
+            .await
+            .is_err()
+    );
+    assert!(!picker_opened.load(Ordering::SeqCst));
+    let operation = Uuid::now_v7();
+    let (picker_started, started) = oneshot::channel();
+    let (picker_result, chosen) = oneshot::channel();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .download_file_with_picker(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./document".to_vec(),
+                    || async move {
+                        picker_started.send(()).unwrap();
+                        Ok(Some(chosen.await.unwrap()))
+                    },
+                )
+                .await
+        }
+    });
+    started.await.unwrap();
+    manager
+        .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+        .unwrap();
+    assert!(pending.await.unwrap().unwrap_err().contains("cancelled"));
+    assert!(picker_result.send(PathBuf::from("late-choice")).is_err());
+    assert!(files.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn ended_transport_cancels_a_picker_before_its_late_result() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let (picker_started, started) = oneshot::channel();
+    let (_picker_result, chosen) = oneshot::channel::<PathBuf>();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .download_file_with_picker(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./document".to_vec(),
+                    || async move {
+                        picker_started.send(()).unwrap();
+                        Ok(Some(chosen.await.unwrap()))
+                    },
+                )
+                .await
+        }
+    });
+    started.await.unwrap();
+    manager.phase("terminal", Phase::Ended).unwrap();
+    assert!(pending.await.unwrap().unwrap_err().contains("cancelled"));
+    assert!(files.try_recv().is_err());
+}
+
+#[test]
+fn old_transport_cannot_commit_a_download() {
+    let (manager, transport, _commands, _files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let (abort, _) = AbortHandle::new_pair();
+    let _guard = manager
+        .reserve_file_operation("terminal", &transport.to_string(), &operation.to_string(), abort)
+        .unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let temporary = folder.path().join("partial");
+    let destination = folder.path().join("existing");
+    std::fs::write(&temporary, b"new").unwrap();
+    std::fs::write(&destination, b"original").unwrap();
+    manager.sessions.lock().unwrap().get_mut("terminal").unwrap().active.as_mut().unwrap().id =
+        Uuid::now_v7();
+    assert!(matches!(
+        SessionManager::commit_download(
+            &manager.sessions,
+            "terminal",
+            transport,
+            operation,
+            &temporary,
+            &destination
+        ),
+        Err(session_files::FileAccessError::ConnectionEnded)
+    ));
+    assert_eq!(std::fs::read(destination).unwrap(), b"original");
+}
+
+#[tokio::test]
+async fn ended_ready_transport_fences_a_delayed_file_commit() {
+    let (manager, transport, _commands, _files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let (abort, _) = AbortHandle::new_pair();
+    let _guard = manager
+        .reserve_file_operation("terminal", &transport.to_string(), &operation.to_string(), abort)
+        .unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let temporary = folder.path().join("partial");
+    let destination = folder.path().join("existing");
+    std::fs::write(&temporary, b"new").unwrap();
+    std::fs::write(&destination, b"original").unwrap();
+    let (worker_started, started) = oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let sessions = manager.sessions.clone();
+    let commit = tokio::task::spawn_blocking({
+        let temporary = temporary.clone();
+        let destination = destination.clone();
+        move || {
+            worker_started.send(()).unwrap();
+            released.recv().unwrap();
+            SessionManager::commit_download(
+                &sessions,
+                "terminal",
+                transport,
+                operation,
+                &temporary,
+                &destination,
+            )
+        }
+    });
+    started.await.unwrap();
+    manager.expire_ready_transport("terminal", transport).unwrap();
+    assert!(manager.input("terminal", &transport.to_string(), b"late\n".to_vec()).is_err());
+    release.send(()).unwrap();
+    assert!(matches!(commit.await.unwrap(), Err(session_files::FileAccessError::ConnectionEnded)));
+    assert_eq!(std::fs::read(destination).unwrap(), b"original");
+    assert_eq!(std::fs::read(temporary).unwrap(), b"new");
+}
+
+#[tokio::test]
+async fn file_permit_expires_before_select_drops_the_file_worker() {
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    struct PendingFileWorker<'a> {
+        manager: &'a SessionManager,
+        transport: Uuid,
+    }
+
+    impl Future for PendingFileWorker<'_> {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Pending
+        }
+    }
+
+    impl Drop for PendingFileWorker<'_> {
+        fn drop(&mut self) {
+            let sessions = self.manager.sessions.lock().unwrap();
+            let active = sessions.get("terminal").unwrap().active.as_ref().unwrap();
+            assert_eq!(active.id, self.transport);
+            assert!(!active.ready);
+            assert!(active.file.is_none());
+        }
+    }
+
+    let (manager, transport, _commands, _files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let (abort, _) = AbortHandle::new_pair();
+    let _guard = manager
+        .reserve_file_operation("terminal", &transport.to_string(), &operation.to_string(), abort)
+        .unwrap();
+    tokio::select! { biased;
+        result = manager.stream_with_file_expiry("terminal", transport, async { Ok(()) }) => {
+            result.unwrap();
+        }
+        _ = PendingFileWorker { manager: &manager, transport } => unreachable!(),
+    }
+}
+
 #[test]
 fn checkpoint_ownership_rejects_cross_store_attempt_sequence_and_forgotten_history() {
     use crate::store::device::{SessionKind, SessionOutcome};
@@ -314,11 +582,13 @@ async fn pending_stop_fail_and_close_win_before_automatic_or_manual_attempt_regi
                     reached.send(()).unwrap();
                     gate.await.unwrap();
                     let (sender, _) = mpsc::channel(COMMAND_QUEUE);
+                    let (files, _) = mpsc::channel(FILE_QUEUE);
                     manager.register_attempt(
                         "logical",
                         Uuid::now_v7(),
                         &PreparationControl::default(),
                         sender,
+                        files,
                         &mut intents,
                     )
                 }
@@ -381,10 +651,13 @@ fn input_is_bounded_and_old_transport_input_cannot_reach_the_replacement() {
     manager.reserve("logical", true).unwrap();
     let old = Uuid::now_v7();
     let (sender, mut receiver) = mpsc::channel(COMMAND_QUEUE);
+    let (files, _) = mpsc::channel(FILE_QUEUE);
     manager.sessions.lock().unwrap().get_mut("logical").unwrap().active = Some(ActiveAttempt {
         id: old,
         control: PreparationControl::default(),
         sender,
+        files,
+        file: None,
         ready: false,
     });
     assert!(manager.input("logical", &old.to_string(), vec![1]).is_err());
@@ -400,10 +673,13 @@ fn input_is_bounded_and_old_transport_input_cannot_reach_the_replacement() {
     manager.phase("logical", Phase::Ended).unwrap();
     let replacement = Uuid::now_v7();
     let (sender, mut new_receiver) = mpsc::channel(COMMAND_QUEUE);
+    let (files, _) = mpsc::channel(FILE_QUEUE);
     manager.sessions.lock().unwrap().get_mut("logical").unwrap().active = Some(ActiveAttempt {
         id: replacement,
         control: PreparationControl::default(),
         sender,
+        files,
+        file: None,
         ready: true,
     });
     assert!(manager.input("logical", &old.to_string(), vec![2]).is_err());

@@ -1206,6 +1206,13 @@ impl SshConnection {
         Ok(SshSession { channel: connection.open_session().await?, output_bytes: 0 })
     }
 
+    pub(crate) fn authenticated_connection(&self) -> Result<&ClientConnection, SshConnectionError> {
+        if self.state() != ConnectionState::Open {
+            return Err(SshConnectionError::Engine(ClientError::NotAuthenticated));
+        }
+        self.connection.as_ref().ok_or(SshConnectionError::AgentCancelled)
+    }
+
     /// Close the SSH connection and mark it closed.
     pub async fn close(mut self) -> Result<(), SshConnectionError> {
         let mut result = Ok(());

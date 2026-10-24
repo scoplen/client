@@ -14,6 +14,7 @@ pub mod locale;
 pub mod personal_inventory;
 pub mod personal_server;
 pub mod repository;
+pub mod session_files;
 pub mod session_lifecycle;
 pub mod session_manager;
 pub mod store;

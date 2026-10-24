@@ -3,14 +3,18 @@
 //! Rust-owned terminal sessions, bounded transport attempts, and reconnect policy.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::io::ErrorKind;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures_util::future::{AbortHandle, Abortable};
 use scoplen_ssh::{ChannelEvent, ClientError, ProxyError, ProxyTransportError, TransportError};
 use serde::Serialize;
 use specta::Type;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -19,11 +23,14 @@ use crate::connection::preparation::{
 };
 use crate::connection::{MAX_SSH_INPUT, SshConnectionError, SshSession, terminal_size};
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
+use crate::session_files::{self, RemoteDirectory};
 use crate::session_lifecycle::SessionHistoryLease;
 use crate::store::Store;
 use crate::terminal_output::{SavedOutputError, TerminalSnapshot};
 
 const COMMAND_QUEUE: usize = 64;
+const FILE_QUEUE: usize = 1;
+const FILE_LIST_TIMEOUT: Duration = Duration::from_secs(20);
 const STABLE_READY: Duration = Duration::from_secs(30);
 const RETRY_DELAYS: [u8; 5] = [1, 2, 4, 8, 16];
 
@@ -102,11 +109,55 @@ enum TransportCommand {
     Resize { columns: u32, rows: u32 },
 }
 
+enum FileCommand {
+    List {
+        path: Vec<u8>,
+        reply: oneshot::Sender<Result<RemoteDirectory, String>>,
+    },
+    Download {
+        remote_path: Vec<u8>,
+        destination: PathBuf,
+        session_id: String,
+        transport: Uuid,
+        operation: Uuid,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+}
+
+struct ActiveFile {
+    id: Uuid,
+    abort: AbortHandle,
+}
+
 struct ActiveAttempt {
     id: Uuid,
     control: PreparationControl,
     sender: mpsc::Sender<TransportCommand>,
+    files: mpsc::Sender<FileCommand>,
+    file: Option<ActiveFile>,
     ready: bool,
+}
+
+struct FileRequestGuard<'a> {
+    manager: &'a SessionManager,
+    session_id: &'a str,
+    transport: Uuid,
+    operation: Uuid,
+    abort: AbortHandle,
+}
+
+impl Drop for FileRequestGuard<'_> {
+    fn drop(&mut self) {
+        self.abort.abort();
+        if let Ok(mut sessions) = self.manager.sessions.lock()
+            && let Some(active) =
+                sessions.get_mut(self.session_id).and_then(|entry| entry.active.as_mut())
+            && active.id == self.transport
+            && active.file.as_ref().is_some_and(|file| file.id == self.operation)
+        {
+            active.file.take();
+        }
+    }
 }
 
 struct SessionEntry {
@@ -131,7 +182,7 @@ struct CheckpointOwner {
 /// Replacing it drops old queued input rather than replaying it into a new shell.
 #[derive(Default)]
 pub struct SessionManager {
-    sessions: Mutex<HashMap<String, SessionEntry>>,
+    sessions: Arc<Mutex<HashMap<String, SessionEntry>>>,
 }
 
 struct Registration<'a> {
@@ -146,6 +197,9 @@ impl Drop for Registration<'_> {
             && let Some(active) = entry.active
         {
             active.control.cancel();
+            if let Some(file) = active.file {
+                file.abort.abort();
+            }
         }
     }
 }
@@ -328,6 +382,9 @@ impl SessionManager {
             && let Some(active) = &entry.active
         {
             active.control.cancel();
+            if let Some(file) = &active.file {
+                file.abort.abort();
+            }
         }
         entry.intent.send_replace(intent);
         if intent == Intent::Close && entry.receiver.is_some() {
@@ -372,6 +429,169 @@ impl SessionManager {
         self.send(session_id, transport_id, TransportCommand::Resize { columns, rows })
     }
 
+    /// Browse one remote directory on the current terminal's authenticated connection.
+    pub async fn list_files(
+        &self,
+        session_id: &str,
+        transport_id: &str,
+        operation_id: &str,
+        path: Vec<u8>,
+    ) -> Result<RemoteDirectory, String> {
+        let (abort, cancellation) = AbortHandle::new_pair();
+        let guard = self.reserve_file_operation(session_id, transport_id, operation_id, abort)?;
+        let (reply, received) = oneshot::channel();
+        self.queue_file_request(&guard, FileCommand::List { path, reply })?;
+        let result =
+            Abortable::new(tokio::time::timeout(FILE_LIST_TIMEOUT, received), cancellation)
+                .await
+                .map_err(|_| "file operation was cancelled".to_owned())?
+                .map_err(|_| "the remote directory did not respond; try again".to_owned())?
+                .map_err(|_| "the file operation ended with this connection".to_owned())?;
+        drop(guard);
+        result
+    }
+
+    /// Stream one selected regular remote file to a native-picker destination.
+    pub async fn download_file_with_picker<F, Fut>(
+        &self,
+        session_id: &str,
+        transport_id: &str,
+        operation_id: &str,
+        remote_path: Vec<u8>,
+        choose_destination: F,
+    ) -> Result<bool, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Option<PathBuf>, String>>,
+    {
+        session_files::validate_path(&remote_path).map_err(|error| error.to_string())?;
+        let (abort, cancellation) = AbortHandle::new_pair();
+        let guard = self.reserve_file_operation(session_id, transport_id, operation_id, abort)?;
+        let result = Abortable::new(
+            async {
+                let Some(destination) = choose_destination().await? else { return Ok(false) };
+                let (reply, received) = oneshot::channel();
+                self.queue_file_request(
+                    &guard,
+                    FileCommand::Download {
+                        remote_path,
+                        destination,
+                        session_id: session_id.to_owned(),
+                        transport: guard.transport,
+                        operation: guard.operation,
+                        reply,
+                    },
+                )?;
+                received
+                    .await
+                    .map_err(|_| "the file operation ended with this connection".to_owned())??;
+                Ok(true)
+            },
+            cancellation,
+        )
+        .await
+        .map_err(|_| "file operation was cancelled".to_owned())?;
+        drop(guard);
+        result
+    }
+
+    /// Cancel only the matching in-flight SFTP operation.
+    pub fn cancel_file_operation(
+        &self,
+        session_id: &str,
+        transport_id: &str,
+        operation_id: &str,
+    ) -> Result<(), String> {
+        let transport =
+            Uuid::parse_str(transport_id).map_err(|_| "transport identifier is invalid")?;
+        let operation =
+            Uuid::parse_str(operation_id).map_err(|_| "file operation identifier is invalid")?;
+        let mut sessions = self.sessions.lock().map_err(|_| "session manager is unavailable")?;
+        let entry = sessions.get_mut(session_id).ok_or("session is not connected")?;
+        let active = entry.active.as_mut().ok_or("session is not ready")?;
+        if active.id != transport || *entry.intent.borrow() != Intent::None {
+            return Err("this session transport is no longer ready".into());
+        }
+        let file = active.file.take().ok_or("file operation has ended")?;
+        if file.id != operation {
+            active.file = Some(file);
+            return Err("file operation has ended".into());
+        }
+        file.abort.abort();
+        Ok(())
+    }
+
+    fn reserve_file_operation<'a>(
+        &'a self,
+        session_id: &'a str,
+        transport_id: &str,
+        operation_id: &str,
+        abort: AbortHandle,
+    ) -> Result<FileRequestGuard<'a>, String> {
+        let transport =
+            Uuid::parse_str(transport_id).map_err(|_| "transport identifier is invalid")?;
+        let operation =
+            Uuid::parse_str(operation_id).map_err(|_| "file operation identifier is invalid")?;
+        let mut sessions = self.sessions.lock().map_err(|_| "session manager is unavailable")?;
+        let entry = sessions.get_mut(session_id).ok_or("session is not connected")?;
+        let active = entry.active.as_mut().ok_or("session is not ready")?;
+        if !active.ready || active.id != transport || *entry.intent.borrow() != Intent::None {
+            return Err("this session transport is no longer ready".into());
+        }
+        if active.file.is_some() {
+            return Err("another file operation is already running".into());
+        }
+        active.file = Some(ActiveFile { id: operation, abort: abort.clone() });
+        Ok(FileRequestGuard { manager: self, session_id, transport, operation, abort })
+    }
+
+    fn queue_file_request(
+        &self,
+        guard: &FileRequestGuard<'_>,
+        request: FileCommand,
+    ) -> Result<(), String> {
+        let sessions = self.sessions.lock().map_err(|_| "session manager is unavailable")?;
+        let entry = sessions.get(guard.session_id).ok_or("session is not connected")?;
+        let active = entry.active.as_ref().ok_or("session is not ready")?;
+        if active.id != guard.transport
+            || *entry.intent.borrow() != Intent::None
+            || guard.abort.is_aborted()
+            || active.file.as_ref().is_none_or(|file| file.id != guard.operation)
+        {
+            return Err("this file operation is no longer current".into());
+        }
+        active.files.try_send(request).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => "file operation queue is full".to_owned(),
+            mpsc::error::TrySendError::Closed(_) => "session is no longer connected".to_owned(),
+        })
+    }
+
+    fn commit_download(
+        sessions: &Mutex<HashMap<String, SessionEntry>>,
+        session_id: &str,
+        transport: Uuid,
+        operation: Uuid,
+        temporary: &Path,
+        destination: &Path,
+    ) -> Result<(), session_files::FileAccessError> {
+        let sessions =
+            sessions.lock().map_err(|_| session_files::FileAccessError::ConnectionEnded)?;
+        let entry =
+            sessions.get(session_id).ok_or(session_files::FileAccessError::ConnectionEnded)?;
+        let active =
+            entry.active.as_ref().ok_or(session_files::FileAccessError::ConnectionEnded)?;
+        if active.id != transport
+            || *entry.intent.borrow() != Intent::None
+            || active
+                .file
+                .as_ref()
+                .is_none_or(|file| file.id != operation || file.abort.is_aborted())
+        {
+            return Err(session_files::FileAccessError::ConnectionEnded);
+        }
+        std::fs::rename(temporary, destination).map_err(session_files::FileAccessError::LocalIo)
+    }
+
     fn send(
         &self,
         session_id: &str,
@@ -398,8 +618,36 @@ impl SessionManager {
         let mut sessions = self.sessions.lock().map_err(|_| "session manager is unavailable")?;
         let entry = sessions.get_mut(session_id).ok_or("session is closed")?;
         entry.phase = phase;
-        entry.active.take();
+        if let Some(active) = entry.active.take()
+            && let Some(file) = active.file
+        {
+            file.abort.abort();
+        }
         Ok(())
+    }
+
+    fn expire_ready_transport(&self, session_id: &str, transport: Uuid) -> Result<(), String> {
+        let mut sessions = self.sessions.lock().map_err(|_| "session manager is unavailable")?;
+        if let Some(active) = sessions.get_mut(session_id).and_then(|entry| entry.active.as_mut())
+            && active.id == transport
+        {
+            active.ready = false;
+            if let Some(file) = active.file.take() {
+                file.abort.abort();
+            }
+        }
+        Ok(())
+    }
+
+    async fn stream_with_file_expiry(
+        &self,
+        session_id: &str,
+        transport: Uuid,
+        stream: impl Future<Output = Result<(), AttemptError>>,
+    ) -> Result<(), AttemptError> {
+        let result = stream.await;
+        self.expire_ready_transport(session_id, transport).map_err(AttemptError::Local)?;
+        result
     }
 
     fn register_attempt(
@@ -408,6 +656,7 @@ impl SessionManager {
         transport: Uuid,
         control: &PreparationControl,
         sender: mpsc::Sender<TransportCommand>,
+        files: mpsc::Sender<FileCommand>,
         intents: &mut watch::Receiver<Intent>,
     ) -> Result<Intent, String> {
         let mut sessions = self.sessions.lock().map_err(|_| "session manager is unavailable")?;
@@ -421,6 +670,8 @@ impl SessionManager {
                 id: transport,
                 control: control.clone(),
                 sender,
+                files,
+                file: None,
                 ready: false,
             });
         }
@@ -458,8 +709,15 @@ impl SessionManager {
             let transport = Uuid::now_v7();
             let control = PreparationControl::default();
             let (sender, mut commands) = mpsc::channel(COMMAND_QUEUE);
-            let requested =
-                self.register_attempt(session_id, transport, &control, sender, &mut intents)?;
+            let (file_sender, mut files) = mpsc::channel(FILE_QUEUE);
+            let requested = self.register_attempt(
+                session_id,
+                transport,
+                &control,
+                sender,
+                file_sender,
+                &mut intents,
+            )?;
             match requested {
                 Intent::Close => return Ok(()),
                 Intent::Stop | Intent::Fail => {
@@ -491,6 +749,7 @@ impl SessionManager {
                     transport,
                     &control,
                     &mut commands,
+                    &mut files,
                     &mut ready_for,
                     &emit,
                     &output,
@@ -599,6 +858,7 @@ impl SessionManager {
         transport: Uuid,
         control: &PreparationControl,
         commands: &mut mpsc::Receiver<TransportCommand>,
+        files: &mut mpsc::Receiver<FileCommand>,
         ready_for: &mut Option<Duration>,
         emit: &impl Fn(SessionEvent) -> Result<(), String>,
         output: &impl Fn(Uuid, Vec<u8>) -> Result<(), String>,
@@ -683,7 +943,16 @@ impl SessionManager {
                 ready_at = Some(Instant::now());
                 emit(SessionEvent::Ready { transport_id: transport.to_string() })
                     .map_err(AttemptError::Local)?;
-                stream_channel(&mut session, transport, commands, output).await?;
+                tokio::select! { biased;
+                    result = self.stream_with_file_expiry(
+                        session_id,
+                        transport,
+                        stream_channel(&mut session, transport, commands, output),
+                    ) => result?,
+                    _ = serve_files(self, &connection, files) => {
+                        return Err(AttemptError::Local("the file request channel closed unexpectedly".into()));
+                    }
+                }
             }
             Ok::<(), AttemptError>(())
         };
@@ -691,12 +960,61 @@ impl SessionManager {
             _ = control.cancelled() => Ok(()),
             result = operation => result,
         };
+        self.expire_ready_transport(session_id, transport).map_err(AttemptError::Local)?;
         *ready_for = ready_at.map(|started| started.elapsed());
         let _ = connection.close().await;
         result?;
         history
             .finish(RecentSessionOutcome::Closed)
             .map_err(|error| AttemptError::Local(error.to_string()))
+    }
+}
+
+async fn serve_files(
+    manager: &SessionManager,
+    connection: &crate::connection::SshConnection,
+    files: &mut mpsc::Receiver<FileCommand>,
+) {
+    while let Some(request) = files.recv().await {
+        match request {
+            FileCommand::List { path, mut reply } => {
+                tokio::select! { biased;
+                    _ = reply.closed() => {},
+                    result = session_files::list_directory(connection, path) => {
+                        let _ = reply.send(result.map_err(|error| error.to_string()));
+                    }
+                }
+            }
+            FileCommand::Download {
+                remote_path,
+                destination,
+                session_id,
+                transport,
+                operation,
+                mut reply,
+            } => {
+                let sessions = manager.sessions.clone();
+                tokio::select! { biased;
+                    _ = reply.closed() => {},
+                    result = session_files::download_file(connection, remote_path, &destination, move |temporary, destination| async move {
+                        tokio::task::spawn_blocking(move || {
+                            SessionManager::commit_download(
+                                &sessions,
+                                &session_id,
+                                transport,
+                                operation,
+                                &temporary,
+                                &destination,
+                            )
+                        })
+                        .await
+                        .map_err(|_| session_files::FileAccessError::LocalIo(std::io::Error::other("local file commit was interrupted")))?
+                    }) => {
+                        let _ = reply.send(result.map_err(|error| error.to_string()));
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -22,6 +22,12 @@ export const commands = {
 	sessionInput: (sessionId: string, transportId: string, data: number[]) => typedError<null, string>(__TAURI_INVOKE("session_input", { sessionId, transportId, data })),
 	/**  Resize the exact ready transport's pseudo-terminal. */
 	sessionResize: (sessionId: string, transportId: string, columns: number, rows: number) => typedError<null, string>(__TAURI_INVOKE("session_resize", { sessionId, transportId, columns, rows })),
+	/**  Browse files on the terminal's authenticated SSH connection. */
+	sessionListFiles: (sessionId: string, transportId: string, operationId: string, path: number[]) => typedError<RemoteDirectory, string>(__TAURI_INVOKE("session_list_files", { sessionId, transportId, operationId, path })),
+	/**  Download a regular remote file to a destination chosen in the native picker. */
+	sessionDownloadFile: (sessionId: string, transportId: string, operationId: string, remotePath: number[]) => typedError<boolean, string>(__TAURI_INVOKE("session_download_file", { sessionId, transportId, operationId, remotePath })),
+	/**  Stop only the matching SFTP operation, leaving the terminal connected. */
+	sessionCancelFileOperation: (sessionId: string, transportId: string, operationId: string) => typedError<null, string>(__TAURI_INVOKE("session_cancel_file_operation", { sessionId, transportId, operationId })),
 	/**  Begin an explicit reconnect with a fresh automatic retry budget. */
 	sessionRetryTransport: (sessionId: string) => typedError<null, string>(__TAURI_INVOKE("session_retry_transport", { sessionId })),
 	/**  Cancel preparation or back-off while preserving the terminal for manual retry. */
@@ -1389,6 +1395,33 @@ export type RecordType =
 "gatewayNetwork" |
 /**  A type a newer version of Scoplen defines. */
 "unknown";
+
+/**  One bounded listing from the current authenticated SSH connection. */
+export type RemoteDirectory = {
+	/**  Entries safe to render or submit using their opaque paths. */
+	entries: RemoteFileEntry[],
+};
+
+/**  One remote name keeps its original bytes apart from display text. */
+export type RemoteFileEntry = {
+	/**  Bounded display text; the original name remains in `path`. */
+	name: string,
+	/**  Opaque remote bytes used for subsequent file requests. */
+	path: number[],
+	/**  Entry type reported by the remote server. */
+	kind: RemoteFileKind,
+	/**  Decimal text preserves the full SFTP 64-bit size in JavaScript. */
+	sizeBytes: string | null,
+};
+
+/**  File types supported by the first session Files surface. */
+export type RemoteFileKind =
+/**  A regular file eligible for download. */
+"file" |
+/**  A directory eligible for browsing. */
+"directory" |
+/**  An unrecognized type, including symbolic links. */
+"other";
 
 /**
  *  A device-independent route definition. Managed routes are represented so
