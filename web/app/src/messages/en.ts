@@ -310,6 +310,21 @@ export const en = {
   "session.output": "Terminal output",
   "session.waiting": "Waiting for terminal output…",
   "session.trust.title": "Verify this host key",
+  "session.trust.reviewTitle": "Confirm this host key again",
+  "session.trust.revokedBody":
+    "The device that trusted this key has been revoked. Compare the fingerprint with a trusted source before confirming it on this device.",
+  "session.trust.unverifiedBody":
+    "This saved key has no verified source for automatic trust. Compare the fingerprint with a trusted source before confirming it on this device.",
+  "session.details.open": "Connection details",
+  "session.details.title": "Connection details",
+  "session.details.close": "Close details",
+  "session.details.source": "Trusted on",
+  "session.details.currentDevice": "This device",
+  "session.details.method": "Trust source",
+  "session.details.manual": "Manually confirmed",
+  "session.details.imported": "Imported from known_hosts",
+  "session.details.acceptedAt": "Recorded at",
+  "session.details.timeUnavailable": "Time not recorded",
   "session.trust.firstBody":
     "This is the first connection to this host. Compare the fingerprint with a trusted source before continuing.",
   "session.trust.changedTitle": "Host key changed",

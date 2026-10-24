@@ -112,12 +112,35 @@ function context(position = 1): PreparationContext {
     target: position === 3,
   };
 }
-function trust(position = 1, changed = false): PreparationEvent {
+function trust(position = 1, changed = false): Extract<PreparationEvent, { kind: "trust" }> {
   return {
     kind: "trust",
     context: context(position),
     promptId: `trust-${position}`,
-    hostKey: { algorithm: "ssh-ed25519", key: `public-${position}`, fingerprint: `SHA256:hop-${position}`, changed },
+    hostKey: {
+      algorithm: "ssh-ed25519",
+      key: `public-${position}`,
+      fingerprint: `SHA256:hop-${position}`,
+      changed,
+      review: null,
+      previousSource: null,
+    },
+  };
+}
+
+function verified(position = 1, imported = false): Extract<PreparationEvent, { kind: "verified" }> {
+  return {
+    kind: "verified",
+    context: context(position),
+    algorithm: "ssh-ed25519",
+    fingerprint: `SHA256:hop-${position}`,
+    source: {
+      deviceId: "other-device",
+      deviceName: "Office Mac",
+      acceptedAt: "1792800000000",
+      imported,
+      current: false,
+    },
   };
 }
 function passphrase(position = 1, incorrect = false): PreparationEvent {
@@ -314,6 +337,64 @@ it("accepts each hop's exact current prompt without renderer-supplied trust data
   await c.ready();
   expect(screen.getByRole("status").textContent).toContain("Connected");
 });
+
+it("shows each verified source and time without another prompt and fences old-attempt details", async () => {
+  const f = fixture();
+  const view = render(sessionView());
+  const c = await connect(f);
+  await c.prepare(verified(1));
+  await c.prepare(verified(2, true));
+  await c.ready();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(f.matching("session_respond")).toHaveLength(0);
+  await userEvent.click(screen.getByRole("button", { name: "Connection details" }));
+  expect(screen.getByRole("heading", { name: "Connection details" })).toBeTruthy();
+  expect(screen.getAllByText("Office Mac")).toHaveLength(2);
+  expect(screen.getByText("Manually confirmed")).toBeTruthy();
+  expect(screen.getByText("Imported from known_hosts")).toBeTruthy();
+  expect(view.baseElement.querySelector("time")?.getAttribute("datetime")).toBe(new Date(1792800000000).toISOString());
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Connection details" }));
+  await c.emit({ kind: "closed" });
+  await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  const next = await c.start();
+  await c.prepare(verified(3));
+  expect(screen.queryByRole("button", { name: "Connection details" })).toBeNull();
+  await next.prepare(verified(3));
+  await userEvent.click(screen.getByRole("button", { name: "Connection details" }));
+  expect(screen.getByText("SHA256:hop-3")).toBeTruthy();
+  expect(screen.queryByText("SHA256:hop-1")).toBeNull();
+});
+
+it.each(["revokedDevice", "unverifiedSource"] as const)(
+  "requires a fresh exact-key confirmation for %s",
+  async (review) => {
+    const f = fixture();
+    render(sessionView());
+    const c = await connect(f);
+    const prompt = trust();
+    prompt.hostKey.review = review;
+    prompt.hostKey.previousSource = review === "revokedDevice" ? verified().source : null;
+    await c.prepare(prompt);
+    expect(screen.getByRole("heading", { name: "Confirm this host key again" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Host key changed" })).toBeNull();
+    if (review === "revokedDevice") {
+      expect(screen.getByText("Office Mac")).toBeTruthy();
+      expect(screen.getByText(/The device that trusted this key has been revoked/)).toBeTruthy();
+    } else {
+      expect(screen.queryByText("Office Mac")).toBeNull();
+      expect(screen.getByText(/This saved key has no verified source/)).toBeTruthy();
+    }
+    expect(f.matching("session_respond")).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Trust and connect" }));
+    expect(f.matching("session_respond").at(-1)?.args).toEqual({
+      sessionId: c.sessionId,
+      promptId: "trust-1",
+      intent: { kind: "acceptHostKey" },
+    });
+  },
+);
 
 it("clears one-time passphrases, handles incorrect replies, and asks again on a fresh attempt", async () => {
   const f = fixture();

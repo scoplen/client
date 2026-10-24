@@ -47,6 +47,7 @@ impl Store {
         identity: &PersonalRecord,
         access: &SecretVec,
         snapshot: &PersonalAccountRecord,
+        expected_devices: Option<&[u8]>,
         now: u64,
     ) -> Result<bool, StoreError> {
         let queried_at =
@@ -63,12 +64,13 @@ impl Store {
                 AND enrollment_request IS ?10 AND paired_handoff IS ?13
                 AND EXISTS (SELECT 1 FROM device_key_pair WHERE singleton = 1 AND signing = ?11 AND kem = ?12)
              ON CONFLICT (singleton) DO UPDATE SET origin = excluded.origin, account_id = excluded.account_id,
-                queried_at = excluded.queried_at, profile = excluded.profile, devices = excluded.devices",
+                queried_at = excluded.queried_at, profile = excluded.profile, devices = excluded.devices
+             WHERE personal_account_snapshot.devices IS ?14",
             params![queried_at, snapshot.profile.as_bytes(), snapshot.devices.as_bytes(),
                 identity.auth_generation, access.as_bytes(), now.min(i64::MAX as u64) as i64,
                 identity.origin, identity.account_id.as_bytes().as_slice(), identity.private_material.as_bytes(),
                 identity.enrollment_request.as_ref().map(SecretVec::as_bytes), signing, kem,
-                identity.paired_handoff.as_ref().map(SecretVec::as_bytes)],
+                identity.paired_handoff.as_ref().map(SecretVec::as_bytes), expected_devices],
         )? == 1)
     }
 }

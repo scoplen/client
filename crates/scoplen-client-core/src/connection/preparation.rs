@@ -14,10 +14,12 @@ use specta::Type;
 use tokio::sync::{oneshot, watch};
 use uuid::Uuid;
 
+use super::trust::TrustPolicy;
 use super::{
-    ConnectionPlan, ConnectionRoute, HostKeyPresentation, HostKeyStatus,
-    MAX_PRIVATE_KEY_PASSPHRASE, SshConnection, SshConnectionError, evaluate_host_key,
-    private_key_passphrase_required, resolve_connection_plan, transport_route, validate_credential,
+    ConnectionPlan, ConnectionRoute, HostKeyPresentation, HostKeyReview, HostKeyStatus,
+    HostKeyTrustSource, MAX_PRIVATE_KEY_PASSPHRASE, SshConnection, SshConnectionError,
+    assess_host_key, private_key_passphrase_required, resolve_connection_plan, transport_route,
+    validate_credential,
 };
 use crate::repository::{
     AccessProfile, Change, Edit, Host, Provenance, Record, RecordError, Repository, TrustRecord,
@@ -63,6 +65,10 @@ pub struct PreparationHostKey {
     pub fingerprint: String,
     /// An active record exists but does not match.
     pub changed: bool,
+    /// A matching key needs review because its source is no longer trusted.
+    pub review: Option<HostKeyReview>,
+    /// Previously verified provenance, present only for an authenticated source.
+    pub previous_source: Option<HostKeyTrustSource>,
 }
 
 /// States emitted by the core, never inferred by the renderer.
@@ -79,6 +85,17 @@ pub enum PreparationPhase {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum PreparationEvent {
+    /// Trust resolved on the retained connection, before credentials are used.
+    Verified {
+        /// Current hop.
+        context: PreparationContext,
+        /// Presented algorithm.
+        algorithm: String,
+        /// Presented fingerprint.
+        fingerprint: String,
+        /// Verified origin of the trust used for this connection.
+        source: HostKeyTrustSource,
+    },
     /// No user response is expected.
     Progress {
         /// Current hop.
@@ -348,16 +365,23 @@ fn resolve_steps(store: &Store, target_id: Uuid) -> Result<Vec<Step>, String> {
 }
 
 fn accept_key(store: &Store, host: Uuid, key: &HostKeyPresentation) -> Result<(), String> {
+    let records = Repository::<TrustRecord>::new(store).list().map_err(|e| e.to_string())?;
+    let policy = TrustPolicy::load(store, &records)?;
+    let account = policy.acceptance_account();
     store
         .write_batch_with_snapshot::<RecordError>(TrustRecord::TYPE, |objects| {
             let records = objects.iter().map(TrustRecord::read).collect::<Result<Vec<_>, _>>()?;
-            if evaluate_host_key(host, &key.key, &key.fingerprint, &records)
-                == HostKeyStatus::Trusted
-            {
+            if policy.assess(host, key, &records).status == HostKeyStatus::Trusted {
                 return Ok(Vec::new());
             }
             let mut writes = Vec::new();
-            for record in records.iter().filter(|r| r.host == Some(host) && !r.revoked && !r.ca) {
+            for record in records.iter().filter(|r| {
+                r.host == Some(host)
+                    && !r.revoked
+                    && !r.ca
+                    && (r.key.as_deref() != Some(&key.key)
+                        || r.fingerprint.as_deref() != Some(&key.fingerprint))
+            }) {
                 writes.push(LocalWrite {
                     id: Some(record.meta.id),
                     object_type: TrustRecord::TYPE,
@@ -377,6 +401,8 @@ fn accept_key(store: &Store, host: Uuid, key: &HostKeyPresentation) -> Result<()
                     fingerprint: Edit::Set(key.fingerprint.clone()),
                     provenance: Some(Provenance::Manual),
                     accepted_at: Edit::Set(now),
+                    accepted_by_device: Edit::Set(store.device_id()),
+                    accepted_by_account: account.map_or(Edit::Keep, Edit::Set),
                     ..Default::default()
                 }
                 .into_writes()?,
@@ -423,9 +449,8 @@ pub async fn prepare_connection(
                 .map_err(|_| "host-key state is unavailable")?
                 .clone()
                 .ok_or("SSH server did not present a host key")?;
-            let records =
-                Repository::<TrustRecord>::new(store).list().map_err(|e| e.to_string())?;
-            let status = evaluate_host_key(step.plan.host_id, &key.key, &key.fingerprint, &records);
+            let assessment = assess_host_key(store, step.plan.host_id, &key)?;
+            let status = assessment.status;
             if status != HostKeyStatus::Trusted {
                 control
                     .prompt(
@@ -438,6 +463,8 @@ pub async fn prepare_connection(
                                 key: key.key.clone(),
                                 fingerprint: key.fingerprint.clone(),
                                 changed: status == HostKeyStatus::Changed,
+                                review: assessment.review,
+                                previous_source: assessment.source.clone(),
                             },
                         },
                         &emit,
@@ -445,6 +472,18 @@ pub async fn prepare_connection(
                     .await?;
                 control.active(|| accept_key(store, step.plan.host_id, &key))?;
             }
+            let confirmed = assess_host_key(store, step.plan.host_id, &key)?;
+            if confirmed.status != HostKeyStatus::Trusted {
+                return Err(
+                    "host-key trust changed during preparation; connect again to review it".into(),
+                );
+            }
+            emit(PreparationEvent::Verified {
+                context: step.context.clone(),
+                algorithm: key.algorithm,
+                fingerprint: key.fingerprint,
+                source: confirmed.source.ok_or("host-key provenance is unavailable")?,
+            })?;
             let connection = connections.0.last_mut().expect("current connection retained");
             let mut incorrect = false;
             loop {

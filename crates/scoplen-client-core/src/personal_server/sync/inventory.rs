@@ -472,7 +472,7 @@ impl SyncContext {
             if account != Some(self.identity.account_id)
                 || !self
                     .bootstrap
-                    .active_devices
+                    .known_devices
                     .iter()
                     .any(|active| Some(active.device_id) == device)
                 || !matches!(object.required_uint(5), Ok(1 | 2))

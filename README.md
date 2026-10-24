@@ -232,8 +232,14 @@ upload automatically. Recover selected edits works offline and creates fresh loc
 need a separate upload preview and confirmation. Original adoption copies remain separate.
 Failed snapshot downloads leave inventory and cursors unchanged. Concurrent server writes stop
 the pass safely; the next bounded cycle retries with a fresh session. Key rotation
-and the complete host-key trust replication policy remain later outcomes. Trust records with
-missing or unverified same-user provenance are retained locally and require review before sync.
+and shared/organization host-key trust policies remain later outcomes. Personal manual and
+known_hosts trust records replicate with verified same-account device provenance. SSH automatically
+uses confirmations from an active enrolled device and shows their source and recorded time in
+Connection details. A revoked source needs confirmation on this device unless another active
+device confirmed the same key. Verified revocations remain effective offline and cannot be
+removed by replaying an older signed active list. Missing or unverified provenance remains
+local and requires review before sync; wildcard-only records and bare CA/policy claims do not
+authorize raw host keys. A newly created trust record still needs explicit upload selection.
 
 ## What it does not do
 

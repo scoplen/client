@@ -16,7 +16,13 @@ import { Channel } from "@tauri-apps/api/core";
 import { Terminal, type TerminalSink, type TerminalSource } from "@scoplen/terminal/react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useI18n } from "./i18n";
-import { commands, type SessionEvent, type PreparationEvent, type PreparationContext } from "./ipc/bindings";
+import {
+  commands,
+  type SessionEvent,
+  type PreparationEvent,
+  type PreparationContext,
+  type HostKeyTrustSource,
+} from "./ipc/bindings";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
 
 export type SessionState =
@@ -59,6 +65,8 @@ export function SessionTerminal({
   const [error, setError] = useState<string | null>(null);
   const [hostPrompt, setHostPrompt] = useState<Extract<PreparationEvent, { kind: "trust" }> | null>(null);
   const hostKey = hostPrompt?.hostKey ?? null;
+  const [verified, setVerified] = useState<Array<Extract<PreparationEvent, { kind: "verified" }>>>([]);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [context, setContext] = useState<PreparationContext | null>(null);
   const [passphrasePrompt, setPassphrasePrompt] = useState<string | null>(null);
   const currentPrompt = useRef<string | null>(null);
@@ -157,6 +165,8 @@ export function SessionTerminal({
               setAutomatic(event.automatic);
               setRetry(null);
               setContext(null);
+              setVerified([]);
+              setDetailsOpen(false);
               setError(null);
               setState(event.automatic ? "reconnecting" : "connecting");
               break;
@@ -165,6 +175,13 @@ export function SessionTerminal({
               clearPreparation();
               const preparation = event.event;
               setContext(preparation.context);
+              if (preparation.kind === "verified") {
+                setVerified((current) => [
+                  ...current.filter((item) => item.context.position !== preparation.context.position),
+                  preparation,
+                ]);
+                break;
+              }
               setHostPrompt(preparation.kind === "trust" ? preparation : null);
               setPassphrasePrompt(preparation.kind === "passphrase" ? preparation.promptId : null);
               currentPrompt.current = preparation.kind === "progress" ? null : preparation.promptId;
@@ -449,7 +466,13 @@ export function SessionTerminal({
     state === "verifying"
       ? t("session.verifying")
       : state === "trusting"
-        ? t(hostKey?.changed ? "session.trust.changedTitle" : "session.firstConnection")
+        ? t(
+            hostKey?.changed
+              ? "session.trust.changedTitle"
+              : hostKey?.review
+                ? "session.trust.reviewTitle"
+                : "session.firstConnection",
+          )
         : state === "passphrase"
           ? t("session.passphrase.status")
           : state === "reconnecting"
@@ -485,6 +508,11 @@ export function SessionTerminal({
           </div>
         </div>
         <div className="flex shrink-0 items-center justify-end gap-1">
+          {verified.length ? (
+            <Button variant="ghost" onClick={() => setDetailsOpen(true)}>
+              {t("session.details.open")}
+            </Button>
+          ) : null}
           {automatic ? (
             <Button variant="ghost" onClick={() => interruptTransport(false, null)}>
               {t("session.reconnecting.stop")}
@@ -572,8 +600,22 @@ export function SessionTerminal({
         onOpenChange={(open) => {
           if (!open && active) cancelTrust();
         }}
-        title={hostKey?.changed ? t("session.trust.changedTitle") : t("session.trust.title")}
-        description={hostKey?.changed ? t("session.trust.changedBody") : t("session.trust.firstBody")}
+        title={
+          hostKey?.changed
+            ? t("session.trust.changedTitle")
+            : hostKey?.review
+              ? t("session.trust.reviewTitle")
+              : t("session.trust.title")
+        }
+        description={
+          hostKey?.changed
+            ? t("session.trust.changedBody")
+            : hostKey?.review === "revokedDevice"
+              ? t("session.trust.revokedBody")
+              : hostKey?.review
+                ? t("session.trust.unverifiedBody")
+                : t("session.trust.firstBody")
+        }
         closeLabel={t("session.trust.cancel")}
         mark={
           hostKey?.changed ? (
@@ -601,6 +643,7 @@ export function SessionTerminal({
         {hostKey ? (
           <div className="space-y-4 text-sm">
             {context ? <HopIdentity context={context} /> : null}
+            {hostKey.previousSource ? <TrustSourceDetails source={hostKey.previousSource} /> : null}
             <dl className="grid gap-3">
               <div>
                 <dt className="text-muted-foreground">{t("session.trust.algorithm")}</dt>
@@ -624,6 +667,32 @@ export function SessionTerminal({
             ) : null}
           </div>
         ) : null}
+      </Dialog>
+      <Dialog
+        open={active && detailsOpen}
+        onOpenChange={setDetailsOpen}
+        title={t("session.details.title")}
+        closeLabel={t("session.details.close")}
+        footer={null}
+      >
+        <div className="space-y-6">
+          {verified.map((hop) => (
+            <section key={hop.context.position} aria-label={hop.context.host}>
+              <HopIdentity context={hop.context} />
+              <dl className="mb-4 grid gap-3 text-sm">
+                <div>
+                  <dt className="text-muted-foreground">{t("session.trust.algorithm")}</dt>
+                  <dd className="m-0 mt-1 font-mono">{hop.algorithm}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">{t("session.trust.fingerprint")}</dt>
+                  <dd className="m-0 mt-1 break-all font-mono select-text">{hop.fingerprint}</dd>
+                </div>
+              </dl>
+              <TrustSourceDetails source={hop.source} />
+            </section>
+          ))}
+        </div>
       </Dialog>
       <Dialog
         open={active && passphrasePrompt !== null}
@@ -662,6 +731,38 @@ export function SessionTerminal({
         </form>
       </Dialog>
     </main>
+  );
+}
+
+function TrustSourceDetails({ source }: { source: HostKeyTrustSource }) {
+  const { t, locale } = useI18n();
+  return (
+    <dl className="grid gap-3 text-sm">
+      <div>
+        <dt className="text-muted-foreground">{t("session.details.source")}</dt>
+        <dd className="m-0 mt-1 break-words">
+          {source.current ? t("session.details.currentDevice") : (source.deviceName ?? source.deviceId)}
+        </dd>
+      </div>
+      <div>
+        <dt className="text-muted-foreground">{t("session.details.method")}</dt>
+        <dd className="m-0 mt-1">{t(source.imported ? "session.details.imported" : "session.details.manual")}</dd>
+      </div>
+      <div>
+        <dt className="text-muted-foreground">{t("session.details.acceptedAt")}</dt>
+        <dd className="m-0 mt-1">
+          {source.acceptedAt ? (
+            <time dateTime={new Date(Number(source.acceptedAt)).toISOString()}>
+              {new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(
+                new Date(Number(source.acceptedAt)),
+              )}
+            </time>
+          ) : (
+            t("session.details.timeUnavailable")
+          )}
+        </dd>
+      </div>
+    </dl>
   );
 }
 

@@ -33,6 +33,10 @@ pub(crate) struct InventorySnapshot {
 }
 
 impl Store {
+    pub(crate) fn object_vault(&self, id: Uuid) -> Result<Option<Uuid>, StoreError> {
+        object_vault(&self.conn(), id)
+    }
+
     /// Adopt only the confirmed selection. New local objects remain local until selected.
     pub(crate) fn adopt_personal_objects(
         &self,

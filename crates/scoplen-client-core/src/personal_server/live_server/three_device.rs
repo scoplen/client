@@ -11,7 +11,7 @@ pub(super) async fn verify(
     old_manager: &PersonalServer,
     old: Arc<Store>,
     paired: pairing::PairedDevice,
-) -> (PersonalAccountSnapshot, [Object; 2], String) {
+) -> (PersonalAccountSnapshot, [Object; 2], String, trust::Receipt) {
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
     let third_manager = PersonalServer {
         operation: Mutex::new(()),
@@ -62,6 +62,13 @@ pub(super) async fn verify(
                 .any(|device| { device.current && device.id == store.device_id().to_string() })
         );
     }
+
+    let trust = trust::verify([
+        (old_manager, &old),
+        (&paired.manager, &paired.store),
+        (&third_manager, &third),
+    ])
+    .await;
 
     // Independent hosts leave the existing exact three-version history scenario untouched.
     let original = host(&old, "Three-device merge host", "192.0.2.70");
@@ -186,14 +193,16 @@ pub(super) async fn verify(
     }
 
     let paired = paired.reopen();
+    trust::assert_offline(&paired.store, &trust);
     offline(&paired.store, &accounts[1], &expected, &saved[1]);
     assert_private(&paired.store, &private[1]);
     drop(third_manager);
     drop(third);
     let third = Store::open(&path, &key).expect("reopen encrypted third device offline");
+    trust::assert_offline(&third, &trust);
     offline(&third, &accounts[2], &expected, &saved[2]);
     assert_private(&third, &private[2]);
-    (accounts.into_iter().next().unwrap(), expected, saved[0].applied_cursor.clone())
+    (accounts.into_iter().next().unwrap(), expected, saved[0].applied_cursor.clone(), trust)
 }
 
 fn host(store: &Store, name: &str, address: &str) -> Object {

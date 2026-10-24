@@ -14,6 +14,7 @@ mod refresh;
 mod retained;
 mod sync;
 mod transport;
+pub(crate) mod trust;
 
 pub use account::{PersonalAccountDevice, PersonalAccountSnapshot};
 pub use background::{PersonalBackgroundStatus, PersonalSyncRuntime};

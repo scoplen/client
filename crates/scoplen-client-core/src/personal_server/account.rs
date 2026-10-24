@@ -183,9 +183,25 @@ impl PersonalServer {
         let expires_at = verified.expires_at();
         tokio::task::spawn_blocking(move || {
             let result = validate(&store, &pending, &snapshot)?;
+            let previous = store.personal_account_snapshot(&pending).map_err(storage)?;
+            if let Some(previous) = &previous {
+                let previous = AccountDeviceStatements::from_json(previous.devices.as_bytes())
+                    .map_err(invalid)?;
+                let next = AccountDeviceStatements::from_json(snapshot.devices.as_bytes())
+                    .map_err(invalid)?;
+                if !super::trust::preserves_revocations(&previous.revocations, &next.revocations) {
+                    return Err(PersonalServerError::InvalidAccountResponse);
+                }
+            }
             if expires_at <= now()?
                 || !store
-                    .save_personal_account_snapshot(&pending, &access, &snapshot, now()?)
+                    .save_personal_account_snapshot(
+                        &pending,
+                        &access,
+                        &snapshot,
+                        previous.as_ref().map(|previous| previous.devices.as_bytes()),
+                        now()?,
+                    )
                     .map_err(storage)?
             {
                 return Err(PersonalServerError::AuthenticationRequired);

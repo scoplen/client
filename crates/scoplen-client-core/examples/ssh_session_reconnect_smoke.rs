@@ -125,7 +125,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                         PreparationEvent::Passphrase { .. } => {
                             panic!("password fixture must not request a key passphrase")
                         }
-                        PreparationEvent::Progress { .. } => {}
+                        PreparationEvent::Progress { .. } | PreparationEvent::Verified { .. } => {}
                     },
                     SessionEvent::Ready { transport_id } => {
                         let count = ready.fetch_add(1, Ordering::SeqCst) + 1;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use super::super::evaluate_host_key;
 use super::*;
 use crate::repository::{
     AccessProfileChange, Credential, CredentialBinding, CredentialChange, CredentialKind,
@@ -258,6 +259,8 @@ async fn prompts_reject_wrong_kind_stale_duplicate_and_cross_attempt_responses()
                     key: "public".into(),
                     fingerprint: "SHA256:fixture".into(),
                     changed: false,
+                    review: None,
+                    previous_source: None,
                 },
             },
             &|event| {
@@ -312,6 +315,8 @@ async fn cancel_after_acceptance_blocks_trust_write_and_any_late_response() {
                     key: "public".into(),
                     fingerprint: "SHA256:fixture".into(),
                     changed: false,
+                    review: None,
+                    previous_source: None,
                 },
             },
             &|event| {
@@ -346,6 +351,8 @@ fn trust_rotation_is_atomic_and_only_trusts_the_selected_host_key() {
     accept_key(&store, host, &second).unwrap();
     let records = Repository::<TrustRecord>::new(&store).list().unwrap();
     assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|record| record.accepted_by_device == Some(store.device_id())));
+    assert!(records.iter().all(|record| record.accepted_by_account.is_none()));
     assert_eq!(records.iter().filter(|r| !r.revoked).count(), 1);
     assert_eq!(
         evaluate_host_key(host, &first.key, &first.fingerprint, &records),

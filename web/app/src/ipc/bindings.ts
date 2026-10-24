@@ -565,6 +565,27 @@ export type HostDetails = {
 	logins: LoginSummary[],
 } & HostSummary;
 
+/**  Why an otherwise matching saved key needs explicit confirmation. */
+export type HostKeyReview =
+/**  Its source device has a verified revocation. */
+"revokedDevice" |
+/**  Its provenance is unavailable or outside the supported Personal policy. */
+"unverifiedSource";
+
+/**  A local confirmation or provenance verified against signed Personal device statements. */
+export type HostKeyTrustSource = {
+	/**  Device identifier, absent only on older local-only confirmations. */
+	deviceId: string | null,
+	/**  Account-signed display name; local-only names are not invented. */
+	deviceName: string | null,
+	/**  Recorded confirmation time, in Unix milliseconds without precision loss. */
+	acceptedAt: string | null,
+	/**  This record originated from an OpenSSH known_hosts import. */
+	imported: boolean,
+	/**  The confirmation belongs to this installation. */
+	current: boolean,
+};
+
 /**  Which hosts to list. */
 export type HostSource =
 /**  Every live host. */
@@ -1220,6 +1241,16 @@ export type PreparationContext = {
 
 /**  Typed progress and current user intent requested by Rust. */
 export type PreparationEvent =
+/**  Trust resolved on the retained connection, before credentials are used. */
+{ kind: "verified";
+/**  Current hop. */
+context: PreparationContext;
+/**  Presented algorithm. */
+algorithm: string;
+/**  Presented fingerprint. */
+fingerprint: string;
+/**  Verified origin of the trust used for this connection. */
+source: HostKeyTrustSource } |
 /**  No user response is expected. */
 { kind: "progress";
 /**  Current hop. */
@@ -1253,6 +1284,10 @@ export type PreparationHostKey = {
 	fingerprint: string,
 	/**  An active record exists but does not match. */
 	changed: boolean,
+	/**  A matching key needs review because its source is no longer trusted. */
+	review: HostKeyReview | null,
+	/**  Previously verified provenance, present only for an authenticated source. */
+	previousSource: HostKeyTrustSource | null,
 };
 
 /**  States emitted by the core, never inferred by the renderer. */

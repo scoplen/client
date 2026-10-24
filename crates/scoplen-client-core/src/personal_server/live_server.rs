@@ -14,6 +14,7 @@ use crate::{personal_inventory::PersonalInventorySettings, store::LocalWrite};
 mod history;
 mod pairing;
 mod three_device;
+mod trust;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -260,10 +261,11 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
         pairing::verify(&deployment, &manager, reopened.clone(), object.id).await;
     let paired_host = reopened.get(object.id).expect("original-device synchronized host");
     let historical_copy = history::verify(&manager, reopened.clone(), &object).await;
-    let (paired_account, converged, cursor) =
+    let (paired_account, converged, cursor, trust) =
         three_device::verify(&deployment, &manager, reopened.clone(), paired).await;
     drop(reopened);
     let reopened = Store::open(&path, &key).expect("reopen original paired-account device");
+    trust::assert_offline(&reopened, &trust);
     assert!(
         offline.load_sync_bootstrap(&reopened).expect("original-device offline keys").is_some()
     );

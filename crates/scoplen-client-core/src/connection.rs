@@ -40,6 +40,10 @@ use crate::store::Store;
 mod agent;
 pub mod preparation;
 mod proxy_command;
+#[cfg(test)]
+pub(crate) mod test_peer;
+mod trust;
+pub use trust::{HostKeyAssessment, HostKeyReview, HostKeyTrustSource, assess_host_key};
 
 /// A resolved credential handed to the SSH adapter.
 ///
@@ -320,6 +324,8 @@ impl HostKeyPresentation {
 /// Wildcard patterns are intentionally ignored here until the C10 OpenSSH
 /// importer owns their matching semantics. A revoked record never authorizes a
 /// key. The caller must require explicit confirmation for `New` and `Changed`.
+/// This compares keys only; use [`assess_host_key`] for stored or synchronized
+/// records whose device provenance also needs verification.
 #[must_use]
 pub fn evaluate_host_key(
     host_id: Uuid,
@@ -596,12 +602,13 @@ pub fn terminal_size(columns: u32, rows: u32) -> Result<WindowChangeRequest, Ssh
 /// Host-key trust callback supplied by the client policy layer.
 pub type HostKeyTrust = Arc<dyn HostKeyVerifier + Send + Sync>;
 
-/// Verifies a presented host key against active device trust records.
+/// Verifies a presented host key against a preauthorized set of local trust records.
 ///
 /// The verifier compares the canonical SSH key blob and its OpenSSH SHA-256
 /// fingerprint. Revoked records, wildcard-only records, and CA records are
 /// not accepted by this direct-key slice. A missing or changed record remains
-/// fail-closed and must be handled by a future explicit trust workflow.
+/// fail-closed. This adapter does not verify account membership or provenance;
+/// production stored-inventory connections use [`preparation::prepare_connection`].
 #[derive(Clone, Debug)]
 pub struct StoredHostKeyVerifier {
     host_id: Uuid,
