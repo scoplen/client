@@ -38,6 +38,198 @@ fn ready_file_manager()
 }
 
 #[tokio::test]
+async fn upload_refuses_existing_target_without_atomic_replace_extension() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let local = tempfile::tempdir().unwrap();
+    let source = local.path().join("keep.bin");
+    std::fs::write(&source, b"new content").unwrap();
+    let confirmed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        let confirmed = confirmed.clone();
+        async move {
+            manager
+                .upload_file_with_picker(
+                    "terminal",
+                    &transport.to_string(),
+                    &Uuid::now_v7().to_string(),
+                    b".".to_vec(),
+                    || async { Ok(Some(source)) },
+                    move |_| async move {
+                        confirmed.store(true, Ordering::SeqCst);
+                        Ok(true)
+                    },
+                )
+                .await
+        }
+    });
+    let FileCommand::PreflightUpload { target, reply } = files.recv().await.unwrap() else {
+        panic!("expected upload preflight")
+    };
+    assert_eq!(target, b"./keep.bin");
+    reply
+        .send(Ok(UploadPreflight {
+            target_attributes: Some(scoplen_ssh::SftpAttributes {
+                permissions: Some(0o100600),
+                size: Some(3),
+                ..Default::default()
+            }),
+            replacement_supported: false,
+        }))
+        .unwrap();
+    let result = pending.await.unwrap().unwrap();
+    assert_eq!(result.status, SessionUploadStatus::Unsupported);
+    assert!(!result.staging_may_remain);
+    assert!(!confirmed.load(Ordering::SeqCst));
+    assert!(files.try_recv().is_err());
+    assert_eq!(std::fs::read(local.path().join("keep.bin")).unwrap(), b"new content");
+}
+
+#[tokio::test]
+async fn upload_publication_rejects_cancel_and_lost_worker_is_unknown() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let local = tempfile::tempdir().unwrap();
+    let source = local.path().join("upload.bin");
+    std::fs::write(&source, b"new content").unwrap();
+    let operation = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .upload_file_with_picker(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b".".to_vec(),
+                    || async { Ok(Some(source)) },
+                    |_| async { Ok(true) },
+                )
+                .await
+        }
+    });
+    let FileCommand::PreflightUpload { reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected upload preflight")
+    };
+    reply
+        .send(Ok(UploadPreflight { target_attributes: None, replacement_supported: false }))
+        .unwrap();
+    let FileCommand::Upload { state, reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected upload worker")
+    };
+    state.staging_may_remain.store(true, Ordering::SeqCst);
+    SessionManager::authorize_upload_publication(
+        &manager.sessions,
+        "terminal",
+        transport,
+        operation,
+    )
+    .unwrap();
+    assert!(
+        manager
+            .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+            .unwrap_err()
+            .contains("publication")
+    );
+    manager.expire_ready_transport("terminal", transport).unwrap();
+    drop(reply);
+    let result = pending.await.unwrap().unwrap();
+    assert_eq!(result.status, SessionUploadStatus::Unknown);
+    assert!(result.staging_may_remain);
+}
+
+#[tokio::test]
+async fn cancelled_upload_confirmation_cannot_queue_late_transfer() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let local = tempfile::tempdir().unwrap();
+    let source = local.path().join("existing.bin");
+    std::fs::write(&source, b"new content").unwrap();
+    let operation = Uuid::now_v7();
+    let (entered, waiting) = oneshot::channel();
+    let (confirm, decided) = oneshot::channel::<bool>();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .upload_file_with_picker(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b".".to_vec(),
+                    || async { Ok(Some(source)) },
+                    |_| async move {
+                        entered.send(()).unwrap();
+                        Ok(decided.await.unwrap())
+                    },
+                )
+                .await
+        }
+    });
+    let FileCommand::PreflightUpload { reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected upload preflight")
+    };
+    reply
+        .send(Ok(UploadPreflight {
+            target_attributes: Some(scoplen_ssh::SftpAttributes {
+                permissions: Some(0o100600),
+                ..Default::default()
+            }),
+            replacement_supported: true,
+        }))
+        .unwrap();
+    waiting.await.unwrap();
+    manager
+        .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+        .unwrap();
+    let result = pending.await.unwrap().unwrap();
+    assert_eq!(result.status, SessionUploadStatus::Cancelled);
+    assert!(!result.staging_may_remain);
+    assert!(confirm.send(true).is_err(), "late native answer must be ignored");
+    assert!(files.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn cancel_before_upload_publication_waits_for_worker_cleanup() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let local = tempfile::tempdir().unwrap();
+    let source = local.path().join("upload.bin");
+    std::fs::write(&source, b"new content").unwrap();
+    let operation = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .upload_file_with_picker(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b".".to_vec(),
+                    || async { Ok(Some(source)) },
+                    |_| async { Ok(true) },
+                )
+                .await
+        }
+    });
+    let FileCommand::PreflightUpload { reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected upload preflight")
+    };
+    reply
+        .send(Ok(UploadPreflight { target_attributes: None, replacement_supported: false }))
+        .unwrap();
+    let FileCommand::Upload { cancel, reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected upload worker")
+    };
+    manager
+        .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+        .unwrap();
+    assert!(*cancel.borrow());
+    assert!(!pending.is_finished(), "caller must wait for cleanup result");
+    manager.finish_upload("terminal", transport, operation);
+    reply.send(SessionUploadResult::new(SessionUploadStatus::Cancelled, None, false)).unwrap();
+    let result = pending.await.unwrap().unwrap();
+    assert_eq!(result.status, SessionUploadStatus::Cancelled);
+}
+
+#[tokio::test]
 async fn file_cancellation_and_refusal_preserve_terminal_and_allow_a_new_request() {
     let (manager, transport, mut commands, mut files) = ready_file_manager();
     let first = Uuid::now_v7();

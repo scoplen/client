@@ -43,6 +43,9 @@ rqrr = { version = "=0.11.0", default-features = false }
 png = { version = "=0.18.1", default-features = false }
 tokio-tungstenite = { version = "=0.30.0", default-features = false }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.190"
+
 [lints]
 workspace = true
 
