@@ -591,7 +591,8 @@ fn upload_name(name: &OsStr) -> Result<Vec<u8>, FileAccessError> {
     Ok(bytes)
 }
 
-/// Open the selected ordinary file once; its handle and declared size remain owned by Rust.
+/// Retain one ordinary source handle without following a final Unix link or Windows reparse point.
+/// Ancestors are resolved normally; retaining the handle does not exclude later writes.
 pub(crate) async fn open_upload_source(path: &Path) -> Result<UploadSource, FileAccessError> {
     let name = upload_name(path.file_name().ok_or(FileAccessError::InvalidSource)?)?;
     let initial =
@@ -599,25 +600,47 @@ pub(crate) async fn open_upload_source(path: &Path) -> Result<UploadSource, File
     if !initial.is_file() {
         return Err(FileAccessError::InvalidSource);
     }
-    #[cfg(unix)]
+    open_upload_source_after_preflight(path, name).await
+}
+
+async fn open_upload_source_after_preflight(
+    path: &Path,
+    name: Vec<u8>,
+) -> Result<UploadSource, FileAccessError> {
+    #[cfg(any(unix, windows))]
     let file = {
         let path = path.to_path_buf();
         let opened = tokio::task::spawn_blocking(move || {
-            std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
-                .open(path)
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+                const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+                options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            }
+            options.open(path)
         })
         .await
         .map_err(|_| FileAccessError::InvalidSource)?
         .map_err(FileAccessError::LocalSourceIo)?;
         File::from_std(opened)
     };
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     let file = File::open(path).await.map_err(FileAccessError::LocalSourceIo)?;
     let metadata = file.metadata().await.map_err(FileAccessError::LocalSourceIo)?;
     if !metadata.is_file() {
         return Err(FileAccessError::InvalidSource);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(FileAccessError::InvalidSource);
+        }
     }
     Ok(UploadSource { file, name, size: metadata.len(), modified: metadata.modified().ok() })
 }
@@ -1549,6 +1572,62 @@ mod tests {
     async fn directory_is_not_a_local_upload_source() {
         let folder = tempfile::tempdir().unwrap();
         let result = open_upload_source(folder.path()).await;
+        assert!(matches!(result, Err(FileAccessError::InvalidSource)));
+    }
+
+    #[tokio::test]
+    async fn ordinary_upload_source_keeps_its_handle_after_path_replacement() {
+        use tokio::io::AsyncReadExt as _;
+
+        let folder = tempfile::tempdir().unwrap();
+        let selected = folder.path().join("selected.txt");
+        std::fs::write(&selected, b"selected contents").unwrap();
+        let mut source = open_upload_source(&selected).await.unwrap();
+        assert_eq!(source.name, b"selected.txt");
+        assert_eq!(source.size, 17);
+        std::fs::rename(&selected, folder.path().join("original.txt")).unwrap();
+        std::fs::write(&selected, b"replacement contents").unwrap();
+
+        let mut contents = Vec::new();
+        source.file.read_to_end(&mut contents).await.unwrap();
+        assert_eq!(contents, b"selected contents");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_symlink_is_not_a_local_upload_source() {
+        use std::os::windows::fs::MetadataExt as _;
+
+        let folder = tempfile::tempdir().unwrap();
+        let target = folder.path().join("target.txt");
+        let selected = folder.path().join("selected.txt");
+        std::fs::write(&target, b"unselected contents").unwrap();
+        std::os::windows::fs::symlink_file(&target, &selected)
+            .expect("this Windows regression requires permission to create file symlinks");
+        let metadata = std::fs::symlink_metadata(&selected).unwrap();
+        assert!(metadata.file_type().is_symlink());
+        assert_ne!(metadata.file_attributes() & 0x400, 0);
+
+        let result = open_upload_source(&selected).await;
+        assert!(matches!(result, Err(FileAccessError::InvalidSource)));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn upload_source_replaced_with_symlink_after_preflight_is_rejected() {
+        let folder = tempfile::tempdir().unwrap();
+        let selected = folder.path().join("selected.txt");
+        let target = folder.path().join("unselected.txt");
+        std::fs::write(&selected, b"selected contents").unwrap();
+        std::fs::write(&target, b"unselected contents").unwrap();
+        let name = upload_name(selected.file_name().unwrap()).unwrap();
+        let initial = tokio::fs::symlink_metadata(&selected).await.unwrap();
+        assert!(initial.is_file(), "the selected source must pass the path preflight");
+        std::fs::remove_file(&selected).unwrap();
+        std::os::windows::fs::symlink_file(&target, &selected)
+            .expect("this Windows regression requires permission to create file symlinks");
+
+        let result = open_upload_source_after_preflight(&selected, name).await;
         assert!(matches!(result, Err(FileAccessError::InvalidSource)));
     }
 

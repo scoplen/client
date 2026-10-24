@@ -470,6 +470,23 @@ The Hosts source navigation remains available as a horizontally scrolling row
 when the window is narrower than the desktop sidebar breakpoint, including at
 the desktop window's minimum width.
 
+## Session upload sources
+
+The native picker supplies an upload path; Rust performs an ordinary-file preflight,
+opens it once and validates the resulting handle before reading. Unix retains
+`O_NOFOLLOW | O_NONBLOCK`. Windows uses `FILE_FLAG_OPEN_REPARSE_POINT` and rejects
+`FILE_ATTRIBUTE_REPARSE_POINT` on the opened handle as well as non-regular files.
+Replacing the final component with a link or reparse point after the path preflight
+therefore cannot admit its target as the upload source.
+
+This protects the final component only. Ancestor directories resolve normally,
+including ancestor links or reparse points; the preflight does not pin their identity
+or distinguish an ordinary-file replacement before opening. Once admitted, the
+retained handle prevents later path replacements from redirecting reads. It does not
+exclude writers or provide an immutable snapshot. Existing size and modification-time
+checks can detect some changes while queued or transferring, but edits preserving
+the compared metadata can escape them, and writes can race later checks.
+
 ## Session download checkpoints
 
 The Rust session transfer queue owns selected resources and paused download checkpoints.
