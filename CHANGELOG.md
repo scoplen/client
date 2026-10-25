@@ -4,12 +4,21 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added saved Dynamic SOCKS4/4a/5 CONNECT tunnels alongside Local TCP tunnels, with
+  explicit Login and numeric bind selection, remote hostname resolution, fixed
+  running configuration and application-only traffic counts. Negotiation, channel
+  opening and copying share bounded peer capacity; an absolute handshake deadline
+  prevents fragmented input from renewing negotiation. The editor and running view
+  explain the unauthenticated proxy's access, and Dynamic saves clear fixed targets.
+  Stop, SSH loss, store replacement and exit use the existing forwarding lifecycle.
+  Local and Dynamic share run limits; Remote, Unix-socket and ad-hoc modes remain open.
+
 - Added saved local TCP tunnels with explicit Login selection and independent
   Start/Stop, host-key and authentication preparation, fixed running configuration,
   bounded concurrent peers, half-close and traffic snapshots. Tunnels keep running
   across view changes and release their listener and SSH route on Stop, application
-  exit or local-store replacement. Failed runs require a new Start. Other forwarding
-  kinds and automatic startup remain incomplete.
+  exit or local-store replacement. Failed runs require a new Start. Automatic startup
+  remains incomplete.
 
 - Added an opt-in Personal process-restart integration check using two real consumer processes,
   the platform secret provider and one owned encrypted data directory. It waits for the genuine

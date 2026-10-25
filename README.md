@@ -91,21 +91,26 @@ Interactive SSH sessions become ready after authentication and shell setup,
 even when the server sends no initial output. Terminal input and PTY resizing
 are available without waiting for a welcome message or prompt.
 
-Tunnels manages saved local TCP forwards independently of terminal tabs. Add a
-definition with a numeric local IPv4 or IPv6 address, nonzero local and destination
-ports, and a destination hostname or address. New definitions use `127.0.0.1`;
-choosing another listening address may let other devices use the tunnel. Choose
-Start and an existing Login, then complete its ordinary host-key, key-passphrase
-or Interactive review. The tunnel opens no terminal or shell. The SSH server
-resolves the destination hostname.
+Tunnels manages saved Local TCP and Dynamic SOCKS forwards independently of terminal
+tabs. Add a definition with a numeric local IPv4 or IPv6 address and a nonzero local
+port. Local also needs a destination hostname or address and nonzero destination
+port; Dynamic takes each destination from SOCKS4/4a or SOCKS5 CONNECT. New definitions
+use `127.0.0.1`. Dynamic provides no SOCKS authentication: devices able to reach its
+listener can request destinations through the selected SSH connection. Review that
+access before choosing a non-loopback listening address. Choose Start and an existing
+Login, then complete its ordinary host-key, key-passphrase or Interactive review.
+The tunnel opens no terminal or shell. The SSH server resolves destination hostnames.
 
 Running tunnels show their fixed configuration, connection count and traffic.
 Leaving Tunnels keeps them running; editing or deleting a saved definition does
 not change an existing run. Stop closes its listener, peers and SSH route. At most
-16 tunnels and 32 peers per tunnel run at once. A failed run requires an explicit
-new Start; tunnels do not reconnect or start automatically. Application exit or
-local-store replacement stops every run. Remote, dynamic, Unix-socket and ad-hoc
-forwarding remain incomplete.
+16 tunnels and 32 peers per tunnel run at once, including SOCKS negotiation and
+channel opening. Dynamic negotiation has an absolute 15-second deadline; channel
+opening and the final SOCKS response each have their own 15-second deadline. Traffic
+counts include only application bytes successfully written, excluding SOCKS messages.
+A failed run requires an explicit new Start; tunnels do not reconnect or start
+automatically. Application exit or local-store replacement stops every run. Remote,
+Unix-socket and ad-hoc forwarding remain incomplete.
 
 A connected terminal's Files button opens an SFTP browser on that terminal's
 authenticated SSH connection. It starts in the server's initial SFTP directory,
@@ -414,6 +419,15 @@ encrypted-key, Interactive and Jump preparation, concurrent binary streams, half
 exact traffic counts, refusal, cancellation and SSH loss while another terminal stays
 usable. It requires PowerShell 7, Docker and `ssh-keygen`. Successful runs remove their
 owned resources; failed runs retain private diagnostics and stop their owned container.
+
+`scripts/test-ssh-dynamic-forward.ps1` checks saved SOCKS4a/5 tunnels through Direct
+and Jump routes against disposable OpenSSH listeners with session channels disabled.
+It verifies literal destination names and server-side resolution, concurrent binary
+streams with coalesced application bytes, half-close, application-only counters,
+refusals, the absolute handshake deadline and cleanup during negotiation, channel
+opening and copying. Saved edits/deletion leave the running configuration fixed;
+an independent terminal remains usable. It uses the same prerequisites and fixture
+retention rules as the Local check.
 
 With PowerShell 7, Docker, and `ssh-keygen` available, `scripts/test-ssh-private-key.ps1`
 starts disposable OpenSSH servers and verifies Ed25519, P-256/P-384/P-521, and RSA key
