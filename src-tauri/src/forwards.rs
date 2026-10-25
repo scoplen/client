@@ -18,7 +18,7 @@ pub struct ForwardChanged {
     pub snapshot: ForwardSnapshot,
 }
 
-/// Start a saved Local tunnel using the explicitly selected Login.
+/// Start a saved Local or Dynamic tunnel using the explicitly selected Login.
 #[tauri::command]
 #[specta::specta]
 pub async fn forward_start(

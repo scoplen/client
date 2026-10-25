@@ -396,3 +396,33 @@ fn deleted_records_disappear_and_a_later_change_restores_them() {
     assert!(restored.meta.restored);
     assert_eq!(hosts.list().unwrap().len(), 1);
 }
+
+#[test]
+fn dynamic_forward_projection_ignores_irrelevant_fixed_target_fields_without_rewriting_them() {
+    let (_dir, store) = store();
+    let forward = Repository::<Forward>::new(&store)
+        .create(ForwardChange {
+            name: Some("SOCKS".into()),
+            kind: Some(ForwardKind::Dynamic),
+            bind_address: Edit::Set("127.0.0.1".into()),
+            bind_port: Edit::Set(1080),
+            ..Default::default()
+        })
+        .unwrap();
+    store
+        .write(LocalWrite {
+            id: Some(forward.meta.id),
+            object_type: ObjectType::FORWARD,
+            fields: vec![
+                (FieldPath::Field(5), Value::Text("unused.example".into())),
+                (FieldPath::Field(6), Value::UInt(65536)),
+            ],
+        })
+        .unwrap();
+    let raw = store.get(forward.meta.id).unwrap().unwrap();
+    let projected = Repository::<Forward>::new(&store).get(forward.meta.id).unwrap().unwrap();
+    assert_eq!(projected.target_host, None);
+    assert_eq!(projected.target_port, None);
+    assert_eq!(store.get(forward.meta.id).unwrap().unwrap(), raw);
+    assert_eq!(raw.field(6).unwrap().value, Value::UInt(65536));
+}

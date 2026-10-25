@@ -15,7 +15,9 @@ use std::{
 
 use scoplen_client_core::{
     connection::preparation::{PreparationEvent, PreparationResponse},
-    forward_manager::{ForwardIssue, ForwardManager, ForwardPhase, ForwardSnapshot},
+    forward_manager::{
+        ForwardConfiguration, ForwardIssue, ForwardManager, ForwardPhase, ForwardSnapshot,
+    },
     inventory::{Inventory, NewHost, SignIn},
     repository::{
         AccessProfile, AccessProfileChange, Edit, Forward, ForwardChange, ForwardKind, Repository,
@@ -192,7 +194,11 @@ impl Fixture {
         )?;
         assert_eq!(initial.phase, ForwardPhase::Preparing);
         assert!(initial.bound_address.is_none());
-        assert_eq!(initial.configuration.target_host, "scoplen-forward-target.invalid");
+        assert!(matches!(
+            &initial.configuration,
+            ForwardConfiguration::Local { target_host, .. }
+                if target_host == "scoplen-forward-target.invalid"
+        ));
         Ok(Running { id: initial.run_id, forward, port, updates })
     }
 
@@ -347,7 +353,10 @@ async fn exercise(
     Repository::<Forward>::new(&fixture.store)
         .update(run.forward, ForwardChange { target_port: Edit::Set(1), ..Default::default() })?;
     Repository::<Forward>::new(&fixture.store).delete(run.forward)?;
-    assert_eq!(fixture.manager.snapshot(&fixture.store, &run.id)?.configuration.target_port, 2300);
+    assert!(matches!(
+        fixture.manager.snapshot(&fixture.store, &run.id)?.configuration,
+        ForwardConfiguration::Local { target_port: 2300, .. }
+    ));
     let after_delete = b"saved snapshot remains live\0\xff";
     echo(run.port, after_delete).await?;
     let final_counts = fixture.stop(&run).await?;

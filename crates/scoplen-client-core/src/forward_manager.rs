@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Explicit local TCP tunnels with Rust-owned preparation, listeners and peer lifetimes.
+//! Explicit TCP and SOCKS tunnels with Rust-owned preparation, listeners and peer lifetimes.
 
 use std::{
     collections::BTreeMap,
@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-use scoplen_ssh::ClientError;
+use scoplen_ssh::{ClientChannel, ClientError, SocksReply};
 use serde::Serialize;
 use specta::Type;
 use tokio::{
@@ -36,9 +36,11 @@ use crate::{
     store::Store,
 };
 
+mod socks;
+
 /// Maximum live tunnels, including preparation and shutdown.
 pub const MAX_RUNNING_FORWARDS: usize = 16;
-/// Maximum accepted peers, including pending SSH channel opens, in each tunnel.
+/// Maximum accepted peers, including SOCKS negotiation and pending SSH channel opens.
 pub const MAX_FORWARD_PEERS: usize = 32;
 /// Maximum retained completed tunnel snapshots.
 pub const MAX_COMPLETED_FORWARDS: usize = 32;
@@ -49,24 +51,67 @@ const COPY_BUFFER: usize = 32 * 1024;
 
 /// Immutable saved endpoints selected for one explicit execution.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct LocalForwardConfiguration {
-    /// Saved Forward identity, never a renderer-selected destination override.
-    pub forward_id: String,
-    /// Saved display label.
-    pub name: String,
-    /// Explicitly selected existing Login.
-    pub profile_id: String,
-    /// Target Login and Host identity from the same immutable preparation plan.
-    pub login: PreparationContext,
-    /// Exact saved IPv4 or IPv6 listening address.
-    pub bind_address: String,
-    /// Exact nonzero saved local port.
-    pub bind_port: u16,
-    /// Exact remote target, resolved by the authenticated SSH server.
-    pub target_host: String,
-    /// Exact nonzero remote target port.
-    pub target_port: u16,
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum ForwardConfiguration {
+    /// A fixed TCP destination reached through the selected Login.
+    Local {
+        /// Saved Forward identity.
+        forward_id: String,
+        /// Saved display label.
+        name: String,
+        /// Explicitly selected existing Login.
+        profile_id: String,
+        /// Login identity from the immutable preparation plan.
+        login: PreparationContext,
+        /// Exact saved IPv4 or IPv6 listening address.
+        bind_address: String,
+        /// Exact nonzero saved local port.
+        bind_port: u16,
+        /// Exact remote target, resolved by the SSH server.
+        target_host: String,
+        /// Exact nonzero remote target port.
+        target_port: u16,
+    },
+    /// An unauthenticated SOCKS4/4a/5 CONNECT proxy through the selected Login.
+    Dynamic {
+        /// Saved Forward identity.
+        forward_id: String,
+        /// Saved display label.
+        name: String,
+        /// Explicitly selected existing Login.
+        profile_id: String,
+        /// Login identity from the immutable preparation plan.
+        login: PreparationContext,
+        /// Exact saved IPv4 or IPv6 listening address.
+        bind_address: String,
+        /// Exact nonzero saved local port.
+        bind_port: u16,
+    },
+}
+
+impl ForwardConfiguration {
+    /// The saved definition that owns this execution.
+    #[must_use]
+    pub fn forward_id(&self) -> &str {
+        match self {
+            Self::Local { forward_id, .. } | Self::Dynamic { forward_id, .. } => forward_id,
+        }
+    }
+
+    /// The fixed readable Login identity for this execution.
+    #[must_use]
+    pub fn login(&self) -> &PreparationContext {
+        match self {
+            Self::Local { login, .. } | Self::Dynamic { login, .. } => login,
+        }
+    }
+
+    fn bind(&self) -> (&str, u16) {
+        match self {
+            Self::Local { bind_address, bind_port, .. }
+            | Self::Dynamic { bind_address, bind_port, .. } => (bind_address, *bind_port),
+        }
+    }
 }
 
 /// State of an independent tunnel, never inferred from an open terminal.
@@ -95,15 +140,15 @@ impl ForwardPhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 pub enum ForwardIssue {
-    /// Saved fields or identifiers are invalid for this local TCP outcome.
-    #[error("save valid local tunnel endpoints and select a Login")]
+    /// Saved fields or identifiers are invalid for this tunnel mode.
+    #[error("save valid tunnel endpoints and select a Login")]
     InvalidConfiguration,
     /// The saved tunnel or selected Login no longer exists.
     #[error("the saved tunnel or Login is no longer available")]
     NotFound,
-    /// Remote and dynamic definitions cannot execute as local TCP forwards.
-    #[error("select a local TCP tunnel")]
-    NotLocal,
+    /// This definition's kind is not an independently executable tunnel mode.
+    #[error("select a local TCP or dynamic SOCKS tunnel")]
+    UnsupportedKind,
     /// That saved definition already owns a live execution.
     #[error("this tunnel is already running or stopping")]
     AlreadyRunning,
@@ -131,6 +176,12 @@ pub enum ForwardIssue {
     /// One accepted peer's target channel did not open within its budget.
     #[error("a target connection timed out")]
     TargetTimedOut,
+    /// One peer sent an invalid or unsupported SOCKS negotiation.
+    #[error("a SOCKS connection was rejected")]
+    HandshakeRejected,
+    /// One peer did not finish SOCKS negotiation within its complete budget.
+    #[error("a SOCKS connection did not finish negotiation in time")]
+    HandshakeTimedOut,
     /// An excess accepted socket was closed without opening an SSH channel.
     #[error("the tunnel has reached its connection limit")]
     PeerLimitReached,
@@ -149,14 +200,14 @@ pub struct ForwardSnapshot {
     /// Fresh execution identity; an earlier run can never control a later one.
     pub run_id: String,
     /// Immutable saved forwarding configuration.
-    pub configuration: LocalForwardConfiguration,
+    pub configuration: ForwardConfiguration,
     /// Current Rust-owned phase.
     pub phase: ForwardPhase,
     /// Latest preparation state, including any current one-use prompt.
     pub preparation: Option<PreparationEvent>,
     /// Actual bound socket, present only after successful listener admission.
     pub bound_address: Option<String>,
-    /// Accepted and opening peers, bounded by `MAX_FORWARD_PEERS`.
+    /// Negotiating, opening and copying peers, bounded by `MAX_FORWARD_PEERS`.
     pub active_connections: u32,
     /// Bytes successfully written toward the SSH target.
     pub uploaded_bytes: String,
@@ -179,7 +230,7 @@ struct State {
 
 struct Run {
     store: Weak<Store>,
-    configuration: LocalForwardConfiguration,
+    configuration: ForwardConfiguration,
     state: Mutex<State>,
     control: PreparationControl,
     stop: watch::Sender<bool>,
@@ -254,7 +305,7 @@ impl Run {
     }
 }
 
-/// Owns independent local TCP executions even when the observing interface detaches.
+/// Owns independent Local TCP and Dynamic SOCKS runs when the observing interface detaches.
 #[derive(Clone, Default)]
 pub struct ForwardManager {
     registry: Arc<Mutex<Registry>>,
@@ -267,7 +318,7 @@ struct Registry {
 }
 
 impl ForwardManager {
-    /// Validate and snapshot a saved local Forward, then spawn its independent owner.
+    /// Validate and snapshot a saved Local or Dynamic Forward, then spawn its owner.
     ///
     /// The observer is optional notification only: losing a renderer never stops a tunnel.
     /// `list` and `snapshot` retain pending preparation prompts for a new observer.
@@ -288,7 +339,7 @@ impl ForwardManager {
         for run in registry.runs.values() {
             let snapshot = run.snapshot()?;
             if snapshot.phase.live()
-                && snapshot.configuration.forward_id == configuration.forward_id
+                && snapshot.configuration.forward_id() == configuration.forward_id()
             {
                 return Err(ForwardIssue::AlreadyRunning);
             }
@@ -476,16 +527,39 @@ fn saved_configuration(
     store: &Store,
     forward_id: &str,
     profile_id: &str,
-) -> Result<(LocalForwardConfiguration, PreparationPlan), ForwardIssue> {
+) -> Result<(ForwardConfiguration, PreparationPlan), ForwardIssue> {
     let forward = Uuid::parse_str(forward_id).map_err(|_| ForwardIssue::InvalidConfiguration)?;
     let profile = Uuid::parse_str(profile_id).map_err(|_| ForwardIssue::InvalidConfiguration)?;
     let forward = Repository::<Forward>::new(store)
         .get(forward)
         .map_err(|_| ForwardIssue::Unavailable)?
         .ok_or(ForwardIssue::NotFound)?;
-    if forward.kind != ForwardKind::Local {
-        return Err(ForwardIssue::NotLocal);
+    if forward.kind == ForwardKind::Remote {
+        return Err(ForwardIssue::UnsupportedKind);
     }
+    let bind_address = forward.bind_address.ok_or(ForwardIssue::InvalidConfiguration)?;
+    let bind_port = forward.bind_port.ok_or(ForwardIssue::InvalidConfiguration)?;
+    if forward.name.trim().is_empty()
+        || forward.name.len() > scoplen_model::MAX_TEXT_BYTES
+        || bind_address.parse::<IpAddr>().is_err()
+        || bind_port == 0
+    {
+        return Err(ForwardIssue::InvalidConfiguration);
+    }
+    let target = if forward.kind == ForwardKind::Local {
+        let host = forward.target_host.ok_or(ForwardIssue::InvalidConfiguration)?;
+        let port = forward.target_port.ok_or(ForwardIssue::InvalidConfiguration)?;
+        if port == 0
+            || host.is_empty()
+            || host.len() > 1024
+            || host.chars().any(|c| c.is_control() || c.is_whitespace())
+        {
+            return Err(ForwardIssue::InvalidConfiguration);
+        }
+        Some((host, port))
+    } else {
+        None
+    };
     if Repository::<AccessProfile>::new(store)
         .get(profile)
         .map_err(|_| ForwardIssue::Unavailable)?
@@ -495,33 +569,27 @@ fn saved_configuration(
     }
     let plan =
         resolve_preparation_plan(store, profile).map_err(|_| ForwardIssue::PreparationFailed)?;
-    let configuration = LocalForwardConfiguration {
-        forward_id: forward.meta.id.to_string(),
-        name: forward.name,
-        profile_id: profile.to_string(),
-        login: plan.target_context().clone(),
-        bind_address: forward.bind_address.ok_or(ForwardIssue::InvalidConfiguration)?,
-        bind_port: forward.bind_port.ok_or(ForwardIssue::InvalidConfiguration)?,
-        target_host: forward.target_host.ok_or(ForwardIssue::InvalidConfiguration)?,
-        target_port: forward.target_port.ok_or(ForwardIssue::InvalidConfiguration)?,
+    let configuration = match target {
+        Some((target_host, target_port)) => ForwardConfiguration::Local {
+            forward_id: forward.meta.id.to_string(),
+            name: forward.name,
+            profile_id: profile.to_string(),
+            login: plan.target_context().clone(),
+            bind_address,
+            bind_port,
+            target_host,
+            target_port,
+        },
+        None => ForwardConfiguration::Dynamic {
+            forward_id: forward.meta.id.to_string(),
+            name: forward.name,
+            profile_id: profile.to_string(),
+            login: plan.target_context().clone(),
+            bind_address,
+            bind_port,
+        },
     };
-    validate_configuration(&configuration)?;
     Ok((configuration, plan))
-}
-
-fn validate_configuration(configuration: &LocalForwardConfiguration) -> Result<(), ForwardIssue> {
-    if configuration.name.trim().is_empty()
-        || configuration.name.len() > scoplen_model::MAX_TEXT_BYTES
-        || configuration.bind_address.parse::<IpAddr>().is_err()
-        || configuration.bind_port == 0
-        || configuration.target_port == 0
-        || configuration.target_host.is_empty()
-        || configuration.target_host.len() > 1024
-        || configuration.target_host.chars().any(|c| c.is_control() || c.is_whitespace())
-    {
-        return Err(ForwardIssue::InvalidConfiguration);
-    }
-    Ok(())
 }
 
 async fn execute(
@@ -585,10 +653,15 @@ async fn settle_preparation(
 enum Activity {
     Stop,
     Accepted(std::io::Result<(TcpStream, SocketAddr)>),
-    Peer(Option<Result<Result<(), ForwardIssue>, tokio::task::JoinError>>),
+    Peer(Option<Result<Result<PeerOutcome, ForwardIssue>, tokio::task::JoinError>>),
     Disconnected,
     UnexpectedChannel(scoplen_ssh::ForwardedChannel),
     Publish,
+}
+
+enum PeerOutcome {
+    Complete,
+    Negotiated(Box<socks::NegotiatedPeer>),
 }
 
 async fn serve(
@@ -599,9 +672,10 @@ async fn serve(
     if *stop.borrow() {
         return Ok(());
     }
+    let (bind_address, bind_port) = run.configuration.bind();
     let address = SocketAddr::new(
-        run.configuration.bind_address.parse().map_err(|_| ForwardIssue::InvalidConfiguration)?,
-        run.configuration.bind_port,
+        bind_address.parse().map_err(|_| ForwardIssue::InvalidConfiguration)?,
+        bind_port,
     );
     let listener = TcpListener::bind(address).await.map_err(|_| ForwardIssue::ListenFailed)?;
     if *stop.borrow() {
@@ -643,6 +717,16 @@ async fn serve(
             }
             Activity::Peer(Some(Ok(Err(issue)))) => run.peer_failed(issue),
             Activity::Peer(Some(Err(_))) => break Err(ForwardIssue::PeerIo),
+            Activity::Peer(Some(Ok(Ok(PeerOutcome::Negotiated(peer))))) => {
+                if *stop.borrow() {
+                    drop(peer);
+                    break Ok(());
+                }
+                let connection = connection.clone();
+                peers.spawn(async move {
+                    socks::forward(*peer, connection).await.map(|()| PeerOutcome::Complete)
+                });
+            }
             Activity::Peer(_) => {}
             Activity::Publish => {
                 run.update(|_| {});
@@ -660,7 +744,20 @@ async fn serve(
                     continue;
                 }
                 run.active.fetch_add(1, Ordering::AcqRel);
-                peers.spawn(peer(PeerLease(run.clone()), connection.clone(), socket, origin));
+                let lease = PeerLease(run.clone());
+                match &run.configuration {
+                    ForwardConfiguration::Local { .. } => {
+                        peers.spawn(peer(lease, connection.clone(), socket, origin));
+                    }
+                    ForwardConfiguration::Dynamic { .. } => {
+                        let deadline = tokio::time::Instant::now() + socks::HANDSHAKE_TIMEOUT;
+                        peers.spawn(async move {
+                            socks::negotiate(lease, socket, origin, deadline)
+                                .await
+                                .map(|peer| PeerOutcome::Negotiated(Box::new(peer)))
+                        });
+                    }
+                }
             }
         }
     };
@@ -701,33 +798,88 @@ async fn peer(
     connection: Arc<SshConnection>,
     socket: TcpStream,
     origin: SocketAddr,
-) -> Result<(), ForwardIssue> {
+) -> Result<PeerOutcome, ForwardIssue> {
     let run = &lease.0;
-    let client = connection.authenticated_connection().map_err(|_| ForwardIssue::ConnectionLost)?;
-    let channel = match tokio::time::timeout(
+    if *run.stop.borrow() {
+        return Ok(PeerOutcome::Complete);
+    }
+    let ForwardConfiguration::Local { target_host, target_port, .. } = &run.configuration else {
+        return Err(ForwardIssue::InvalidConfiguration);
+    };
+    let channel = open_channel(&connection, target_host, *target_port, origin)
+        .await
+        .map_err(|failure| failure.issue)?;
+    drop(connection);
+    copy_peer(run, socket, channel, Vec::new()).await?;
+    Ok(PeerOutcome::Complete)
+}
+
+struct OpenFailure {
+    issue: ForwardIssue,
+    reply: SocksReply,
+}
+
+async fn open_channel(
+    connection: &SshConnection,
+    host: &str,
+    port: u16,
+    origin: SocketAddr,
+) -> Result<ClientChannel, OpenFailure> {
+    let client = connection.authenticated_connection().map_err(|_| OpenFailure {
+        issue: ForwardIssue::ConnectionLost,
+        reply: SocksReply::GeneralFailure,
+    })?;
+    match tokio::time::timeout(
         OPEN_TIMEOUT,
         client.open_direct_tcpip(
-            &run.configuration.target_host,
-            u32::from(run.configuration.target_port),
+            host,
+            u32::from(port),
             &origin.ip().to_string(),
             u32::from(origin.port()),
         ),
     )
     .await
     {
-        Ok(Ok(channel)) => channel,
-        Ok(Err(ClientError::ConnectionClosed | ClientError::NetworkLost)) => {
-            return Err(ForwardIssue::ConnectionLost);
+        Ok(Ok(channel)) => Ok(channel),
+        Ok(Err(ClientError::ConnectionClosed | ClientError::NetworkLost)) => Err(OpenFailure {
+            issue: ForwardIssue::ConnectionLost,
+            reply: SocksReply::GeneralFailure,
+        }),
+        Ok(Err(error)) => {
+            let reply = match error {
+                ClientError::ChannelOpen { code: 1, .. } | ClientError::NotAuthenticated => {
+                    SocksReply::ConnectionNotAllowed
+                }
+                ClientError::ChannelOpen { code: 2, .. } => SocksReply::ConnectionRefused,
+                ClientError::ChannelOpen { code: 3, .. } => SocksReply::CommandNotSupported,
+                ClientError::Transport(error) => match error.kind() {
+                    std::io::ErrorKind::ConnectionRefused => SocksReply::ConnectionRefused,
+                    std::io::ErrorKind::HostUnreachable => SocksReply::HostUnreachable,
+                    std::io::ErrorKind::NetworkUnreachable => SocksReply::NetworkUnreachable,
+                    _ => SocksReply::GeneralFailure,
+                },
+                _ => SocksReply::GeneralFailure,
+            };
+            Err(OpenFailure { issue: ForwardIssue::TargetRejected, reply })
         }
-        Ok(Err(_)) => return Err(ForwardIssue::TargetRejected),
-        Err(_) => return Err(ForwardIssue::TargetTimedOut),
-    };
-    drop(connection);
+        Err(_) => Err(OpenFailure {
+            issue: ForwardIssue::TargetTimedOut,
+            reply: SocksReply::GeneralFailure,
+        }),
+    }
+}
+
+async fn copy_peer(
+    run: &Run,
+    socket: TcpStream,
+    channel: ClientChannel,
+    trailing: Vec<u8>,
+) -> Result<(), ForwardIssue> {
     let stream = channel.into_stream();
     let (socket_read, socket_write) = tokio::io::split(socket);
     let (remote_read, remote_write) = tokio::io::split(stream);
     tokio::try_join!(
-        copy(socket_read, remote_write, &run.uploaded),
+        copy(std::io::Cursor::new(trailing).chain(socket_read), remote_write, &run.uploaded),
         copy(remote_read, socket_write, &run.downloaded),
     )
     .map(|_| ())

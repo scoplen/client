@@ -12,7 +12,7 @@ export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	/**  Called by the frontend once its first screen has rendered. */
 	shellReady: () => __TAURI_INVOKE<void>("shell_ready"),
-	/**  Start a saved Local tunnel using the explicitly selected Login. */
+	/**  Start a saved Local or Dynamic tunnel using the explicitly selected Login. */
 	forwardStart: (forwardId: string, profileId: string) => typedError<ForwardSnapshot, ForwardIssue>(__TAURI_INVOKE("forward_start", { forwardId, profileId })),
 	/**  List the current store's live runs and retained terminal snapshots. */
 	forwardList: () => typedError<ForwardSnapshot[], ForwardIssue>(__TAURI_INVOKE("forward_list")),
@@ -115,7 +115,7 @@ export const commands = {
 	inventoryAccessProfiles: () => typedError<AccessProfileSummary[], ObjectEditError>(__TAURI_INVOKE("inventory_access_profiles")),
 	/**  Lists saved tunnels that can be attached to an access profile. */
 	inventoryForwards: () => typedError<ForwardSummary[], ObjectEditError>(__TAURI_INVOKE("inventory_forwards")),
-	/**  Saves a local tunnel definition without starting it. */
+	/**  Saves a Local TCP or Dynamic SOCKS definition without starting it. */
 	inventoryCreateForward: (forward: ForwardInput) => typedError<ForwardSummary, ObjectEditError>(__TAURI_INVOKE("inventory_create_forward", { forward })),
 	/**  Replaces saved endpoints without changing a live run. */
 	inventoryUpdateForward: (id: string, forward: ForwardInput) => typedError<ForwardSummary, ObjectEditError>(__TAURI_INVOKE("inventory_update_forward", { id, forward })),
@@ -600,32 +600,67 @@ export type ForwardChanged = {
 	snapshot: ForwardSnapshot,
 };
 
-/**  Complete replacement of a saved local TCP tunnel definition. */
+/**  Immutable saved endpoints selected for one explicit execution. */
+export type ForwardConfiguration =
+/**  A fixed TCP destination reached through the selected Login. */
+{ kind: "local";
+/**  Saved Forward identity. */
+forwardId: string;
+/**  Saved display label. */
+name: string;
+/**  Explicitly selected existing Login. */
+profileId: string;
+/**  Login identity from the immutable preparation plan. */
+login: PreparationContext;
+/**  Exact saved IPv4 or IPv6 listening address. */
+bindAddress: string;
+/**  Exact nonzero saved local port. */
+bindPort: number;
+/**  Exact remote target, resolved by the SSH server. */
+targetHost: string;
+/**  Exact nonzero remote target port. */
+targetPort: number } |
+/**  An unauthenticated SOCKS4/4a/5 CONNECT proxy through the selected Login. */
+{ kind: "dynamic";
+/**  Saved Forward identity. */
+forwardId: string;
+/**  Saved display label. */
+name: string;
+/**  Explicitly selected existing Login. */
+profileId: string;
+/**  Login identity from the immutable preparation plan. */
+login: PreparationContext;
+/**  Exact saved IPv4 or IPv6 listening address. */
+bindAddress: string;
+/**  Exact nonzero saved local port. */
+bindPort: number };
+
+/**  Complete replacement of a saved Local TCP or Dynamic SOCKS definition. */
 export type ForwardInput = {
 	/**  Nonempty display name. */
 	name: string,
-	/**  Only Local is editable in this outcome. */
+	/**  Local and Dynamic are editable; Remote remains unsupported. */
 	kind: ForwardKindInput,
 	/**  Explicit IPv4 or IPv6 literal; never replaced with a broader listener. */
 	bindAddress: string,
 	/**  Nonzero TCP listening port. */
 	bindPort: number,
-	/**  Hostname or IP literal resolved remotely. */
-	targetHost: string,
-	/**  Nonzero TCP destination port. */
-	targetPort: number,
+	/**  Required Local destination; ignored and cleared for Dynamic. */
+	targetHost?: string | null,
+	/**  Required nonzero Local destination port; ignored and cleared for Dynamic. */
+	targetPort?: number | null,
 	/**  Optional default Login; starting still selects an explicit Login. */
 	profile: string | null,
 };
 
 /**  Fixed failure categories; native errors and connection secrets are never exposed. */
 export type ForwardIssue =
-/**  Saved fields or identifiers are invalid for this local TCP outcome. */
+/**  Saved fields or identifiers are invalid for this tunnel mode. */
 "invalidConfiguration" |
 /**  The saved tunnel or selected Login no longer exists. */
 "notFound" |
-/**  Remote and dynamic definitions cannot execute as local TCP forwards. */
-"notLocal" |
+/**  This definition's kind is not an independently executable tunnel mode. */
+"unsupportedKind" |
 /**  That saved definition already owns a live execution. */
 "alreadyRunning" |
 /**  Live execution capacity is reserved before any network operation. */
@@ -644,6 +679,10 @@ export type ForwardIssue =
 "targetRejected" |
 /**  One accepted peer's target channel did not open within its budget. */
 "targetTimedOut" |
+/**  One peer sent an invalid or unsupported SOCKS negotiation. */
+"handshakeRejected" |
+/**  One peer did not finish SOCKS negotiation within its complete budget. */
+"handshakeTimedOut" |
 /**  An excess accepted socket was closed without opening an SSH channel. */
 "peerLimitReached" |
 /**  One peer failed while copying bytes; other peers remain independent. */
@@ -678,14 +717,14 @@ export type ForwardSnapshot = {
 	/**  Fresh execution identity; an earlier run can never control a later one. */
 	runId: string,
 	/**  Immutable saved forwarding configuration. */
-	configuration: LocalForwardConfiguration,
+	configuration: ForwardConfiguration,
 	/**  Current Rust-owned phase. */
 	phase: ForwardPhase,
 	/**  Latest preparation state, including any current one-use prompt. */
 	preparation: PreparationEvent | null,
 	/**  Actual bound socket, present only after successful listener admission. */
 	boundAddress: string | null,
-	/**  Accepted and opening peers, bounded by `MAX_FORWARD_PEERS`. */
+	/**  Negotiating, opening and copying peers, bounded by `MAX_FORWARD_PEERS`. */
 	activeConnections: number,
 	/**  Bytes successfully written toward the SSH target. */
 	uploadedBytes: string,
@@ -851,26 +890,6 @@ export type LocalDataError =
 /**  A diagnostic reference for support, free of secrets. */
 reference: string };
 
-/**  Immutable saved endpoints selected for one explicit execution. */
-export type LocalForwardConfiguration = {
-	/**  Saved Forward identity, never a renderer-selected destination override. */
-	forwardId: string,
-	/**  Saved display label. */
-	name: string,
-	/**  Explicitly selected existing Login. */
-	profileId: string,
-	/**  Target Login and Host identity from the same immutable preparation plan. */
-	login: PreparationContext,
-	/**  Exact saved IPv4 or IPv6 listening address. */
-	bindAddress: string,
-	/**  Exact nonzero saved local port. */
-	bindPort: number,
-	/**  Exact remote target, resolved by the authenticated SSH server. */
-	targetHost: string,
-	/**  Exact nonzero remote target port. */
-	targetPort: number,
-};
-
 /**
  *  A language the interface is written in (`11-client-architecture.md` §4).
  *
@@ -937,9 +956,9 @@ export type ObjectEditError =
 { kind: "invalidProxyAuthentication" } |
 /**  A route command is empty or exceeds the model limit. */
 { kind: "invalidCommand" } |
-/**  A local tunnel endpoint is invalid. */
+/**  A saved tunnel endpoint is invalid. */
 { kind: "invalidForward"; field: string } |
-/**  Only local TCP definitions can be created or edited here. */
+/**  Only Local TCP and Dynamic SOCKS definitions can be created or edited here. */
 { kind: "unsupportedForward" } |
 /**  Kind and binding do not satisfy the object model. */
 { kind: "invalidCredentialBinding" } |
