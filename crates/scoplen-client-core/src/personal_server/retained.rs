@@ -3,15 +3,21 @@
 
 use std::collections::BTreeMap;
 
+use scoplen_api::sync::{
+    SyncAccountKeyBundle, SyncSessionResponse, SyncVaultKeysResponse, VaultKind,
+};
 use scoplen_crypto::{
     AccountKemKeyPair, DeviceCertificate, DeviceKemKeyPair, Ed25519SigningKey, P256SigningKey,
-    SymmetricKey, validate_server_origin,
+    PersonalVaultKeyWrap, SecretVec, SymmetricKey, validate_server_origin,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use super::{PersonalServerError, identity::Secrets, storage};
-use crate::store::{Store, personal::PersonalRecord};
+use crate::store::{
+    Store,
+    personal::{PersonalRecord, PersonalSyncRecord},
+};
 
 mod legacy;
 
@@ -43,6 +49,91 @@ pub(super) struct RetainedAccount {
 }
 
 impl RetainedAccount {
+    /// A candidate is anchored in retained private roots, then independently checked by K-4
+    /// validation before it can be installed. Response digests alone establish no authority.
+    pub(super) fn from_snapshot(
+        store: &Store,
+        identity: &PersonalRecord,
+        snapshot: &PersonalSyncRecord,
+    ) -> Result<(Self, SecretVec), PersonalServerError> {
+        let secrets = Secrets::parse(&identity.private_material).map_err(invalid)?;
+        let signing_public =
+            Ed25519SigningKey::from_bytes(secrets.account_signing()).map_err(invalid)?.public_key();
+        let kem_public = AccountKemKeyPair::from_private_bytes(secrets.account_kem())
+            .map_err(invalid)?
+            .public_key()
+            .try_into()
+            .map_err(invalid)?;
+        let bundle =
+            SyncAccountKeyBundle::from_cbor(snapshot.account_keys.as_bytes()).map_err(invalid)?;
+        let certificate = bundle
+            .certificates
+            .iter()
+            .find(|bytes| {
+                DeviceCertificate::decode(bytes)
+                    .is_ok_and(|certificate| certificate.device_id == store.device_id())
+            })
+            .ok_or(PersonalServerError::AdmissionUnverified)?
+            .clone();
+        let session = SyncSessionResponse::from_cbor_with_body_limit(
+            snapshot.session.as_bytes(),
+            4 * 1024 * 1024,
+        )
+        .map_err(invalid)?;
+        let vault = session
+            .vaults
+            .iter()
+            .find(|vault| {
+                vault.id == identity.personal_vault_id && vault.kind == VaultKind::Personal
+            })
+            .ok_or(PersonalServerError::AdmissionUnverified)?;
+        let current_epoch = u32::try_from(vault.key_epoch).map_err(invalid)?;
+        let ark = SymmetricKey::new(secrets.ark().try_into().map_err(invalid)?);
+        let wraps =
+            SyncVaultKeysResponse::from_cbor(snapshot.vault_keys.as_bytes()).map_err(invalid)?;
+        let keys = wraps
+            .keys
+            .iter()
+            .map(|key| {
+                let epoch = u32::try_from(key.epoch).map_err(invalid)?;
+                let key = PersonalVaultKeyWrap::decode(&key.wrapped_vault_key)
+                    .map_err(invalid)?
+                    .open(identity.account_id, identity.personal_vault_id, epoch, &ark)
+                    .map_err(invalid)?;
+                Ok((epoch, key))
+            })
+            .collect::<Result<BTreeMap<_, _>, PersonalServerError>>()?;
+        let anchors = Anchors {
+            version: 1,
+            signing_public,
+            kem_public,
+            certificate,
+            revision: bundle.revision,
+            projection: projection_anchor(
+                bundle.revision,
+                &bundle.wrapped_ark,
+                &bundle.account_signing_key,
+                &bundle.account_kem_key,
+                &bundle.recovery_blob,
+            ),
+            artifacts: artifacts_anchor(
+                &bundle.account_signing_key,
+                &bundle.account_kem_key,
+                &bundle.recovery_blob,
+            ),
+            vault_keys: vault_key_anchor(&keys),
+            vault_wraps: Some(digest(
+                b"scoplen-client-personal-wraps-v1",
+                &[snapshot.vault_keys.as_bytes()],
+            )),
+            current_epoch,
+        };
+        let encoded = SecretVec::new(serde_json::to_vec(&anchors).map_err(invalid)?);
+        let value = Self::from_anchors(anchors)?;
+        value.verify_identity(store, identity)?;
+        Ok((value, encoded))
+    }
+
     pub fn load(store: &Store, identity: &PersonalRecord) -> Result<Self, PersonalServerError> {
         let encoded = match store.personal_admission(identity).map_err(storage)? {
             Some(encoded) => encoded,

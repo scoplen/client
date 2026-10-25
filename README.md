@@ -245,7 +245,7 @@ Settings -> Personal account keeps access for an existing confirmed profile. It 
 that device with its saved signing key, query account/device metadata, and explicitly verify
 sync keys. Registration and password sign-in are not available in this build; local SSH remains
 available. Invitation enrollment, invitation replacement, and device pairing have been retired.
-An unfinished old setup is preserved but cannot resume or gain account access.
+An unfinished old setup is preserved and cannot resume its retired entry protocol.
 
 Confirmed historical identities convert offline into neutral admitted provenance. The conversion
 verifies the original cryptographic artifacts and retained private roots, plus a previously
@@ -255,6 +255,15 @@ original data unchanged. The admitted profile binds its canonical origin, Accoun
 device, and keys immutably to this encrypted store. Existing local SSH data stays local.
 This is the retirement/storage prerequisite for D-128; password admission and full multi-profile
 or Team context switching remain incomplete.
+
+When a historical profile retains its original device keys, ARK and both private Account roots,
+Revalidate this device explicitly proves its current server authority through ordinary device
+authentication and verifies the complete K-4 bootstrap. Credentials stay transient until the
+original keys, signed device statements, revocations, revision and epoch evidence all agree.
+One open-profile-generation-fenced transaction installs neutral provenance, session and bootstrap;
+failure preserves the original bytes and cannot activate background sync. This does not recover
+a historical receipt, establish password credentials, resume an old entry request, or upload local
+inventory. Pending D-128 operations must use their separate exact receipt confirmation.
 
 Account and devices reads its saved results locally when Settings opens. Refresh account and
 devices explicitly queries the authenticated account profile and complete signed device statement

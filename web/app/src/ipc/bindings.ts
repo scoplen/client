@@ -194,6 +194,8 @@ export const commands = {
 	queryPersonalAccount: () => typedError<PersonalAccountSnapshot, PersonalServerError>(__TAURI_INVOKE("query_personal_account")),
 	/**  Authenticate the current confirmed profile with its retained device key. */
 	authenticatePersonalServer: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("authenticate_personal_server")),
+	/**  Prove existing Device authority and install verified keys in the captured profile only. */
+	revalidateRetainedDevice: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("revalidate_retained_device")),
 	/**  Revalidate saved Personal sync keys locally without making a server request. */
 	personalSyncKeyStatus: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("personal_sync_key_status")),
 	/**  Verify and save the retained account's sync keys without uploading local inventory. */
@@ -1277,6 +1279,8 @@ export type PersonalServerPhase =
 "not_configured" |
 /**  Historical pending data is retained, but its entry protocol is retired. */
 "retired_entry" |
+/**  Retained keys can explicitly prove current device authority before local installation. */
+"revalidation_required" |
 /**  The verified session is usable, including refresh on an explicit network operation. */
 "authenticated" |
 /**  The established session needs a fresh signed-device challenge; local data is retained. */

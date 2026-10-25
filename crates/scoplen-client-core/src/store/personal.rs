@@ -74,16 +74,32 @@ impl Store {
     }
 
     pub(crate) fn personal_sync_record(&self) -> Result<Option<PersonalSyncRecord>, StoreError> {
-        Ok(self.conn().query_row(
-            "SELECT generation, session, account_keys, vault_keys FROM personal_sync WHERE singleton = 1",
-            [],
-            |row| Ok(PersonalSyncRecord {
-                generation: row.get(0)?,
-                session: SecretVec::new(row.get(1)?),
-                account_keys: SecretVec::new(row.get(2)?),
-                vault_keys: SecretVec::new(row.get(3)?),
-            }),
-        ).optional()?)
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT generation,
+                CASE WHEN length(CAST(session AS BLOB)) BETWEEN 1 AND 4194304 THEN session END,
+                CASE WHEN length(CAST(account_keys AS BLOB)) BETWEEN 1 AND 4194304 THEN account_keys END,
+                CASE WHEN length(CAST(vault_keys AS BLOB)) BETWEEN 1 AND 4194304 THEN vault_keys END,
+                length(CAST(session AS BLOB)), length(CAST(account_keys AS BLOB)),
+                length(CAST(vault_keys AS BLOB))
+             FROM personal_sync WHERE singleton = 1",
+                [],
+                |row| {
+                    for column in 4..=6 {
+                        if !(1..=4 * 1024 * 1024).contains(&row.get::<_, i64>(column)?) {
+                            return Err(rusqlite::Error::InvalidQuery);
+                        }
+                    }
+                    Ok(PersonalSyncRecord {
+                        generation: row.get(0)?,
+                        session: SecretVec::new(row.get(1)?),
+                        account_keys: SecretVec::new(row.get(2)?),
+                        vault_keys: SecretVec::new(row.get(3)?),
+                    })
+                },
+            )
+            .optional()?)
     }
 
     pub(crate) fn save_personal_sync(
@@ -148,6 +164,20 @@ impl Store {
     }
 
     pub(crate) fn personal_record(&self) -> Result<Option<PersonalRecord>, StoreError> {
+        self.read_personal_record(false)
+    }
+
+    /// Current-device revalidation never loads or decodes archived entry payloads.
+    pub(crate) fn personal_revalidation_record(
+        &self,
+    ) -> Result<Option<PersonalRecord>, StoreError> {
+        self.read_personal_record(true)
+    }
+
+    fn read_personal_record(
+        &self,
+        revalidation: bool,
+    ) -> Result<Option<PersonalRecord>, StoreError> {
         let conn = self.conn();
         let oversized: bool = conn.query_row(
             "SELECT EXISTS (SELECT 1 FROM personal_server WHERE singleton=1
@@ -156,21 +186,22 @@ impl Store {
             [],
             |row| row.get(0),
         )?;
-        if oversized {
+        if oversized && !revalidation {
             return Err(StoreError::AccountContext);
         }
         let row = conn
             .query_row(
-                "SELECT origin, account_id, personal_vault_id, device_name, private_material,
-                    CASE WHEN length(enrollment_request)<=1048576 THEN enrollment_request END,
+                "SELECT origin, account_id, personal_vault_id, device_name,
+                    CASE WHEN length(private_material)<=225 THEN private_material ELSE X'' END,
+                    CASE WHEN ?1=0 AND length(enrollment_request)<=1048576 THEN enrollment_request END,
                     recovery_saved, recovery_confirmed,
                     enrollment_attempted, access_expires_at, refresh_expires_at,
                     auth_generation, auth_scope,
                     refresh_claimed = 0 AND length(refresh_token) BETWEEN 1 AND 2048,
                     session_established, refresh_retry_at,
-                    CASE WHEN length(paired_handoff)<=4456408 THEN paired_handoff END
+                    CASE WHEN ?1=0 AND length(paired_handoff)<=4456408 THEN paired_handoff END
              FROM personal_server WHERE singleton = 1",
-                [],
+                [revalidation],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,

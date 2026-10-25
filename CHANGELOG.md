@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added explicit retained-device revalidation in Personal account settings. Original device,
+  ARK and private Account keys anchor ordinary signed authentication and complete K-4 checks;
+  temporary credentials, neutral provenance and bootstrap install atomically in the captured
+  profile generation. Known certificates, revocations, revision and epoch evidence survive.
+  Failed verification preserves the original data without enabling sync or uploads. Retired
+  entry protocols and pending D-128 receipt confirmation remain separate.
+
 - Retired Personal invitation enrollment, invitation replacement, and device pairing from
   the desktop UI, IPC and network paths. Confirmed historical profiles convert offline to
   verified, immutable account provenance; unfinished or invalid setups retain their data

@@ -152,8 +152,12 @@ impl Peer {
     }
 
     async fn prepare(&self, store: &Arc<Store>) -> PersonalServer {
+        self.prepare_profile(store, true).await
+    }
+
+    async fn prepare_profile(&self, store: &Arc<Store>, admitted: bool) -> PersonalServer {
         let manager = self.manager();
-        crate::personal_server::tests::legacy_profile(store, &self.origin, true);
+        crate::personal_server::tests::legacy_profile(store, &self.origin, admitted);
         let pending = store.personal_record().unwrap().unwrap();
         let enrollment = PersonalEnrollmentRequest::from_json(
             pending.enrollment_request.as_ref().unwrap().as_bytes(),
@@ -227,11 +231,13 @@ impl Peer {
             },
         );
         self.install_token(store, |_| {}, None);
-        crate::personal_server::retained::RetainedAccount::load(
-            store,
-            &store.personal_record().unwrap().unwrap(),
-        )
-        .unwrap();
+        if admitted {
+            crate::personal_server::retained::RetainedAccount::load(
+                store,
+                &store.personal_record().unwrap().unwrap(),
+            )
+            .unwrap();
+        }
         manager
     }
 
@@ -431,6 +437,7 @@ fn local(dir: &tempfile::TempDir) -> Arc<Store> {
 
 mod account;
 mod membership;
+mod revalidation;
 mod trust;
 
 #[tokio::test]

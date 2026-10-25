@@ -54,7 +54,7 @@ impl LocalDataState {
         self.0.as_ref().ok().and_then(|data| data.with_store(operation))
     }
 
-    fn get(&self) -> Result<Arc<LocalData>, LocalDataError> {
+    pub(crate) fn get(&self) -> Result<Arc<LocalData>, LocalDataError> {
         self.0.clone()
     }
 }

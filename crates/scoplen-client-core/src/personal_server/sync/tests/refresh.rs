@@ -48,6 +48,7 @@ pub(super) struct RefreshPeer {
     nonce: Option<String>,
     challenges: usize,
     devices: usize,
+    device_mode: Option<Mode>,
 }
 
 impl RefreshPeer {
@@ -109,7 +110,8 @@ impl RefreshPeer {
                 self.nonce = None;
                 self.devices += 1;
                 self.family_expires = now().unwrap() + 3600;
-                Ok(self.tokens(expected, origin, Mode::Success))
+                let mode = self.device_mode.take().unwrap_or_default();
+                Ok(self.tokens(expected, origin, mode))
             }
             "/api/v1/auth/refresh" => {
                 if record(&self.observer).unwrap().refresh_available
@@ -272,8 +274,25 @@ pub(super) fn install(peer: &Peer, store: &Arc<Store>, modes: Vec<Mode>) {
         nonce: None,
         challenges: 0,
         devices: 0,
+        device_mode: None,
     });
     due(store);
+}
+
+pub(super) fn install_revalidation(peer: &Peer, store: &Arc<Store>, mode: Mode) {
+    let pending = store.personal_revalidation_record().unwrap().unwrap();
+    peer.state.lock().unwrap().refresh = Some(RefreshPeer {
+        observer: store.clone(),
+        account: pending.account_id,
+        current: "refresh".into(),
+        family_expires: now().unwrap() + 3600,
+        modes: VecDeque::new(),
+        calls: 0,
+        nonce: None,
+        challenges: 0,
+        devices: 0,
+        device_mode: Some(mode),
+    });
 }
 
 fn due(store: &Store) {

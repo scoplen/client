@@ -49,6 +49,10 @@ function fixture(initial = empty) {
         status = { ...status, phase: "authenticated" };
         return status;
       }
+      if (command === "revalidate_retained_device") {
+        status = { ...status, phase: "authenticated" };
+        return status;
+      }
       if (command === "personal_account_snapshot") return null;
       if (command === "personal_sync_key_status") return "notConnected";
       if (command === "personal_sync_background_status") return "inactive";
@@ -101,6 +105,53 @@ it("preserves a retired pending profile without attempting account access", asyn
   expect(screen.queryByRole("textbox")).toBeNull();
   expect(f.calls).toEqual(["personal_server_status"]);
   expect(await violations(container)).toEqual([]);
+});
+
+it.each(["en", "zh-Hans"] as const)(
+  "explicitly revalidates retained keys before enabling sync (%s)",
+  async (locale) => {
+    const f = fixture({ ...confirmed, phase: "revalidation_required" });
+    const { container } = render(view(locale));
+    const revalidate = await screen.findByRole("button", {
+      name: locale === "en" ? "Revalidate this device" : "重新验证此设备",
+    });
+    expect(screen.getByText(confirmed.origin!)).toBeTruthy();
+    expect(f.calls).toEqual(["personal_server_status"]);
+    expect(screen.queryByRole("button", { name: "Verify sync keys" })).toBeNull();
+    revalidate.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(
+      await screen.findByRole("button", { name: locale === "en" ? "Authenticate this device" : "认证此设备" }),
+    ).toBeTruthy();
+    expect(f.matching("revalidate_retained_device")).toHaveLength(1);
+    expect(f.matching("authenticate_personal_server")).toHaveLength(0);
+    expect(await violations(container)).toEqual([]);
+  },
+);
+
+it("retains revalidation context after failure and ignores a late closed-view result", async () => {
+  const f = fixture({ ...confirmed, phase: "revalidation_required" });
+  f.handlers.set("revalidate_retained_device", () => Promise.reject("admissionUnverified"));
+  const rendered = render(view());
+  await userEvent.click(await screen.findByRole("button", { name: "Revalidate this device" }));
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(screen.getByText(confirmed.origin!)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Verify sync keys" })).toBeNull();
+  let finish!: (status: PersonalServerStatus) => void;
+  f.handlers.set(
+    "revalidate_retained_device",
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await userEvent.dblClick(screen.getByRole("button", { name: "Revalidate this device" }));
+  expect(f.matching("revalidate_retained_device")).toHaveLength(2);
+  expect(screen.getByRole("button", { name: "Working…" }).hasAttribute("disabled")).toBe(true);
+  rendered.unmount();
+  const reads = f.matching("personal_server_status").length;
+  await act(async () => finish({ ...confirmed, phase: "authenticated" }));
+  expect(f.matching("personal_server_status")).toHaveLength(reads);
 });
 
 it.each<PersonalServerError>(["admissionUnverified", "storage"])(

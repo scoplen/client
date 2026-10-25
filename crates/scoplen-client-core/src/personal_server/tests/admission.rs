@@ -62,7 +62,10 @@ async fn pending_and_attempted_invitations_never_migrate_or_send_a_challenge() {
             )
             .unwrap();
         let manager = server.manager();
-        assert_eq!(manager.status(&local).unwrap().phase, PersonalServerPhase::RetiredEntry);
+        assert_eq!(
+            manager.status(&local).unwrap().phase,
+            PersonalServerPhase::RevalidationRequired
+        );
         assert_eq!(
             manager.authenticate(local.clone()).await,
             Err(PersonalServerError::RetiredEntry)
@@ -148,18 +151,26 @@ fn confirmed_but_mismatched_or_unbounded_evidence_is_preserved_without_admission
         let reopened = store(&dir);
         if fault == 5 {
             assert_eq!(
-                PersonalServer::default().status(&reopened).unwrap_err(),
-                PersonalServerError::AdmissionUnverified
+                PersonalServer::default().status(&reopened).unwrap().phase,
+                PersonalServerPhase::RevalidationRequired
             );
             assert_eq!(admission_count(&dir), 0);
             continue;
         }
         let before = reopened.personal_record().unwrap().unwrap();
-        assert_eq!(
-            PersonalServer::default().status(&reopened).unwrap_err(),
-            PersonalServerError::AdmissionUnverified,
-            "fault {fault}"
-        );
+        if matches!(fault, 4 | 6) {
+            assert_eq!(
+                PersonalServer::default().status(&reopened).unwrap_err(),
+                PersonalServerError::AdmissionUnverified,
+                "fault {fault}"
+            );
+        } else {
+            assert_eq!(
+                PersonalServer::default().status(&reopened).unwrap().phase,
+                PersonalServerPhase::RevalidationRequired,
+                "fault {fault}"
+            );
+        }
         assert_eq!(admission_count(&dir), 0);
         let after = reopened.personal_record().unwrap().unwrap();
         assert!(
@@ -297,14 +308,17 @@ fn paired_fixture(dir: &tempfile::TempDir, phase: &str, matching: bool) -> Arc<S
 fn completed_new_device_pairing_is_bound_evidence_but_pending_or_foreign_handoffs_are_not() {
     for (phase, matching, expected) in [
         ("completed", true, PersonalServerPhase::AuthenticationRequired),
-        ("admission_pending", true, PersonalServerPhase::RetiredEntry),
-        ("completed", false, PersonalServerPhase::RetiredEntry),
+        ("admission_pending", true, PersonalServerPhase::RevalidationRequired),
+        ("completed", false, PersonalServerPhase::RevalidationRequired),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let local = paired_fixture(&dir, phase, matching);
         let before = local.personal_record().unwrap().unwrap();
         assert_eq!(PersonalServer::default().status(&local).unwrap().phase, expected);
-        assert_eq!(admission_count(&dir), i64::from(expected != PersonalServerPhase::RetiredEntry));
+        assert_eq!(
+            admission_count(&dir),
+            i64::from(expected == PersonalServerPhase::AuthenticationRequired)
+        );
         let after = local.personal_record().unwrap().unwrap();
         assert!(
             before.paired_handoff.as_ref().unwrap().as_bytes()
