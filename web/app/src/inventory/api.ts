@@ -182,8 +182,8 @@ export interface ForwardInput {
   kind: ForwardKind;
   bindAddress: string;
   bindPort: number;
-  targetHost: string;
-  targetPort: number;
+  targetHost: string | null;
+  targetPort: number | null;
   profile: Id | null;
 }
 

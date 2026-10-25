@@ -2,7 +2,7 @@
 import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { X } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { Button } from "./button";
 
 const backdrop =
@@ -23,15 +23,27 @@ export interface DialogProps {
   footer: ReactNode;
   /** A character beside the title, such as the mark reacting to the form. Decorative. */
   mark?: ReactNode;
+  /** Where focus returns when the opener is outside the dialog's trigger system. */
+  finalFocus?: ComponentProps<typeof BaseDialog.Popup>["finalFocus"];
 }
 
 /** A modal dialog: focus stays inside, Escape closes, focus returns on close. */
-export function Dialog({ open, onOpenChange, title, description, closeLabel, children, footer, mark }: DialogProps) {
+export function Dialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  closeLabel,
+  children,
+  footer,
+  mark,
+  finalFocus,
+}: DialogProps) {
   return (
     <BaseDialog.Root open={open} onOpenChange={onOpenChange}>
       <BaseDialog.Portal>
         <BaseDialog.Backdrop className={backdrop} />
-        <BaseDialog.Popup className={`${popup} overflow-hidden`}>
+        <BaseDialog.Popup className={`${popup} overflow-hidden`} finalFocus={finalFocus}>
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="flex items-start gap-3.5 px-6 pt-5">
               {mark ? (

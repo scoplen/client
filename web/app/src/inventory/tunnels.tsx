@@ -36,6 +36,13 @@ function endpoint(host: string | null, port: number | null): string {
   return `${host.includes(":") ? `[${host}]` : host}:${port}`;
 }
 
+function isLoopback(address: string): boolean {
+  const normalized = address.trim().toLowerCase();
+  return (
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalized) || normalized === "::1" || normalized === "0:0:0:0:0:0:0:1"
+  );
+}
+
 export function TunnelsHome() {
   const { t, locale } = useI18n();
   const api = useInventory();
@@ -50,6 +57,8 @@ export function TunnelsHome() {
   const [deleteError, setDeleteError] = useState<ObjectEditError | null>(null);
   const [stopIssue, setStopIssue] = useState<ForwardIssue | null>(null);
   const [stopping, setStopping] = useState<string | null>(null);
+  const addTrigger = useRef<HTMLButtonElement | null>(null);
+  const editorTrigger = useRef<HTMLButtonElement | null>(null);
   const runs = runtime?.snapshots ?? [];
   const profileList = profiles.state === "ready" ? profiles.data : [];
   const selectedRun = runs.find((run) => run.runId === selected);
@@ -90,7 +99,15 @@ export function TunnelsHome() {
             <h1 className="ui-display text-3xl">{t("tunnels.title")}</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{t("tunnels.description")}</p>
           </div>
-          <Button variant="primary" onClick={() => setEditing("new")} className="gap-1.5">
+          <Button
+            ref={addTrigger}
+            variant="primary"
+            onClick={(event) => {
+              editorTrigger.current = event.currentTarget;
+              setEditing("new");
+            }}
+            className="gap-1.5"
+          >
             <Plus aria-hidden="true" className="size-4" />
             {t("tunnels.add")}
           </Button>
@@ -152,9 +169,21 @@ export function TunnelsHome() {
                     ) : null}
                   </div>
                   <p className="mt-1 mb-0 break-all font-mono text-xs text-muted-foreground select-text">
-                    {run.boundAddress ?? endpoint(configuration.bindAddress, configuration.bindPort)} →{" "}
-                    {endpoint(configuration.targetHost, configuration.targetPort)}
+                    {run.boundAddress ?? endpoint(configuration.bindAddress, configuration.bindPort)}
+                    {configuration.kind === "local"
+                      ? ` → ${endpoint(configuration.targetHost, configuration.targetPort)}`
+                      : null}
                   </p>
+                  {configuration.kind === "dynamic" ? (
+                    <>
+                      <p className="mt-1 mb-0 text-xs text-muted-foreground">{t("tunnels.dynamicBody")}</p>
+                      {!isLoopback(configuration.bindAddress) ? (
+                        <p role="note" className="mt-2 mb-0 text-sm text-attention">
+                          {t("tunnels.dynamicNonLoopback")}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : null}
                   <p className="mt-1 mb-0 break-words text-xs text-muted-foreground">
                     {configuration.login.host} · {configuration.login.login}
                   </p>
@@ -201,15 +230,19 @@ export function TunnelsHome() {
             <ul aria-label={t("tunnels.saved")} className="m-0 mt-3 list-none divide-y divide-border p-0">
               {forwards.data.map((forward) => {
                 const live = runs.some((run) => run.configuration.forwardId === forward.id && isLiveForward(run));
+                const supported = forward.kind === "local" || forward.kind === "dynamic";
                 return (
                   <li key={forward.id} className="flex min-w-0 flex-wrap items-center gap-3 py-4">
                     <div className="min-w-0 flex-1 basis-52">
                       <h3 className="m-0 break-words text-sm font-medium">{forward.name}</h3>
                       <p className="mt-1 mb-0 break-all font-mono text-xs text-muted-foreground">
-                        {endpoint(forward.bindAddress, forward.bindPort)} →{" "}
-                        {endpoint(forward.targetHost, forward.targetPort)}
+                        {endpoint(forward.bindAddress, forward.bindPort)}
+                        {forward.kind === "dynamic" ? null : ` → ${endpoint(forward.targetHost, forward.targetPort)}`}
                       </p>
-                      {forward.kind !== "local" ? (
+                      {forward.kind === "dynamic" ? (
+                        <p className="mt-1 mb-0 text-xs text-muted-foreground">{t("tunnels.dynamicSocks")}</p>
+                      ) : null}
+                      {!supported ? (
                         <p className="mt-1 mb-0 text-xs text-muted-foreground">{t("tunnels.unsupported")}</p>
                       ) : null}
                       {forward.restored ? (
@@ -217,7 +250,7 @@ export function TunnelsHome() {
                       ) : null}
                     </div>
                     <div className="ml-auto flex shrink-0 items-center gap-1">
-                      {forward.kind === "local" ? (
+                      {supported ? (
                         <Button
                           variant="secondary"
                           onClick={() => setStarting(forward)}
@@ -232,10 +265,13 @@ export function TunnelsHome() {
                           {live ? t("tunnels.running") : t("tunnels.start")}
                         </Button>
                       ) : null}
-                      {forward.kind === "local" ? (
+                      {supported ? (
                         <IconButton
                           label={t("tunnels.edit", { name: forward.name })}
-                          onClick={() => setEditing(forward)}
+                          onClick={(event) => {
+                            editorTrigger.current = event.currentTarget;
+                            setEditing(forward);
+                          }}
                         >
                           <Pencil aria-hidden="true" className="size-4" />
                         </IconButton>
@@ -267,6 +303,7 @@ export function TunnelsHome() {
           key={editing === "new" ? "new" : editing.id}
           existing={editing === "new" ? null : editing}
           profiles={profileList}
+          finalFocus={() => (editorTrigger.current?.isConnected ? editorTrigger.current : addTrigger.current)}
           onClose={() => setEditing(null)}
           onSaved={() => setEditing(null)}
         />
@@ -502,11 +539,13 @@ function StartDialog({
 function TunnelEditor({
   existing,
   profiles,
+  finalFocus,
   onClose,
   onSaved,
 }: {
   existing: ForwardSummary | null;
   profiles: AccessProfileSummary[];
+  finalFocus: () => HTMLElement | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -514,12 +553,14 @@ function TunnelEditor({
   const api = useInventory();
   const form = useId();
   const select = useId();
+  const mode = useId();
+  const [kind, setKind] = useState<"local" | "dynamic">(existing?.kind === "dynamic" ? "dynamic" : "local");
   const [value, setValue] = useState({
     name: existing?.name ?? "",
     bindAddress: existing?.bindAddress ?? "127.0.0.1",
     bindPort: existing?.bindPort?.toString() ?? "",
-    targetHost: existing?.targetHost ?? "",
-    targetPort: existing?.targetPort?.toString() ?? "",
+    targetHost: existing?.kind === "local" ? (existing.targetHost ?? "") : "",
+    targetPort: existing?.kind === "local" ? (existing.targetPort?.toString() ?? "") : "",
     profile: existing?.profile ?? "",
   });
   const [error, setError] = useState<ObjectEditError | null>(null);
@@ -531,18 +572,17 @@ function TunnelEditor({
       setValue((current) => ({ ...current, [name]: event.target.value })),
   });
   const invalid = error?.kind === "invalidForward" ? error.field : null;
-  const address = value.bindAddress.trim().toLowerCase();
-  const loopback =
-    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(address) || address === "::1" || address === "0:0:0:0:0:0:0:1";
+  const address = value.bindAddress.trim();
   const save = async () => {
     if (busy) return;
     setError(null);
     setBusy(true);
     const input: ForwardInput = {
       ...value,
-      kind: "local",
+      kind,
       bindPort: Number(value.bindPort),
-      targetPort: Number(value.targetPort),
+      targetHost: kind === "local" ? value.targetHost : null,
+      targetPort: kind === "local" ? Number(value.targetPort) : null,
       profile: value.profile || null,
     };
     try {
@@ -563,6 +603,7 @@ function TunnelEditor({
       }}
       title={existing ? t("tunnels.editTitle") : t("tunnels.newTitle")}
       description={t("tunnels.editorBody")}
+      finalFocus={finalFocus}
       closeLabel={t("objects.cancel")}
       footer={
         <>
@@ -590,7 +631,25 @@ function TunnelEditor({
           autoFocus
           error={error?.kind === "emptyName" ? t("objects.error.emptyName") : undefined}
         />
-        <p className="text-xs text-muted-foreground">{t("tunnels.localTcp")}</p>
+        <div>
+          <label htmlFor={mode} className="block text-sm font-medium">
+            {t("tunnels.mode")}
+          </label>
+          <select
+            id={mode}
+            value={kind}
+            disabled={busy}
+            onChange={(event) => {
+              setKind(event.target.value as "local" | "dynamic");
+              setError(null);
+            }}
+            className={selectStyle}
+          >
+            <option value="local">{t("tunnels.localTcp")}</option>
+            <option value="dynamic">{t("tunnels.dynamicSocks")}</option>
+          </select>
+        </div>
+        {kind === "dynamic" ? <p className="text-sm text-muted-foreground">{t("tunnels.dynamicBody")}</p> : null}
         <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_7rem]">
           <Field
             label={t("tunnels.bindAddress")}
@@ -608,28 +667,30 @@ function TunnelEditor({
             error={invalid === "bindPort" ? t("tunnels.error.port") : undefined}
           />
         </div>
-        {!loopback && address ? (
+        {!isLoopback(address) && address ? (
           <p role="note" className="text-sm text-attention">
-            {t("tunnels.nonLoopback")}
+            {t(kind === "dynamic" ? "tunnels.dynamicNonLoopback" : "tunnels.nonLoopback")}
           </p>
         ) : null}
-        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_7rem]">
-          <Field
-            label={t("tunnels.targetHost")}
-            {...field("targetHost")}
-            required
-            error={invalid === "targetHost" ? t("tunnels.error.targetHost") : undefined}
-          />
-          <Field
-            label={t("tunnels.targetPort")}
-            {...field("targetPort")}
-            type="number"
-            min={1}
-            max={65535}
-            required
-            error={invalid === "targetPort" ? t("tunnels.error.port") : undefined}
-          />
-        </div>
+        {kind === "local" ? (
+          <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_7rem]">
+            <Field
+              label={t("tunnels.targetHost")}
+              {...field("targetHost")}
+              required
+              error={invalid === "targetHost" ? t("tunnels.error.targetHost") : undefined}
+            />
+            <Field
+              label={t("tunnels.targetPort")}
+              {...field("targetPort")}
+              type="number"
+              min={1}
+              max={65535}
+              required
+              error={invalid === "targetPort" ? t("tunnels.error.port") : undefined}
+            />
+          </div>
+        ) : null}
         <div>
           <label htmlFor={select} className="block text-sm font-medium">
             {t("tunnels.defaultLogin")}

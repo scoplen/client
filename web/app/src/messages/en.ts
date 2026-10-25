@@ -1060,13 +1060,14 @@ export const en = {
     "Saving has started and can no longer be paused or cancelled. Wait for the result.",
   "session.transfers.issue.staleItem": "This transfer changed or ended. Refresh Files to see its current result.",
   "tunnels.title": "Tunnels",
-  "tunnels.description": "Forward a local TCP port through a saved Login. Tunnels keep running when you change views.",
+  "tunnels.description":
+    "Forward local TCP or SOCKS traffic through a saved Login. Tunnels keep running when you change views.",
   "tunnels.add": "Add tunnel",
   "tunnels.name": "Name",
   "tunnels.runs": "Runs",
   "tunnels.saved": "Saved tunnels",
   "tunnels.runs.empty": "No tunnel runs yet. Start a saved tunnel when you need its local port.",
-  "tunnels.saved.empty": "No saved tunnels yet. Add a local TCP tunnel to choose its endpoints.",
+  "tunnels.saved.empty": "No saved tunnels yet. Add a local TCP or dynamic SOCKS tunnel to choose its listening port.",
   "tunnels.desktopOnly": "Start and monitor tunnels in the desktop app.",
   "tunnels.loading": "Loading tunnels…",
   "tunnels.refresh": "Refresh runs",
@@ -1085,7 +1086,7 @@ export const en = {
   "tunnels.deleteTitle": "Delete {name}?",
   "tunnels.deleteBody":
     "Remove this saved definition. Any running tunnel keeps its current endpoints and can still be stopped under Runs.",
-  "tunnels.unsupported": "Only local TCP tunnels can be started or edited in this version.",
+  "tunnels.unsupported": "Only local TCP and dynamic SOCKS tunnels can be started or edited in this version.",
   "tunnels.login": "Login",
   "tunnels.defaultLogin": "Default Login",
   "tunnels.chooseLogin": "Choose a Login",
@@ -1094,12 +1095,19 @@ export const en = {
   "tunnels.noLogins": "Add or repair a Login under Manage inventory before starting this tunnel.",
   "tunnels.profilesFailed": "Logins could not be loaded. Reopen Tunnels to try again.",
   "tunnels.startTitle": "Start {name}",
-  "tunnels.startBody": "Use this Login to reach the saved destination. Review host keys and authentication when asked.",
+  "tunnels.startBody":
+    "Use this Login for the tunnel's SSH connection. Review host keys and authentication when asked.",
   "tunnels.newTitle": "New tunnel",
   "tunnels.editTitle": "Edit tunnel",
   "tunnels.editorBody":
     "Saving changes the definition for the next Start. Running tunnels keep their current configuration.",
   "tunnels.localTcp": "Local TCP",
+  "tunnels.mode": "Mode",
+  "tunnels.dynamicSocks": "Dynamic SOCKS",
+  "tunnels.dynamicBody":
+    "SOCKS4/4a and SOCKS5 CONNECT without proxy authentication. The SSH server resolves destination names.",
+  "tunnels.dynamicNonLoopback":
+    "Any device that can reach this listener can request destinations through the selected SSH connection. Use 127.0.0.1 or ::1 to keep access on this device.",
   "tunnels.bindAddress": "Bind address",
   "tunnels.bindPort": "Bind port",
   "tunnels.targetHost": "Target host",
@@ -1121,7 +1129,7 @@ export const en = {
   "tunnels.issue.invalidConfiguration": "Check the saved tunnel endpoints and selected Login before starting again.",
   "tunnels.issue.notFound":
     "The tunnel or selected Login is no longer available. Choose an existing definition and Login.",
-  "tunnels.issue.notLocal": "Choose a local TCP tunnel.",
+  "tunnels.issue.unsupportedKind": "Choose a local TCP or dynamic SOCKS tunnel.",
   "tunnels.issue.alreadyRunning": "This tunnel is already preparing, running or stopping.",
   "tunnels.issue.capacityReached": "Stop another tunnel before starting this one. Up to 16 can run at once.",
   "tunnels.issue.unavailable": "Tunnel management is unavailable. Refresh runs to try again.",
@@ -1133,6 +1141,10 @@ export const en = {
   "tunnels.issue.targetRejected":
     "The SSH server refused a target connection. Check the destination and forwarding permissions.",
   "tunnels.issue.targetTimedOut": "A target connection timed out. Check the destination before connecting again.",
+  "tunnels.issue.handshakeRejected":
+    "A SOCKS request was refused. Use SOCKS4/4a or SOCKS5 CONNECT without proxy authentication. Other connections can continue.",
+  "tunnels.issue.handshakeTimedOut":
+    "A SOCKS handshake timed out and its connection closed. Reconnect the requesting app to try again. Other connections can continue.",
   "tunnels.issue.peerLimitReached": "This tunnel reached its limit of 32 connections. Extra connections were closed.",
   "tunnels.issue.peerIo": "One connection ended before copying completed. Other tunnel connections can continue.",
   "tunnels.issue.shutdownFailed": "Tunnel shutdown could not be confirmed.",

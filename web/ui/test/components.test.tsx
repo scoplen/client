@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useRef, useState } from "react";
 import {
   Button,
   ChoiceList,
@@ -21,6 +22,37 @@ import {
 import { violations } from "./axe";
 
 describe("Dialog", () => {
+  it.each(["ref", "callback"] as const)("returns focus to an explicit %s target after unmount", async (kind) => {
+    function Preview() {
+      const target = useRef<HTMLButtonElement | null>(null);
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <Button ref={target}>Return here</Button>
+          <Button onClick={() => setOpen(true)}>Open preview</Button>
+          {open ? (
+            <Dialog
+              open
+              onOpenChange={setOpen}
+              title="Preview"
+              closeLabel="Close preview"
+              finalFocus={kind === "ref" ? target : () => target.current}
+              footer={<Button onClick={() => setOpen(false)}>Done</Button>}
+            >
+              <p>Read-only text</p>
+            </Dialog>
+          ) : null}
+        </>
+      );
+    }
+    render(<Preview />);
+    await userEvent.click(screen.getByRole("button", { name: "Open preview" }));
+    await screen.findByRole("dialog", { name: "Preview" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Return here" })));
+  });
+
   it("keeps long file and connection text accessible while closing by keyboard", async () => {
     const title = `${"n".repeat(251)}.txt`;
     const description = `user@${"host".repeat(60)}.example`;
