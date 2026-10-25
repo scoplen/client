@@ -17,6 +17,7 @@ use crate::{personal_inventory::PersonalInventorySettings, store::LocalWrite};
 
 mod confirmed;
 mod history;
+mod password_entry;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod process_restart;
 mod three_device;
@@ -111,6 +112,7 @@ async fn rotate_live_session(
     manager: &PersonalServer,
     store: &Arc<Store>,
     context: &'static str,
+    expected_devices: usize,
 ) -> PersonalAccountSnapshot {
     let mut before = record(store).expect("retained authenticated identity");
     let access = store
@@ -129,7 +131,7 @@ async fn rotate_live_session(
     });
     assert_eq!(account.account_id, before.account_id.to_string());
     assert_eq!(account.email, None);
-    assert_eq!(account.devices.len(), 3);
+    assert_eq!(account.devices.len(), expected_devices);
     let current =
         account.devices.iter().find(|device| device.current).expect("current signed device");
     assert_eq!(current.id, store.device_id().to_string());
@@ -193,9 +195,13 @@ async fn live_confirmed_personal_inventory_roundtrip() {
         .await
         .expect("verify server K-4 bundle and unwrap the real account and Personal keys");
     assert_eq!(bootstrap.session().vaults.len(), 1);
-    let account =
-        rotate_live_session(&manager, &store, "rotate the initial native session before transfer")
-            .await;
+    let account = rotate_live_session(
+        &manager,
+        &store,
+        "rotate the initial native session before transfer",
+        3,
+    )
+    .await;
 
     let object = store
         .write(LocalWrite {
@@ -292,6 +298,7 @@ async fn live_confirmed_personal_inventory_roundtrip() {
         &manager,
         &reopened,
         "rotate the native session after encrypted-store reopen",
+        3,
     )
     .await;
     assert_eq!(
