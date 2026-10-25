@@ -430,6 +430,22 @@ struct Step {
     passphrase: bool,
 }
 
+/// Locally resolved immutable inputs; credentials remain inside Rust preparation.
+pub(crate) struct PreparationPlan(Vec<Step>);
+
+impl PreparationPlan {
+    pub(crate) fn target_context(&self) -> &PreparationContext {
+        &self.0.last().expect("target step exists").context
+    }
+}
+
+pub(crate) fn resolve_preparation_plan(
+    store: &Store,
+    profile_id: Uuid,
+) -> Result<PreparationPlan, PreparationError> {
+    Ok(PreparationPlan(resolve_steps(store, profile_id)?))
+}
+
 struct ConnectionStack(Vec<SshConnection>);
 
 impl Drop for ConnectionStack {
@@ -554,10 +570,19 @@ pub async fn prepare_connection(
     control: &PreparationControl,
     emit: impl Fn(PreparationEvent) -> Result<(), String> + Sync,
 ) -> Result<SshConnection, PreparationError> {
-    let steps = resolve_steps(store, profile_id)?;
+    let plan = resolve_preparation_plan(store, profile_id)?;
+    prepare_resolved_connection(store, plan, control, emit).await
+}
+
+pub(crate) async fn prepare_resolved_connection(
+    store: &Store,
+    plan: PreparationPlan,
+    control: &PreparationControl,
+    emit: impl Fn(PreparationEvent) -> Result<(), String> + Sync,
+) -> Result<SshConnection, PreparationError> {
     let mut connections = ConnectionStack(Vec::new());
     let result = async {
-        for step in steps {
+        for step in plan.0 {
             control.active(|| Ok(()))?;
             emit(PreparationEvent::Progress {
                 context: step.context.clone(),

@@ -7,6 +7,7 @@
 //! that it is the same on every desktop platform and testable without a window.
 
 pub mod connection;
+pub mod forward_manager;
 pub mod inventory;
 pub mod local_data;
 pub mod local_key;
