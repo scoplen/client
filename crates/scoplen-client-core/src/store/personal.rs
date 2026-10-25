@@ -10,8 +10,10 @@ use super::{Store, StoreError, uuid_from};
 mod account;
 mod admission;
 mod auth;
+mod registration;
 pub(crate) use account::PersonalAccountRecord;
 pub(crate) use auth::{PersonalRefreshClaim, PersonalTokens};
+pub(crate) use registration::RegistrationRecord;
 
 #[derive(Debug)]
 pub(crate) struct PersonalRecord {

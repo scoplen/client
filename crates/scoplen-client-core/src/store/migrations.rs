@@ -261,4 +261,48 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     WHEN EXISTS (SELECT 1 FROM personal_admission)
     BEGIN SELECT RAISE(ABORT, 'Personal device keys belong to this profile'); END;
     "#,
+    // 12: D-128 preparation is separate from an admitted identity and local writer id.
+    r#"
+    CREATE TABLE personal_registration (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        payload BLOB NOT NULL CHECK (length(payload) BETWEEN 1 AND 262144),
+        account_signature BLOB NOT NULL CHECK (length(account_signature) = 64),
+        private_material BLOB NOT NULL CHECK (length(private_material) = 225),
+        recovery_saved INTEGER NOT NULL DEFAULT 0 CHECK (recovery_saved IN (0, 1)),
+        recovery_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (recovery_confirmed IN (0, 1)),
+        phase INTEGER NOT NULL DEFAULT 0 CHECK (phase IN (0, 1, 2)),
+        confirmation BLOB CHECK (confirmation IS NULL OR length(confirmation) BETWEEN 1 AND 1024),
+        CHECK (recovery_confirmed = 0 OR recovery_saved = 1),
+        CHECK (phase = 0 OR recovery_confirmed = 1),
+        CHECK ((phase = 2) = (confirmation IS NOT NULL))
+    ) STRICT;
+    CREATE TRIGGER personal_registration_unbound BEFORE INSERT ON personal_registration
+    WHEN EXISTS (SELECT 1 FROM personal_server) OR EXISTS (SELECT 1 FROM personal_admission)
+        OR EXISTS (SELECT 1 FROM personal_pairing) OR EXISTS (SELECT 1 FROM personal_pairing_device)
+        OR EXISTS (SELECT 1 FROM personal_pairing_attempts) OR EXISTS (SELECT 1 FROM device_key_pair)
+    BEGIN SELECT RAISE(ABORT, 'Personal profile already contains an identity'); END;
+    CREATE TRIGGER personal_registration_immutable
+    BEFORE UPDATE OF payload, account_signature, private_material ON personal_registration
+    WHEN NEW.payload IS NOT OLD.payload OR NEW.account_signature IS NOT OLD.account_signature
+        OR NEW.private_material IS NOT OLD.private_material
+    BEGIN SELECT RAISE(ABORT, 'Pending registration identity is immutable'); END;
+    CREATE TRIGGER personal_registration_monotonic BEFORE UPDATE ON personal_registration
+    WHEN NEW.phase < OLD.phase OR NEW.phase > OLD.phase + 1
+        OR NEW.recovery_saved < OLD.recovery_saved
+        OR NEW.recovery_confirmed < OLD.recovery_confirmed
+        OR (OLD.confirmation IS NOT NULL AND NEW.confirmation IS NOT OLD.confirmation)
+    BEGIN SELECT RAISE(ABORT, 'Pending registration outcome cannot be forgotten'); END;
+    CREATE TRIGGER personal_registration_retained BEFORE DELETE ON personal_registration
+    WHEN OLD.phase != 0
+    BEGIN SELECT RAISE(ABORT, 'Attempted registration requires exact confirmation'); END;
+    CREATE TRIGGER personal_registration_no_replace BEFORE INSERT ON personal_registration
+    WHEN EXISTS (SELECT 1 FROM personal_registration)
+    BEGIN SELECT RAISE(ABORT, 'Pending registration already exists'); END;
+    CREATE TRIGGER personal_registration_blocks_identity BEFORE INSERT ON personal_server
+    WHEN EXISTS (SELECT 1 FROM personal_registration)
+    BEGIN SELECT RAISE(ABORT, 'Pending registration is not an admitted profile'); END;
+    CREATE TRIGGER personal_registration_blocks_device_keys BEFORE INSERT ON device_key_pair
+    WHEN EXISTS (SELECT 1 FROM personal_registration)
+    BEGIN SELECT RAISE(ABORT, 'Pending registration keys belong only to its operation'); END;
+    "#,
 ];

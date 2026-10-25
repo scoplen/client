@@ -4,6 +4,14 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added Rust-only password registration preparation with the real D-127 derivation, independent
+  software Device keys and locally opened password/Device/recovery/root/Personal wrappers.
+  A separate SQLCipher pending record retains exact signed business bytes, mandatory recovery
+  save/confirmation and conservative unknown handoff state through restart. Exact receipt
+  confirmation records historical outcome only. HTTP, desktop UI, isolated Account-profile
+  installation, password login and full admission remain incomplete; admitted devices retain
+  their existing authentication and sync paths.
+
 - Updated the single shared proto revision to published `a604b72` password-account contracts,
   removing retired invitation and pairing protocols from resolved dependencies. Retained
   signed-device authentication and Personal sync remain supported; password registration,

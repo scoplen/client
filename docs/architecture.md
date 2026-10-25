@@ -165,6 +165,45 @@ production enrollment, invitation replacement, recovery export and pairing APIs,
 controls are removed. Fresh registration and password sign-in remain unavailable until D-128 is
 implemented, and Settings says so without an inert registration form.
 
+The Rust-only registration preparation surface is independent of those retired entry paths.
+`prepare_registration` consumes an owned `SecretVec` password on a blocking caller, admits at
+most one process-wide D-127 derivation without a wait queue, and uses the published shared
+password, hierarchy, certificate and K-4 codecs. It generates new operation/Account/Personal
+vault/Device ids, independent software Device signing/KEM keys, Account roots, random ARK,
+epoch-one vault key and recovery key. Password, Device and recovery wrappers open to the same
+ARK; both private roots reconstruct exactly and the Personal wrap opens to the generated key.
+Only then are deterministic `Pregister` bytes and their additional Account signature retained.
+Passwords, AuthSecret and KEK are never stored. Reopening revalidates the signed exact bytes,
+available private roots, Device/recovery wraps and Personal key without another derivation.
+
+Migration 12 adds `personal_registration`, separate from `personal_server`, device key pairs,
+admission anchors and sync snapshots. Preparation refuses profiles with current or archived
+Account setup material. Pending software private material is redacted, zeroizing and protected
+by SQLCipher; no hardware-backed/non-exportable signer or KEM provider is claimed. The pending
+Device id never replaces `Store.device_id()`, which still owns account-free local writes.
+Local objects remain local. Later confirmed installation must create an isolated Account store;
+this boundary does not rebind the existing singleton or implement profile switching.
+
+Recovery export writes only to a new native-selected path and flushes the file before durably
+marking it saved. Unix uses mode 0600; Windows inherits the destination directory ACL, so the
+caller must choose a private location. Failed writes or marker commits preserve the pending
+keys, leave confirmation false and may leave an incomplete file; the next attempt needs a new
+path. No user-owned export is overwritten or deleted. A separate explicit operation confirms
+keeping the saved key. Both markers and the exact captured operation are required for submit.
+
+`registration_challenge` chooses `submit` only for a never-dispatched, recovery-confirmed
+preparation. `registration_request` signs a fresh shared D-128 proof and FULL/IMMEDIATE-commits
+the unknown marker before returning any Submit request to a caller. From that point cancellation,
+lost responses and restart preserve the original signed bytes and keys and select only `confirm`.
+There is no absent-receipt, denial or changed-false fallback to a mutation in this slice. Verified
+pre-transmission or unchanged-failure retry handling belongs to the later trusted HTTP driver.
+Exact bounded committed confirmation binds kind, operation, digest, all ids and revision using
+the shared validator and stores only historical outcome. Neither it nor a JWT installs neutral
+admission, ordinary tokens, sync/upload authority or an active profile. Pending records cannot
+enter retained-device revalidation. All local actions fence the original open-store generation
+and operation id; immutable pending business bytes and monotonic state also have SQL constraints.
+No registration/password HTTP driver, Tauri IPC or replacement Settings UI exists yet.
+
 Migration 8 adds a monotonically increasing authentication generation, the verified scope ceiling,
 single-use refresh claim and an optional Retry-After deadline, alongside the saved absolute family
 expiry. Initial authentication accepts exactly D-107's initial scope set. An explicit

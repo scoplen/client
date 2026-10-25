@@ -247,6 +247,14 @@ sync keys. Registration and password sign-in are not available in this build; lo
 available. Invitation enrollment, invitation replacement, and device pairing have been retired.
 An unfinished old setup is preserved and cannot resume its retired entry protocol.
 
+Rust has a separate registration preparation API with the real fixed D-127 password derivation,
+locally verified key wrappers, a mandatory saved recovery key and explicit confirmation.
+Its independent SQLCipher pending record keeps the original Device keys and signed business
+bytes through restart and uncertain request handoff. It performs no HTTP, exposes no desktop
+commands, and installs no Account, tokens or sync authority. Device keys in this boundary are
+software keys protected by SQLCipher, not hardware-held non-exportable keys. Full registration,
+password sign-in, isolated Account-profile installation and switching remain incomplete.
+
 Profiles with saved neutral admission anchors continue to verify offline against their original
 private roots. Profiles without those anchors require explicit current-device revalidation;
 historical session flags, cached bootstrap responses and archived entry payloads cannot grant

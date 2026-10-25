@@ -160,6 +160,28 @@ Fixtures construct public K-2 artifacts and signed K-4 updates without retired D
 Retained fresh-challenge, JWKS, invalid-response, refresh, account, sync, history and notification
 regressions remain applicable. This closure does not implement the future password sign-in UI.
 
+## Password registration preparation
+
+The public Rust preparation API uses the production D-127 profile, not a cheaper test KDF:
+
+```text
+cargo test -p scoplen-client-core --lib personal_server::registration::tests -- --test-threads=1
+```
+
+The suite independently opens all generated wrappers, checks the real verifier/password
+binding, create-new recovery export and explicit confirmation, failed SQL commits, exact
+original bytes and fresh submit/confirm proofs across reopen, every terminal-confirmation field,
+immutable/oversized pending records, existing-profile preservation and captured-store fences.
+The suite serializes its genuine derivations, while production uses a process-wide fail-fast
+slot. Recovery output on Windows inherits the chosen directory ACL; Unix asserts mode 0600.
+No tokens, admission anchors or usable sync state may result from preparation or historical
+confirmation. A request handed to a sender is conservatively unknown even if the caller drops
+it without transmitting; the current slice offers only exact confirmation afterward.
+These tests perform no Account HTTP exchange or UI/native-picker acceptance. Real registration,
+password login, isolated Account-profile installation, trusted unchanged-failure retries and
+macOS/native acceptance remain separate outcomes. No bindings regeneration is required because
+this Rust-only surface adds no Tauri command or frontend type.
+
 ## Native Personal notification fault tests
 
 The independent TLS 1.3/H2 peer verifies context/auth/ready, CONNECT/token-bound fresh DPoP,
