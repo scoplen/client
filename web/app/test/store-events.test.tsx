@@ -4,6 +4,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { render, waitFor } from "@testing-library/react";
 import type { StoreChanged } from "../src/ipc/bindings";
 import { useStoreChanges } from "../src/ipc/store-events";
+import { createInventoryApi } from "../src/inventory/core-api";
 
 afterEach(() => clearMocks());
 
@@ -13,6 +14,19 @@ function Listener({ onChange }: { onChange: (change: StoreChanged) => void }) {
 }
 
 describe("useStoreChanges", () => {
+  it("refreshes inventory consumers after a saved Forward changes", async () => {
+    mockIPC(() => undefined, { shouldMockEvents: true });
+    const listener = vi.fn();
+    const stop = createInventoryApi().onChange(listener);
+    await waitFor(async () => {
+      await emit("store-changed", { recordType: "forward", ids: ["forward-1"] });
+      expect(listener).toHaveBeenCalled();
+    });
+    stop();
+    const count = listener.mock.calls.length;
+    await emit("store-changed", { recordType: "forward", ids: ["forward-1"] });
+    expect(listener).toHaveBeenCalledTimes(count);
+  });
   it("delivers changes of the requested types and stops on unmount", async () => {
     mockIPC(() => undefined, { shouldMockEvents: true });
     const heard: StoreChanged[] = [];

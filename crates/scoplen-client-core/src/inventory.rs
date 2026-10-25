@@ -22,9 +22,9 @@ use uuid::Uuid;
 use crate::connection::{ConnectionPlan, ConnectionPlanError, resolve_connection_plan};
 use crate::repository::{
     AccessProfile, AccessProfileChange, Change, Credential, CredentialBinding, CredentialChange,
-    CredentialKind, DeviceKey, Edit, Forward, Host, HostChange, HostGroup, HostGroupChange, Record,
-    RecordError, Repository, Route, RouteChange, RouteChoice, RouteKind, Workspace,
-    credential_secret,
+    CredentialKind, DeviceKey, Edit, Forward, ForwardChange, ForwardKind, Host, HostChange,
+    HostGroup, HostGroupChange, Record, RecordError, Repository, Route, RouteChange, RouteChoice,
+    RouteKind, Workspace, credential_secret,
 };
 use crate::store::device::{SESSION_HISTORY_LIMIT, SessionKind, SessionOutcome};
 use crate::store::{LocalWrite, NewObject, Store, StoreError};
@@ -467,7 +467,7 @@ pub struct RouteInput {
 }
 
 /// The direction of a saved tunnel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Type)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum ForwardKindInput {
     /// Listen locally and connect to the remote target.
@@ -489,6 +489,38 @@ pub struct ForwardSummary {
     /// Tunnel direction.
     pub kind: ForwardKindInput,
     /// The optional default profile configured on the tunnel.
+    pub profile: Option<String>,
+    /// Saved local listening address, when specified.
+    pub bind_address: Option<String>,
+    /// Saved nonzero local port, when specified.
+    pub bind_port: Option<u16>,
+    /// Destination resolved by the SSH server, when specified.
+    pub target_host: Option<String>,
+    /// Saved nonzero destination port, when specified.
+    pub target_port: Option<u16>,
+    /// Number of Logins that attach this tunnel.
+    pub profile_count: u32,
+    /// Whether a later write resurrected this definition.
+    pub restored: bool,
+}
+
+/// Complete replacement of a saved local TCP tunnel definition.
+#[derive(Clone, Debug, Deserialize, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardInput {
+    /// Nonempty display name.
+    pub name: String,
+    /// Only Local is editable in this outcome.
+    pub kind: ForwardKindInput,
+    /// Explicit IPv4 or IPv6 literal; never replaced with a broader listener.
+    pub bind_address: String,
+    /// Nonzero TCP listening port.
+    pub bind_port: u32,
+    /// Hostname or IP literal resolved remotely.
+    pub target_host: String,
+    /// Nonzero TCP destination port.
+    pub target_port: u32,
+    /// Optional default Login; starting still selects an explicit Login.
     pub profile: Option<String>,
 }
 
@@ -592,6 +624,12 @@ pub enum ObjectEditError {
     /// A route command is empty or exceeds the model limit.
     #[error("the route command is invalid")]
     InvalidCommand,
+    /// A local tunnel endpoint is invalid.
+    #[error("the tunnel {field} is invalid")]
+    InvalidForward { field: String },
+    /// Only local TCP definitions can be created or edited here.
+    #[error("only local TCP tunnel definitions can be edited")]
+    UnsupportedForward,
     /// Kind and binding do not satisfy the object model.
     #[error("the credential kind and binding are incompatible")]
     InvalidCredentialBinding,
@@ -1158,15 +1196,124 @@ impl Inventory {
 
     /// Lists saved tunnels that can be attached to an access profile.
     pub fn forwards_objects(&self) -> Result<Vec<ForwardSummary>, ObjectEditError> {
+        let profiles = self.profiles().map_err(object_from_failure)?;
         let mut result = self
             .forwards()
             .map_err(object_from_failure)?
             .iter()
-            .map(forward_summary)
+            .map(|forward| forward_summary(forward, &profiles))
             .collect::<Vec<_>>();
         result
             .sort_by(|left, right| left.name.cmp(&right.name).then_with(|| left.id.cmp(&right.id)));
         Ok(result)
+    }
+
+    /// Creates a local TCP definition without starting any network operation.
+    pub fn create_forward(&self, input: ForwardInput) -> Result<ForwardSummary, ObjectEditError> {
+        let change = self.validate_forward_input(input)?;
+        let forward =
+            Repository::<Forward>::new(&self.store).create(change).map_err(object_from_record)?;
+        Ok(forward_summary(&forward, &[]))
+    }
+
+    /// Replaces saved endpoints. Existing runs retain their own fixed snapshot.
+    pub fn update_forward(
+        &self,
+        forward_id: String,
+        input: ForwardInput,
+    ) -> Result<ForwardSummary, ObjectEditError> {
+        let id = parse_object_id(&forward_id, "tunnel")?;
+        let forwards = Repository::<Forward>::new(&self.store);
+        let existing = forwards
+            .get(id)
+            .map_err(object_from_record)?
+            .ok_or_else(|| object_not_found("tunnel"))?;
+        if existing.kind != ForwardKind::Local {
+            return Err(ObjectEditError::UnsupportedForward);
+        }
+        let change = self.validate_forward_input(input)?;
+        let profiles = self.profiles().map_err(object_from_failure)?;
+        let forward = forwards.update(id, change).map_err(object_from_record)?;
+        Ok(forward_summary(&forward, &profiles))
+    }
+
+    /// Deletes an unreferenced saved definition; independent runs remain owned.
+    pub fn delete_forward(&self, forward_id: String) -> Result<(), ObjectEditError> {
+        let id = parse_object_id(&forward_id, "tunnel")?;
+        let forwards = Repository::<Forward>::new(&self.store);
+        forwards.get(id).map_err(object_from_record)?.ok_or_else(|| object_not_found("tunnel"))?;
+        if self
+            .profiles()
+            .map_err(object_from_failure)?
+            .iter()
+            .any(|profile| profile.forwards.contains(&id))
+            || Repository::<Workspace>::new(&self.store)
+                .list()
+                .map_err(object_from_record)?
+                .iter()
+                .any(|workspace| {
+                    workspace.sessions.values().any(|session| session.forward == Some(id))
+                })
+        {
+            return Err(ObjectEditError::InUse);
+        }
+        forwards.delete(id).map_err(object_from_record)
+    }
+
+    fn validate_forward_input(
+        &self,
+        input: ForwardInput,
+    ) -> Result<ForwardChange, ObjectEditError> {
+        if input.kind != ForwardKindInput::Local {
+            return Err(ObjectEditError::UnsupportedForward);
+        }
+        let name = validate_name(input.name)?;
+        let invalid = |field: &str| ObjectEditError::InvalidForward { field: field.to_owned() };
+        let bind_address = input.bind_address.trim().to_owned();
+        if bind_address.parse::<std::net::IpAddr>().is_err() {
+            return Err(invalid("bindAddress"));
+        }
+        let bind_port = u16::try_from(input.bind_port)
+            .ok()
+            .filter(|port| *port != 0)
+            .ok_or_else(|| invalid("bindPort"))?;
+        let target_host = input.target_host.trim().to_owned();
+        if target_host.len() > 1024 {
+            return Err(invalid("targetHost"));
+        }
+        validate_text(&target_host, "targetHost")?;
+        if target_host.is_empty()
+            || target_host.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(invalid("targetHost"));
+        }
+        let target_port = u16::try_from(input.target_port)
+            .ok()
+            .filter(|port| *port != 0)
+            .ok_or_else(|| invalid("targetPort"))?;
+        let profile = match input.profile {
+            None => None,
+            Some(value) => {
+                let id = parse_object_id(&value, "access profile")?;
+                if Repository::<AccessProfile>::new(&self.store)
+                    .get(id)
+                    .map_err(object_from_record)?
+                    .is_none()
+                {
+                    return Err(object_not_found("access profile"));
+                }
+                Some(id)
+            }
+        };
+        Ok(ForwardChange {
+            name: Some(name),
+            kind: Some(ForwardKind::Local),
+            bind_address: Edit::Set(bind_address),
+            bind_port: Edit::Set(bind_port),
+            target_host: Edit::Set(target_host),
+            target_port: Edit::Set(target_port),
+            profile: Edit::from_option(profile),
+        })
     }
 
     /// Reads one route.
@@ -3172,7 +3319,7 @@ fn profile_summary(
     })
 }
 
-fn forward_summary(forward: &Forward) -> ForwardSummary {
+fn forward_summary(forward: &Forward, profiles: &[AccessProfile]) -> ForwardSummary {
     ForwardSummary {
         id: id(forward.meta.id),
         name: forward.name.clone(),
@@ -3182,6 +3329,15 @@ fn forward_summary(forward: &Forward) -> ForwardSummary {
             crate::repository::ForwardKind::Dynamic => ForwardKindInput::Dynamic,
         },
         profile: forward.profile.map(id),
+        bind_address: forward.bind_address.clone(),
+        bind_port: forward.bind_port,
+        target_host: forward.target_host.clone(),
+        target_port: forward.target_port,
+        profile_count: profiles
+            .iter()
+            .filter(|profile| profile.forwards.contains(&forward.meta.id))
+            .count() as u32,
+        restored: forward.meta.restored,
     }
 }
 
@@ -4797,6 +4953,160 @@ mod tests {
             );
         }
         assert!(inventory.routes_objects().unwrap().is_empty());
+    }
+
+    fn local_forward_input(profile: Option<String>) -> ForwardInput {
+        ForwardInput {
+            name: "postgres".into(),
+            kind: ForwardKindInput::Local,
+            bind_address: "127.0.0.1".into(),
+            bind_port: 5433,
+            target_host: "prod-db.internal".into(),
+            target_port: 5432,
+            profile,
+        }
+    }
+
+    #[test]
+    fn local_forward_crud_preserves_explicit_endpoints_and_validates_before_writing() {
+        let inventory = inventory();
+        let created = inventory.create_forward(local_forward_input(None)).unwrap();
+        assert_eq!(created.bind_address.as_deref(), Some("127.0.0.1"));
+        assert_eq!(created.target_host.as_deref(), Some("prod-db.internal"));
+        let mut replacement = local_forward_input(None);
+        replacement.bind_address = "::".into();
+        replacement.target_host = "db.internal".into();
+        let changed = inventory.update_forward(created.id.clone(), replacement.clone()).unwrap();
+        assert_eq!(changed.bind_address.as_deref(), Some("::"));
+        assert_eq!(changed.target_host.as_deref(), Some("db.internal"));
+
+        for (field, invalid) in [
+            (
+                "bindAddress",
+                ForwardInput { bind_address: "localhost".into(), ..replacement.clone() },
+            ),
+            ("bindPort", ForwardInput { bind_port: 0, ..replacement.clone() }),
+            ("targetPort", ForwardInput { target_port: 65536, ..replacement.clone() }),
+            (
+                "targetHost",
+                ForwardInput { target_host: "db\ninternal".into(), ..replacement.clone() },
+            ),
+        ] {
+            assert_eq!(
+                inventory.update_forward(created.id.clone(), invalid),
+                Err(ObjectEditError::InvalidForward { field: field.into() })
+            );
+            assert_eq!(inventory.forwards_objects().unwrap(), vec![changed.clone()]);
+        }
+        replacement.profile = Some(id(Uuid::now_v7()));
+        assert!(matches!(
+            inventory.update_forward(created.id.clone(), replacement),
+            Err(ObjectEditError::NotFound { .. })
+        ));
+        assert_eq!(inventory.forwards_objects().unwrap(), vec![changed]);
+        inventory.delete_forward(created.id).unwrap();
+        assert!(inventory.forwards_objects().unwrap().is_empty());
+    }
+
+    #[test]
+    fn forward_deletion_protects_profile_and_workspace_references() {
+        let inventory = inventory();
+        let host = inventory
+            .add_host(NewHost {
+                name: None,
+                address: "api.example".into(),
+                port: None,
+                username: "ops".into(),
+                sign_in: SignIn::Agent,
+            })
+            .unwrap();
+        let profile_id = parse_id(&host.logins[0].id).unwrap();
+        let created = inventory.create_forward(local_forward_input(Some(id(profile_id)))).unwrap();
+        let forward_id = parse_id(&created.id).unwrap();
+        Repository::<AccessProfile>::new(&inventory.store)
+            .update(
+                profile_id,
+                AccessProfileChange { forwards: [(forward_id, true)].into(), ..Default::default() },
+            )
+            .unwrap();
+        assert_eq!(inventory.forwards_objects().unwrap()[0].profile_count, 1);
+        assert_eq!(inventory.delete_forward(created.id.clone()), Err(ObjectEditError::InUse));
+        Repository::<AccessProfile>::new(&inventory.store)
+            .update(
+                profile_id,
+                AccessProfileChange {
+                    forwards: [(forward_id, false)].into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let workspace = Repository::<Workspace>::new(&inventory.store)
+            .create(WorkspaceChange {
+                name: Some("database".into()),
+                sessions: [(
+                    Uuid::now_v7(),
+                    Some(SessionSpec {
+                        profile: profile_id,
+                        kind: WorkspaceSessionKind::Forward,
+                        forward: Some(forward_id),
+                        working_directory: None,
+                    }),
+                )]
+                .into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(inventory.delete_forward(created.id.clone()), Err(ObjectEditError::InUse));
+        Repository::<Workspace>::new(&inventory.store).delete(workspace.meta.id).unwrap();
+        inventory.delete_forward(created.id).unwrap();
+    }
+
+    #[test]
+    fn forward_target_limit_uses_utf8_bytes_and_rejects_without_writing() {
+        let inventory = inventory();
+        let boundary = "\u{00e9}".repeat(512);
+        let created = inventory
+            .create_forward(ForwardInput {
+                target_host: boundary.clone(),
+                ..local_forward_input(None)
+            })
+            .unwrap();
+        assert_eq!(created.target_host.as_deref(), Some(boundary.as_str()));
+        let invalid =
+            ForwardInput { target_host: format!("{boundary}x"), ..local_forward_input(None) };
+        assert_eq!(
+            inventory.create_forward(invalid.clone()),
+            Err(ObjectEditError::InvalidForward { field: "targetHost".into() })
+        );
+        assert_eq!(
+            inventory.update_forward(created.id.clone(), invalid),
+            Err(ObjectEditError::InvalidForward { field: "targetHost".into() })
+        );
+        assert_eq!(inventory.forwards_objects().unwrap(), vec![created]);
+    }
+
+    #[test]
+    fn unsupported_forward_edits_leave_the_original_record_untouched() {
+        let inventory = inventory();
+        let mut unsupported = local_forward_input(None);
+        unsupported.kind = ForwardKindInput::Remote;
+        assert_eq!(inventory.create_forward(unsupported), Err(ObjectEditError::UnsupportedForward));
+        assert!(inventory.forwards_objects().unwrap().is_empty());
+        let remote = Repository::<Forward>::new(&inventory.store)
+            .create(ForwardChange {
+                name: Some("remote".into()),
+                kind: Some(ForwardKind::Remote),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            inventory.update_forward(id(remote.meta.id), local_forward_input(None)),
+            Err(ObjectEditError::UnsupportedForward)
+        );
+        assert_eq!(
+            Repository::<Forward>::new(&inventory.store).get(remote.meta.id).unwrap(),
+            Some(remote)
+        );
     }
 
     #[test]

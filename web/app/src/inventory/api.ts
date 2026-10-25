@@ -169,6 +169,22 @@ export interface ForwardSummary {
   name: string;
   kind: ForwardKind;
   profile: Id | null;
+  bindAddress: string | null;
+  bindPort: number | null;
+  targetHost: string | null;
+  targetPort: number | null;
+  profileCount: number;
+  restored: boolean;
+}
+
+export interface ForwardInput {
+  name: string;
+  kind: ForwardKind;
+  bindAddress: string;
+  bindPort: number;
+  targetHost: string;
+  targetPort: number;
+  profile: Id | null;
 }
 
 export interface AccessProfileSummary {
@@ -214,6 +230,8 @@ export type ObjectEditError =
   | { kind: "invalidProxy" }
   | { kind: "invalidProxyAuthentication" }
   | { kind: "invalidCommand" }
+  | { kind: "invalidForward"; field: string }
+  | { kind: "unsupportedForward" }
   | { kind: "invalidCredentialBinding" }
   | { kind: "secretRequired" }
   | { kind: "secretNotAllowed" }
@@ -387,6 +405,9 @@ export interface InventoryApi {
   updateGroup(id: Id, group: GroupInput): Promise<Outcome<GroupSummary, GroupError>>;
   accessProfiles(): Promise<Outcome<AccessProfileSummary[], ObjectEditError>>;
   forwards(): Promise<Outcome<ForwardSummary[], ObjectEditError>>;
+  createForward(forward: ForwardInput): Promise<Outcome<ForwardSummary, ObjectEditError>>;
+  updateForward(id: Id, forward: ForwardInput): Promise<Outcome<ForwardSummary, ObjectEditError>>;
+  deleteForward(id: Id): Promise<Outcome<null, ObjectEditError>>;
   createAccessProfile(profile: AccessProfileInput): Promise<Outcome<AccessProfileSummary, ObjectEditError>>;
   updateAccessProfile(id: Id, profile: AccessProfileInput): Promise<Outcome<AccessProfileSummary, ObjectEditError>>;
   deleteAccessProfile(id: Id): Promise<Outcome<null, ObjectEditError>>;
