@@ -8,9 +8,16 @@ use std::time::Duration;
 
 use scoplen_api::{
     auth::{AuthJwk, AuthJwks},
-    personal_enrollment::PersonalEnrollmentRequest,
+    sync::{
+        SessionVault, SyncAccountDeviceWrap, SyncAccountKeyBundle, SyncAccountKeyBundleUpdate,
+        SyncLimits, SyncSessionResponse, SyncVaultKey, SyncVaultKeysResponse, VaultKind,
+    },
 };
-use scoplen_crypto::{DeviceAccessTokenClaims, Ed25519SigningKey, SymmetricKey, p256_verify};
+use scoplen_crypto::{
+    AccountKemKeyWrap, AccountSigningKeyWrap, DeviceAccessTokenClaims, DeviceArkWrap,
+    DeviceCertificate, Ed25519SigningKey, PersonalVaultKeyWrap, RecoveryBlob, RecoveryKey,
+    SymmetricKey, generate_account_keys, generate_device_keys, generate_symmetric_key, p256_verify,
+};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpListener,
@@ -20,8 +27,6 @@ use tokio_rustls::TlsAcceptor;
 use super::*;
 
 mod admission;
-
-const TOKEN: [u8; 32] = [42; 32];
 
 fn store(dir: &tempfile::TempDir) -> Arc<Store> {
     Arc::new(Store::open(&dir.path().join("personal.db"), &SymmetricKey::new([27; 32])).unwrap())
@@ -34,13 +39,9 @@ pub(super) fn database(dir: &tempfile::TempDir) -> rusqlite::Connection {
     conn
 }
 
-fn invitation(origin: &str) -> Zeroizing<String> {
-    Zeroizing::new(format!("{origin}/invite#token={}", URL_SAFE_NO_PAD.encode(TOKEN)))
-}
-
 #[derive(Default)]
 struct FixtureState {
-    enrolled: StdMutex<Option<PersonalEnrollmentRequest>>,
+    enrolled: StdMutex<Option<DeviceCertificate>>,
     challenges: AtomicUsize,
     device_exchanges: AtomicUsize,
     nonces: StdMutex<Vec<String>>,
@@ -183,7 +184,7 @@ fn fixture_response(state: &FixtureState, origin: &str, path: &str, body: &[u8])
             let request =
                 AuthChallengeRequest::from_json(std::str::from_utf8(body).unwrap()).unwrap();
             if let Some(enrolled) = &*state.enrolled.lock().unwrap() {
-                assert_eq!(request.device_id, enrolled.device_certificate.device_id);
+                assert_eq!(request.device_id, enrolled.device_id);
             }
             let index = state.challenges.fetch_add(1, Ordering::SeqCst) + 1;
             if let Some(response) = &*state.challenge_response.lock().unwrap() {
@@ -210,9 +211,10 @@ fn fixture_response(state: &FixtureState, origin: &str, path: &str, body: &[u8])
                 .collect();
             let enrolled = state.enrolled.lock().unwrap();
             let expected_key = state.expected_device_key.lock().unwrap();
-            if let Some(key) = expected_key.as_ref().or_else(|| {
-                enrolled.as_ref().map(|record| &record.device_certificate.signing_public_key)
-            }) {
+            if let Some(key) = expected_key
+                .as_ref()
+                .or_else(|| enrolled.as_ref().map(|record| &record.signing_public_key))
+            {
                 p256_verify(
                     key,
                     &DeviceAuthContext::new(origin, &request.nonce, request.device_id)
@@ -241,8 +243,7 @@ fn fixture_response(state: &FixtureState, origin: &str, path: &str, body: &[u8])
                 },
                 did: request.device_id,
                 jti: scoplen_model::new_uuid_v7().unwrap(),
-                cnf_jkt: dpop_jwk_thumbprint(&enrolled.device_certificate.signing_public_key)
-                    .unwrap(),
+                cnf_jkt: dpop_jwk_thumbprint(&enrolled.signing_public_key).unwrap(),
                 org: vec![],
                 scope: scoplen_api::auth::INITIAL_DEVICE_ACCESS_SCOPE.into(),
                 iat: issued_at,
@@ -252,7 +253,7 @@ fn fixture_response(state: &FixtureState, origin: &str, path: &str, body: &[u8])
                 &signing,
                 &trusted,
                 "fixture",
-                &enrolled.device_certificate.signing_public_key,
+                &enrolled.signing_public_key,
                 &claims,
             )
             .unwrap();
@@ -282,26 +283,152 @@ fn fixture_response(state: &FixtureState, origin: &str, path: &str, body: &[u8])
     }
 }
 
-pub(crate) fn legacy_profile(local: &Store, origin: &str, confirmed: bool) -> PersonalRecord {
-    let pending =
-        identity::prepare(local, Invitation::parse(&invitation(origin)).unwrap(), "Desktop".into())
-            .unwrap();
-    local.insert_personal_record(&pending).unwrap();
-    if confirmed {
-        local.save_personal_tokens(b"historical-access", b"historical-refresh", 1, 2).unwrap();
-        local.clear_personal_tokens().unwrap();
+pub(crate) struct FixtureProfile {
+    pub record: PersonalRecord,
+    pub certificate: DeviceCertificate,
+    pub snapshot: crate::store::personal::PersonalSyncRecord,
+}
+
+/// Test setup uses only the public K-2/K-4 artifacts, never an archived entry codec.
+pub(crate) fn fixture_profile(local: &Store, origin: &str, admitted: bool) -> FixtureProfile {
+    let account_id = scoplen_model::new_uuid_v7().unwrap();
+    let personal_vault_id = scoplen_model::new_uuid_v7().unwrap();
+    let device = generate_device_keys().unwrap();
+    let account = generate_account_keys().unwrap();
+    let ark = generate_symmetric_key().unwrap();
+    let vault_key = generate_symmetric_key().unwrap();
+    let recovery = RecoveryKey::generate().unwrap();
+    let device_id = local.device_id();
+    let certificate = DeviceCertificate::issue(
+        &account.signing,
+        device_id,
+        account_id,
+        device.signing.public_key_sec1(),
+        device.kem.public_key().to_vec(),
+        "Desktop".into(),
+        std::env::consts::OS.to_owned(),
+        scoplen_model::system_time_millis().unwrap(),
+    )
+    .unwrap();
+    let mut update = SyncAccountKeyBundleUpdate {
+        revision: 1,
+        device_wraps: vec![SyncAccountDeviceWrap {
+            device_id,
+            wrapped_ark: DeviceArkWrap::seal(account_id, device_id, device.kem.public_key(), &ark)
+                .unwrap()
+                .encode()
+                .to_vec(),
+        }],
+        account_signing_key: AccountSigningKeyWrap::seal(account_id, &ark, &account.signing)
+            .unwrap()
+            .encode()
+            .to_vec(),
+        account_kem_key: AccountKemKeyWrap::seal(account_id, &ark, &account.kem)
+            .unwrap()
+            .encode()
+            .to_vec(),
+        recovery_blob: RecoveryBlob::wrap(&recovery, account_id, &ark).unwrap().encode().unwrap(),
+        signature: vec![0; 64],
+    };
+    update.signature = account.signing.sign(&update.signature_input().unwrap()).to_vec();
+    let update = SyncAccountKeyBundleUpdate::from_cbor(&update.to_cbor().unwrap()).unwrap();
+    let bundle = SyncAccountKeyBundle {
+        revision: update.revision,
+        wrapped_ark: update.device_wraps[0].wrapped_ark.clone(),
+        account_signing_key: update.account_signing_key,
+        account_kem_key: update.account_kem_key,
+        recovery_blob: update.recovery_blob,
+        certificates: vec![certificate.encode().unwrap()],
+        revocations: vec![],
+    };
+    let session = SyncSessionResponse {
+        server_version: "0.1.0".into(),
+        max_model_version: 1,
+        limits: SyncLimits {
+            max_envelope_bytes: 1_048_576,
+            max_batch_objects: 500,
+            max_batch_bytes: 4_194_304,
+            max_objects_per_vault: 100_000,
+            max_shared_vaults_per_account: 100,
+            max_members_per_shared_vault: 100,
+            write_requests_per_second: 10,
+            write_burst: 20,
+        },
+        vaults: vec![
+            SessionVault {
+                id: personal_vault_id,
+                kind: VaultKind::Personal,
+                seq: 7,
+                key_epoch: 1,
+                rotation_pending: false,
+            },
+            SessionVault {
+                id: scoplen_model::new_uuid_v7().unwrap(),
+                kind: VaultKind::Unknown("future".into()),
+                seq: 3,
+                key_epoch: 4,
+                rotation_pending: true,
+            },
+        ],
+    };
+    let vault = SyncVaultKeysResponse {
+        keys: vec![SyncVaultKey {
+            epoch: 1,
+            wrapped_vault_key: PersonalVaultKeyWrap::seal(
+                account_id,
+                personal_vault_id,
+                1,
+                &ark,
+                &vault_key,
+            )
+            .unwrap()
+            .encode()
+            .to_vec(),
+        }],
+    };
+    let snapshot = crate::store::personal::PersonalSyncRecord {
+        generation: 0,
+        session: SecretVec::new(session.to_cbor().unwrap()),
+        account_keys: SecretVec::new(bundle.to_cbor().unwrap()),
+        vault_keys: SecretVec::new(vault.to_cbor().unwrap()),
+    };
+    let mut material = Zeroizing::new(Vec::with_capacity(225));
+    material.push(1);
+    material.extend_from_slice(device.signing.private_key_bytes().as_bytes());
+    material.extend_from_slice(device.kem.private_key_bytes().as_bytes());
+    material.extend_from_slice(ark.as_bytes());
+    material.extend_from_slice(account.signing.private_key_bytes().as_bytes());
+    material.extend_from_slice(account.kem.private_key_bytes().as_bytes());
+    material.extend_from_slice(vault_key.as_bytes());
+    material.extend_from_slice(recovery.as_bytes());
+    let record = PersonalRecord {
+        origin: origin.into(),
+        account_id,
+        personal_vault_id,
+        device_name: "Desktop".into(),
+        private_material: SecretVec::new(material.to_vec()),
+        recovery_saved: false,
+        recovery_confirmed: false,
+        access_expires_at: None,
+        refresh_expires_at: None,
+        auth_generation: 0,
+        auth_scope: None,
+        refresh_available: false,
+        refresh_retry_at: None,
+        admitted: false,
+    };
+    local.insert_personal_record(&record).unwrap();
+    if admitted {
+        let (retained, anchors) =
+            retained::RetainedAccount::from_snapshot(local, &record, &snapshot).unwrap();
+        sync::validate_against(local, &record, &snapshot, None, &retained, false).unwrap();
+        local.insert_personal_admission(&record, anchors.as_bytes()).unwrap();
     }
-    local.personal_record().unwrap().unwrap()
+    FixtureProfile { record: local.personal_record().unwrap().unwrap(), certificate, snapshot }
 }
 
 async fn ready(_manager: &PersonalServer, local: &Arc<Store>, origin: &str, state: &FixtureState) {
-    let pending = legacy_profile(local, origin, true);
-    let enrollment = PersonalEnrollmentRequest::from_json(
-        pending.enrollment_request.as_ref().unwrap().as_bytes(),
-    )
-    .unwrap();
-    *state.enrolled.lock().unwrap() = Some(enrollment);
-    retained::RetainedAccount::load(local, &pending).unwrap();
+    *state.enrolled.lock().unwrap() = Some(fixture_profile(local, origin, true).certificate);
 }
 #[tokio::test]
 async fn real_https_authenticates_confirmed_identity_and_retains_tokens_only_in_sqlcipher() {

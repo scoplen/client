@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Removed archived invitation and pairing codecs from the client and its test fixtures.
+  Saved neutral admission anchors still verify offline; profiles without anchors require
+  explicit current-device revalidation. Status leaves archived payloads unread in SQLCipher,
+  and historical session flags or cached bootstrap responses cannot grant admission.
+
 - Added explicit retained-device revalidation in Personal account settings. Original device,
   ARK and private Account keys anchor ordinary signed authentication and complete K-4 checks;
   temporary credentials, neutral provenance and bootstrap install atomically in the captured

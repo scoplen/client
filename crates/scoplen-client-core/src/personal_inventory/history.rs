@@ -139,7 +139,7 @@ mod tests {
         let path = dir.path().join("history.db");
         let store = Arc::new(Store::open(&path, &SymmetricKey::new([61; 32])).unwrap());
         let manager = PersonalServer::default();
-        crate::personal_server::tests::legacy_profile(&store, "https://example.test", true);
+        crate::personal_server::tests::fixture_profile(&store, "https://example.test", true);
         manager.status(&store).unwrap();
         let record = store.personal_record().unwrap().unwrap();
         let object = store

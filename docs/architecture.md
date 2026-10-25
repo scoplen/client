@@ -141,19 +141,26 @@ Identity roots, device keys, origin and account ownership cannot change in place
 This binds the current single-account encrypted store; it does not implement D-126 profile/Team
 switching or the D-128 password wire.
 
-Conversion is bounded and offline. The read-only historical decoder verifies the origin-bound
-D-101 possession proof and account-signed K-4 update, or the exact authenticated pairing handoff,
-then the certificate, stored device keys and opened account/vault/recovery wrappers. It requires
-historical confirmed use: the verified-session marker written after token verification, a complete
-locally reverified `personal_sync`, or a matching completed new-device checkpoint. An attempted
-request or bare handoff cannot authorize conversion. A FULL-synchronous IMMEDIATE transaction
-checks the unchanged identity, auth generation, device keys, snapshot bytes and completion
-checkpoint before inserting admission. Failure preserves every original byte.
+Runtime authentication, account reads, bootstrap, inventory and trust require saved neutral
+admission anchors, verified locally against the retained private roots. The archived entry decoder
+and conversion path are removed. Historical session markers, cached bootstrap responses and
+completed pairing checkpoints cannot install admission. Active identity reads select bounded
+private material and current metadata, excluding `enrollment_request` and `paired_handoff`.
+Orphaned archived entry status uses only an existence query against `personal_pairing`.
+Historical tables, columns and payload bytes remain unchanged in SQLCipher.
 
-After conversion, runtime authentication, account reads, bootstrap, inventory and trust use
-neutral admission rather than the archived ceremony. Original artifacts remain unchanged inside
-SQLCipher as recovery/audit data; runtime does not decode them again. Retired pending setups have
-no network or mutation entry point. Their status explains that the data was preserved. The
+A retained profile without anchors can explicitly revalidate its current device authority when
+its original device keys, ARK and private Account roots remain available. The operation uses
+ordinary signed-device authentication and complete K-4 verification; all previous certificate,
+revocation, revision and epoch evidence remains binding. Credentials stay transient until a
+FULL-synchronous IMMEDIATE transaction checks the unchanged identity, auth generation, device
+keys and snapshot bytes, while the caller holds its captured open-profile generation fence.
+The transaction installs neutral anchors, session and bootstrap together. Failure leaves the
+original profile unchanged. This path does not confirm pending D-128 operations or receipts.
+
+Status performs no network work or mutation. It verifies saved anchors, reports explicit
+revalidation for retained keys without anchors, and reports retirement for orphaned archived
+entries. The
 production enrollment, invitation replacement, recovery export and pairing APIs, IPC and Settings
 controls are removed. Fresh registration and password sign-in remain unavailable until D-128 is
 implemented, and Settings says so without an inert registration form.

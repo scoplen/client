@@ -479,7 +479,7 @@ mod tests {
             .unwrap(),
         );
         let manager = PersonalServer::default();
-        crate::personal_server::tests::legacy_profile(&store, "https://example.test", true);
+        crate::personal_server::tests::fixture_profile(&store, "https://example.test", true);
         manager.status(&store).unwrap();
         let object = store
             .write(LocalWrite {

@@ -247,12 +247,12 @@ sync keys. Registration and password sign-in are not available in this build; lo
 available. Invitation enrollment, invitation replacement, and device pairing have been retired.
 An unfinished old setup is preserved and cannot resume its retired entry protocol.
 
-Confirmed historical identities convert offline into neutral admitted provenance. The conversion
-verifies the original cryptographic artifacts and retained private roots, plus a previously
-established verified session, a complete verified bootstrap, or the matching completed new-device
-checkpoint. Attempt flags and a bare handoff are insufficient. Failed verification leaves the
-original data unchanged. The admitted profile binds its canonical origin, Account, Personal vault,
-device, and keys immutably to this encrypted store. Existing local SSH data stays local.
+Profiles with saved neutral admission anchors continue to verify offline against their original
+private roots. Profiles without those anchors require explicit current-device revalidation;
+historical session flags, cached bootstrap responses and archived entry payloads cannot grant
+admission. The client no longer reads or decodes archived invitation or pairing payloads, and
+preserves the original database bytes. The admitted profile binds its canonical origin, Account,
+Personal vault, device, and keys immutably to this encrypted store. Existing local SSH data stays local.
 This is the retirement/storage prerequisite for D-128; password admission and full multi-profile
 or Team context switching remain incomplete.
 
@@ -275,14 +275,14 @@ results; opening the page never starts a query. These results do not prove recen
 hardware protection, current server admission, or statements a server has withheld. Revocation
 publication and key rotation remain separate work.
 
-The Rust core can bootstrap retained first or paired devices through the real sync session,
+The Rust core can bootstrap admitted devices through the real sync session,
 account-key, and Personal vault-key endpoints. It requires a verified DPoP-bound access token,
 TLS 1.3, and HTTP/2; verifies certificates and every key wrap against the neutral admission anchors;
 and atomically saves the complete result in SQLCipher for offline restart. Membership-only
-account revisions can advance while the account key ciphertexts, recovery blob and Personal
-epoch-1 wrapping remain exactly those in the signed enrollment. A paired device retains all
-Personal epochs from its handoff, checks the first response against its admission revision and
-key projection, and keeps the same verified epoch/key set at later membership revisions. A newer revision may rewrap
+account revisions can advance while the account key ciphertexts and recovery blob match the
+saved neutral anchors. Each profile retains its verified Personal epochs, checks responses against
+its admission revision and key projection, and keeps the same verified epoch/key set at later
+membership revisions. A newer revision may rewrap
 this device's unchanged ARK. The saved revision prevents later rollback, including after
 restart; at the same revision only independently verified device statements may change.
 A pending or newer key rotation returns a distinct unsupported-rotation error while keeping

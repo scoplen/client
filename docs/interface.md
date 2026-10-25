@@ -147,86 +147,39 @@ the local store, Recent, terminal snapshots, synchronization or diagnostics; no 
 local write or remote write is started. SFTP v3 path resolution is not confinement or atomic
 no-follow opening. Matching metadata and EOF do not establish an immutable snapshot.
 
-## Personal account setup
+## Personal account
 
-Settings → Personal account opens the optional first-device flow. It reads public status
-without network access. The invitation is a hidden, uncontrolled input: submitting clears
-its DOM value and passes it once to Rust. The frontend retains no invitation, recovery key,
-private key, access token, or refresh token. The device name and trusted server origin are
-shown before joining. Rust parses the invitation, generates the shared K-2 artifacts, and
-persists the same pending identity in SQLCipher before any request.
+Settings → Personal account reads saved public status without network access or database
+mutation. Registration, password sign-in, invitation enrollment, invitation replacement and
+device pairing are unavailable in this build. A new installation explains that sign-in is
+unavailable; an orphaned archived entry explains that its protocol has retired. Existing
+local SSH data remains available. The frontend receives no recovery key, private key,
+access token or refresh token, and performs no cryptography or network requests.
 
-Save recovery file opens a native picker and writes the plaintext backup directly from Rust
-to a new file; existing files are not overwritten. Cancellation retains the current phase.
-The prompt asks the user to keep the file private and offline, separate from the device,
-and states that this version cannot restore an account from a recovery key. After joining,
-the user must retain access to at least one enrolled device. It also confirms that no account
-request has been sent yet. The user separately confirms that the file is kept safely before
-Join becomes available.
-Clear connector failures before any HTTP request allow explicit Join again with the same
-identity. Timeouts, lost responses, and unknown outcomes retain the pending identity and show
-Authenticate this device, which uses a fresh challenge without replaying the invitation.
-Errors use typed localized codes; arbitrary IPC or server diagnostics are not rendered.
+A retained profile shows its saved server, Account id and device name. Saved neutral admission
+anchors are verified locally against the original private roots. Historical session flags,
+cached bootstrap responses and archived invitation or pairing payloads cannot establish
+admission. Rust leaves archived payloads in SQLCipher without reading or decoding them.
 
-### Pair a second device
+When the original device keys, ARK and both private Account roots remain available but neutral
+anchors are absent, Revalidate this device is the explicit network action. It uses ordinary
+signed-device authentication and validates the complete K-4 bootstrap against those roots and
+all retained certificate, revocation, revision and epoch evidence. Credentials remain transient
+until one captured-profile-generation-fenced transaction installs anchors, session and bootstrap.
+A failed or superseded attempt preserves the original profile bytes and cannot start sync or
+upload inventory. Revalidation does not resume a retired entry protocol or confirm a pending
+D-128 operation; exact receipt confirmation remains separate.
 
-In Personal account, a new installation chooses Join an existing account, supplies the same
-canonical HTTPS server and a device name, and creates a five-minute pairing session. Rust
-returns its public link, one-time eight-character password and QR module matrix through a
-dedicated command. The QR is drawn locally with a four-module quiet zone on white. Rendering
-failure shows an explicit fallback while retaining the valid manual link/password session.
-Only the public link has a Copy action. The password and QR stay in this transient view and clear
-on termination, failure, cancellation or leaving the view. Reopening settings reads only the
-saved public checkpoint; it does not repeat the password or resume network activity.
+Authenticate this device obtains a fresh signed challenge for an admitted profile. Authenticated
+status means Rust retains a verified usable device session, which can refresh on a server
+operation or background reconnect when its access token approaches expiry. It does not mean
+inventory has synchronized. Existing hosts and credentials remain local.
 
-On the existing authenticated installation, Pair another device offers Read PNG and pair,
-which opens a native PNG picker. Rust recognizes one canonical QRv2 locally; no image or QR
-text crosses IPC or is uploaded. Closing the picker leaves the form unchanged. Leaving the
-view detaches its registration, fencing late picker/decoder results before a claim. Rust
-rejects a different origin before claiming and verifies the QR's key digest against authenticated
-device keys before review. Camera capture is not part of this entrance.
-The public link and separately entered password remain available. Submitting clears the
-password field immediately. Rust runs
-CPace and exposes only the authenticated device name and platform for explicit approval. The
-screen states that approval grants account and Personal sync-key access. All signing, handoff
-validation, durable checkpoints, admission and anchored sync verification stay in Rust.
-
-The explicit create/join/approve/recover action attaches one foreground Rust observer.
-`watchPersonalPairing` drives bounded core progress and sends public status over a typed channel;
-JavaScript does not run network timers. Closing the view detaches that observer without
-cancelling the saved protocol. Late notifications cannot replace newer status. Confirmation,
-terminal state and uncertain admission pause progress. Check and continue pairing resumes from
-the retained identity and exact checkpoint; Cancel pairing is a separate explicit intent.
-Neither action fabricates an invitation, recovery key or new account. Pairing never selects
-local inventory for upload. New-device completion confirms device authentication and sync-key
-verification; the existing device reports admission confirmed and directs verification to the
-new device. Screenshot guidance explains that the QR contains the password and should be
-shared privately and deleted after pairing.
-
-Failed operations reload the public local checkpoint without resuming network work, so fresh
-session and uncertain-admission actions follow the saved core phase. A fresh new-device session
-reuses its retained server/name and keys. Observer registration is completed before polling;
-closing or cancelling during registration detaches it before any late poll can begin. A new
-intent waits for the current bounded core tick to finish before invoking another mutation.
-
-### Invitation recovery and account status
-
-Only the unconfirmed phase offers Use a new invitation. It reveals a hidden, uncontrolled
-field for a link from the displayed server, focuses it, and clears it before calling the
-generated `updatePersonalInvitation` command. Cancel also clears the field. Rust handles
-the same-origin check, fresh authentication, and exact D-109 device-denial rules; the frontend
-does not infer permission from a general authentication error. Authentication success ends
-recovery without using the new link. A replacement accepted by Rust returns to Join readiness
-with the original identity and recovery confirmation; another explicit Join is required.
-A rejected replacement retains the pending phase and offers no Join. Busy state blocks duplicate replacement
-and authentication intents, and no invitation appears in localized errors or public status.
-
-Authenticated status means Rust retains a verified usable device session, which can refresh
-on a server operation or background reconnect when its access token approaches expiry. It does not mean inventory
-has synchronized. Existing hosts and credentials remain local. Settings navigation supports
-arrow keys, Home/End, visible focus, and wrapping at narrow widths. An explicit action that
-advances to another phase focuses its heading; initial status reads and same-phase actions
-retain keyboard focus.
+Account, sync and authentication actions share one busy state to block duplicate intents.
+Finishing an action reloads status locally. Late results from an unmounted view or superseded
+status request cannot replace current state. Errors use typed localized codes; arbitrary IPC
+or server diagnostics are not rendered. Reload status retries a local read. Settings navigation
+supports arrow keys, Home/End, visible focus, and wrapping at narrow widths.
 
 Account and devices loads the last saved manual query locally, including after authentication
 expires. Refresh account and devices is the only network action for this panel; it queries the
@@ -235,12 +188,11 @@ result changes. The panel displays the real account id, an exact optional email 
 signed names and platform claims, the current device, and the device-local Last manual query time.
 It labels these as saved results, not live presence, hardware guarantees or server admission.
 Errors retain the previous snapshot and timestamp, and expose no raw response. Account and sync
-intents share the parent's busy state with pairing; revocation publication remains separate work.
+intents share the parent's busy state; revocation publication remains separate work.
 
 An expired refresh family or uncertain renewal shows Authenticate this device with an explanation
 that local inventory, recovery copies and sync keys were retained. That action obtains a fresh
-challenge using the saved identity. No invitation replacement is offered for this established
-session state. Finishing a sync action reloads account status locally, so renewal failure updates
+challenge using the saved identity. Finishing a sync action reloads account status locally, so renewal failure updates
 the recovery action without another network request. Retry-After and narrowed-permission failures
 have separate localized messages. Mounting settings and offline recovery never renew a session.
 

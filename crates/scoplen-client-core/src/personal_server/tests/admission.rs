@@ -1,12 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Offline conversion never redeems or resumes a historical entry ceremony.
-
-use rusqlite::params;
-use scoplen_api::sync::{SyncVaultKey, SyncVaultKeysResponse};
-use scoplen_crypto::{
-    PairingApplicationContext, PairingContext, PairingHandoff, pairing_key_anchor,
-};
-use sha2::{Digest as _, Sha256};
+//! Neutral admission and archived data stay independent of retired wire formats.
 
 use super::*;
 
@@ -15,52 +8,87 @@ fn admission_count(dir: &tempfile::TempDir) -> i64 {
 }
 
 #[test]
-fn confirmed_profile_converts_once_and_runtime_no_longer_decodes_archived_ceremonies() {
+fn neutral_anchors_reopen_offline_without_reading_or_changing_archived_entry_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let local = store(&dir);
-    let before = legacy_profile(&local, "https://example.test", true);
+    let fixture = fixture_profile(&local, "https://example.test", true);
+    let anchors = local.personal_admission(&fixture.record).unwrap().unwrap();
+    assert!(anchors.len() < 4096);
+    let conn = database(&dir);
+    conn.execute(
+        "UPDATE personal_server SET enrollment_request=X'00ff', paired_handoff=X'cafe'",
+        [],
+    )
+    .unwrap();
+    let before: i64 = conn.pragma_query_value(None, "data_version", |r| r.get(0)).unwrap();
     let manager = PersonalServer::default();
     assert_eq!(manager.status(&local).unwrap().phase, PersonalServerPhase::AuthenticationRequired);
-    assert_eq!(admission_count(&dir), 1);
-    let after = local.personal_record().unwrap().unwrap();
-    assert!(after.admitted);
-    assert!(before.private_material.as_bytes() == after.private_material.as_bytes());
-    assert!(
-        before.enrollment_request.as_ref().unwrap().as_bytes()
-            == after.enrollment_request.as_ref().unwrap().as_bytes()
+    assert_eq!(
+        conn.pragma_query_value(None, "data_version", |r| r.get::<_, i64>(0)).unwrap(),
+        before
     );
-    let anchors = local.personal_admission(&after).unwrap().unwrap();
-    assert!(anchors.len() < 4096, "admission stores compact anchors, not all epoch ciphertexts");
-    database(&dir).execute("UPDATE personal_server SET enrollment_request=X'ff'", []).unwrap();
     drop(local);
     let reopened = store(&dir);
     assert_eq!(
         manager.status(&reopened).unwrap().phase,
         PersonalServerPhase::AuthenticationRequired
     );
-    assert!(
-        reopened
-            .personal_admission(&reopened.personal_record().unwrap().unwrap())
-            .unwrap()
-            .is_some_and(|saved| saved.as_bytes() == anchors.as_bytes())
+    let record = reopened.personal_record().unwrap().unwrap();
+    assert_eq!(record.private_material.as_bytes(), fixture.record.private_material.as_bytes());
+    assert_eq!(
+        reopened.personal_admission(&record).unwrap().unwrap().as_bytes(),
+        anchors.as_bytes()
     );
+    let archives: (Vec<u8>, Vec<u8>) = conn
+        .query_row("SELECT enrollment_request,paired_handoff FROM personal_server", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(archives, (vec![0, 255], vec![202, 254]));
     assert_eq!(admission_count(&dir), 1);
 }
 
+#[test]
+fn saved_v1_anchors_without_a_wrap_digest_still_reopen_offline() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = store(&dir);
+    let fixture = fixture_profile(&local, "https://example.test", false);
+    let (_, anchors) =
+        retained::RetainedAccount::from_snapshot(&local, &fixture.record, &fixture.snapshot)
+            .unwrap();
+    let mut saved: serde_json::Value = serde_json::from_slice(anchors.as_bytes()).unwrap();
+    assert_eq!(saved["version"], 1);
+    saved["vault_wraps"] = serde_json::Value::Null;
+    local.insert_personal_admission(&fixture.record, &serde_json::to_vec(&saved).unwrap()).unwrap();
+    drop(local);
+    let reopened = store(&dir);
+    assert_eq!(
+        PersonalServer::default().status(&reopened).unwrap().phase,
+        PersonalServerPhase::AuthenticationRequired
+    );
+    let record = reopened.personal_record().unwrap().unwrap();
+    assert!(retained::RetainedAccount::load(&reopened, &record).unwrap().vault_wraps.is_none());
+    assert_eq!(record.private_material.as_bytes(), fixture.record.private_material.as_bytes());
+}
+
 #[tokio::test]
-async fn pending_and_attempted_invitations_never_migrate_or_send_a_challenge() {
+async fn historical_session_flags_and_unbounded_archives_cannot_install_admission_or_send_auth() {
     let server = Fixture::new().await;
-    for attempted in [false, true] {
+    for oversized in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let local = store(&dir);
-        let before = legacy_profile(&local, &server.origin, false);
-        database(&dir)
-            .execute(
-                "UPDATE personal_server SET enrollment_attempted=?1,
+        let fixture = fixture_profile(&local, &server.origin, false);
+        let conn = database(&dir);
+        conn.pragma_update(None, "ignore_check_constraints", "ON").unwrap();
+        let sizes = if oversized { (1_048_577, 4_456_409) } else { (1, 1) };
+        conn.execute(
+            "UPDATE personal_server SET enrollment_request=zeroblob(?1),
+            paired_handoff=zeroblob(?2), enrollment_attempted=1, session_established=1,
             recovery_saved=1, recovery_confirmed=1",
-                [attempted],
-            )
-            .unwrap();
+            rusqlite::params![sizes.0, sizes.1],
+        )
+        .unwrap();
+        let version: i64 = conn.pragma_query_value(None, "data_version", |r| r.get(0)).unwrap();
         let manager = server.manager();
         assert_eq!(
             manager.status(&local).unwrap().phase,
@@ -71,142 +99,87 @@ async fn pending_and_attempted_invitations_never_migrate_or_send_a_challenge() {
             Err(PersonalServerError::RetiredEntry)
         );
         assert_eq!(admission_count(&dir), 0);
-        let after = local.personal_record().unwrap().unwrap();
-        assert!(
-            before.enrollment_request.as_ref().unwrap().as_bytes()
-                == after.enrollment_request.as_ref().unwrap().as_bytes()
+        assert_eq!(
+            local.personal_record().unwrap().unwrap().private_material.as_bytes(),
+            fixture.record.private_material.as_bytes()
         );
-        assert!(before.private_material.as_bytes() == after.private_material.as_bytes());
+        let after: (i64, i64) = conn
+            .query_row(
+                "SELECT length(enrollment_request),length(paired_handoff) FROM personal_server",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(after, (i64::from(sizes.0), i64::from(sizes.1)));
+        assert_eq!(
+            conn.pragma_query_value(None, "data_version", |r| r.get::<_, i64>(0)).unwrap(),
+            version
+        );
     }
     assert_eq!(server.state.challenges.load(Ordering::SeqCst), 0);
     assert_eq!(server.state.device_exchanges.load(Ordering::SeqCst), 0);
 }
 
 #[test]
-fn confirmed_but_mismatched_or_unbounded_evidence_is_preserved_without_admission() {
-    for fault in 0..9 {
+fn invalid_retained_keys_and_invalid_neutral_anchors_fail_closed() {
+    for fault in 0..3 {
         let dir = tempfile::tempdir().unwrap();
         let local = store(&dir);
-        let initial = legacy_profile(&local, "https://example.test", true);
+        let fixture = fixture_profile(&local, "https://example.test", false);
         let conn = database(&dir);
+        conn.execute("UPDATE personal_server SET enrollment_request=X'ff'", []).unwrap();
         match fault {
             0 => {
-                conn.execute("UPDATE personal_server SET origin='https://other.test'", []).unwrap();
-            }
-            1 => {
-                conn.execute(
-                    "UPDATE personal_server SET account_id=?1",
-                    [scoplen_model::new_uuid_v7().unwrap().as_bytes().as_slice()],
-                )
-                .unwrap();
-            }
-            2 => {
-                conn.execute(
-                    "UPDATE personal_server SET personal_vault_id=?1",
-                    [scoplen_model::new_uuid_v7().unwrap().as_bytes().as_slice()],
-                )
-                .unwrap();
-            }
-            3 => {
-                conn.execute(
-                    "UPDATE device SET device_id=?1",
-                    [scoplen_model::new_uuid_v7().unwrap().as_bytes().as_slice()],
-                )
-                .unwrap();
-            }
-            4 => {
                 conn.execute("UPDATE device_key_pair SET signing=?1", [vec![3; 32]]).unwrap();
             }
-            5 => {
-                conn.execute(
-                    "UPDATE personal_server SET enrollment_request=?1",
-                    [vec![b' '; 1_048_577]],
-                )
-                .unwrap();
-            }
-            6 => {
-                conn.execute("UPDATE personal_server SET private_material=?1", [vec![1; 225]])
+            1 => {
+                conn.execute("UPDATE personal_server SET private_material=zeroblob(226)", [])
                     .unwrap();
             }
-            7 | 8 => {
-                let mut request = PersonalEnrollmentRequest::from_json(
-                    initial.enrollment_request.as_ref().unwrap().as_bytes(),
-                )
-                .unwrap();
-                if fault == 7 {
-                    request.device_signature[0] ^= 1;
-                } else {
-                    request.key_bundle_update.signature[0] ^= 1;
-                }
-                conn.execute(
-                    "UPDATE personal_server SET enrollment_request=?1",
-                    [request.to_json().unwrap()],
-                )
-                .unwrap();
+            _ => {
+                local.insert_personal_admission(&fixture.record, b"invalid anchors").unwrap();
             }
-            _ => unreachable!(),
         }
-        drop(conn);
-        drop(local);
-        let reopened = store(&dir);
-        if fault == 5 {
-            assert_eq!(
-                PersonalServer::default().status(&reopened).unwrap().phase,
-                PersonalServerPhase::RevalidationRequired
-            );
-            assert_eq!(admission_count(&dir), 0);
-            continue;
-        }
-        let before = reopened.personal_record().unwrap().unwrap();
-        if matches!(fault, 4 | 6) {
-            assert_eq!(
-                PersonalServer::default().status(&reopened).unwrap_err(),
-                PersonalServerError::AdmissionUnverified,
-                "fault {fault}"
-            );
-        } else {
-            assert_eq!(
-                PersonalServer::default().status(&reopened).unwrap().phase,
-                PersonalServerPhase::RevalidationRequired,
-                "fault {fault}"
-            );
-        }
-        assert_eq!(admission_count(&dir), 0);
-        let after = reopened.personal_record().unwrap().unwrap();
-        assert!(
-            before.enrollment_request.as_ref().unwrap().as_bytes()
-                == after.enrollment_request.as_ref().unwrap().as_bytes()
+        let version: i64 = conn.pragma_query_value(None, "data_version", |r| r.get(0)).unwrap();
+        assert_eq!(
+            PersonalServer::default().status(&local).unwrap_err(),
+            PersonalServerError::AdmissionUnverified
         );
-        assert!(before.private_material.as_bytes() == after.private_material.as_bytes());
+        assert_eq!(admission_count(&dir), i64::from(fault == 2));
+        assert_eq!(
+            conn.pragma_query_value(None, "data_version", |r| r.get::<_, i64>(0)).unwrap(),
+            version
+        );
+        let archive: Vec<u8> = conn
+            .query_row("SELECT enrollment_request FROM personal_server", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(archive, [255]);
     }
 }
 
 #[test]
-fn conversion_rolls_back_failed_publication_and_rejects_stale_or_unconfirmed_claims() {
+fn an_orphaned_archived_entry_reports_retirement_without_decoding_its_payload() {
     let dir = tempfile::tempdir().unwrap();
     let local = store(&dir);
-    let pending = legacy_profile(&local, "https://example.test", false);
-    assert!(!local.save_personal_admission(&pending, b"untrusted", None, None).unwrap());
-    local.save_personal_tokens(b"historical", b"historical", 1, 2).unwrap();
-    let stale = local.personal_record().unwrap().unwrap();
-    local.clear_personal_tokens().unwrap();
-    assert!(!local.save_personal_admission(&stale, b"stale", None, None).unwrap());
-    database(&dir)
-        .execute_batch(
-            "CREATE TRIGGER fail_admission BEFORE INSERT ON personal_admission
-        BEGIN SELECT RAISE(ABORT, 'fixture'); END;",
-        )
-        .unwrap();
-    assert_eq!(PersonalServer::default().status(&local).unwrap_err(), PersonalServerError::Storage);
-    assert_eq!(admission_count(&dir), 0);
-    assert!(
-        local.personal_record().unwrap().unwrap().enrollment_request.as_ref().unwrap().as_bytes()
-            == pending.enrollment_request.as_ref().unwrap().as_bytes()
-    );
-    database(&dir).execute_batch("DROP TRIGGER fail_admission;").unwrap();
+    let conn = database(&dir);
+    conn.pragma_update(None, "ignore_check_constraints", "ON").unwrap();
+    conn.execute(
+        "INSERT INTO personal_pairing (singleton,generation,side,origin,pairing_id,
+        expires_at,local_expires_at,attempt_started,phase,transcript,certificate)
+        VALUES (1,1,2,'https://example.test',randomblob(16),1,1,1,'completed',
+        zeroblob(8388609),zeroblob(65537))",
+        [],
+    )
+    .unwrap();
+    let version: i64 = conn.pragma_query_value(None, "data_version", |r| r.get(0)).unwrap();
     assert_eq!(
         PersonalServer::default().status(&local).unwrap().phase,
-        PersonalServerPhase::AuthenticationRequired
+        PersonalServerPhase::RetiredEntry
+    );
+    assert_eq!(admission_count(&dir), 0);
+    assert_eq!(
+        conn.pragma_query_value(None, "data_version", |r| r.get::<_, i64>(0)).unwrap(),
+        version
     );
 }
 
@@ -214,7 +187,7 @@ fn conversion_rolls_back_failed_publication_and_rejects_stale_or_unconfirmed_cla
 fn admitted_account_origin_vault_device_and_secret_ownership_are_immutable() {
     let dir = tempfile::tempdir().unwrap();
     let local = store(&dir);
-    legacy_profile(&local, "https://example.test", true);
+    fixture_profile(&local, "https://example.test", true);
     PersonalServer::default().status(&local).unwrap();
     let conn = database(&dir);
     for statement in [
@@ -241,89 +214,4 @@ fn admitted_account_origin_vault_device_and_secret_ownership_are_immutable() {
     foreign.origin = "https://other.test".into();
     assert!(local.begin_personal_authentication(&foreign).is_err());
     assert!(local.claim_personal_refresh(&foreign, 0).is_err());
-}
-
-fn paired_fixture(dir: &tempfile::TempDir, phase: &str, matching: bool) -> Arc<Store> {
-    let local = store(dir);
-    let identity = legacy_profile(&local, "https://example.test", false);
-    let enrollment = PersonalEnrollmentRequest::from_json(
-        identity.enrollment_request.as_ref().unwrap().as_bytes(),
-    )
-    .unwrap();
-    let pairing_id = scoplen_model::new_uuid_v7().unwrap();
-    let peer = scoplen_model::new_uuid_v7().unwrap();
-    let mut handoff = PairingHandoff {
-        context: PairingApplicationContext::new(
-            &identity.origin,
-            PairingContext::new(pairing_id, peer, local.device_id()).unwrap(),
-        )
-        .unwrap(),
-        account_id: identity.account_id,
-        personal_vault_id: identity.personal_vault_id,
-        account_signing_public_key: enrollment.account_signing_public_key,
-        account_kem_public_key: enrollment.account_kem_public_key,
-        device_certificate: enrollment.device_certificate.encode().unwrap(),
-        revision: 1,
-        key_bundle_update_hash: Sha256::digest(enrollment.key_bundle_update.to_cbor().unwrap())
-            .into(),
-        key_anchor: [0; 32],
-        wrapped_ark: enrollment.key_bundle_update.device_wraps[0].wrapped_ark.clone(),
-        account_signing_key: enrollment.key_bundle_update.account_signing_key,
-        account_kem_key: enrollment.key_bundle_update.account_kem_key,
-        recovery_blob: enrollment.key_bundle_update.recovery_blob,
-        personal_vault_keys: SyncVaultKeysResponse {
-            keys: vec![SyncVaultKey {
-                epoch: 1,
-                wrapped_vault_key: enrollment.wrapped_personal_vault_key,
-            }],
-        }
-        .to_cbor()
-        .unwrap(),
-    };
-    handoff.key_anchor = pairing_key_anchor(handoff.projection()).unwrap();
-    let mut material = Zeroizing::new(identity.private_material.as_bytes()[..193].to_vec());
-    material[0] = 2;
-    let conn = database(dir);
-    conn.execute("UPDATE personal_server SET enrollment_request=NULL, paired_handoff=?1, private_material=?2",
-        params![handoff.encode().unwrap().as_bytes(), &*material]).unwrap();
-    conn.execute(
-        "INSERT INTO personal_pairing (singleton,generation,side,origin,pairing_id,peer_id,
-        expires_at,local_expires_at,attempt_started,phase,transcript,certificate)
-        VALUES (1,1,2,?1,?2,?3,1000,1000,1,?4,X'00',?5)",
-        params![
-            identity.origin,
-            pairing_id.as_bytes().as_slice(),
-            if matching { peer } else { scoplen_model::new_uuid_v7().unwrap() }
-                .as_bytes()
-                .as_slice(),
-            phase,
-            handoff.device_certificate
-        ],
-    )
-    .unwrap();
-    local
-}
-
-#[test]
-fn completed_new_device_pairing_is_bound_evidence_but_pending_or_foreign_handoffs_are_not() {
-    for (phase, matching, expected) in [
-        ("completed", true, PersonalServerPhase::AuthenticationRequired),
-        ("admission_pending", true, PersonalServerPhase::RevalidationRequired),
-        ("completed", false, PersonalServerPhase::RevalidationRequired),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let local = paired_fixture(&dir, phase, matching);
-        let before = local.personal_record().unwrap().unwrap();
-        assert_eq!(PersonalServer::default().status(&local).unwrap().phase, expected);
-        assert_eq!(
-            admission_count(&dir),
-            i64::from(expected == PersonalServerPhase::AuthenticationRequired)
-        );
-        let after = local.personal_record().unwrap().unwrap();
-        assert!(
-            before.paired_handoff.as_ref().unwrap().as_bytes()
-                == after.paired_handoff.as_ref().unwrap().as_bytes()
-        );
-        assert!(before.private_material.as_bytes() == after.private_material.as_bytes());
-    }
 }

@@ -7,11 +7,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use scoplen_api::{
-    auth::{AuthJwk, AuthJwks},
-    personal_enrollment::PersonalEnrollmentRequest,
-    sync::{SessionVault, SyncLimits, SyncVaultKey},
-};
+use scoplen_api::auth::{AuthJwk, AuthJwks};
 use scoplen_crypto::{
     DeviceAccessTokenClaims, Ed25519SigningKey, SecretVec, TrustedDeviceAccessTokenKeys,
 };
@@ -20,7 +16,7 @@ use tokio_rustls::TlsAcceptor;
 use zeroize::Zeroizing;
 
 use super::*;
-use crate::personal_server::transport::Transport;
+use crate::personal_server::{PersonalServerPhase, transport::Transport};
 
 #[derive(Clone)]
 struct Reply {
@@ -157,65 +153,13 @@ impl Peer {
 
     async fn prepare_profile(&self, store: &Arc<Store>, admitted: bool) -> PersonalServer {
         let manager = self.manager();
-        crate::personal_server::tests::legacy_profile(store, &self.origin, admitted);
-        let pending = store.personal_record().unwrap().unwrap();
-        let enrollment = PersonalEnrollmentRequest::from_json(
-            pending.enrollment_request.as_ref().unwrap().as_bytes(),
-        )
-        .unwrap();
-        let bundle = SyncAccountKeyBundle {
-            revision: 1,
-            wrapped_ark: enrollment.key_bundle_update.device_wraps[0].wrapped_ark.clone(),
-            account_signing_key: enrollment.key_bundle_update.account_signing_key.clone(),
-            account_kem_key: enrollment.key_bundle_update.account_kem_key.clone(),
-            recovery_blob: enrollment.key_bundle_update.recovery_blob.clone(),
-            certificates: vec![enrollment.device_certificate.encode().unwrap()],
-            revocations: vec![],
-        };
-        let session = SyncSessionResponse {
-            server_version: "0.1.0".into(),
-            max_model_version: 1,
-            limits: SyncLimits {
-                max_envelope_bytes: 1_048_576,
-                max_batch_objects: 500,
-                max_batch_bytes: 4_194_304,
-                max_objects_per_vault: 100_000,
-                max_shared_vaults_per_account: 100,
-                max_members_per_shared_vault: 100,
-                write_requests_per_second: 10,
-                write_burst: 20,
-            },
-            vaults: vec![
-                SessionVault {
-                    id: pending.personal_vault_id,
-                    kind: VaultKind::Personal,
-                    seq: 7,
-                    key_epoch: 1,
-                    rotation_pending: false,
-                },
-                SessionVault {
-                    id: scoplen_model::new_uuid_v7().unwrap(),
-                    kind: VaultKind::Unknown("future".into()),
-                    seq: 3,
-                    key_epoch: 4,
-                    rotation_pending: true,
-                },
-            ],
-        };
-        self.reply("/sync/v1/session", Reply::cbor(session.to_cbor().unwrap()));
-        self.reply("/sync/v1/keys", Reply::cbor(bundle.to_cbor().unwrap()));
+        let fixture = crate::personal_server::tests::fixture_profile(store, &self.origin, admitted);
+        let pending = fixture.record;
+        self.reply("/sync/v1/session", Reply::cbor(fixture.snapshot.session.as_bytes().to_vec()));
+        self.reply("/sync/v1/keys", Reply::cbor(fixture.snapshot.account_keys.as_bytes().to_vec()));
         self.reply(
             &format!("/sync/v1/vaults/{}/keys", pending.personal_vault_id),
-            Reply::cbor(
-                SyncVaultKeysResponse {
-                    keys: vec![SyncVaultKey {
-                        epoch: 1,
-                        wrapped_vault_key: enrollment.wrapped_personal_vault_key,
-                    }],
-                }
-                .to_cbor()
-                .unwrap(),
-            ),
+            Reply::cbor(fixture.snapshot.vault_keys.as_bytes().to_vec()),
         );
         let signing = Ed25519SigningKey::from_bytes(&[55; 32]).unwrap();
         self.reply(
@@ -231,13 +175,6 @@ impl Peer {
             },
         );
         self.install_token(store, |_| {}, None);
-        if admitted {
-            crate::personal_server::retained::RetainedAccount::load(
-                store,
-                &store.personal_record().unwrap().unwrap(),
-            )
-            .unwrap();
-        }
         manager
     }
 
@@ -720,7 +657,7 @@ fn retained_identity_and_cached_snapshot_are_revalidated() {
     let dir = tempfile::tempdir().unwrap();
     let store = local(&dir);
     let pending =
-        crate::personal_server::tests::legacy_profile(&store, "https://sync.example", true);
+        crate::personal_server::tests::fixture_profile(&store, "https://sync.example", true).record;
     PersonalServer::default().status(&store).unwrap();
     let snapshot = PersonalSyncRecord {
         generation: 1,
@@ -753,7 +690,7 @@ use inventory::InventoryPeer;
 use refresh::RefreshPeer;
 
 #[tokio::test]
-async fn a_complete_verified_historical_bootstrap_is_independent_confirmation_evidence() {
+async fn a_saved_bootstrap_without_neutral_anchors_cannot_grant_admission() {
     let peer = Peer::new().await;
     let dir = tempfile::tempdir().unwrap();
     let source = local(&dir);
@@ -780,20 +717,29 @@ async fn a_complete_verified_historical_bootstrap_is_independent_confirmation_ev
                 ],
             )
             .unwrap();
-        assert!(!restored.personal_record().unwrap().unwrap().session_established);
+        let session_established = || {
+            crate::personal_server::tests::database(&historical)
+                .query_row("SELECT session_established FROM personal_server", [], |row| {
+                    row.get::<_, bool>(0)
+                })
+                .unwrap()
+        };
+        assert!(!session_established());
         let result = PersonalServer::default().load_sync_bootstrap(&restored);
-        if valid {
-            assert!(result.unwrap().is_some());
-            assert!(restored.personal_record().unwrap().unwrap().admitted);
-        } else {
-            assert!(matches!(
-                result,
-                Err(PersonalSyncError::Personal(PersonalServerError::AdmissionUnverified))
-            ));
-            assert!(!restored.personal_record().unwrap().unwrap().admitted);
-            assert!(restored.personal_sync_record().unwrap().unwrap().session.as_bytes() == [0xff]);
-        }
-        assert!(!restored.personal_record().unwrap().unwrap().session_established);
+        assert!(matches!(
+            result,
+            Err(PersonalSyncError::Personal(PersonalServerError::RetiredEntry))
+        ));
+        assert!(!restored.personal_record().unwrap().unwrap().admitted);
+        assert_eq!(
+            PersonalServer::default().status(&restored).unwrap().phase,
+            PersonalServerPhase::RevalidationRequired
+        );
+        assert_eq!(
+            restored.personal_sync_record().unwrap().unwrap().session.as_bytes(),
+            if valid { snapshot.session.as_bytes() } else { &[0xff] }
+        );
+        assert!(!session_established());
     }
     peer.assert_healthy();
 }

@@ -18,11 +18,9 @@ pub(super) fn install(peer: &Peer, store: &Store) -> AccountDeviceStatements {
         identity::Secrets::parse(&pending.private_material).unwrap().account_signing(),
     )
     .unwrap();
-    let current = PersonalEnrollmentRequest::from_json(
-        pending.enrollment_request.as_ref().unwrap().as_bytes(),
-    )
-    .unwrap()
-    .device_certificate;
+    let current = crate::personal_server::retained::RetainedAccount::load(store, &pending)
+        .unwrap()
+        .certificate;
     let other = issue(
         store,
         &key,

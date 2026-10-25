@@ -280,7 +280,7 @@ pub(super) fn install(peer: &Peer, store: &Arc<Store>, modes: Vec<Mode>) {
 }
 
 pub(super) fn install_revalidation(peer: &Peer, store: &Arc<Store>, mode: Mode) {
-    let pending = store.personal_revalidation_record().unwrap().unwrap();
+    let pending = store.personal_record().unwrap().unwrap();
     peer.state.lock().unwrap().refresh = Some(RefreshPeer {
         observer: store.clone(),
         account: pending.account_id,
