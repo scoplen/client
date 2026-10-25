@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Updated the single shared proto revision to published `a604b72` password-account contracts,
+  removing retired invitation and pairing protocols from resolved dependencies. Retained
+  signed-device authentication and Personal sync remain supported; password registration,
+  sign-in, device admission and full profile switching remain incomplete.
+  The dependency policy explicitly accepts the Apache-2.0 LLVM exception used by Cedar's
+  `ar_archive_writer` build dependency.
+
 - Removed archived invitation and pairing codecs from the client and its test fixtures.
   Saved neutral admission anchors still verify offline; profiles without anchors require
   explicit current-device revalidation. Status leaves archived payloads unread in SQLCipher,

@@ -23,6 +23,8 @@ ignore = [
 version = 2
 allow = [
     "Apache-2.0",
+    # Cedar's ar_archive_writer build dependency adds permissive LLVM exceptions.
+    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "CC0-1.0",
