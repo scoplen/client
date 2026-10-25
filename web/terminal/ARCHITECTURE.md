@@ -58,6 +58,11 @@ emulator and does not claim full-screen program compatibility.
   used only as a capability fallback.
 - **Clipboard:** read/write operations are injected or use `navigator.clipboard`.
   Permission errors return `false` and emit a typed `clipboard` error.
+  Pending paste reads retain their renderer lifecycle, input-sink assignment and
+  broadcast generation; stale results and errors are discarded. xterm's public
+  paste operation supplies line-ending normalization and bracketed-paste framing
+  through the existing bounded input queue. The paste promise retains that
+  write's result instead of claiming success before the primary sink accepts it.
 - **IME:** composition events outside xterm.js' helper textarea pass through a
   DOM-free `TerminalImeCompositionBridge`. Candidate updates are discarded;
   only non-empty `compositionend` data reaches the sink. Cancellation, blur,
@@ -65,7 +70,9 @@ emulator and does not claim full-screen program compatibility.
 - **Broadcast:** enabling requires an explicit confirmation callback. A
   secondary caller-owned sink receives copies of primary input and cannot make
   the primary write fail. The visible status indicator and events make the mode
-  legible to keyboard and screen-reader users.
+  legible to keyboard and screen-reader users. Each input frame captures its
+  broadcast sink and mode generation; a changed assignment discards the pending
+  secondary copy without redirecting it or cancelling the primary write.
 - **Tabs and splits:** `TerminalWorkspace` stores only layout metadata. It does
   not create, close, or reconnect sessions; callers bind terminal elements and
   transports to pane IDs.
