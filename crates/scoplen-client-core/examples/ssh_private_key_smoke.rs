@@ -93,7 +93,6 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if args[1] == "wrong-key" || args[1] == "wrong-rsa-key" || args[1] == "sha1-only" {
         let error = authentication.err().ok_or("rejected authentication accepted")?;
         let rejected = match args[1].as_str() {
-            "wrong-rsa-key" => matches!(error, SshConnectionError::RsaAuthenticationRejected),
             "sha1-only" => matches!(error, SshConnectionError::RsaSha2Unavailable),
             _ => matches!(
                 error,

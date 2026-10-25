@@ -21,7 +21,9 @@ web/app (React)  ── typed commands, binary channels ──  src-tauri  ─�
 - `scoplen-client-core` holds every behavior, so it is the same on both platforms and testable without a window.
 - `scoplen-client-platform` is the only crate that may contain `unsafe` code or FFI; it is denied by default there too and allowed per module with each block documented.
 
-The shared libraries and Pageant patch are pinned to `proto@e2b8817`. D-116 adds the object-safe
+The shared libraries and Pageant patch are pinned to `proto@b1748dd`. That revision
+supplies kind-8 descriptor validation and the D-121 asynchronous challenge API with
+zeroizing response custody. D-116 adds the object-safe
 `Signer::sign_async` hook, awaited by concrete SSH authentication. The built-in agent signer
 runs each serialized signing exchange on Tokio's blocking pool. Existing synchronous signers
 retain the default hook; other blocking providers need their own override. SSH and agent wire
@@ -42,6 +44,24 @@ The interactive `session_connect` command has a separate typed readiness channel
 It sends once authentication, optional PTY allocation, and the shell request
 succeed. The view becomes connected on that notification, independently of
 terminal output. Ended and unsubscribed views ignore late notifications.
+
+Keyboard-interactive preparation resolves an explicit kind-8 Credential on each
+saved target or Jump Login. Missing Credential references retain the existing
+local-material selection policy. Ordinary authentication continues only from valid
+partial success advertising keyboard-interactive. Rust retains the same reviewed
+connection, preserves RSA rejection metadata, and opens channels only after full
+success. Unsupported further factors fail explicitly.
+
+Each hop's authentication has a 300-second absolute deadline after trust, including
+key passphrase entry. Every server challenge has a 120-second reply deadline capped
+by that budget. Pending metadata checks its deadline, expected answer count, response
+kind and one-use prompt id under the response lock. `session_respond` also names the
+active transport. Cancellation and errors discard pending state and release the chain.
+Uncontrolled, echo-aware DOM fields are the dedicated transient input boundary;
+literal server text remains separate from trusted hop identity. Both echo policies
+are sensitive. Answers become zeroizing Rust values at IPC, never enter snapshots
+or stored records, and are not reused by reconnect. Zero-prompt requests require
+an explicit empty response.
 
 Pairing uses dedicated create/join commands for its transient password boundary. The general
 `personal_pairing_status` command reads only public local metadata. An explicit foreground

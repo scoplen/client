@@ -20,7 +20,7 @@ import { Frame } from "../frame";
 import { I18nProvider, useI18n } from "../i18n";
 import { HostsHome } from "../inventory/home";
 import { InventoryContext } from "../inventory/api";
-import type { Locale, Platform, Status } from "../ipc/bindings";
+import type { Locale, Platform, SessionEvent, Status } from "../ipc/bindings";
 import { CreatePassphraseScreen, UnlockScreen, UnreadableScreen } from "../local-data";
 import { Menus } from "../menus";
 import { SettingsView } from "../settings";
@@ -29,13 +29,51 @@ import { TerminalColorsProvider } from "../terminal-colors";
 import { sampleHosts, sampleInventory } from "./sample-inventory";
 
 const remotePath = (path: string) => Array.from(new TextEncoder().encode(path));
+let interactivePreview: { sessionId: string; transportId: string; emit: (event: SessionEvent) => void } | null = null;
+
+function previewChallenge(transportId: string, informational: boolean): SessionEvent {
+  return {
+    kind: "preparation",
+    transportId,
+    event: {
+      kind: "keyboardInteractive",
+      context: {
+        profileId: "gallery-interactive",
+        hostId: "gallery-api-01",
+        login: "deploy",
+        host: "api-01",
+        username: "deploy",
+        address: "api.example.com",
+        port: 22,
+        position: 2,
+        total: 2,
+        target: true,
+      },
+      promptId: informational ? "gallery-continue" : "gallery-answers",
+      name: "Example PAM service",
+      instruction: informational
+        ? "Your authentication request is ready to continue."
+        : "Confirm the account and enter this connection's one-time code.",
+      prompts: informational
+        ? []
+        : [
+            { text: "Account", echo: true },
+            { text: "One-time code", echo: false },
+          ],
+    },
+  };
+}
 
 // The local-data screens call the core; answer them as a core would.
 mockIPC((cmd, args) => {
   const payload = (args ?? {}) as {
     passphrase?: string;
+    profileId?: string;
+    sessionId?: string;
+    transportId?: string;
+    promptId?: string;
     path?: number[];
-    messages?: { onmessage: (event: { kind: "starting" | "ready"; transportId: string; automatic?: boolean }) => void };
+    messages?: { onmessage: (event: SessionEvent) => void };
   };
   if (cmd === "unlock_local_data") {
     return payload.passphrase === "scoplen"
@@ -50,9 +88,30 @@ mockIPC((cmd, args) => {
     const transportId = crypto.randomUUID();
     queueMicrotask(() => {
       payload.messages?.onmessage({ kind: "starting", transportId, automatic: false });
-      payload.messages?.onmessage({ kind: "ready", transportId });
+      if (payload.profileId === "gallery-interactive" && payload.messages) {
+        interactivePreview = { sessionId: payload.sessionId!, transportId, emit: payload.messages.onmessage };
+        payload.messages.onmessage(previewChallenge(transportId, false));
+      } else payload.messages?.onmessage({ kind: "ready", transportId });
     });
     return new Promise(() => undefined);
+  }
+  const preview = interactivePreview;
+  if (cmd === "session_respond" && preview && preview.transportId === payload.transportId) {
+    preview.emit(
+      payload.promptId === "gallery-answers"
+        ? previewChallenge(preview.transportId, true)
+        : { kind: "ready", transportId: preview.transportId },
+    );
+    return null;
+  }
+  if (
+    (cmd === "session_close_transport" || cmd === "session_stop_reconnecting") &&
+    preview &&
+    preview.sessionId === payload.sessionId
+  ) {
+    interactivePreview = null;
+    preview.emit({ kind: "closed" });
+    return null;
   }
   if (cmd === "session_list_files") {
     const root = remotePath(".");
@@ -78,6 +137,7 @@ const screens = {
   failed: "Hosts: failed to load",
   settings: "Settings",
   files: "Session: files",
+  interactive: "Session: keyboard-interactive",
   unlock: "Unlock",
   create: "Choose a passphrase",
   unreadable: "Unreadable data",
@@ -203,7 +263,7 @@ function Screen({
   if (screen === "create") return <CreatePassphraseScreen onStatus={onStatus} />;
   if (screen === "unreadable") return <UnreadableScreen reason="keyMissing" onStatus={onStatus} />;
   const settings = screen === "settings";
-  const files = screen === "files";
+  const files = screen === "files" || screen === "interactive";
   return (
     <Frame
       platform={platform}
@@ -212,7 +272,7 @@ function Screen({
         ...(files ? [{ id: "files", label: "api-01", state: filesState, seed: "gallery-api-01" }] : []),
       ]}
       active={files ? "files" : "hosts"}
-      onTab={(id) => onSettings(id === "files" ? "files" : "hosts")}
+      onTab={(id) => onSettings(id === "files" ? screen : "hosts")}
       onSettings={() => onSettings(settings ? "hosts" : "settings")}
       settingsActive={settings}
     >
@@ -223,7 +283,7 @@ function Screen({
         />
       ) : files ? (
         <SessionTerminal
-          profileId="gallery-api-01"
+          profileId={screen === "interactive" ? "gallery-interactive" : "gallery-api-01"}
           label="api-01"
           onClose={() => onSettings("hosts")}
           onStateChange={setFilesState}

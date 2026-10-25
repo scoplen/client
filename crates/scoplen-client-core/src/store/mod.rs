@@ -126,6 +126,23 @@ pub struct NewObject {
     pub fields: Vec<(FieldPath, cbor::Value)>,
 }
 
+/// Live objects read inside the transaction that will apply a related batch.
+pub(crate) struct ObjectSnapshot<'a> {
+    conn: &'a Connection,
+}
+
+impl ObjectSnapshot<'_> {
+    /// Reads a live object of the expected type from this transaction.
+    pub(crate) fn get(
+        &self,
+        id: Uuid,
+        object_type: ObjectType,
+    ) -> Result<Option<Object>, StoreError> {
+        Ok(read_object(self.conn, id)?
+            .filter(|object| !object.is_tombstoned() && object.object_type == object_type))
+    }
+}
+
 /// Objects that changed in one committed write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
@@ -426,9 +443,24 @@ impl Store {
         if creates.is_empty() && writes.is_empty() {
             return Ok(Vec::new());
         }
+        self.create_and_write_batch_with_snapshot(|_| Ok((creates, writes)))
+    }
+
+    /// Validates related objects and computes creates and writes under the
+    /// same immediate transaction. The callback must not reenter this Store.
+    pub(crate) fn create_and_write_batch_with_snapshot<E>(
+        &self,
+        prepare: impl FnOnce(&ObjectSnapshot<'_>) -> Result<(Vec<NewObject>, Vec<LocalWrite>), E>,
+    ) -> Result<Vec<Object>, E>
+    where
+        E: From<StoreError>,
+    {
         let (objects, changes) = {
             let mut conn = self.conn();
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(StoreError::from)?;
+            let (creates, writes) = prepare(&ObjectSnapshot { conn: &tx })?;
             let mut objects = Vec::with_capacity(creates.len() + writes.len());
             for create in creates {
                 objects.push(apply_create(&tx, self.device_id, create)?);
@@ -436,7 +468,7 @@ impl Store {
             for write in writes {
                 objects.push(apply_write(&tx, self.device_id, write)?);
             }
-            tx.commit()?;
+            tx.commit().map_err(StoreError::from)?;
             let changes = grouped_changes(&objects);
             (objects, changes)
         };

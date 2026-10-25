@@ -134,6 +134,121 @@ function outputFrame(transportId: string, text: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+function interactive(
+  promptId = "challenge-1",
+  position = 2,
+): Extract<PreparationEvent, { kind: "keyboardInteractive" }> {
+  return {
+    kind: "keyboardInteractive",
+    context: context(position),
+    promptId,
+    name: "<script>server text</script>",
+    instruction: "Server instructions",
+    prompts: [
+      { text: "Account", echo: true },
+      { text: "Code", echo: false },
+    ],
+  };
+}
+
+it("binds literal mixed-echo responses to the exact attempt and clears them before submission", async () => {
+  const f = fixture();
+  const pending = f.delay("session_respond");
+  render(sessionView());
+  const c = await connect(f);
+  await c.prepare(interactive());
+  const dialog = screen.getByRole("dialog", { name: "Answer this server's request" });
+  expect(within(dialog).getByText("<script>server text</script>")).toBeTruthy();
+  expect(dialog.querySelector("script")).toBeNull();
+  expect(within(dialog).getByText("Host 2 · Login 2")).toBeTruthy();
+  const account = within(dialog).getByLabelText("Account") as HTMLInputElement;
+  const code = within(dialog).getByLabelText("Code") as HTMLInputElement;
+  expect(account.type).toBe("text");
+  expect(code.type).toBe("password");
+  await waitFor(() => expect(document.activeElement).toBe(account));
+  await userEvent.type(account, "visible-answer");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+  expect(account.value).toBe("");
+  expect(code.value).toBe("");
+  expect(f.matching("session_respond").at(-1)?.args).toEqual({
+    sessionId: c.sessionId,
+    transportId: c.transportId,
+    promptId: "challenge-1",
+    intent: { kind: "keyboardInteractive", answers: ["visible-answer", ""] },
+  });
+  await c.prepare({ ...interactive("challenge-2"), prompts: [] });
+  await act(() => pending.resolve(null));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(f.matching("session_respond").at(-1)?.args.intent).toEqual({ kind: "keyboardInteractive", answers: [] });
+});
+
+it("preserves both answers across unrelated renders and repeated transfer queue refreshes", async () => {
+  const f = fixture();
+  const view = render(sessionView());
+  const c = await connect(f);
+  await c.prepare(interactive());
+  const account = screen.getByLabelText("Account") as HTMLInputElement;
+  const code = screen.getByLabelText("Code") as HTMLInputElement;
+  await userEvent.type(account, "visible-answer");
+  await userEvent.type(code, "one-time-answer");
+  const expectAnswers = () => {
+    expect(account.value).toBe("visible-answer");
+    expect(code.value).toBe("one-time-answer");
+  };
+  for (const revision of ["2", "3", "4"]) {
+    view.rerender(sessionView("en", true, undefined, undefined, { label: `Updated ${revision}` }));
+    expectAnswers();
+    const previousPolls = f.matching("session_transfer_queue").length;
+    f.setQueue({ revision });
+    await waitFor(() => expect(f.matching("session_transfer_queue").length).toBeGreaterThan(previousPolls));
+    expectAnswers();
+  }
+  expect(f.matching("session_respond")).toHaveLength(0);
+  view.unmount();
+  expect(account.value).toBe("");
+  expect(code.value).toBe("");
+});
+
+it("clears both echo policies on hide, replacement and cancellation, including Chinese controls", async () => {
+  const f = fixture();
+  const view = render(sessionView("zh-Hans"));
+  const c = await connect(f);
+  await c.prepare(interactive());
+  const hiddenAccount = screen.getByLabelText("Account") as HTMLInputElement;
+  const hiddenCode = screen.getByLabelText("Code") as HTMLInputElement;
+  await userEvent.type(hiddenAccount, "discard-visible");
+  await userEvent.type(hiddenCode, "discard-hidden");
+  view.rerender(sessionView("zh-Hans", false));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(hiddenAccount.value).toBe("");
+  expect(hiddenCode.value).toBe("");
+  view.rerender(sessionView("zh-Hans"));
+  const replacedAccount = screen.getByLabelText("Account") as HTMLInputElement;
+  const replacedCode = screen.getByLabelText("Code") as HTMLInputElement;
+  expect(replacedAccount.value).toBe("");
+  expect(replacedCode.value).toBe("");
+  await userEvent.type(replacedAccount, "replace-visible");
+  await userEvent.type(replacedCode, "replace-hidden");
+  await c.prepare({ ...interactive("new-round"), prompts: [] });
+  expect(replacedAccount.value).toBe("");
+  expect(replacedCode.value).toBe("");
+  expect(screen.getByRole("dialog", { name: "回答服务器的请求" })).toBeTruthy();
+  expect(screen.queryByLabelText("Code")).toBeNull();
+  await c.prepare(interactive("cancel-round"));
+  const cancelledAccount = screen.getByLabelText("Account") as HTMLInputElement;
+  const cancelledCode = screen.getByLabelText("Code") as HTMLInputElement;
+  await userEvent.type(cancelledAccount, "cancel-visible");
+  await userEvent.type(cancelledCode, "cancel-hidden");
+  await userEvent.click(within(screen.getByRole("dialog")).getByText("取消", { exact: true }));
+  expect(cancelledAccount.value).toBe("");
+  expect(cancelledCode.value).toBe("");
+  expect(f.matching("session_stop_reconnecting")).toHaveLength(1);
+  await c.prepare(interactive("late"));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(f.matching("session_respond")).toHaveLength(0);
+});
+
 function context(position = 1): PreparationContext {
   return {
     profileId: `profile-${position}`,
@@ -904,6 +1019,7 @@ it("accepts each hop's exact current prompt without renderer-supplied trust data
     await userEvent.click(screen.getByRole("button", { name: "Trust and connect" }));
     expect(f.matching("session_respond").at(-1)?.args).toEqual({
       sessionId: c.sessionId,
+      transportId: c.transportId,
       promptId: `trust-${position}`,
       intent: { kind: "acceptHostKey" },
     });
@@ -964,6 +1080,7 @@ it.each(["revokedDevice", "unverifiedSource"] as const)(
     await userEvent.click(screen.getByRole("button", { name: "Trust and connect" }));
     expect(f.matching("session_respond").at(-1)?.args).toEqual({
       sessionId: c.sessionId,
+      transportId: c.transportId,
       promptId: "trust-1",
       intent: { kind: "acceptHostKey" },
     });

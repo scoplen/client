@@ -21,7 +21,7 @@ export type RouteLabel =
 /** A credential as the interface may show it: never its secret. */
 export interface CredentialLabel {
   id: Id;
-  kind: "password" | "key" | "agent" | "securityKey" | "deviceKey" | "external" | "certificate";
+  kind: "password" | "key" | "agent" | "securityKey" | "deviceKey" | "external" | "certificate" | "keyboardInteractive";
   /** The name the user gave it, if any. */
   name: string | null;
   /** For keys: the SHA-256 fingerprint as OpenSSH prints it. */
@@ -110,7 +110,7 @@ export interface GroupSummary {
 }
 
 export type CredentialKindInput =
-  "password" | "key" | "certificate" | "agent" | "securityKey" | "deviceKey" | "external";
+  "password" | "key" | "certificate" | "agent" | "securityKey" | "deviceKey" | "external" | "keyboardInteractive";
 export type CredentialBindingInput = "shared" | "device" | "none";
 
 /** A redacted independent credential. It never includes secret material. */
@@ -222,6 +222,8 @@ export type ObjectEditError =
   | { kind: "managedRoute" }
   | { kind: "failed"; reference: string };
 
+export type HostLoginCredential = { kind: "saved"; credential: Id | null } | { kind: "keyboardInteractive" };
+
 export interface EditHost {
   name: string;
   address: string;
@@ -229,6 +231,8 @@ export interface EditHost {
   notes: string | null;
   tags: Record<string, string>;
   groups: Id[];
+  /** Changed Login choices only; absent Logins retain their saved credential. */
+  loginCredentials: Record<Id, HostLoginCredential>;
 }
 
 export type EditHostError =
@@ -238,6 +242,8 @@ export type EditHostError =
   | { kind: "notesTooLong" }
   | { kind: "invalidTag" }
   | { kind: "groupNotFound" }
+  | { kind: "invalidLogin" }
+  | { kind: "invalidCredential" }
   | { kind: "failed"; reference: string };
 
 export interface GroupInput {
@@ -265,6 +271,7 @@ export type HostSource = { kind: "all" } | { kind: "favorites" } | { kind: "rece
 
 /** How a new host signs in. */
 export type SignIn =
+  | { kind: "keyboardInteractive" }
   | { kind: "password"; password: string }
   | { kind: "keyFile"; path: string }
   | { kind: "keyText"; key: string }

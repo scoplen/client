@@ -116,13 +116,15 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                             manager.stop("fixture-terminal")?;
                         }
                     }
-                    SessionEvent::Preparation { event, .. } => match *event {
+                    SessionEvent::Preparation { transport_id, event } => match *event {
                         PreparationEvent::Trust { prompt_id, .. } => manager.respond(
                             "fixture-terminal",
+                            &transport_id,
                             &prompt_id,
                             PreparationResponse::AcceptHostKey,
                         )?,
-                        PreparationEvent::Passphrase { .. } => {
+                        PreparationEvent::Passphrase { .. }
+                        | PreparationEvent::KeyboardInteractive { .. } => {
                             panic!("password fixture must not request a key passphrase")
                         }
                         PreparationEvent::Progress { .. } | PreparationEvent::Verified { .. } => {}

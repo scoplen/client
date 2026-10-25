@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::connection::{ConnectionPlan, ConnectionPlanError, resolve_connection_plan};
 use crate::repository::{
     AccessProfile, AccessProfileChange, Change, Credential, CredentialBinding, CredentialChange,
-    CredentialKind, DeviceKey, Edit, Forward, Host, HostChange, HostGroup, HostGroupChange,
+    CredentialKind, DeviceKey, Edit, Forward, Host, HostChange, HostGroup, HostGroupChange, Record,
     RecordError, Repository, Route, RouteChange, RouteChoice, RouteKind, Workspace,
     credential_secret,
 };
@@ -120,6 +120,8 @@ pub struct CredentialLabel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum CredentialLabelKind {
+    /// Server challenges, answered only for this connection.
+    KeyboardInteractive,
     /// A password.
     Password,
     /// A private key.
@@ -324,6 +326,8 @@ pub struct GroupSummary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum CredentialKindInput {
+    /// Server challenges without stored authentication material.
+    KeyboardInteractive,
     /// A password stored in the encrypted shared object.
     Password,
     /// An OpenSSH private key.
@@ -614,7 +618,20 @@ pub enum ObjectEditError {
     PlatformCredential { reference: String },
 }
 
-/// The editable host metadata owned by the local inventory.
+/// An explicit replacement for one Login's saved credential choice.
+#[derive(Clone, Debug, Deserialize, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum HostLoginCredential {
+    /// Select an existing credential, or any usable local credential when absent.
+    Saved {
+        /// Saved credential identifier, or `None` for any usable local credential.
+        credential: Option<String>,
+    },
+    /// Create and explicitly reference a secretless interactive descriptor.
+    KeyboardInteractive,
+}
+
+/// The editable host metadata and explicit Login choices owned by the inventory.
 #[derive(Clone, Debug, Deserialize, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct EditHost {
@@ -630,6 +647,8 @@ pub struct EditHost {
     pub tags: BTreeMap<String, String>,
     /// Complete replacement for host-group membership.
     pub groups: Vec<String>,
+    /// Changed Login choices only; omitted Logins keep their saved credentials.
+    pub login_credentials: BTreeMap<String, HostLoginCredential>,
 }
 
 /// Why editing host metadata failed. The host is unchanged for every variant.
@@ -654,6 +673,12 @@ pub enum EditHostError {
     /// A requested group does not exist.
     #[error("the group was not found")]
     GroupNotFound,
+    /// A changed Login no longer belongs to this Host.
+    #[error("the Login was not found on this host")]
+    InvalidLogin,
+    /// An explicitly selected credential no longer exists.
+    #[error("the credential was not found")]
+    InvalidCredential,
     /// The local store or model failed without changing the host.
     #[error("{reference}")]
     Failed {
@@ -697,6 +722,8 @@ pub enum GroupError {
 #[derive(Clone, Debug, Deserialize, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SignIn {
+    /// Answer server challenges at connection time without a saved secret.
+    KeyboardInteractive,
     /// Store a password in the encrypted personal object.
     Password {
         /// The password to store in the encrypted local object.
@@ -1468,7 +1495,9 @@ impl Inventory {
         } else {
             None
         };
-        let devices = if new_device_key.is_some() {
+        let devices = if kind == CredentialKind::KeyboardInteractive {
+            existing.devices.keys().map(|id| (*id, None)).collect()
+        } else if new_device_key.is_some() {
             [(
                 self.store.device_id(),
                 Some(DeviceKey {
@@ -2203,11 +2232,6 @@ impl Inventory {
     ) -> Result<HostDetails, EditHostError> {
         let host_uuid =
             parse_id(&host_id).map_err(|_| edit_failed("the host identifier is invalid"))?;
-        let hosts = Repository::<Host>::new(&self.store);
-        let existing = hosts
-            .get(host_uuid)
-            .map_err(edit_failure)?
-            .ok_or_else(|| edit_failed("the host was not found"))?;
         let name = input.name.trim().to_owned();
         if name.is_empty() {
             return Err(EditHostError::EmptyName);
@@ -2230,45 +2254,116 @@ impl Inventory {
             return Err(EditHostError::InvalidTag);
         }
 
-        let mut groups = BTreeSet::new();
-        let group_repo = Repository::<HostGroup>::new(&self.store);
-        let known_groups = group_repo.list().map_err(edit_failure)?;
-        for group in input.groups {
-            let group_id = parse_id(&group).map_err(|_| EditHostError::GroupNotFound)?;
-            if !known_groups.iter().any(|known| known.meta.id == group_id) {
-                return Err(EditHostError::GroupNotFound);
+        self.store.create_and_write_batch_with_snapshot(|snapshot| {
+            let existing = snapshot
+                .get(host_uuid, Host::TYPE)?
+                .ok_or_else(|| edit_failed("the host was not found"))?;
+            let existing = Host::read(&existing).map_err(edit_failure)?;
+            let mut groups = BTreeSet::new();
+            for group in input.groups {
+                let group_id = parse_id(&group).map_err(|_| EditHostError::GroupNotFound)?;
+                if snapshot.get(group_id, HostGroup::TYPE)?.is_none() {
+                    return Err(EditHostError::GroupNotFound);
+                }
+                groups.insert(group_id);
             }
-            groups.insert(group_id);
-        }
-        let tags = input.tags;
-        let mut tag_changes = BTreeMap::new();
-        for key in existing.tags.keys().chain(tags.keys()) {
-            if tag_changes.contains_key(key) {
-                continue;
+            let tags = input.tags;
+            let mut tag_changes = BTreeMap::new();
+            for key in existing.tags.keys().chain(tags.keys()) {
+                if tag_changes.contains_key(key) {
+                    continue;
+                }
+                tag_changes.insert(key.clone(), tags.get(key).cloned());
             }
-            tag_changes.insert(key.clone(), tags.get(key).cloned());
-        }
-        let mut group_changes = BTreeMap::new();
-        for group in existing.groups.iter().chain(groups.iter()) {
-            if group_changes.contains_key(group) {
-                continue;
+            let mut group_changes = BTreeMap::new();
+            for group in existing.groups.iter().chain(groups.iter()) {
+                if group_changes.contains_key(group) {
+                    continue;
+                }
+                group_changes.insert(*group, groups.contains(group));
             }
-            group_changes.insert(*group, groups.contains(group));
-        }
-        hosts
-            .update(
-                host_uuid,
-                HostChange {
-                    name: Some(name),
-                    address: Some(address),
-                    port: Edit::Set(input.port as u16),
-                    tags: tag_changes,
-                    groups: group_changes,
-                    notes: Edit::from_option(input.notes),
-                    ..Default::default()
-                },
-            )
+            let fields = HostChange {
+                name: Some(name),
+                address: Some(address),
+                port: Edit::Set(input.port as u16),
+                tags: tag_changes,
+                groups: group_changes,
+                notes: Edit::from_option(input.notes),
+                ..Default::default()
+            }
+            .into_writes()
             .map_err(edit_failure)?;
+            let mut writes = vec![LocalWrite {
+                id: Some(host_uuid),
+                object_type: scoplen_model::ObjectType::HOST,
+                fields,
+            }];
+            let mut creates = Vec::new();
+            let read_credential = |id| {
+                snapshot
+                    .get(id, Credential::TYPE)
+                    .map_err(edit_failure)?
+                    .as_ref()
+                    .map(Credential::read)
+                    .transpose()
+                    .map_err(edit_failure)
+            };
+            for (profile_id, choice) in input.login_credentials {
+                let profile_id = parse_id(&profile_id).map_err(|_| EditHostError::InvalidLogin)?;
+                let profile = snapshot
+                    .get(profile_id, AccessProfile::TYPE)?
+                    .as_ref()
+                    .map(AccessProfile::read)
+                    .transpose()
+                    .map_err(edit_failure)?
+                    .filter(|profile| profile.host == host_uuid)
+                    .ok_or(EditHostError::InvalidLogin)?;
+                let credential = match choice {
+                    HostLoginCredential::Saved { credential: None } => None,
+                    HostLoginCredential::Saved { credential: Some(value) } => {
+                        let id = parse_id(&value).map_err(|_| EditHostError::InvalidCredential)?;
+                        if read_credential(id)?.is_none() {
+                            return Err(EditHostError::InvalidCredential);
+                        }
+                        Some(id)
+                    }
+                    HostLoginCredential::KeyboardInteractive => {
+                        let current =
+                            profile.credential.map(read_credential).transpose()?.flatten();
+                        if let Some(current) = current
+                            && current.kind == CredentialKind::KeyboardInteractive
+                        {
+                            Some(current.meta.id)
+                        } else {
+                            let id = new_id().map_err(edit_failure)?;
+                            creates.push(NewObject {
+                                id,
+                                object_type: scoplen_model::ObjectType::CREDENTIAL,
+                                fields: vec![
+                                    (
+                                        FieldPath::Field(2),
+                                        uint(CredentialKind::KeyboardInteractive as u64),
+                                    ),
+                                    (FieldPath::Field(3), uint(CredentialBinding::None as u64)),
+                                ],
+                            });
+                            Some(id)
+                        }
+                    }
+                };
+                writes.push(LocalWrite {
+                    id: Some(profile_id),
+                    object_type: scoplen_model::ObjectType::ACCESS_PROFILE,
+                    fields: AccessProfileChange {
+                        credential: Edit::from_option(credential),
+                        ..Default::default()
+                    }
+                    .into_writes()
+                    .map_err(edit_failure)?,
+                });
+            }
+            Ok((creates, writes))
+        })?;
         self.host(host_id)
             .map_err(|error| EditHostError::Failed { reference: error.to_string() })?
             .ok_or_else(|| edit_failed("the host disappeared after editing"))
@@ -2800,6 +2895,7 @@ fn credential_kind(input: CredentialKindInput) -> CredentialKind {
         CredentialKindInput::SecurityKey => CredentialKind::SecurityKey,
         CredentialKindInput::DeviceKey => CredentialKind::DeviceBoundKey,
         CredentialKindInput::External => CredentialKind::ExternalProvider,
+        CredentialKindInput::KeyboardInteractive => CredentialKind::KeyboardInteractive,
     }
 }
 
@@ -2812,6 +2908,7 @@ fn credential_kind_input(kind: CredentialKind) -> CredentialKindInput {
         CredentialKind::SecurityKey => CredentialKindInput::SecurityKey,
         CredentialKind::DeviceBoundKey => CredentialKindInput::DeviceKey,
         CredentialKind::ExternalProvider => CredentialKindInput::External,
+        CredentialKind::KeyboardInteractive => CredentialKindInput::KeyboardInteractive,
     }
 }
 
@@ -2844,9 +2941,9 @@ fn validate_credential_binding(
         | CredentialKind::DeviceBoundKey => {
             matches!(binding, CredentialBinding::Device | CredentialBinding::None)
         }
-        CredentialKind::Agent | CredentialKind::ExternalProvider => {
-            binding == CredentialBinding::None
-        }
+        CredentialKind::Agent
+        | CredentialKind::ExternalProvider
+        | CredentialKind::KeyboardInteractive => binding == CredentialBinding::None,
     };
     valid.then_some(()).ok_or(ObjectEditError::InvalidCredentialBinding)
 }
@@ -3166,6 +3263,7 @@ fn credential_label(credential: &Credential) -> CredentialLabel {
             CredentialKind::SecurityKey => CredentialLabelKind::SecurityKey,
             CredentialKind::DeviceBoundKey => CredentialLabelKind::DeviceKey,
             CredentialKind::ExternalProvider => CredentialLabelKind::External,
+            CredentialKind::KeyboardInteractive => CredentialLabelKind::KeyboardInteractive,
         },
         name: credential.name.clone(),
         fingerprint: None,
@@ -3201,6 +3299,9 @@ fn credential_input(
             reference: "key generation is not available in the inventory flow".into(),
         }),
         SignIn::Agent => Ok((CredentialKind::Agent, CredentialBinding::None, None)),
+        SignIn::KeyboardInteractive => {
+            Ok((CredentialKind::KeyboardInteractive, CredentialBinding::None, None))
+        }
     }
 }
 
@@ -3534,6 +3635,12 @@ impl From<StoreError> for AddHostError {
     }
 }
 
+impl From<StoreError> for EditHostError {
+    fn from(error: StoreError) -> Self {
+        edit_failure(error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -3586,6 +3693,130 @@ mod tests {
             1
         );
         assert_eq!(inventory.store.list(scoplen_model::ObjectType::CREDENTIAL).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn interactive_host_saves_an_explicit_secretless_login_and_any_credential_does_not_choose_it() {
+        let inventory = inventory();
+        let host = inventory
+            .add_host(NewHost {
+                name: None,
+                address: "interactive.example".into(),
+                port: None,
+                username: "ops".into(),
+                sign_in: SignIn::KeyboardInteractive,
+            })
+            .unwrap();
+        let profile = &host.logins[0];
+        let credential = profile.credential.as_ref().unwrap();
+        assert_eq!(credential.kind, CredentialLabelKind::KeyboardInteractive);
+        let credential_id = Uuid::parse_str(&credential.id).unwrap();
+        let stored =
+            Repository::<Credential>::new(&inventory.store).get(credential_id).unwrap().unwrap();
+        assert_eq!(stored.kind, CredentialKind::KeyboardInteractive);
+        assert_eq!(stored.binding, CredentialBinding::None);
+        assert!(!stored.has_secret);
+        assert!(stored.devices.is_empty());
+        assert!(inventory.store.device_credential(credential_id).unwrap().is_none());
+        let profile_id = Uuid::parse_str(&profile.id).unwrap();
+        assert!(matches!(
+            resolve_connection_plan(&inventory.store, profile_id).unwrap().credential,
+            crate::connection::CredentialMaterial::KeyboardInteractive
+        ));
+        Repository::<AccessProfile>::new(&inventory.store)
+            .update(
+                profile_id,
+                AccessProfileChange { credential: Edit::Clear, ..Default::default() },
+            )
+            .unwrap();
+        assert!(matches!(
+            resolve_connection_plan(&inventory.store, profile_id),
+            Err(crate::connection::ConnectionPlanError::CredentialUnavailable)
+        ));
+    }
+
+    #[test]
+    fn converting_a_device_password_to_interactive_removes_all_resolution_material() {
+        let inventory = inventory();
+        let input = CredentialInput {
+            name: Some("interactive".into()),
+            kind: CredentialKindInput::Password,
+            binding: CredentialBindingInput::Device,
+            secret: None,
+            device_secret: Some("old-device-secret".into()),
+            public_key: None,
+            provider: BTreeMap::new(),
+            certificate_scope: None,
+        };
+        let credential = inventory.create_credential(input.clone()).unwrap();
+        let id = Uuid::parse_str(&credential.id).unwrap();
+        let public_key = ssh_key::PrivateKey::random(
+            &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+            ssh_key::Algorithm::Ed25519,
+        )
+        .unwrap()
+        .public_key()
+        .to_openssh()
+        .unwrap();
+        Repository::<Credential>::new(&inventory.store)
+            .update(
+                id,
+                CredentialChange {
+                    devices: [inventory.store.device_id(), Uuid::now_v7()]
+                        .into_iter()
+                        .map(|device| {
+                            (
+                                device,
+                                Some(DeviceKey {
+                                    public_key: public_key.clone(),
+                                    label: "old device".into(),
+                                }),
+                            )
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let converted = inventory
+            .update_credential(
+                credential.id.clone(),
+                CredentialInput {
+                    kind: CredentialKindInput::KeyboardInteractive,
+                    binding: CredentialBindingInput::None,
+                    device_secret: None,
+                    ..input.clone()
+                },
+            )
+            .unwrap();
+        assert!(!converted.has_secret);
+        assert!(inventory.store.device_credential(id).unwrap().is_none());
+        let stored = Repository::<Credential>::new(&inventory.store).get(id).unwrap().unwrap();
+        assert!(stored.devices.is_empty());
+        assert!(crate::repository::credential_secret(&inventory.store, id).unwrap().is_none());
+        for binding in [CredentialBindingInput::Shared, CredentialBindingInput::Device] {
+            assert!(
+                inventory
+                    .create_credential(CredentialInput {
+                        kind: CredentialKindInput::KeyboardInteractive,
+                        binding,
+                        device_secret: None,
+                        ..input.clone()
+                    })
+                    .is_err()
+            );
+        }
+        assert!(
+            inventory
+                .create_credential(CredentialInput {
+                    kind: CredentialKindInput::KeyboardInteractive,
+                    binding: CredentialBindingInput::None,
+                    secret: Some("must-not-save".into()),
+                    device_secret: None,
+                    ..input
+                })
+                .is_err()
+        );
     }
 
     #[test]
@@ -3850,6 +4081,206 @@ mod tests {
     }
 
     #[test]
+    fn edit_host_creates_an_explicit_interactive_login_without_changing_other_credentials() {
+        let inventory = inventory();
+        let details = inventory
+            .add_host(NewHost {
+                name: Some("api".into()),
+                address: "api.example".into(),
+                port: None,
+                username: "ops".into(),
+                sign_in: SignIn::Password { password: "saved-password".into() },
+            })
+            .unwrap();
+        let login = &details.logins[0];
+        let original = login.credential.as_ref().unwrap().id.clone();
+        let input = |choice| EditHost {
+            name: "API".into(),
+            address: "api.example".into(),
+            port: 22,
+            notes: None,
+            tags: BTreeMap::new(),
+            groups: Vec::new(),
+            login_credentials: BTreeMap::from([(login.id.clone(), choice)]),
+        };
+        let updated = inventory
+            .update_host(
+                details.summary.id.clone(),
+                input(HostLoginCredential::KeyboardInteractive),
+            )
+            .unwrap();
+        let descriptor = updated.logins[0].credential.as_ref().unwrap();
+        assert_eq!(descriptor.kind, CredentialLabelKind::KeyboardInteractive);
+        assert_ne!(descriptor.id, original);
+        let credential = inventory.credential_object(descriptor.id.clone()).unwrap().unwrap();
+        assert_eq!(credential.binding, CredentialBindingInput::None);
+        assert!(!credential.has_secret);
+        let plan = inventory.connection_plan(login.id.clone()).unwrap();
+        assert!(matches!(
+            plan.credential,
+            crate::connection::CredentialMaterial::KeyboardInteractive
+        ));
+        let again = inventory
+            .update_host(
+                details.summary.id.clone(),
+                input(HostLoginCredential::KeyboardInteractive),
+            )
+            .unwrap();
+        assert_eq!(again.logins[0].credential.as_ref().unwrap().id, descriptor.id);
+        let restored = inventory
+            .update_host(
+                details.summary.id.clone(),
+                input(HostLoginCredential::Saved { credential: Some(original.clone()) }),
+            )
+            .unwrap();
+        assert_eq!(restored.logins[0].credential.as_ref().unwrap().id, original);
+        assert!(inventory.credential_object(original).unwrap().unwrap().has_secret);
+        let before = inventory.credentials_objects().unwrap().len();
+        let mut invalid = input(HostLoginCredential::KeyboardInteractive);
+        invalid
+            .login_credentials
+            .insert(Uuid::now_v7().to_string(), HostLoginCredential::KeyboardInteractive);
+        invalid.name = "must roll back".into();
+        assert_eq!(
+            inventory.update_host(details.summary.id.clone(), invalid),
+            Err(EditHostError::InvalidLogin)
+        );
+        assert_eq!(inventory.credentials_objects().unwrap().len(), before);
+        assert_eq!(inventory.host(details.summary.id).unwrap().unwrap().summary.name, "API");
+    }
+
+    #[test]
+    fn edit_host_observes_a_concurrent_login_move_before_selecting_interactive() {
+        let inventory = inventory();
+        let add = |name: &str| {
+            inventory
+                .add_host(NewHost {
+                    name: Some(name.into()),
+                    address: format!("{name}.example"),
+                    port: None,
+                    username: "ops".into(),
+                    sign_in: SignIn::Password { password: "disposable".into() },
+                })
+                .unwrap()
+        };
+        let original = add("original");
+        let destination = add("destination");
+        let login = parse_id(&original.logins[0].id).unwrap();
+        let destination_id = parse_id(&destination.summary.id).unwrap();
+        let original_credential = original.logins[0].credential.as_ref().unwrap().id.clone();
+        let credential_count = inventory.credentials_objects().unwrap().len();
+        let (started, snapshot_ready) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn({
+            let store = inventory.store.clone();
+            move || {
+                store
+                    .create_and_write_batch_with_snapshot::<StoreError>(|snapshot| {
+                        assert!(snapshot.get(login, AccessProfile::TYPE)?.is_some());
+                        started.send(()).unwrap();
+                        released.recv().unwrap();
+                        Ok((
+                            Vec::new(),
+                            vec![LocalWrite {
+                                id: Some(login),
+                                object_type: AccessProfile::TYPE,
+                                fields: AccessProfileChange {
+                                    host: Some(destination_id),
+                                    ..Default::default()
+                                }
+                                .into_writes()
+                                .unwrap(),
+                            }],
+                        ))
+                    })
+                    .unwrap()
+            }
+        });
+        snapshot_ready.recv().unwrap();
+        let (attempting, attempted) = std::sync::mpsc::channel();
+        let editor = std::thread::spawn({
+            let inventory = inventory.clone();
+            let host_id = original.summary.id.clone();
+            let login_id = login.to_string();
+            move || {
+                attempting.send(()).unwrap();
+                inventory.update_host(
+                    host_id,
+                    EditHost {
+                        name: "must roll back".into(),
+                        address: "original.example".into(),
+                        port: 22,
+                        notes: None,
+                        tags: BTreeMap::new(),
+                        groups: Vec::new(),
+                        login_credentials: BTreeMap::from([(
+                            login_id,
+                            HostLoginCredential::KeyboardInteractive,
+                        )]),
+                    },
+                )
+            }
+        });
+        attempted.recv().unwrap();
+        release.send(()).unwrap();
+        writer.join().unwrap();
+        assert_eq!(editor.join().unwrap(), Err(EditHostError::InvalidLogin));
+        let moved = Repository::<AccessProfile>::new(&inventory.store).get(login).unwrap().unwrap();
+        assert_eq!(moved.host, destination_id);
+        assert_eq!(moved.credential.unwrap().to_string(), original_credential);
+        assert_eq!(inventory.credentials_objects().unwrap().len(), credential_count);
+        assert_eq!(inventory.host(original.summary.id).unwrap().unwrap().summary.name, "original");
+    }
+
+    #[test]
+    fn edit_host_refuses_deleted_logins_and_credentials_without_resurrection_or_partial_writes() {
+        for delete_login in [true, false] {
+            let inventory = inventory();
+            let host = inventory
+                .add_host(NewHost {
+                    name: Some("original".into()),
+                    address: "original.example".into(),
+                    port: None,
+                    username: "ops".into(),
+                    sign_in: SignIn::Password { password: "disposable".into() },
+                })
+                .unwrap();
+            let login = host.logins[0].id.clone();
+            let credential = host.logins[0].credential.as_ref().unwrap().id.clone();
+            let deleted = parse_id(if delete_login { &login } else { &credential }).unwrap();
+            inventory.store.delete(deleted).unwrap();
+            let choice = if delete_login {
+                HostLoginCredential::KeyboardInteractive
+            } else {
+                HostLoginCredential::Saved { credential: Some(credential) }
+            };
+            let result = inventory.update_host(
+                host.summary.id.clone(),
+                EditHost {
+                    name: "must roll back".into(),
+                    address: "original.example".into(),
+                    port: 22,
+                    notes: None,
+                    tags: BTreeMap::new(),
+                    groups: Vec::new(),
+                    login_credentials: BTreeMap::from([(login, choice)]),
+                },
+            );
+            assert_eq!(
+                result,
+                Err(if delete_login {
+                    EditHostError::InvalidLogin
+                } else {
+                    EditHostError::InvalidCredential
+                })
+            );
+            assert!(inventory.store.get(deleted).unwrap().unwrap().is_tombstoned());
+            assert_eq!(inventory.host(host.summary.id).unwrap().unwrap().summary.name, "original");
+            assert_eq!(inventory.credentials_objects().unwrap().len(), usize::from(delete_login));
+        }
+    }
+
+    #[test]
     fn edits_host_metadata_tags_and_groups_as_one_validated_change() {
         let inventory = inventory();
         let group =
@@ -3873,6 +4304,7 @@ mod tests {
                     notes: Some("owned by platform".into()),
                     tags: BTreeMap::from([("env".into(), "prod".into())]),
                     groups: vec![group.id.clone()],
+                    login_credentials: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -3905,6 +4337,7 @@ mod tests {
                 notes: None,
                 tags: BTreeMap::new(),
                 groups: Vec::new(),
+                login_credentials: BTreeMap::new(),
             },
         );
         assert_eq!(result, Err(EditHostError::EmptyName));

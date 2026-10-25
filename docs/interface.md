@@ -3,7 +3,8 @@
 The interface (`web/app`, `web/ui`) and the core (`crates/`, `src-tauri`) are built separately. Each screen states what it needs from the core as a TypeScript contract; the core implements that contract with typed commands. This page lists the contracts, what each operation must do, and how a contract is connected once its commands exist.
 
 The screens never read the store or decide business rules. Private keys, account material and
-tokens remain in Rust. Dedicated transient inputs accept SSH passphrases and the D-114 pairing
+tokens remain in Rust. Dedicated transient inputs accept SSH passphrases, keyboard-interactive
+answers, and the D-114 pairing
 password; the new-device pairing screen may display that password and its secret QR once. These exceptions never
 enter ordinary state snapshots or clipboard automation. Anything the screens must not decide —
 validation beyond "is this field empty", what a deletion removes, which areas the user has
@@ -380,7 +381,15 @@ first negotiated key is pinned for all rekeys. Before agent access, private-key
 decryption, or remote authentication, Rust requires exact saved trust or
 explicit acceptance of that connection's key.
 
-`sessionRespond(sessionId, promptId, intent)` accepts only the current,
+Add Host and each Login in Edit Host offer Interactive (OTP/PAM). Saving creates a
+kind-8, binding-None descriptor and explicitly references it from that Login; editing
+Host metadata and these Login choices commits atomically. The Credential editor can
+also create or convert this descriptor, clearing all previous authentication material.
+Other saved credential choices retain their meaning. Any usable local credential
+does not implicitly select Interactive. Reconnect and Direct Jump hops resolve each
+saved Login independently.
+
+`sessionRespond(sessionId, transportId, promptId, intent)` accepts only the current,
 correctly typed, one-use prompt. Trust intents contain no renderer-supplied
 host or key. Passphrase intents are write-only, clear the input before sending,
 and never enter React state; wrong local decryption requests a fresh prompt on
@@ -390,7 +399,19 @@ closing the tab cancels preparation, with reverse cleanup of the entire chain.
 Delayed IPC acknowledgments cannot replace a newer hop's prompt. Background
 sessions retain their pending prompts without opening a portal over the active
 tab. Selecting that tab shows its prompt; hiding it clears any unsubmitted
-passphrase field. The tab's host mark indicates that attention is needed.
+passphrase or challenge fields. The tab's host mark indicates that attention is needed.
+
+Interactive dialogs have a fixed localized title and trusted hop identity, with literal
+server name, instructions and ordered prompts shown separately. Echo-true controls show
+text and echo-false controls hide it. Both use uncontrolled DOM values, clear immediately
+on submit, hide, replacement, cancellation or unmount, and send only ordered answers.
+Empty answers are permitted; zero-prompt rounds require Continue and send an empty vector.
+Rust enforces shared answer bounds and prompt count, a 120-second challenge deadline and
+a 300-second absolute authentication budget per trusted hop, including key-passphrase
+waiting. Wrong, overdue, duplicate and old-transport replies are refused. Answers never
+enter React state, history, terminal output, saved objects or reconnect state. An accepted
+password/key/agent factor continues into Interactive only through a typed partial-success
+rejection advertising that method; ordinary rejection never selects a fallback.
 
 ## Connecting a contract
 

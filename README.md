@@ -23,6 +23,18 @@ Changed keys require a separate review. Forwarded connection setup has a
 ten-second deadline. Cancellation or failure closes the current connection and
 its parents in reverse order; the target owns that chain until the session ends.
 
+Choose Interactive when adding a host, or for a Login in Edit Host, for OTP or PAM
+login without a stored password or key. The Credential editor also offers Interactive (OTP/PAM), which
+can be assigned to a saved Login, including a Direct jump Login. Server requests
+show each prompt in order and respect its echo setting. Informational requests
+with no inputs require Continue. Answers are cleared after submission or hiding
+the prompt and are never saved or reused by reconnect. A selected password, key,
+or agent continues into Interactive only after the server accepts that factor
+and advertises keyboard-interactive; a rejected credential does not fall back.
+Each hop has five minutes for authentication, including key passphrase entry,
+and each server request has at most two minutes for a reply. Cancellation or
+expiry closes that connection attempt; reconnect starts with blank inputs.
+
 To use ProxyCommand, create that kind of Route and assign it to the target Login.
 Enter a program followed by arguments; quote paths or arguments containing spaces.
 Space and tab separate arguments outside single or double quotes. Outside single
@@ -370,6 +382,15 @@ pnpm typecheck
 pnpm test
 pnpm license-check
 ```
+
+`scripts/test-ssh-keyboard-interactive.ps1` uses PowerShell 7 and Docker to start
+disposable OpenSSH 9.9/PAM listeners with exact package versions. Through public
+saved client preparation it checks explicit Interactive, accepted password/key/agent
+continuation, wrong-answer/key refusal, fresh successful attempts, cancellation
+and late replies, another terminal while one challenge waits, and Interactive
+Jump plus target authentication. Every successful connection must execute the
+exact expected command with exit status zero. The fixture cleans up its own
+containers and temporary keys.
 
 With PowerShell 7, Docker, and `ssh-keygen` available, `scripts/test-ssh-private-key.ps1`
 starts disposable OpenSSH servers and verifies Ed25519, P-256/P-384/P-521, and RSA key
