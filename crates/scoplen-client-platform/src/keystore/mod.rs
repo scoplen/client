@@ -61,7 +61,9 @@ pub trait Keystore: Send + Sync {
     fn store(&self, secret: &[u8]) -> Result<(), KeystoreError>;
     /// Removes the stored secret. Removing nothing is not an error.
     /// Windows checks the exact current-user native slot even when its blob
-    /// is absent or uses DPAPI. Native errors preserve the blob and are returned.
+    /// is absent or uses DPAPI. A device-not-ready probe permits software cleanup
+    /// only when TBS confirms no TPM and the blob is valid DPAPI or absent.
+    /// Other native errors preserve the blob and are returned.
     fn delete(&self) -> Result<(), KeystoreError>;
 }
 
