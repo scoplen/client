@@ -42,7 +42,8 @@ The opt-in `live-server-integration` feature checks retained admitted-device aut
 refresh, sync keys, reviewed inventory, native notifications, history, SSH trust propagation and
 three-device convergence against an independently running disposable server. It does not read
 server source or seed the server database. It no longer invokes retired invitation or pairing
-endpoints. D-128 registration/password sign-in is not implemented by this client yet.
+endpoints. Its fixture setup does not yet provision profiles through the Rust D-128 registration
+and independent installation APIs; password sign-in remains incomplete.
 
 Provide a loopback `https://localhost:<port>` deployment and three independently admitted,
 already confirmed disposable SQLCipher profiles for the same Account, with distinct device ids
@@ -185,9 +186,22 @@ cover historical success, dropped replies, restart/exact confirmation, trusted u
 explicit retries, missing receipts, malformed/oversized/duplicate/inexact responses, cache/media
 metadata, redirects, untrusted TLS, timeout, cancellation, future drop, profile replacement and
 failed result transactions. These checks do not run production-server or native-picker acceptance.
-Full desktop registration, password login, isolated Account-profile installation and macOS/native
-acceptance remain separate outcomes. No bindings regeneration is required because
-this Rust-only surface adds no Tauri command or frontend type.
+The same suite drives the public `install_registration_profile` API over this real TLS/H2 peer.
+The peer independently verifies ordinary Device signatures, JWT/JKT binding and every fresh DPoP
+request before serving K-4 derived from the original encrypted public registration artifacts.
+Installation tests cover original Device/private keys, separate encrypted files and keystore slots,
+Local/Account namespace isolation, equal object UUIDs, two Accounts, selection/reopen generations,
+valid higher membership revisions, revoked/corrupt/missing keys and certificates, authentication
+denial, bad JWTs, target rollback, root publication failure, process reopen and exact retry.
+Cancellation/future drop/timeout and root replacement retain unusable candidates; SQL identity,
+generation and replacement guards and independent no-keystore local passphrases are exercised.
+The suite also asserts that the installation future can run on a native Send executor.
+
+Full desktop registration/profile selection, password login, next-Device admission and macOS/native
+acceptance remain separate outcomes. These Rust tests substitute isolated in-memory keystore
+slots for native key providers; they do not establish native keystore, picker or platform UI
+acceptance. No bindings regeneration is required because this Rust-only surface adds no Tauri
+command or frontend type.
 
 ## Native Personal notification fault tests
 

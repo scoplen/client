@@ -253,10 +253,15 @@ Its independent SQLCipher pending record keeps the original Device keys and sign
 bytes through restart and uncertain request handoff. A separate Rust HTTPS driver runs fresh
 D-128 challenge/register/exact-confirm exchanges over verified TLS 1.3/H2 without redirects.
 Trusted unchanged Submit results permit only an explicit retry; unknown outcomes remain
-receipt-only, including after a missing receipt. It exposes no desktop commands and installs no
-isolated Account profile, tokens or sync authority. Device keys in this boundary are
-software keys protected by SQLCipher, not hardware-held non-exportable keys. Full registration,
-password sign-in, isolated Account-profile installation and switching remain incomplete.
+receipt-only, including after a missing receipt. A separate Rust installation API creates an
+independent encrypted candidate after exact confirmation and makes it usable only after fresh
+ordinary Device authentication and complete verified K-4 bootstrap. Its encrypted Local catalog retains each
+Account by canonical origin and Account id, with independent local key protection. Explicit Rust
+selection/reopen gives each namespace a fresh generation and Store; Local inventory stays local.
+Failed installation keeps the original keys and directory reservation for explicit retry.
+Device keys are software keys protected by SQLCipher, not hardware-held non-exportable keys.
+These APIs expose no desktop commands. The registration/profile-selection UI, password sign-in,
+next-Device admission and Team context switching remain incomplete.
 
 Profiles with saved neutral admission anchors continue to verify offline against their original
 private roots. Profiles without those anchors require explicit current-device revalidation;

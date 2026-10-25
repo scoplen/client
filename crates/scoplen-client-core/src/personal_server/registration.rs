@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Rust-owned registration preparation and HTTPS. No tokens or admitted profile installation.
+//! Rust-owned registration preparation, HTTPS and separate verified Account installation.
 
 use std::{fs::OpenOptions, io::Write as _, path::Path, sync::Arc};
 
@@ -28,6 +28,7 @@ use crate::{
 };
 
 mod http;
+mod install;
 pub use http::{RegistrationAction, RegistrationCancellation};
 
 // Process-wide, fail-fast admission also covers separate PersonalServer instances. A caller
@@ -48,7 +49,7 @@ pub enum RegistrationPhase {
     OutcomeUnknown,
     /// A trusted response proves the latest Submit unchanged; another Submit needs explicit Retry.
     RetryAvailable,
-    /// Every historical confirmation field matches the original bytes; no Device is installed.
+    /// Exact historical confirmation matches the original bytes; current authority is separate.
     Committed,
 }
 

@@ -16,14 +16,14 @@ use super::*;
 use crate::{personal_server::transport::Transport, testing::MemoryKeystore};
 
 #[derive(Clone)]
-struct Reply {
-    status: u16,
-    body: SecretVec,
-    headers: Vec<(&'static str, String)>,
+pub(in crate::personal_server::registration) struct Reply {
+    pub(in crate::personal_server::registration) status: u16,
+    pub(in crate::personal_server::registration) body: SecretVec,
+    pub(in crate::personal_server::registration) headers: Vec<(&'static str, String)>,
 }
 
 impl Reply {
-    fn json(status: u16, body: Vec<u8>) -> Self {
+    pub(in crate::personal_server::registration) fn json(status: u16, body: Vec<u8>) -> Self {
         Self {
             status,
             body: SecretVec::new(body),
@@ -35,7 +35,12 @@ impl Reply {
         }
     }
 
-    fn problem(status: u16, code: &str, changed: bool, retryable: bool) -> Self {
+    pub(in crate::personal_server::registration) fn problem(
+        status: u16,
+        code: &str,
+        changed: bool,
+        retryable: bool,
+    ) -> Self {
         let body = serde_json::to_vec(
             &ProblemDetails::new(
                 ErrorCode::new(code).unwrap(),
@@ -63,6 +68,8 @@ impl Reply {
     }
 }
 
+type Extra = Box<dyn FnMut(&::http::request::Parts, &[u8], &str) -> Result<Reply, String> + Send>;
+
 #[derive(Default)]
 struct PeerState {
     paths: Vec<String>,
@@ -73,12 +80,13 @@ struct PeerState {
     register_reply: Option<Reply>,
     reject_commit: bool,
     lose_reply: bool,
-    pause: Option<(&'static str, Arc<Notify>, Arc<Notify>)>,
+    pause: Option<(String, Arc<Notify>, Arc<Notify>)>,
     errors: Vec<String>,
+    extra: Option<Extra>,
 }
 
-struct Peer {
-    origin: String,
+pub(in crate::personal_server::registration) struct Peer {
+    pub(in crate::personal_server::registration) origin: String,
     certificate: reqwest::Certificate,
     state: Arc<StdMutex<PeerState>>,
     task: tokio::task::JoinHandle<()>,
@@ -91,7 +99,7 @@ impl Drop for Peer {
 }
 
 impl Peer {
-    async fn new() -> Self {
+    pub(in crate::personal_server::registration) async fn new() -> Self {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let key = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
         let certificate = reqwest::Certificate::from_der(key.cert.der()).unwrap();
@@ -142,14 +150,21 @@ impl Peer {
         Self { origin, certificate, state, task }
     }
 
-    fn manager(&self, timeout: Duration) -> PersonalServer {
+    pub(in crate::personal_server::registration) fn manager(
+        &self,
+        timeout: Duration,
+    ) -> PersonalServer {
         PersonalServer {
             operation: tokio::sync::Mutex::new(()),
             transport: Ok(Transport::fixture(self.certificate.clone(), timeout)),
         }
     }
 
-    fn registration_reply(&self, reply: Option<Reply>, reject_commit: bool) {
+    pub(in crate::personal_server::registration) fn registration_reply(
+        &self,
+        reply: Option<Reply>,
+        reject_commit: bool,
+    ) {
         let mut state = self.state.lock().unwrap();
         state.register_reply = reply;
         state.reject_commit = reject_commit;
@@ -157,18 +172,33 @@ impl Peer {
         state.pause = None;
     }
 
-    fn pause(&self, path: &'static str) -> (Arc<Notify>, Arc<Notify>) {
+    pub(in crate::personal_server::registration) fn pause(
+        &self,
+        path: &str,
+    ) -> (Arc<Notify>, Arc<Notify>) {
         let reached = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
-        self.state.lock().unwrap().pause = Some((path, reached.clone(), release.clone()));
+        self.state.lock().unwrap().pause = Some((path.into(), reached.clone(), release.clone()));
         (reached, release)
     }
 
-    fn healthy(&self) {
-        assert!(
-            self.state.lock().unwrap().errors.is_empty(),
-            "independent peer rejected a request"
-        );
+    pub(in crate::personal_server::registration) fn healthy(&self) {
+        let state = self.state.lock().unwrap();
+        assert!(state.errors.is_empty(), "independent peer rejected a request: {:?}", state.errors);
+    }
+
+    pub(in crate::personal_server::registration) fn extra(&self, handler: Extra) {
+        self.state.lock().unwrap().extra = Some(handler);
+    }
+
+    pub(in crate::personal_server::registration) fn paths(&self) -> Vec<String> {
+        self.state.lock().unwrap().paths.clone()
+    }
+
+    pub(in crate::personal_server::registration) fn payload(&self) -> AccountRegistrationPayload {
+        let state = self.state.lock().unwrap();
+        AccountRegistrationPayload::from_cbor(state.requests.first().unwrap().payload.as_bytes())
+            .unwrap()
     }
 }
 
@@ -179,33 +209,38 @@ async fn answer(
     origin: &str,
 ) -> Result<(), String> {
     let path = request.uri().path().to_owned();
-    let operation =
-        AccountEntryOperation::from_route(request.method().as_str(), &path).ok_or("route")?;
+    let operation = AccountEntryOperation::from_route(request.method().as_str(), &path);
     if request.uri().query().is_some()
-        || ["authorization", "dpop", "cookie", "idempotency-key", "if-match"]
-            .iter()
-            .any(|h| request.headers().contains_key(*h))
-        || request.headers().get("content-type").and_then(|v| v.to_str().ok())
-            != Some("application/json")
-        || request.headers().get("accept-encoding").and_then(|v| v.to_str().ok())
-            != Some("identity")
+        || operation.is_some()
+            && (["authorization", "dpop", "cookie", "idempotency-key", "if-match"]
+                .iter()
+                .any(|h| request.headers().contains_key(*h))
+                || request.headers().get("content-type").and_then(|v| v.to_str().ok())
+                    != Some("application/json")
+                || request.headers().get("accept-encoding").and_then(|v| v.to_str().ok())
+                    != Some("identity"))
     {
         return Err("native request metadata".into());
     }
     let mut body = Zeroizing::new(Vec::new());
     while let Some(chunk) = request.body_mut().data().await {
         let chunk = chunk.map_err(|_| "request body")?;
-        if chunk.len() > operation.body_limits().0.saturating_sub(body.len()) {
+        if chunk.len()
+            > operation
+                .map_or(65_536, |operation| operation.body_limits().0)
+                .saturating_sub(body.len())
+        {
             return Err("request limit".into());
         }
         request.body_mut().flow_control().release_capacity(chunk.len()).unwrap();
         body.extend_from_slice(&chunk);
     }
+    let (parts, _) = request.into_parts();
     let (reply, lose, pause) = {
         let mut state = state.lock().unwrap();
         state.paths.push(path.clone());
         let reply = match operation {
-            AccountEntryOperation::RequestChallenge => {
+            Some(AccountEntryOperation::RequestChallenge) => {
                 let request = AccountRequestChallengeRequest::from_json(&body)
                     .map_err(|_| "challenge codec")?;
                 let n = u8::try_from(state.challenges.len() + 1)
@@ -222,7 +257,7 @@ async fn answer(
                 state.challenges.push((request, response));
                 reply
             }
-            AccountEntryOperation::Register => {
+            Some(AccountEntryOperation::Register) => {
                 let request = AccountRegistrationRequest::from_json(&body)
                     .map_err(|_| "registration codec")?;
                 let digest = request.verify_proof(origin).map_err(|_| "registration signatures")?;
@@ -269,10 +304,13 @@ async fn answer(
                 state.requests.push(request);
                 reply
             }
+            None => {
+                state.extra.as_mut().ok_or("unsupported fixture route")?(&parts, &body, origin)?
+            }
             _ => return Err("unsupported fixture operation".into()),
         };
-        let pause = state.pause.clone().filter(|(expected, _, _)| *expected == path);
-        (reply, state.lose_reply && operation == AccountEntryOperation::Register, pause)
+        let pause = state.pause.clone().filter(|(expected, _, _)| expected == &path);
+        (reply, state.lose_reply && operation == Some(AccountEntryOperation::Register), pause)
     };
     if let Some((_, reached, release)) = pause {
         reached.notify_one();
@@ -301,25 +339,25 @@ async fn answer(
     Ok(())
 }
 
-struct Fixture {
-    peer: Peer,
-    server: PersonalServer,
-    local: LocalData,
-    store: Arc<Store>,
-    keys: MemoryKeystore,
-    status: RegistrationStatus,
-    dir: tempfile::TempDir,
+pub(in crate::personal_server::registration) struct Fixture {
+    pub(in crate::personal_server::registration) peer: Peer,
+    pub(in crate::personal_server::registration) server: PersonalServer,
+    pub(in crate::personal_server::registration) local: Arc<LocalData>,
+    pub(in crate::personal_server::registration) store: Arc<Store>,
+    pub(in crate::personal_server::registration) keys: MemoryKeystore,
+    pub(in crate::personal_server::registration) status: RegistrationStatus,
+    pub(in crate::personal_server::registration) dir: tempfile::TempDir,
     _serial: MutexGuard<'static, ()>,
 }
 
 impl Fixture {
-    async fn new() -> Self {
+    pub(in crate::personal_server::registration) async fn new() -> Self {
         let serial = TEST_SERIAL.lock().await;
         let peer = Peer::new().await;
         let server = peer.manager(Duration::from_secs(2));
         let dir = tempfile::tempdir().unwrap();
         let keys = MemoryKeystore::default();
-        let local = LocalData::start(dir.path(), Some(Box::new(keys.clone()))).unwrap();
+        let local = Arc::new(LocalData::start(dir.path(), Some(Box::new(keys.clone()))).unwrap());
         let store = local.store().unwrap();
         let status = server
             .prepare_registration(
@@ -343,7 +381,7 @@ impl Fixture {
         Self { peer, server, local, store, keys, status, dir, _serial: serial }
     }
 
-    async fn exchange(
+    pub(in crate::personal_server::registration) async fn exchange(
         &self,
         action: RegistrationAction,
     ) -> Result<RegistrationStatus, RegistrationError> {
@@ -371,7 +409,7 @@ impl Fixture {
         assert_ne!(store.device_id(), self.status.device_id);
     }
 
-    fn database(&self) -> rusqlite::Connection {
+    pub(in crate::personal_server::registration) fn database(&self) -> rusqlite::Connection {
         let conn = rusqlite::Connection::open(self.dir.path().join("local.db")).unwrap();
         let keys = self.keys.0.lock().unwrap();
         let hex = Zeroizing::new(

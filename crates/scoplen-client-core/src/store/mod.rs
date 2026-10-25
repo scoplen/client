@@ -2,7 +2,7 @@
 
 //! The encrypted local store (`scoplen-docs/11-client-architecture.md` §2).
 //!
-//! One SQLCipher database per device, keyed by the local database key
+//! One SQLCipher database per Local or Account namespace, keyed by its own local database key
 //! (`05-cryptography-and-keys.md` §9). It holds replicated objects in their
 //! merged form with per-field clocks, and the device's own records. Every
 //! local write is merged with the stored object through `scoplen-model`, so
@@ -11,6 +11,7 @@
 pub mod device;
 mod migrations;
 pub(crate) mod personal;
+pub(crate) mod profiles;
 pub(crate) mod sync;
 
 use std::collections::HashSet;
@@ -34,6 +35,9 @@ pub const MAX_OBJECTS_PER_VAULT: u64 = 100_000;
 /// A failure of the local store.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    /// The encrypted Local catalog has reached its bounded Account-profile capacity.
+    #[error("the device holds at most 128 Account profiles")]
+    ProfileLimit,
     /// A retained identity belongs to another immutable Account/store context.
     #[error("the Personal account context does not match this store; reopen its original profile")]
     AccountContext,
@@ -192,15 +196,25 @@ impl Drop for Subscription {
 impl Store {
     /// Opens the store at `path`, creating it if it does not exist, and runs
     /// any pending migrations. A new store is given a new device identity.
+    /// Bound Account stores require the profile catalog's contextual factory.
     pub fn open(path: &Path, key: &LocalDatabaseKey) -> Result<Store, StoreError> {
+        Self::open_profile(path, key, None)
+    }
+
+    pub(crate) fn open_profile(
+        path: &Path,
+        key: &LocalDatabaseKey,
+        profile: Option<&profiles::ProfileRecord>,
+    ) -> Result<Store, StoreError> {
         let mut conn = Connection::open(path)?;
         apply_key(&conn, key)?;
+        profiles::preflight(&conn, profile)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "secure_delete", "ON")?;
         migrate(&mut conn)?;
-        let device_id = ensure_device(&conn)?;
+        let device_id = ensure_device(&conn, profile.map(|p| p.profile.device_id))?;
         Ok(Store {
             conn: Mutex::new(conn),
             data_dir: path.parent().unwrap_or_else(|| Path::new(".")).to_owned(),
@@ -952,14 +966,21 @@ fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
-fn ensure_device(conn: &Connection) -> Result<Uuid, StoreError> {
+fn ensure_device(conn: &Connection, expected: Option<Uuid>) -> Result<Uuid, StoreError> {
     let existing: Option<Vec<u8>> = conn
         .query_row("SELECT device_id FROM device WHERE singleton = 1", [], |row| row.get(0))
         .optional()?;
     if let Some(id) = existing {
-        return uuid_from(&id);
+        let id = uuid_from(&id)?;
+        if expected.is_some_and(|expected| expected != id) {
+            return Err(StoreError::AccountContext);
+        }
+        return Ok(id);
     }
-    let id = scoplen_model::new_uuid_v7()?;
+    let id = match expected {
+        Some(id) => id,
+        None => scoplen_model::new_uuid_v7()?,
+    };
     let now = scoplen_model::system_time_millis()?;
     conn.execute(
         "INSERT INTO device (singleton, device_id, clock, created_at) VALUES (1, ?1, 0, ?2)",

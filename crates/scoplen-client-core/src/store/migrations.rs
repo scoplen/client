@@ -335,4 +335,116 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         OR (NEW.phase>0 AND NEW.dispatch_generation=0)
     BEGIN SELECT RAISE(ABORT, 'Registration dispatch evidence cannot be replaced'); END;
     "#,
+    // 14: Local owns the catalog; Account stores have an immutable, independent identity.
+    r#"
+    CREATE TABLE account_profiles (
+        profile_id BLOB PRIMARY KEY CHECK (length(profile_id)=16),
+        origin TEXT NOT NULL CHECK (length(origin) BETWEEN 1 AND 2048),
+        account_id BLOB NOT NULL CHECK (length(account_id)=16),
+        vault_id BLOB NOT NULL CHECK (length(vault_id)=16),
+        device_id BLOB NOT NULL CHECK (length(device_id)=16),
+        operation_id BLOB NOT NULL UNIQUE CHECK (length(operation_id)=16),
+        payload BLOB NOT NULL CHECK (length(payload) BETWEEN 1 AND 262144),
+        signature BLOB NOT NULL CHECK (length(signature)=64),
+        confirmation BLOB NOT NULL CHECK (length(confirmation) BETWEEN 1 AND 1024),
+        ready INTEGER NOT NULL DEFAULT 0 CHECK (ready IN (0,1)),
+        UNIQUE(origin,account_id)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE profile_selection (
+        singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+        generation INTEGER NOT NULL DEFAULT 0 CHECK (generation>=0),
+        profile_id BLOB REFERENCES account_profiles(profile_id)
+    ) STRICT;
+    INSERT INTO profile_selection(singleton) VALUES(1);
+    CREATE TABLE account_profile_binding (
+        singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+        profile_id BLOB NOT NULL CHECK (length(profile_id)=16),
+        origin TEXT NOT NULL CHECK (length(origin) BETWEEN 1 AND 2048),
+        account_id BLOB NOT NULL CHECK (length(account_id)=16),
+        vault_id BLOB NOT NULL CHECK (length(vault_id)=16),
+        device_id BLOB NOT NULL CHECK (length(device_id)=16),
+        operation_id BLOB NOT NULL CHECK (length(operation_id)=16),
+        payload BLOB NOT NULL CHECK (length(payload) BETWEEN 1 AND 262144),
+        signature BLOB NOT NULL CHECK (length(signature)=64),
+        confirmation BLOB NOT NULL CHECK (length(confirmation) BETWEEN 1 AND 1024)
+    ) STRICT;
+    CREATE TRIGGER account_catalog_local BEFORE INSERT ON account_profiles
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) OR EXISTS (SELECT 1 FROM personal_server)
+        OR NEW.ready!=0 OR (SELECT count(*) FROM account_profiles)>=128
+        OR EXISTS (SELECT 1 FROM account_profiles WHERE profile_id=NEW.profile_id
+            OR operation_id=NEW.operation_id OR (origin=NEW.origin AND account_id=NEW.account_id))
+    BEGIN SELECT RAISE(ABORT, 'Account catalogs belong to Local'); END;
+    CREATE TRIGGER account_catalog_immutable BEFORE UPDATE ON account_profiles
+    WHEN NEW.profile_id IS NOT OLD.profile_id OR NEW.origin IS NOT OLD.origin
+        OR NEW.account_id IS NOT OLD.account_id OR NEW.vault_id IS NOT OLD.vault_id
+        OR NEW.device_id IS NOT OLD.device_id OR NEW.operation_id IS NOT OLD.operation_id
+        OR NEW.payload IS NOT OLD.payload OR NEW.signature IS NOT OLD.signature
+        OR NEW.confirmation IS NOT OLD.confirmation OR NEW.ready < OLD.ready
+    BEGIN SELECT RAISE(ABORT, 'Account catalog identity is immutable'); END;
+    CREATE TRIGGER account_catalog_retained BEFORE DELETE ON account_profiles
+    BEGIN SELECT RAISE(ABORT, 'Account profiles must be retained'); END;
+    CREATE TRIGGER account_binding_empty BEFORE INSERT ON account_profile_binding
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) OR EXISTS (SELECT 1 FROM account_profiles)
+        OR EXISTS (SELECT 1 FROM objects) OR EXISTS (SELECT 1 FROM personal_server)
+        OR EXISTS (SELECT 1 FROM device_key_pair) OR EXISTS (SELECT 1 FROM personal_registration)
+        OR EXISTS (SELECT 1 FROM personal_pairing) OR EXISTS (SELECT 1 FROM personal_pairing_device)
+        OR EXISTS (SELECT 1 FROM personal_pairing_attempts)
+        OR NOT EXISTS (SELECT 1 FROM device WHERE device_id=NEW.device_id AND clock=0)
+    BEGIN SELECT RAISE(ABORT, 'Account identity requires its own empty store'); END;
+    CREATE TRIGGER account_binding_immutable BEFORE UPDATE ON account_profile_binding
+    BEGIN SELECT RAISE(ABORT, 'Account profile binding is immutable'); END;
+    CREATE TRIGGER account_binding_retained BEFORE DELETE ON account_profile_binding
+    BEGIN SELECT RAISE(ABORT, 'Account profile binding must be retained'); END;
+    CREATE TRIGGER profile_selection_monotonic BEFORE UPDATE ON profile_selection
+    WHEN NEW.generation != OLD.generation+1
+    BEGIN SELECT RAISE(ABORT, 'Profile owner generation must advance'); END;
+    CREATE TRIGGER profile_selection_insert BEFORE INSERT ON profile_selection
+    WHEN EXISTS (SELECT 1 FROM profile_selection)
+    BEGIN SELECT RAISE(ABORT, 'Profile owner generation cannot be replaced'); END;
+    CREATE TRIGGER profile_selection_retained BEFORE DELETE ON profile_selection
+    BEGIN SELECT RAISE(ABORT, 'Profile owner generation must be retained'); END;
+    CREATE TRIGGER account_profile_identity_insert BEFORE INSERT ON personal_server
+    WHEN EXISTS (SELECT 1 FROM account_profiles) OR (EXISTS (SELECT 1 FROM account_profile_binding) AND
+        (EXISTS (SELECT 1 FROM personal_server) OR NOT EXISTS (
+            SELECT 1 FROM account_profile_binding WHERE origin=NEW.origin
+                AND account_id=NEW.account_id AND vault_id=NEW.personal_vault_id)))
+    BEGIN SELECT RAISE(ABORT, 'Account identity does not match its store'); END;
+    CREATE TRIGGER account_profile_identity_update BEFORE UPDATE ON personal_server
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) AND
+        (NEW.origin IS NOT OLD.origin OR NEW.account_id IS NOT OLD.account_id
+            OR NEW.personal_vault_id IS NOT OLD.personal_vault_id
+            OR NEW.private_material IS NOT OLD.private_material)
+    BEGIN SELECT RAISE(ABORT, 'Account profile identity cannot be replaced'); END;
+    CREATE TRIGGER account_profile_identity_delete BEFORE DELETE ON personal_server
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding)
+    BEGIN SELECT RAISE(ABORT, 'Account profile identity must be retained'); END;
+    CREATE TRIGGER account_profile_device_update BEFORE UPDATE OF device_id ON device
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) AND NEW.device_id IS NOT OLD.device_id
+    BEGIN SELECT RAISE(ABORT, 'Account profile Device cannot be replaced'); END;
+    CREATE TRIGGER account_profile_device_insert BEFORE INSERT ON device
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding)
+    BEGIN SELECT RAISE(ABORT, 'Account profile Device already exists'); END;
+    CREATE TRIGGER account_profile_device_delete BEFORE DELETE ON device
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding)
+    BEGIN SELECT RAISE(ABORT, 'Account profile Device must be retained'); END;
+    CREATE TRIGGER account_profile_keys_insert BEFORE INSERT ON device_key_pair
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) AND
+        (EXISTS (SELECT 1 FROM device_key_pair) OR NOT EXISTS (
+            SELECT 1 FROM personal_server WHERE substr(private_material,2,32)=NEW.signing
+                AND substr(private_material,34,32)=NEW.kem))
+    BEGIN SELECT RAISE(ABORT, 'Account profile keys already exist'); END;
+    CREATE TRIGGER account_profile_keys_update BEFORE UPDATE ON device_key_pair
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) AND
+        (NEW.signing IS NOT OLD.signing OR NEW.kem IS NOT OLD.kem)
+    BEGIN SELECT RAISE(ABORT, 'Account profile keys cannot be replaced'); END;
+    CREATE TRIGGER account_profile_keys_delete BEFORE DELETE ON device_key_pair
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding)
+    BEGIN SELECT RAISE(ABORT, 'Account profile keys must be retained'); END;
+    DROP TRIGGER personal_registration_retained;
+    CREATE TRIGGER personal_registration_retained BEFORE DELETE ON personal_registration
+    WHEN OLD.phase != 0 AND NOT (OLD.phase=2 AND EXISTS (
+        SELECT 1 FROM account_profiles WHERE ready=1 AND payload=OLD.payload
+            AND signature=OLD.account_signature AND confirmation=OLD.confirmation))
+    BEGIN SELECT RAISE(ABORT, 'Registration requires confirmed independent installation'); END;
+    "#,
 ];

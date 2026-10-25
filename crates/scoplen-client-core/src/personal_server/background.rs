@@ -110,6 +110,20 @@ impl PersonalSyncRuntime {
         });
     }
 
+    pub(crate) fn release_store(&self, expected: &Arc<Store>) {
+        self.control.send_if_modified(|control| {
+            if !control.store.as_ref().is_some_and(|store| Arc::ptr_eq(store, expected)) {
+                return false;
+            }
+            if let Some(run) = &control.run {
+                run.cancel();
+            }
+            control.run = None;
+            control.store = None;
+            true
+        });
+    }
+
     /// Cancel owned background work during native shutdown.
     pub fn shutdown(&self) {
         self.control.send_modify(|control| {
@@ -307,6 +321,33 @@ fn generations(store: &Store) -> (i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_profile_release_cannot_cancel_the_replacement_background_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = scoplen_crypto::LocalDatabaseKey::new([73; 32]);
+        let old = Arc::new(Store::open(&directory.path().join("local.db"), &key).unwrap());
+        let replacement = Arc::new(Store::open(&directory.path().join("local.db"), &key).unwrap());
+        let runtime = PersonalSyncRuntime::default();
+        runtime.set_store(Some(old.clone()));
+        let old_run = runtime.control.borrow().run.clone().unwrap();
+        runtime.set_store(Some(replacement.clone()));
+        assert!(old_run.guard().is_err());
+        let new_run = runtime.control.borrow().run.clone().unwrap();
+        runtime.release_store(&old);
+        assert!(new_run.guard().is_ok());
+        assert!(
+            runtime
+                .control
+                .borrow()
+                .store
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &replacement))
+        );
+        runtime.release_store(&replacement);
+        assert!(new_run.guard().is_err());
+        assert!(runtime.control.borrow().store.is_none());
+    }
 
     #[test]
     fn cancellation_serializes_with_commit_and_rejects_later_commits() {

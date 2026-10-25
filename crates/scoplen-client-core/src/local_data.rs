@@ -117,9 +117,14 @@ enum State {
     },
 }
 
+pub(crate) struct CurrentStoreGuard<'a> {
+    _state: MutexGuard<'a, State>,
+}
+
 /// The device's local data and the state of its store.
 pub struct LocalData {
     keys: LocalKeys,
+    profile: Option<crate::store::profiles::ProfileRecord>,
     state: Mutex<State>,
     listener: Mutex<Option<ChangeListener>>,
     context: tokio::sync::watch::Sender<()>,
@@ -138,8 +143,16 @@ impl LocalData {
     }
 
     fn with_keys(keys: LocalKeys) -> Result<LocalData, LocalDataError> {
+        Self::with_profile(keys, None)
+    }
+
+    pub(crate) fn with_profile(
+        keys: LocalKeys,
+        profile: Option<crate::store::profiles::ProfileRecord>,
+    ) -> Result<LocalData, LocalDataError> {
         let data = LocalData {
             keys,
+            profile,
             state: Mutex::new(State::Locked(Status::NeedsNewPassphrase)),
             listener: Mutex::new(None),
             context: tokio::sync::watch::channel(()).0,
@@ -194,6 +207,32 @@ impl LocalData {
 
     pub(crate) fn context_changes(&self) -> tokio::sync::watch::Receiver<()> {
         self.context.subscribe()
+    }
+
+    pub(crate) fn current_store_guard(
+        &self,
+        expected: &Arc<Store>,
+    ) -> Option<CurrentStoreGuard<'_>> {
+        let state = self.state();
+        if !matches!(&*state, State::Open { store, .. } if Arc::ptr_eq(store, expected)) {
+            return None;
+        }
+        Some(CurrentStoreGuard { _state: state })
+    }
+
+    pub(crate) fn reopen_generation(&self) -> Result<Arc<Store>, LocalDataError> {
+        let mut state = self.state();
+        let State::Open { key, protection, .. } = &*state else {
+            return Err(LocalDataError::InvalidState);
+        };
+        let next = self.open(key.clone(), *protection)?;
+        let State::Open { store, .. } = &next else {
+            return Err(LocalDataError::InvalidState);
+        };
+        let store = store.clone();
+        *state = next;
+        self.context.send_replace(());
+        Ok(store)
     }
 
     /// Opens the store with the local passphrase.
@@ -275,7 +314,7 @@ impl LocalData {
     }
 
     fn open(&self, key: LocalDatabaseKey, protection: Protection) -> Result<State, LocalDataError> {
-        match Store::open(&self.keys.store_path(), &key) {
+        match Store::open_profile(&self.keys.store_path(), &key, self.profile.as_ref()) {
             Ok(store) => {
                 let store = Arc::new(store);
                 let listener = self.listener.lock().unwrap_or_else(|e| e.into_inner()).clone();

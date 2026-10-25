@@ -47,6 +47,43 @@ pub(super) struct RetainedAccount {
 }
 
 impl RetainedAccount {
+    pub(super) fn from_registration(
+        payload: &scoplen_api::account_admission::AccountRegistrationPayload,
+        private: &SecretVec,
+    ) -> Result<Self, PersonalServerError> {
+        let secrets = Secrets::parse(private).map_err(invalid)?;
+        let bundle = scoplen_api::sync::SyncAccountKeyBundleUpdate::from_cbor(&payload.key_bundle)
+            .map_err(invalid)?;
+        let own = bundle
+            .device_wraps
+            .iter()
+            .find(|wrap| wrap.device_id == payload.device_id)
+            .ok_or(PersonalServerError::AdmissionUnverified)?;
+        let vault = SymmetricKey::from_slice(secrets.vault())
+            .ok_or(PersonalServerError::AdmissionUnverified)?;
+        Ok(Self {
+            signing_public: payload.account_signing_public_key,
+            kem_public: payload.account_kem_public_key,
+            certificate: DeviceCertificate::decode(&payload.device_certificate).map_err(invalid)?,
+            revision: bundle.revision,
+            anchor: projection_anchor(
+                bundle.revision,
+                &own.wrapped_ark,
+                &bundle.account_signing_key,
+                &bundle.account_kem_key,
+                &bundle.recovery_blob,
+            ),
+            artifacts: artifacts_anchor(
+                &bundle.account_signing_key,
+                &bundle.account_kem_key,
+                &bundle.recovery_blob,
+            ),
+            vault_keys: vault_key_anchor(&BTreeMap::from([(1, vault)])),
+            vault_wraps: None,
+            current_epoch: 1,
+        })
+    }
+
     /// A candidate is anchored in retained private roots, then independently checked by K-4
     /// validation before it can be installed. Response digests alone establish no authority.
     pub(super) fn from_snapshot(
