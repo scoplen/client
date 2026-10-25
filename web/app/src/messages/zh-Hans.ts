@@ -99,6 +99,9 @@ export const zhHans: Messages = {
     "无法验证已保存的账号身份，原数据保持不变。请重新打开该账号原来的资料，或恢复经过验证的本地备份。",
   "settings.personal.loading": "正在读取本机账号…",
   "settings.personal.reload": "重新读取账号状态",
+  "settings.personal.revalidate": "重新验证此设备",
+  "settings.personal.revalidationBody":
+    "此资料保留了原始密钥。重新验证此设备，将向上方服务器确认当前访问权限并验证同步密钥。验证失败时原数据保持不变。此操作不会继续旧设置或上传本地清单。",
   "settings.personal.error.storage": "无法读取加密的本地数据。请解锁数据或重新打开 Scoplen，再重新读取账号状态。",
   "settings.personal.error.busy": "另一项账号操作正在进行。请等待其完成后重试。",
   "settings.personal.error.identity": "无法读取或准备账号身份，已有密钥仍被保留。请重新打开 Scoplen 后重试。",
@@ -144,7 +147,7 @@ export const zhHans: Messages = {
   "settings.personal.working": "正在处理…",
   "settings.personal.server": "服务器",
   "settings.personal.authenticate": "认证此设备",
-  "settings.personal.authenticatedBody": "账号身份已就绪。请在下方连接个人同步以验证密钥；本地清单不会被上传。",
+  "settings.personal.authenticatedBody": "账号身份已就绪。请在下方查看同步密钥状态；本地清单不会自动上传。",
   "settings.personal.sync.title": "个人同步",
   "settings.personal.sync.loading": "正在检查本机已保存的同步密钥…",
   "settings.personal.sync.body": "连接后将验证账号与保险库密钥，主机与凭据仍保存在本机。",

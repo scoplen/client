@@ -53,7 +53,9 @@ export function PersonalSettings() {
     setBusy(true);
     setFailed(null);
     try {
-      const result = await commands.authenticatePersonalServer();
+      const result = await (status?.phase === "revalidation_required"
+        ? commands.revalidateRetainedDevice()
+        : commands.authenticatePersonalServer());
       if (!mounted.current) return;
       if (result.status === "ok") setStatus(result.data);
       else setFailed(result.error);
@@ -76,7 +78,8 @@ export function PersonalSettings() {
     [reload],
   );
 
-  const configured = status?.phase === "authenticated" || status?.phase === "authentication_required";
+  const revalidation = status?.phase === "revalidation_required";
+  const configured = revalidation || status?.phase === "authenticated" || status?.phase === "authentication_required";
   const authenticated = status?.phase === "authenticated";
   const context = `${status?.origin ?? ""}/${status?.accountId ?? ""}/${status?.deviceId ?? ""}`;
 
@@ -132,13 +135,29 @@ export function PersonalSettings() {
             </div>
           </dl>
           <p role="status" className="mt-4 text-sm text-muted-foreground">
-            {t(authenticated ? "settings.personal.authenticatedBody" : "settings.personal.authenticationRequiredBody")}
+            {t(
+              revalidation
+                ? "settings.personal.revalidationBody"
+                : authenticated
+                  ? "settings.personal.authenticatedBody"
+                  : "settings.personal.authenticationRequiredBody",
+            )}
           </p>
           <Button className="mt-4" disabled={busy} onClick={() => void authenticate()}>
-            {t(busy ? "settings.personal.working" : "settings.personal.authenticate")}
+            {t(
+              busy
+                ? "settings.personal.working"
+                : revalidation
+                  ? "settings.personal.revalidate"
+                  : "settings.personal.authenticate",
+            )}
           </Button>
-          <PersonalAccountSettings authenticated={authenticated} disabled={busy} onBusyChange={childBusy} />
-          <PersonalSyncSettings authenticated={authenticated} disabled={busy} onBusyChange={childBusy} />
+          {!revalidation ? (
+            <>
+              <PersonalAccountSettings authenticated={authenticated} disabled={busy} onBusyChange={childBusy} />
+              <PersonalSyncSettings authenticated={authenticated} disabled={busy} onBusyChange={childBusy} />
+            </>
+          ) : null}
         </div>
       ) : null}
     </section>

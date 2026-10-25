@@ -150,3 +150,20 @@ pub async fn authenticate_personal_server(
 ) -> Result<PersonalServerStatus, PersonalServerError> {
     personal.authenticate(store(&local)?).await
 }
+
+/// Prove existing Device authority and install verified keys in the captured profile only.
+#[tauri::command]
+#[specta::specta]
+pub async fn revalidate_retained_device(
+    local: tauri::State<'_, LocalDataState>,
+    personal: tauri::State<'_, PersonalServer>,
+) -> Result<PersonalServerStatus, PersonalServerError> {
+    let local = local.get().map_err(|_| PersonalServerError::Storage)?;
+    let captured = local.store().ok_or(PersonalServerError::Storage)?;
+    let result = personal.revalidate_retained_device(&local, captured.clone()).await;
+    local
+        .with_store(|current| {
+            if Arc::ptr_eq(current, &captured) { result } else { Err(PersonalServerError::Busy) }
+        })
+        .ok_or(PersonalServerError::Busy)?
+}

@@ -118,6 +118,7 @@ pub fn ipc() -> Builder<tauri::Wry> {
             personal_server::personal_account_snapshot,
             personal_server::query_personal_account,
             personal_server::authenticate_personal_server,
+            personal_server::revalidate_retained_device,
             personal_server::personal_sync_key_status,
             personal_server::connect_personal_sync,
             personal_server::personal_sync_background_status,

@@ -111,6 +111,9 @@ export const en = {
     "The saved account identity could not be verified. Its data is unchanged. Reopen its original profile or restore a verified local backup.",
   "settings.personal.loading": "Reading this device’s account…",
   "settings.personal.reload": "Reload account status",
+  "settings.personal.revalidate": "Revalidate this device",
+  "settings.personal.revalidationBody":
+    "This profile retains its original keys. Revalidate this device with the server above to verify its current access and sync keys. Failed verification keeps the existing data unchanged. This does not resume an old setup or upload local inventory.",
   "settings.personal.error.storage":
     "The encrypted local data could not be reached. Unlock it or reopen Scoplen, then reload the account status.",
   "settings.personal.error.busy": "Another account operation is running. Wait for it to finish, then try again.",
@@ -168,7 +171,7 @@ export const en = {
   "settings.personal.server": "Server",
   "settings.personal.authenticate": "Authenticate this device",
   "settings.personal.authenticatedBody":
-    "Your account identity is ready. Connect Personal sync below to verify its keys. Local inventory is not uploaded.",
+    "Your account identity is ready. Review sync key status below. Local inventory is not uploaded automatically.",
   "settings.personal.sync.title": "Personal sync",
   "settings.personal.sync.loading": "Checking saved sync keys on this device…",
   "settings.personal.sync.body": "Connect to verify your account and vault keys. Hosts and credentials remain local.",

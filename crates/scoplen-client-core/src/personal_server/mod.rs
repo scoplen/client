@@ -2,8 +2,8 @@
 //! Retained admitted-device authentication and Personal synchronization.
 //!
 //! This module keeps identity, request material, and credentials inside Rust and
-//! SQLCipher. Historical confirmed identities convert locally; retired pending
-//! enrollment and pairing can never authorize a network operation.
+//! SQLCipher. Historical confirmed identities convert locally; explicit retained-device
+//! revalidation uses only current authentication and K-4, never retired entry operations.
 
 mod account;
 mod background;
@@ -12,6 +12,7 @@ mod notification;
 
 mod refresh;
 mod retained;
+mod revalidation;
 mod sync;
 mod transport;
 pub(crate) mod trust;
@@ -52,6 +53,8 @@ pub enum PersonalServerPhase {
     NotConfigured,
     /// Historical pending data is retained, but its entry protocol is retired.
     RetiredEntry,
+    /// Retained keys can explicitly prove current device authority before local installation.
+    RevalidationRequired,
     /// The verified session is usable, including refresh on an explicit network operation.
     Authenticated,
     /// The established session needs a fresh signed-device challenge; local data is retained.
@@ -199,7 +202,7 @@ fn record(store: &Store) -> Result<PersonalRecord, PersonalServerError> {
 }
 
 fn status(store: &Store) -> Result<PersonalServerStatus, PersonalServerError> {
-    let Some(record) = store.personal_record().map_err(storage)? else {
+    let Some(record) = store.personal_revalidation_record().map_err(storage)? else {
         return Ok(PersonalServerStatus {
             phase: if store.pairing_record().map_err(storage)?.is_some() {
                 PersonalServerPhase::RetiredEntry
@@ -216,13 +219,28 @@ fn status(store: &Store) -> Result<PersonalServerStatus, PersonalServerError> {
         });
     };
     let current = now().unwrap_or(u64::MAX);
-    let admitted = match retained::RetainedAccount::load(store, &record) {
+    let admission = if record.admitted {
+        retained::RetainedAccount::load(store, &record)
+    } else {
+        store.personal_record().map_err(storage).and_then(|record| {
+            retained::RetainedAccount::load(
+                store,
+                &record.ok_or(PersonalServerError::NotConfigured)?,
+            )
+        })
+    };
+    let admitted = match admission {
         Ok(_) => true,
-        Err(PersonalServerError::RetiredEntry) => false,
+        Err(PersonalServerError::RetiredEntry | PersonalServerError::AdmissionUnverified)
+            if !record.admitted =>
+        {
+            revalidation::verify_material(store, &record)?;
+            false
+        }
         Err(error) => return Err(error),
     };
     let phase = if !admitted {
-        PersonalServerPhase::RetiredEntry
+        PersonalServerPhase::RevalidationRequired
     } else if record.auth_scope.is_some()
         && (record.access_expires_at.is_some_and(|expires| expires > current)
             || record.refresh_available
@@ -300,6 +318,22 @@ async fn authenticate(
         .begin_personal_authentication(pending)
         .map_err(storage)?
         .ok_or(PersonalServerError::Busy)?;
+    let Some(tokens) = authentication_tokens(store, pending, transport, || Ok(())).await? else {
+        return Ok(AuthenticationOutcome::DeviceDenied);
+    };
+    if !store.finish_personal_session(pending, generation, false, &tokens, None).map_err(storage)? {
+        return Err(PersonalServerError::Busy);
+    }
+    Ok(AuthenticationOutcome::Authenticated)
+}
+
+async fn authentication_tokens(
+    store: &Store,
+    pending: &PersonalRecord,
+    transport: &Transport,
+    current: impl Fn() -> Result<(), PersonalServerError>,
+) -> Result<Option<PersonalTokens>, PersonalServerError> {
+    current()?;
     let request =
         AuthChallengeRequest::new(store.device_id()).map_err(|_| PersonalServerError::Identity)?;
     let response = transport
@@ -315,6 +349,7 @@ async fn authenticate(
     }
     let challenge = AuthChallengeResponse::from_json(response.text()?)
         .map_err(|_| PersonalServerError::InvalidResponse)?;
+    current()?;
     let secrets = identity::Secrets::parse(&pending.private_material)?;
     let signing =
         P256SigningKey::from_bytes(secrets.signing()).map_err(|_| PersonalServerError::Identity)?;
@@ -341,7 +376,7 @@ async fn authenticate(
             && problem.code.as_str() == "auth.authentication_required"
             && !problem.retryable
         {
-            return Ok(AuthenticationOutcome::DeviceDenied);
+            return Ok(None);
         }
         return Err(PersonalServerError::Authentication);
     }
@@ -352,7 +387,9 @@ async fn authenticate(
     if refresh.is_empty() || refresh.len() > scoplen_api::auth::MAX_REFRESH_TOKEN_BYTES {
         return Err(PersonalServerError::InvalidResponse);
     }
+    current()?;
     let trusted = trusted_token_keys(transport, &pending.origin).await?;
+    current()?;
     let current_time = now()?;
     let verified = DeviceAccessToken::parse(&access)
         .and_then(|token| token.verify(&trusted, current_time))
@@ -374,25 +411,13 @@ async fn authenticate(
         .checked_add(tokens.refresh_expires_in)
         .filter(|expires| *expires <= i64::MAX as u64 && *expires > current_time)
         .ok_or(PersonalServerError::InvalidResponse)?;
-    if !store
-        .finish_personal_session(
-            pending,
-            generation,
-            false,
-            &PersonalTokens {
-                access: SecretVec::new(access.as_bytes().to_vec()),
-                refresh: SecretVec::new(refresh.as_bytes().to_vec()),
-                access_expires_at: access_expires,
-                refresh_expires_at: refresh_expires,
-                scope: claims.scope.clone(),
-            },
-            None,
-        )
-        .map_err(storage)?
-    {
-        return Err(PersonalServerError::Busy);
-    }
-    Ok(AuthenticationOutcome::Authenticated)
+    Ok(Some(PersonalTokens {
+        access: SecretVec::new(access.as_bytes().to_vec()),
+        refresh: SecretVec::new(refresh.as_bytes().to_vec()),
+        access_expires_at: access_expires,
+        refresh_expires_at: refresh_expires,
+        scope: claims.scope.clone(),
+    }))
 }
 
 async fn trusted_token_keys(

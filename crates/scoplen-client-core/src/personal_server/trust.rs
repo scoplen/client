@@ -8,7 +8,10 @@ use scoplen_crypto::{DeviceCertificate, RevocationStatement, verify_device_list}
 use uuid::Uuid;
 
 use super::{PersonalServerError, retained::RetainedAccount, storage};
-use crate::store::Store;
+use crate::store::{
+    Store,
+    personal::{PersonalAccountRecord, PersonalSyncRecord},
+};
 
 pub(crate) struct PersonalTrustDevices {
     pub account: Uuid,
@@ -26,29 +29,42 @@ impl PersonalTrustDevices {
             Err(PersonalServerError::RetiredEntry) => return Ok(None),
             Err(error) => return Err(error),
         };
+        Self::from_snapshots(
+            identity.account_id,
+            retained.certificate,
+            &retained.signing_public,
+            store.personal_sync_record().map_err(storage)?.as_ref(),
+            store.personal_account_snapshot(&identity).map_err(storage)?.as_ref(),
+        )
+        .map(Some)
+    }
+
+    pub(super) fn from_snapshots(
+        account: Uuid,
+        own: DeviceCertificate,
+        signing_public: &[u8; 32],
+        sync: Option<&PersonalSyncRecord>,
+        account_snapshot: Option<&PersonalAccountRecord>,
+    ) -> Result<Self, PersonalServerError> {
         let mut devices = Self {
-            account: identity.account_id,
-            certificates: [(store.device_id(), retained.certificate)].into_iter().collect(),
+            account,
+            certificates: [(own.device_id, own)].into_iter().collect(),
             revoked: HashSet::new(),
         };
-        if let Some(snapshot) = store.personal_sync_record().map_err(storage)? {
+        if let Some(snapshot) = sync {
             let bundle = SyncAccountKeyBundle::from_cbor(snapshot.account_keys.as_bytes())
                 .map_err(|_| PersonalServerError::Identity)?;
-            devices.merge(&bundle.certificates, &bundle.revocations, &retained.signing_public)?;
+            devices.merge(&bundle.certificates, &bundle.revocations, signing_public)?;
         }
-        if let Some(snapshot) = store.personal_account_snapshot(&identity).map_err(storage)? {
+        if let Some(snapshot) = account_snapshot {
             let statements = AccountDeviceStatements::from_json(snapshot.devices.as_bytes())
                 .map_err(|_| PersonalServerError::Identity)?;
-            if statements.account_id != identity.account_id {
+            if statements.account_id != account {
                 return Err(PersonalServerError::Identity);
             }
-            devices.merge(
-                &statements.certificates,
-                &statements.revocations,
-                &retained.signing_public,
-            )?;
+            devices.merge(&statements.certificates, &statements.revocations, signing_public)?;
         }
-        Ok(Some(devices))
+        Ok(devices)
     }
 
     fn merge(

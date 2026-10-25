@@ -180,6 +180,16 @@ impl LocalData {
         }
     }
 
+    /// Fence a bounded operation to the exact open-store generation captured before I/O.
+    /// Keeping the captured Arc alive prevents a reopened profile from reusing its identity.
+    pub(crate) fn with_current_store<T>(
+        &self,
+        expected: &Arc<Store>,
+        operation: impl FnOnce() -> T,
+    ) -> Option<T> {
+        self.with_store(|current| Arc::ptr_eq(current, expected).then(operation)).flatten()
+    }
+
     /// Opens the store with the local passphrase.
     pub fn unlock(&self, passphrase: &str) -> Result<Status, LocalDataError> {
         let mut state = self.state();
@@ -297,6 +307,21 @@ mod tests {
         let data = start(dir.path(), Some(&MemoryKeystore::default()));
         assert_eq!(data.status(), Status::Open { protection: Protection::Keystore });
         assert!(data.store().is_some());
+    }
+
+    #[test]
+    fn reopening_the_same_profile_fences_the_previous_open_store_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = start(dir.path(), Some(&MemoryKeystore::default()));
+        let captured = data.store().unwrap();
+        assert_eq!(data.with_current_store(&captured, || 1), Some(1));
+        data.restart().unwrap();
+        assert_eq!(data.store().unwrap().device_id(), captured.device_id());
+        assert_eq!(
+            data.with_current_store(&captured, || -> () { panic!("stale generation committed") }),
+            None::<()>
+        );
+        assert_eq!(data.with_current_store(&data.store().unwrap(), || 2), Some(2));
     }
 
     #[test]
