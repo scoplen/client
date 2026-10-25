@@ -17,12 +17,6 @@ pub(super) struct Transport {
     pub(super) notification_tls: std::sync::Arc<rustls::ClientConfig>,
 }
 
-pub(super) enum PairingCredential<'a> {
-    Anonymous,
-    New(&'a [u8]),
-    Old { access: &'a str, proof: &'a DpopProof },
-}
-
 pub(super) struct Response {
     pub status: u16,
     pub body: SecretVec,
@@ -44,105 +38,6 @@ impl Response {
 }
 
 impl Transport {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn pairing(
-        &self,
-        method: Method,
-        origin: &str,
-        path: &str,
-        body: Option<&[u8]>,
-        credential: PairingCredential<'_>,
-        limit: usize,
-    ) -> Result<Response, PersonalServerError> {
-        validate_server_origin(origin).map_err(|_| PersonalServerError::InvalidResponse)?;
-        let mut request = self
-            .client
-            .request(method, format!("{origin}{path}"))
-            .header(header::ACCEPT, "application/json")
-            .header(header::ACCEPT_ENCODING, "identity");
-        let authorization = match credential {
-            PairingCredential::Anonymous => None,
-            PairingCredential::New(token) => {
-                use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-                if token.len() != 32 {
-                    return Err(PersonalServerError::Identity);
-                }
-                let encoded = zeroize::Zeroizing::new(URL_SAFE_NO_PAD.encode(token));
-                Some(zeroize::Zeroizing::new(format!("Pairing {}", encoded.as_str())))
-            }
-            PairingCredential::Old { access, proof } => {
-                let mut dpop = header::HeaderValue::from_str(proof.as_str())
-                    .map_err(|_| PersonalServerError::Identity)?;
-                dpop.set_sensitive(true);
-                request = request.header("DPoP", dpop);
-                Some(zeroize::Zeroizing::new(format!("DPoP {access}")))
-            }
-        };
-        if let Some(authorization) = authorization {
-            let mut value = header::HeaderValue::from_str(&authorization)
-                .map_err(|_| PersonalServerError::Identity)?;
-            value.set_sensitive(true);
-            request = request.header(header::AUTHORIZATION, value);
-        }
-        if let Some(body) = body {
-            request = request.header(header::CONTENT_TYPE, "application/json").body(body.to_vec());
-        }
-        let response = request.send().await.map_err(|error| {
-            if error.is_connect() && !error.is_timeout() {
-                PersonalServerError::ConnectionBeforeRequest
-            } else {
-                PersonalServerError::Network
-            }
-        })?;
-        let status = response.status().as_u16();
-        let single = |name: &str| {
-            let mut values = response.headers().get_all(name).iter();
-            let value = values.next()?.to_str().ok()?;
-            if values.next().is_some() {
-                return None;
-            }
-            Some(value)
-        };
-        let content_type = single("content-type");
-        let problem_json = content_type == Some("application/problem+json");
-        if response.status().is_redirection()
-            || ["age", "content-encoding", "etag", "set-cookie"]
-                .iter()
-                .any(|name| response.headers().contains_key(*name))
-            || single("cache-control") != Some("no-store")
-            || single("pragma") != Some("no-cache")
-            || single("referrer-policy") != Some("no-referrer")
-            || status != 204 && content_type != Some("application/json") && !problem_json
-            || status == 204 && content_type.is_some()
-        {
-            return Err(PersonalServerError::InvalidResponse);
-        }
-        let body = read_body(
-            response,
-            if status == 204 {
-                0
-            } else if problem_json {
-                4096
-            } else {
-                limit
-            },
-        )
-        .await?;
-        Ok(Response {
-            status,
-            body,
-            problem_json,
-            problem_cbor: false,
-            date: None,
-            refresh_protocol: false,
-            nonce: None,
-            retry_after: None,
-            etag: None,
-            cache_control: None,
-            pragma: None,
-        })
-    }
-
     pub fn new() -> Result<Self, PersonalServerError> {
         // All Rustls consumers use the already installed provider, or the existing ring stack.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -239,7 +134,7 @@ impl Transport {
         proof: &DpopProof,
         limit: usize,
     ) -> Result<Response, PersonalServerError> {
-        validate_server_origin(origin).map_err(|_| PersonalServerError::Invitation)?;
+        validate_server_origin(origin).map_err(|_| PersonalServerError::Identity)?;
         let authorization = zeroize::Zeroizing::new(format!("DPoP {access_token}"));
         let mut authorization = header::HeaderValue::from_str(&authorization)
             .map_err(|_| PersonalServerError::Identity)?;
@@ -309,7 +204,7 @@ impl Transport {
         access: Option<&str>,
         limit: usize,
     ) -> Result<Response, PersonalServerError> {
-        validate_server_origin(origin).map_err(|_| PersonalServerError::Invitation)?;
+        validate_server_origin(origin).map_err(|_| PersonalServerError::Identity)?;
         let mut request = self
             .client
             .request(method, format!("{origin}{path}"))

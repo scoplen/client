@@ -12,7 +12,6 @@ pub mod frames;
 pub mod inventory;
 pub mod local_data;
 pub mod personal_inventory;
-pub mod personal_pairing;
 pub mod personal_server;
 pub mod session_transfers;
 mod smoke;
@@ -118,25 +117,10 @@ pub fn ipc() -> Builder<tauri::Wry> {
             personal_server::personal_server_status,
             personal_server::personal_account_snapshot,
             personal_server::query_personal_account,
-            personal_server::prepare_personal_enrollment,
-            personal_server::save_personal_recovery_key,
-            personal_server::confirm_personal_recovery_key,
-            personal_server::submit_personal_enrollment,
             personal_server::authenticate_personal_server,
-            personal_server::update_personal_invitation,
             personal_server::personal_sync_key_status,
             personal_server::connect_personal_sync,
             personal_server::personal_sync_background_status,
-            personal_pairing::personal_pairing_status,
-            personal_pairing::create_personal_pairing,
-            personal_pairing::join_personal_pairing,
-            personal_pairing::join_personal_pairing_image,
-            personal_pairing::prepare_personal_pairing_watch,
-            personal_pairing::watch_personal_pairing,
-            personal_pairing::stop_personal_pairing_watch,
-            personal_pairing::confirm_personal_pairing,
-            personal_pairing::recover_personal_pairing,
-            personal_pairing::cancel_personal_pairing,
             personal_inventory::personal_inventory_status,
             personal_inventory::preview_personal_inventory,
             personal_inventory::synchronize_personal_inventory,
@@ -216,7 +200,6 @@ pub fn run() {
                 }
             });
             app.manage(background);
-            app.manage(personal_pairing::PairingWatchState::default());
             app.manage(std::sync::Arc::new(
                 scoplen_client_core::personal_inventory::PersonalInventorySettings::default(),
             ));

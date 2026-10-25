@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Personal invitation enrollment and fresh enrolled-device authentication.
+//! Retained admitted-device authentication and Personal synchronization.
 //!
 //! This module keeps identity, request material, and credentials inside Rust and
-//! SQLCipher. Enrollment is claimed durably once; recovery always authenticates
-//! the retained identity with a new challenge instead of replaying an invitation.
+//! SQLCipher. Historical confirmed identities convert locally; retired pending
+//! enrollment and pairing can never authorize a network operation.
 
 mod account;
 mod background;
 mod identity;
 mod notification;
-mod pairing;
+
 mod refresh;
 mod retained;
 mod sync;
@@ -18,22 +18,20 @@ pub(crate) mod trust;
 
 pub use account::{PersonalAccountDevice, PersonalAccountSnapshot};
 pub use background::{PersonalBackgroundStatus, PersonalSyncRuntime};
-pub use pairing::{
-    PairingError, PairingPhase, PairingQrDisplay, PairingSide, PairingStarted, PairingStatus,
-};
 pub use sync::{
     PersonalInventoryIntent, PersonalInventoryProgress, PersonalSyncBootstrap, PersonalSyncError,
 };
 
-use std::{fs::OpenOptions, io::Write as _, path::Path, sync::Arc};
+use std::sync::Arc;
 
+#[cfg(test)]
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use scoplen_api::auth::{
     AuthChallengeRequest, AuthChallengeResponse, AuthDeviceRequest, AuthJwks, AuthTokenResponse,
 };
 use scoplen_crypto::{
-    DeviceAccessToken, DeviceAuthContext, P256SigningKey, RecoveryKey, SecretVec,
-    TrustedDeviceAccessTokenKeys, dpop_jwk_thumbprint, validate_server_origin,
+    DeviceAccessToken, DeviceAuthContext, P256SigningKey, SecretVec, TrustedDeviceAccessTokenKeys,
+    dpop_jwk_thumbprint,
 };
 use serde::Serialize;
 use specta::Type;
@@ -46,18 +44,14 @@ use crate::store::{
 };
 use transport::Transport;
 
-/// Redacted progress of this device's Personal server enrollment.
+/// Redacted state of this device's retained Account identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PersonalServerPhase {
-    /// No invitation has been prepared.
+    /// No Account is bound to this store; password sign-in is not implemented yet.
     NotConfigured,
-    /// Save the generated recovery key and confirm that it is kept safely.
-    RecoveryRequired,
-    /// The single invitation redemption may now be submitted.
-    ReadyToEnroll,
-    /// Enrollment may have committed; only fresh device authentication is safe.
-    EnrollmentUnconfirmed,
+    /// Historical pending data is retained, but its entry protocol is retired.
+    RetiredEntry,
     /// The verified session is usable, including refresh on an explicit network operation.
     Authenticated,
     /// The established session needs a fresh signed-device challenge; local data is retained.
@@ -90,41 +84,29 @@ pub struct PersonalServerStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 pub enum PersonalServerError {
+    /// Historical pending data cannot authorize current account access.
+    #[error(
+        "This unfinished account setup uses a retired protocol. Its data is unchanged. Reopen a confirmed profile or restore a verified local backup."
+    )]
+    RetiredEntry,
+    /// Historical success evidence or immutable ownership could not be verified.
+    #[error(
+        "The saved account identity could not be verified. Its data is unchanged. Reopen its original profile or restore a verified local backup."
+    )]
+    AdmissionUnverified,
     /// The encrypted store is unavailable or an operation could not be committed.
     #[error("The encrypted local data is unavailable. Unlock it and try again.")]
     Storage,
     /// An operation is already running.
     #[error("A Personal server operation is already running. Wait for it to finish.")]
     Busy,
-    /// An invitation did not have the exact canonical HTTPS fragment form.
-    #[error("Use the complete HTTPS Personal invitation link supplied by your server operator.")]
-    Invitation,
-    /// A certificate display name must be a bounded, nonempty printable string.
-    #[error("Enter a device name containing 1 to 128 UTF-8 bytes without control characters.")]
-    DeviceName,
-    /// A persisted identity must not be silently replaced.
-    #[error("This device already has a prepared Personal identity. Continue its existing setup.")]
-    AlreadyConfigured,
     /// A generated key or stored identity is unavailable.
     #[error(
         "The Personal identity could not be prepared or read. Its existing keys were retained."
     )]
     Identity,
-    /// Setup has not reached the required phase.
-    #[error("Save the recovery key and confirm that it is kept safely before joining the server.")]
-    RecoveryRequired,
-    /// The recovery file was not written.
-    #[error(
-        "The recovery key could not be saved. Choose a new file in a private location and try again."
-    )]
-    RecoverySave,
-    /// An attempted redemption cannot be replayed.
-    #[error(
-        "Enrollment was already attempted. Retry device authentication with the retained identity."
-    )]
-    AlreadyAttempted,
     /// An encrypted-store identity must exist before any network operation.
-    #[error("Prepare a Personal invitation before continuing.")]
+    #[error("No confirmed account profile is open. Open an existing profile before continuing.")]
     NotConfigured,
     /// A bounded verified HTTPS exchange did not complete.
     #[error(
@@ -138,7 +120,7 @@ pub enum PersonalServerError {
     ConnectionBeforeRequest,
     /// Authentication was denied without exposing arbitrary server content.
     #[error(
-        "The server did not authenticate this device. Its identity was retained; ask the operator to check enrollment, then retry device authentication."
+        "The server did not authenticate this device. Its identity was retained; ask the operator to check device access before authenticating again."
     )]
     Authentication,
     /// A bounded response or its cryptographic binding was invalid.
@@ -172,16 +154,11 @@ pub enum PersonalServerError {
 pub struct PersonalServer {
     operation: Mutex<()>,
     transport: Result<Transport, PersonalServerError>,
-    pairing: std::sync::Mutex<Option<pairing::ActivePairing>>,
 }
 
 impl Default for PersonalServer {
     fn default() -> Self {
-        Self {
-            operation: Mutex::new(()),
-            transport: Transport::new(),
-            pairing: std::sync::Mutex::new(None),
-        }
+        Self { operation: Mutex::new(()), transport: Transport::new() }
     }
 }
 
@@ -191,118 +168,7 @@ impl PersonalServer {
         status(store)
     }
 
-    /// Parse the invitation and persist the generated identity before any network request.
-    pub async fn prepare(
-        &self,
-        store: Arc<Store>,
-        invitation_url: Zeroizing<String>,
-        device_name: String,
-    ) -> Result<PersonalServerStatus, PersonalServerError> {
-        let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
-        tokio::task::spawn_blocking(move || {
-            if store.personal_record().map_err(storage)?.is_some() {
-                return Err(PersonalServerError::AlreadyConfigured);
-            }
-            if device_name.is_empty()
-                || device_name.len() > 128
-                || device_name.chars().any(char::is_control)
-            {
-                return Err(PersonalServerError::DeviceName);
-            }
-            let invitation = Invitation::parse(&invitation_url)?;
-            let record = identity::prepare(&store, invitation, device_name)?;
-            store.insert_personal_record(&record).map_err(storage)?;
-            status(&store)
-        })
-        .await
-        .map_err(|_| PersonalServerError::Identity)?
-    }
-
-    /// Save the recovery key directly to a new native-selected file. Secrets never cross IPC.
-    pub async fn save_recovery_key(
-        &self,
-        store: Arc<Store>,
-        path: std::path::PathBuf,
-    ) -> Result<PersonalServerStatus, PersonalServerError> {
-        let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
-        tokio::task::spawn_blocking(move || {
-            let record = record(&store)?;
-            let secrets = identity::Secrets::parse(&record.private_material)?;
-            let recovery = RecoveryKey::from_bytes(secrets.recovery().ok_or(PersonalServerError::RecoveryRequired)?)
-                .map_err(|_| PersonalServerError::Identity)?;
-            let display = Zeroizing::new(recovery.encode_display());
-            let contents = Zeroizing::new(format!("Scoplen Personal recovery key\nServer: {}\nAccount: {}\n\n{}\n\nKeep this file private and offline. Anyone with this key can recover the account.\n",
-                record.origin, record.account_id, display.as_str()));
-            save_private_file(&path, contents.as_bytes())?;
-            if !store.save_personal_recovery().map_err(storage)? {
-                return Err(PersonalServerError::Storage);
-            }
-            status(&store)
-        }).await.map_err(|_| PersonalServerError::RecoverySave)?
-    }
-
-    /// Record the user's explicit confirmation after a successful native export.
-    pub async fn confirm_recovery_key(
-        &self,
-        store: Arc<Store>,
-    ) -> Result<PersonalServerStatus, PersonalServerError> {
-        let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
-        tokio::task::spawn_blocking(move || {
-            if !store.confirm_personal_recovery().map_err(storage)? {
-                return Err(PersonalServerError::RecoveryRequired);
-            }
-            status(&store)
-        })
-        .await
-        .map_err(|_| PersonalServerError::Storage)?
-    }
-
-    /// Claim redemption once before I/O; always confirm by fresh device authentication.
-    pub async fn submit(
-        &self,
-        store: Arc<Store>,
-    ) -> Result<PersonalServerStatus, PersonalServerError> {
-        let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
-        let pending = record(&store)?;
-        if pending.enrollment_attempted {
-            return Err(PersonalServerError::AlreadyAttempted);
-        }
-        if !pending.recovery_confirmed {
-            return Err(PersonalServerError::RecoveryRequired);
-        }
-        let transport = self.transport.as_ref().map_err(|error| *error)?;
-        let body = pending.enrollment_request.as_ref().ok_or(PersonalServerError::Identity)?;
-        if !store.claim_personal_enrollment().map_err(storage)? {
-            return Err(PersonalServerError::AlreadyAttempted);
-        }
-        let response = transport
-            .post(&pending.origin, "/api/v1/auth/personal-enroll", body.as_bytes(), 256)
-            .await;
-        if matches!(response, Err(PersonalServerError::ConnectionBeforeRequest)) {
-            store.release_unsent_personal_enrollment().map_err(storage)?;
-            return Err(PersonalServerError::ConnectionBeforeRequest);
-        }
-        // A missing, malformed, denied, or uncertain response never replaces or replays identity.
-        // Authentication is the only authoritative recovery for a possibly committed enrollment.
-        if let Ok(response) = response
-            && response.status == 201
-        {
-            let enrolled = scoplen_api::personal_enrollment::PersonalEnrollmentResponse::from_json(
-                response.body.as_bytes(),
-            )
-            .map_err(|_| PersonalServerError::InvalidResponse)?;
-            if enrolled.account_id != pending.account_id
-                || enrolled.device_id != store.device_id()
-                || enrolled.personal_vault_id != pending.personal_vault_id
-            {
-                return Err(PersonalServerError::InvalidResponse);
-            }
-        }
-        authenticate(&store, &pending, transport).await?.require_authenticated()?;
-        status(&store)
-    }
-
-    /// Retry using a fresh challenge. Never sends the invitation redemption again.
+    /// Authenticate an admitted identity with a fresh signed-device challenge.
     pub async fn authenticate(
         &self,
         store: Arc<Store>,
@@ -310,57 +176,36 @@ impl PersonalServer {
         let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
         let pending = record(&store)?;
         if !pending.authentication_allowed() {
-            return Err(PersonalServerError::RecoveryRequired);
+            return Err(PersonalServerError::RetiredEntry);
         }
         let transport = self.transport.as_ref().map_err(|error| *error)?;
         authenticate(&store, &pending, transport).await?.require_authenticated()?;
         status(&store)
     }
+}
 
-    /// Authenticate the retained identity before importing a same-origin replacement invitation.
-    /// Importing never redeems it; a separate explicit submit is required.
-    pub async fn update_invitation(
-        &self,
-        store: Arc<Store>,
-        invitation_url: Zeroizing<String>,
-    ) -> Result<PersonalServerStatus, PersonalServerError> {
-        let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
-        let pending = record(&store)?;
-        let invitation = Invitation::parse(&invitation_url)?;
-        if invitation.origin != pending.origin {
-            return Err(PersonalServerError::Invitation);
-        }
-        if !pending.enrollment_attempted {
-            return Err(PersonalServerError::AlreadyConfigured);
-        }
-        let transport = self.transport.as_ref().map_err(|error| *error)?;
-        match authenticate(&store, &pending, transport).await? {
-            AuthenticationOutcome::Authenticated => status(&store),
-            AuthenticationOutcome::DeviceDenied => {
-                let replacement = identity::replace_invitation(&store, &pending, invitation)?;
-                let expected =
-                    pending.enrollment_request.as_ref().ok_or(PersonalServerError::Identity)?;
-                if !store.replace_personal_invitation(expected, &replacement).map_err(storage)? {
-                    return Err(PersonalServerError::Storage);
-                }
-                status(&store)
-            }
-        }
+fn storage(error: crate::store::StoreError) -> PersonalServerError {
+    match error {
+        crate::store::StoreError::AccountContext => PersonalServerError::AdmissionUnverified,
+        _ => PersonalServerError::Storage,
     }
 }
 
-fn storage(_: crate::store::StoreError) -> PersonalServerError {
-    PersonalServerError::Storage
-}
-
 fn record(store: &Store) -> Result<PersonalRecord, PersonalServerError> {
+    let identity =
+        store.personal_record().map_err(storage)?.ok_or(PersonalServerError::NotConfigured)?;
+    retained::RetainedAccount::load(store, &identity)?;
     store.personal_record().map_err(storage)?.ok_or(PersonalServerError::NotConfigured)
 }
 
 fn status(store: &Store) -> Result<PersonalServerStatus, PersonalServerError> {
     let Some(record) = store.personal_record().map_err(storage)? else {
         return Ok(PersonalServerStatus {
-            phase: PersonalServerPhase::NotConfigured,
+            phase: if store.pairing_record().map_err(storage)?.is_some() {
+                PersonalServerPhase::RetiredEntry
+            } else {
+                PersonalServerPhase::NotConfigured
+            },
             origin: None,
             account_id: None,
             device_id: None,
@@ -371,20 +216,21 @@ fn status(store: &Store) -> Result<PersonalServerStatus, PersonalServerError> {
         });
     };
     let current = now().unwrap_or(u64::MAX);
-    let phase = if record.auth_scope.is_some()
+    let admitted = match retained::RetainedAccount::load(store, &record) {
+        Ok(_) => true,
+        Err(PersonalServerError::RetiredEntry) => false,
+        Err(error) => return Err(error),
+    };
+    let phase = if !admitted {
+        PersonalServerPhase::RetiredEntry
+    } else if record.auth_scope.is_some()
         && (record.access_expires_at.is_some_and(|expires| expires > current)
             || record.refresh_available
                 && record.refresh_expires_at.is_some_and(|expires| expires > current))
     {
         PersonalServerPhase::Authenticated
-    } else if record.session_established || record.paired_handoff.is_some() {
-        PersonalServerPhase::AuthenticationRequired
-    } else if record.enrollment_attempted {
-        PersonalServerPhase::EnrollmentUnconfirmed
-    } else if record.recovery_confirmed {
-        PersonalServerPhase::ReadyToEnroll
     } else {
-        PersonalServerPhase::RecoveryRequired
+        PersonalServerPhase::AuthenticationRequired
     };
     Ok(PersonalServerStatus {
         phase,
@@ -404,25 +250,28 @@ fn now() -> Result<u64, PersonalServerError> {
         .map_err(|_| PersonalServerError::Identity)
 }
 
+#[cfg(test)]
 struct Invitation {
     origin: String,
     token: SecretVec,
 }
 
+#[cfg(test)]
 impl Invitation {
     fn parse(input: &str) -> Result<Self, PersonalServerError> {
         let (origin, encoded) =
-            input.split_once("/invite#token=").ok_or(PersonalServerError::Invitation)?;
-        validate_server_origin(origin).map_err(|_| PersonalServerError::Invitation)?;
+            input.split_once("/invite#token=").ok_or(PersonalServerError::Identity)?;
+        scoplen_crypto::validate_server_origin(origin)
+            .map_err(|_| PersonalServerError::Identity)?;
         if encoded.len() != 43 {
-            return Err(PersonalServerError::Invitation);
+            return Err(PersonalServerError::Identity);
         }
         let bytes = Zeroizing::new(
-            URL_SAFE_NO_PAD.decode(encoded).map_err(|_| PersonalServerError::Invitation)?,
+            URL_SAFE_NO_PAD.decode(encoded).map_err(|_| PersonalServerError::Identity)?,
         );
         let canonical = Zeroizing::new(URL_SAFE_NO_PAD.encode(&*bytes));
         if bytes.len() != 32 || canonical.as_str() != encoded {
-            return Err(PersonalServerError::Invitation);
+            return Err(PersonalServerError::Identity);
         }
         Ok(Self { origin: origin.to_owned(), token: SecretVec::new(bytes.to_vec()) })
     }
@@ -566,22 +415,8 @@ async fn trusted_token_keys(
     Ok(trusted)
 }
 
-fn save_private_file(path: &Path, contents: &[u8]) -> Result<(), PersonalServerError> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path).map_err(|_| PersonalServerError::RecoverySave)?;
-    file.write_all(contents)
-        .and_then(|()| file.sync_all())
-        .map_err(|_| PersonalServerError::RecoverySave)
-}
-
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(all(test, feature = "live-server-integration"))]
 mod live_server;

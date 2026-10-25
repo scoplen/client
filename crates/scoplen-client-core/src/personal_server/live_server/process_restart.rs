@@ -3,6 +3,7 @@
 
 use std::{
     fs::{File, OpenOptions},
+    io::Write as _,
     process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     time::Instant,
@@ -11,7 +12,6 @@ use std::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
-use zeroize::Zeroize as _;
 
 use super::*;
 use crate::{
@@ -25,7 +25,6 @@ const RUN_ENV: &str = "SCOPLEN_PERSONAL_RESTART_RUN";
 const PHASE_ENV: &str = "SCOPLEN_PERSONAL_RESTART_PHASE";
 const MAX_WAIT: u64 = 15 * 60;
 const PHASE_LIMIT: Duration = Duration::from_secs(120);
-const DEVICE_NAME: &str = "Process restart integration device";
 const INITIAL_NAME: &str = "Host before process exit";
 const EDITED_NAME: &str = "Host edited before process exit";
 
@@ -123,7 +122,7 @@ fn deployment() -> Deployment {
     let descriptor = std::env::var_os("SCOPLEN_LIVE_PERSONAL_DEPLOYMENT")
         .expect("set SCOPLEN_LIVE_PERSONAL_DEPLOYMENT to a fresh private deployment descriptor");
     let value: Deployment = read_json(Path::new(&descriptor));
-    assert!(value.disposable, "the process check consumes a disposable invitation once");
+    assert!(value.disposable, "the process check uses a disposable confirmed profile");
     assert!(
         value
             .origin
@@ -160,8 +159,7 @@ struct OwnedRun {
 }
 
 impl OwnedRun {
-    fn create(mut deployment: Deployment) -> Self {
-        deployment.invitation_url.zeroize();
+    fn create(deployment: Deployment) -> Self {
         let mut builder = tempfile::Builder::new();
         builder.prefix("scoplen-personal-restart-");
         #[cfg(unix)]
@@ -358,7 +356,6 @@ fn manager(run: &Run) -> PersonalServer {
     PersonalServer {
         operation: Mutex::new(()),
         transport: Ok(trusted_transport(&bounded_file(&run.root.join("server-ca.pem"), 65_536))),
-        pairing: Default::default(),
     }
 }
 
@@ -375,30 +372,48 @@ fn host(store: &Store, name: &str) -> scoplen_model::Object {
         .expect("write an ordinary local host through the production store")
 }
 
-async fn enroll(run: &Run) {
-    let mut deployment = deployment();
+async fn initialize(run: &Run) {
+    let deployment = deployment();
     assert_eq!(deployment.origin, run.origin);
     assert!(
         !run.data.join(crate::local_key::STORE_FILE).exists(),
         "first process needs a fresh store"
     );
+    let source = &deployment.profiles[0];
+    let key = source.key();
+    drop(source.open());
+    let wal = PathBuf::from(format!("{}-wal", source.store.display()));
+    assert!(
+        !wal.exists() || std::fs::metadata(&wal).unwrap().len() == 0,
+        "the disposable source profile must be closed before this check"
+    );
+    std::fs::copy(&source.store, run.data.join(crate::local_key::STORE_FILE))
+        .expect("copy only the closed disposable SQLCipher fixture");
+    let provider = scoplen_client_platform::keystore::local_key_store(&run.data)
+        .expect("actual native key provider");
+    assert!(provider.load().unwrap().is_none(), "the owned native slot must be empty");
+    let mut slot = Zeroizing::new(vec![1]);
+    slot.extend_from_slice(key.as_bytes());
+    provider.store(&slot).expect("protect the imported fixture key in the owned native slot");
+    drop(slot);
     let local = open(run);
     let store = local.store().expect("real provider opened the encrypted store");
     let object = host(&store, INITIAL_NAME);
     let unshared = host(&store, "Local-only restart host");
     let manager = manager(run);
-    let invitation = Zeroizing::new(std::mem::take(&mut deployment.invitation_url));
-    manager.prepare(store.clone(), invitation, DEVICE_NAME.into()).await.expect("prepare identity");
-    manager.save_recovery_key(store.clone(), run.root.join("recovery.txt")).await.unwrap();
-    manager.confirm_recovery_key(store.clone()).await.unwrap();
     assert_eq!(
-        manager.submit(store.clone()).await.unwrap().phase,
+        manager.authenticate(store.clone()).await.unwrap().phase,
         PersonalServerPhase::Authenticated
     );
     manager.bootstrap_sync(store.clone()).await.expect("verify real signed Personal keys");
     let account = manager.query_account(store.clone()).await.expect("retain signed account view");
-    assert_eq!(account.devices.len(), 1);
-    assert_eq!(account.devices[0].id, store.device_id().to_string());
+    assert_eq!(account.devices.len(), 3);
+    assert!(
+        account
+            .devices
+            .iter()
+            .any(|device| device.current && device.id == store.device_id().to_string())
+    );
     let settings = PersonalInventorySettings::default();
     let before = settings.status(&store).unwrap();
     assert_eq!(before.pending, 0, "setup never silently adopts existing hosts");
@@ -482,10 +497,10 @@ async fn resume(run: &Run) {
     let account =
         manager.query_account(store.clone()).await.expect("refresh after real process exit");
     assert_eq!(account.account_id, before.account.to_string());
-    assert_eq!(account.devices.len(), 1);
-    assert_eq!(account.devices[0].id, before.device.to_string());
-    assert_eq!(account.devices[0].name, DEVICE_NAME);
-    assert!(account.devices[0].current);
+    assert_eq!(account.devices.len(), 3);
+    let current = account.devices.iter().find(|device| device.current).unwrap();
+    assert_eq!(current.id, before.device.to_string());
+    assert_eq!(current.name, identity.device_name);
     let rotated = record(&store).unwrap();
     assert_eq!(identity_digest(&store), before.identity);
     assert!(rotated.auth_generation > before.generation);
@@ -542,16 +557,18 @@ async fn live_personal_process_restart() {
         assert_eq!(Path::new(&path).canonicalize().unwrap(), run.root.join("run.json"));
         run.verify();
         match std::env::var(PHASE_ENV).as_deref() {
-            Ok("enroll") => enroll(&run).await,
+            Ok("initialize") => initialize(&run).await,
             Ok("resume") => resume(&run).await,
             _ => panic!("unknown consumer phase; no operation was sent"),
         }
         return;
     }
     assert!(std::env::var_os(PHASE_ENV).is_none(), "phase requires an owned controller receipt");
-    let owned = OwnedRun::create(deployment());
+    let deployment = deployment();
+    deployment.verify_profiles();
+    let owned = OwnedRun::create(deployment);
     let run = &owned.run;
-    let first = Consumer::start(&owned, "enroll").wait(run.deadline).await;
+    let first = Consumer::start(&owned, "initialize").wait(run.deadline).await;
     let enrolled: Enrolled = read_json(&run.root.join("enrolled.json"));
     assert_eq!(enrolled.process, first);
     let started = Instant::now();

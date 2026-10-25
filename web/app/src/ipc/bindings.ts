@@ -192,59 +192,14 @@ export const commands = {
 } | null, PersonalServerError>(__TAURI_INVOKE("personal_account_snapshot")),
 	/**  Explicitly query the account and complete signed device set; never mutates device membership. */
 	queryPersonalAccount: () => typedError<PersonalAccountSnapshot, PersonalServerError>(__TAURI_INVOKE("query_personal_account")),
-	/**  Persist the invitation's generated identity locally before any network request. */
-	preparePersonalEnrollment: (invitationUrl: string, deviceName: string) => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("prepare_personal_enrollment", { invitationUrl, deviceName })),
-	/**  Save the recovery key directly from Rust through a native file picker. */
-	savePersonalRecoveryKey: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("save_personal_recovery_key")),
-	/**  Confirm that the recovery key has been saved safely before invitation redemption. */
-	confirmPersonalRecoveryKey: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("confirm_personal_recovery_key")),
-	/**  Redeem the invitation at most once and confirm the retained device identity. */
-	submitPersonalEnrollment: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("submit_personal_enrollment")),
-	/**  Retry fresh device authentication without replaying invitation redemption. */
+	/**  Authenticate the current confirmed profile with its retained device key. */
 	authenticatePersonalServer: () => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("authenticate_personal_server")),
-	/**  Import a same-origin invitation after fresh authentication, retaining the existing identity. */
-	updatePersonalInvitation: (invitationUrl: string) => typedError<PersonalServerStatus, PersonalServerError>(__TAURI_INVOKE("update_personal_invitation", { invitationUrl })),
 	/**  Revalidate saved Personal sync keys locally without making a server request. */
 	personalSyncKeyStatus: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("personal_sync_key_status")),
 	/**  Verify and save the retained account's sync keys without uploading local inventory. */
 	connectPersonalSync: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("connect_personal_sync")),
 	/**  Read the native background owner's state without activating network activity. */
 	personalSyncBackgroundStatus: () => __TAURI_INVOKE<PersonalBackgroundStatus>("personal_sync_background_status"),
-	/**  Inspect the encrypted local pairing checkpoint without network access. */
-	personalPairingStatus: () => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("personal_pairing_status")),
-	/**  Explicitly create a new-device session and display its password once. */
-	createPersonalPairing: (origin: string, deviceName: string) => typedError<PairingPasswordDisplay, PairingError>(__TAURI_INVOKE("create_personal_pairing", { origin, deviceName })),
-	/**  Submit the separate password through this write-only pairing boundary. */
-	joinPersonalPairing: (publicLink: string, password: string) => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("join_personal_pairing", { publicLink, password })),
-	/**  Choose and recognize a PNG locally; cancellation sends no pairing request. */
-	joinPersonalPairingImage: (watchId: string) => typedError<{
-	/**  Current safe next action. */
-	phase: PairingPhase,
-	/**  Retained role, if a session exists. */
-	side: PairingSide | null,
-	/**  Exact selected canonical HTTPS origin. */
-	origin: string | null,
-	/**  Public-only session locator, suitable for an explicit Copy action. */
-	publicLink: string | null,
-	/**  Local installation's selected name. */
-	deviceName: string | null,
-	/**  Authenticated new device name, only for old-device confirmation. */
-	peerName: string | null,
-	/**  Authenticated new device platform claim, only for old-device confirmation. */
-	peerPlatform: string | null,
-} | null, PairingError>(__TAURI_INVOKE("join_personal_pairing_image", { watchId })),
-	/**  Register before scheduling an observer so an earlier detach cannot be undone. */
-	preparePersonalPairingWatch: () => typedError<string, PairingError>(__TAURI_INVOKE("prepare_personal_pairing_watch")),
-	/**  Drive bounded Rust progress only while this explicitly started observer is attached. */
-	watchPersonalPairing: (watchId: string, messages: Channel<PairingStatus>) => typedError<null, PairingError>(__TAURI_INVOKE("watch_personal_pairing", { watchId, messages })),
-	/**  Stop this observer without cancelling or replacing the durable pairing checkpoint. */
-	stopPersonalPairingWatch: (watchId: string) => typedError<null, PairingError>(__TAURI_INVOKE("stop_personal_pairing_watch", { watchId })),
-	/**  Approve the authenticated peer metadata and prepare the exact membership handoff. */
-	confirmPersonalPairing: () => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("confirm_personal_pairing")),
-	/**  Explicitly recover the saved ceremony without creating another identity or CPace attempt. */
-	recoverPersonalPairing: () => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("recover_personal_pairing")),
-	/**  Explicitly cancel the session while retaining any authenticated pending identity. */
-	cancelPersonalPairing: () => typedError<PairingStatus, PairingError>(__TAURI_INVOKE("cancel_personal_pairing")),
 	/**  Read public inventory metadata and durable sync progress without network access. */
 	personalInventoryStatus: () => typedError<PersonalInventoryStatus, PersonalInventoryError>(__TAURI_INVOKE("personal_inventory_status")),
 	/**  Preview exact ids and missing references; keys and object content remain in Rust. */
@@ -1092,93 +1047,6 @@ export type OpenSshUnsupportedDirective = {
 	directive: string,
 };
 
-/**  Localized, non-sensitive failures preserve retained device identity and checkpoints. */
-export type PairingError =
-/**  Existing account/transport/store boundary failure. */
-{ personal: PersonalServerError } |
-/**  Origin, public locator, name or eight-character password was invalid. */
-"invalid_input" |
-/**  A selected file was not one bounded static PNG with exactly one valid pairing QR. */
-"qr_image" |
-/**  The QR could not be rendered; the existing public link and password remain usable. */
-"qr_unavailable" |
-/**  The response, transcript, key material or cryptographic binding was invalid. */
-"invalid_response" |
-/**  The earlier local/session five-minute deadline has passed. */
-"expired" |
-/**  Volatile state was lost before a recoverable checkpoint. */
-"restart_required" |
-/**  No pending ceremony accepts this operation. */
-"not_active" |
-/**  A competing state change prevents replaying this retained plan. */
-"conflict" |
-/**  The selected existing device needs a valid native device session. */
-"authentication_required";
-
-/**  The D-114 one-time display exception. Never used by the general status command. */
-export type PairingPasswordDisplay = {
-	/**  Public local ceremony state. */
-	status: PairingStatus,
-	/**  Display once on the new device; never save or automatically copy this value. */
-	password: string,
-	/**  Secret-bearing QR modules, limited to the same one-time foreground display. */
-	qr: PairingQrDisplay | null,
-};
-
-/**  Safe local ceremony progress; no phase alone establishes an authenticated account. */
-export type PairingPhase =
-/**  No retained ceremony. */
-"idle" |
-/**  New device is waiting for an existing device to claim the public locator. */
-"waiting" |
-/**  The single password-authenticated attempt is running. */
-"exchanging" |
-/**  Confirm the authenticated new-device claims before issuing its certificate. */
-"confirm_device" |
-/**  The exact old-device plan is retained while waiting for possession acceptance. */
-"waiting_acceptance" |
-/**  Admission may have committed; recover with the retained identity and exact plan. */
-"admission_unconfirmed" |
-/**  New side verified authentication/keys; old side confirmed its exact admission receipt. */
-"completed" |
-/**  A fresh explicitly requested ceremony and password are required. */
-"restart_required" |
-/**  This installation terminated the ceremony. */
-"cancelled";
-
-/**  Secret-bearing module matrix, returned only with the one-time password display. */
-export type PairingQrDisplay = {
-	/**  Number of modules on each side, excluding the four-module quiet zone. */
-	size: number,
-	/**  Row-major monochrome modules: zero is white and one is black. */
-	modules: number[],
-};
-
-/**  This installation's fixed role in a ceremony. */
-export type PairingSide =
-/**  Existing authenticated account device. */
-"old_device" |
-/**  New device receiving the existing account. */
-"new_device";
-
-/**  Public pairing metadata; never carries a password, capability, key, or decrypted package. */
-export type PairingStatus = {
-	/**  Current safe next action. */
-	phase: PairingPhase,
-	/**  Retained role, if a session exists. */
-	side: PairingSide | null,
-	/**  Exact selected canonical HTTPS origin. */
-	origin: string | null,
-	/**  Public-only session locator, suitable for an explicit Copy action. */
-	publicLink: string | null,
-	/**  Local installation's selected name. */
-	deviceName: string | null,
-	/**  Authenticated new device name, only for old-device confirmation. */
-	peerName: string | null,
-	/**  Authenticated new device platform claim, only for old-device confirmation. */
-	peerPlatform: string | null,
-};
-
 /**  Public signed claims only; no certificate or key material crosses IPC. */
 export type PersonalAccountDevice = {
 	/**  Stable signed identity. */
@@ -1374,24 +1242,16 @@ export type PersonalInventoryVersion = {
 
 /**  Safe failures contain no source body, URL fragment, token, or underlying network diagnostic. */
 export type PersonalServerError =
+/**  Historical pending data cannot authorize current account access. */
+"retiredEntry" |
+/**  Historical success evidence or immutable ownership could not be verified. */
+"admissionUnverified" |
 /**  The encrypted store is unavailable or an operation could not be committed. */
 "storage" |
 /**  An operation is already running. */
 "busy" |
-/**  An invitation did not have the exact canonical HTTPS fragment form. */
-"invitation" |
-/**  A certificate display name must be a bounded, nonempty printable string. */
-"deviceName" |
-/**  A persisted identity must not be silently replaced. */
-"alreadyConfigured" |
 /**  A generated key or stored identity is unavailable. */
 "identity" |
-/**  Setup has not reached the required phase. */
-"recoveryRequired" |
-/**  The recovery file was not written. */
-"recoverySave" |
-/**  An attempted redemption cannot be replayed. */
-"alreadyAttempted" |
 /**  An encrypted-store identity must exist before any network operation. */
 "notConfigured" |
 /**  A bounded verified HTTPS exchange did not complete. */
@@ -1411,16 +1271,12 @@ export type PersonalServerError =
 /**  The complete account and signed-device snapshot could not be verified. */
 "invalidAccountResponse";
 
-/**  Redacted progress of this device's Personal server enrollment. */
+/**  Redacted state of this device's retained Account identity. */
 export type PersonalServerPhase =
-/**  No invitation has been prepared. */
+/**  No Account is bound to this store; password sign-in is not implemented yet. */
 "not_configured" |
-/**  Save the generated recovery key and confirm that it is kept safely. */
-"recovery_required" |
-/**  The single invitation redemption may now be submitted. */
-"ready_to_enroll" |
-/**  Enrollment may have committed; only fresh device authentication is safe. */
-"enrollment_unconfirmed" |
+/**  Historical pending data is retained, but its entry protocol is retired. */
+"retired_entry" |
 /**  The verified session is usable, including refresh on an explicit network operation. */
 "authenticated" |
 /**  The established session needs a fresh signed-device challenge; local data is retained. */

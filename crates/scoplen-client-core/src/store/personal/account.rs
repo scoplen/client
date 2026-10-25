@@ -50,6 +50,9 @@ impl Store {
         expected_devices: Option<&[u8]>,
         now: u64,
     ) -> Result<bool, StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Ok(false);
+        }
         let queried_at =
             i64::try_from(snapshot.queried_at).map_err(|_| StoreError::InvalidIdentifier)?;
         let (signing, kem) = identity.device_secrets()?;
@@ -61,16 +64,18 @@ impl Store {
              WHERE singleton = 1 AND auth_generation = ?4 AND access_token = ?5
                 AND access_expires_at > ?6 AND refresh_claimed = 0
                 AND origin = ?7 AND account_id = ?8 AND private_material = ?9
-                AND enrollment_request IS ?10 AND paired_handoff IS ?13
+                AND personal_vault_id=?10
+                AND EXISTS (SELECT 1 FROM personal_admission a WHERE a.singleton=1
+                    AND a.origin=personal_server.origin AND a.account_id=personal_server.account_id
+                    AND a.personal_vault_id=personal_server.personal_vault_id)
                 AND EXISTS (SELECT 1 FROM device_key_pair WHERE singleton = 1 AND signing = ?11 AND kem = ?12)
              ON CONFLICT (singleton) DO UPDATE SET origin = excluded.origin, account_id = excluded.account_id,
                 queried_at = excluded.queried_at, profile = excluded.profile, devices = excluded.devices
-             WHERE personal_account_snapshot.devices IS ?14",
+             WHERE personal_account_snapshot.devices IS ?13",
             params![queried_at, snapshot.profile.as_bytes(), snapshot.devices.as_bytes(),
                 identity.auth_generation, access.as_bytes(), now.min(i64::MAX as u64) as i64,
                 identity.origin, identity.account_id.as_bytes().as_slice(), identity.private_material.as_bytes(),
-                identity.enrollment_request.as_ref().map(SecretVec::as_bytes), signing, kem,
-                identity.paired_handoff.as_ref().map(SecretVec::as_bytes), expected_devices],
+                identity.personal_vault_id.as_bytes().as_slice(), signing, kem, expected_devices],
         )? == 1)
     }
 }

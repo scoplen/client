@@ -34,6 +34,9 @@ pub const MAX_OBJECTS_PER_VAULT: u64 = 100_000;
 /// A failure of the local store.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    /// A retained identity belongs to another immutable Account/store context.
+    #[error("the Personal account context does not match this store; reopen its original profile")]
+    AccountContext,
     /// The key does not open the database: it is the wrong key, or the file is
     /// not a Scoplen store.
     #[error("the local database key does not open this store")]

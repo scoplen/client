@@ -21,6 +21,15 @@ fn local() -> (tempfile::TempDir, Store, Uuid) {
         params![scoplen_model::new_uuid_v7().unwrap().as_bytes().as_slice(), vault.as_bytes().as_slice()],
     ).unwrap();
     store.conn().execute("INSERT INTO personal_sync VALUES(1,1,X'01',X'01',X'01')", []).unwrap();
+    store
+        .conn()
+        .execute(
+            "INSERT INTO personal_admission
+        SELECT 1,p.origin,p.account_id,p.personal_vault_id,d.device_id,X'01'
+        FROM personal_server p,device d WHERE p.singleton=1 AND d.singleton=1",
+            [],
+        )
+        .unwrap();
     (dir, store, vault)
 }
 

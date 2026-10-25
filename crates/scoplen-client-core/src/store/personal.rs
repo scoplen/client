@@ -8,11 +8,12 @@ use uuid::Uuid;
 use super::{Store, StoreError, uuid_from};
 
 mod account;
+mod admission;
 mod auth;
 mod pairing;
 pub(crate) use account::PersonalAccountRecord;
 pub(crate) use auth::{PersonalRefreshClaim, PersonalTokens};
-pub(crate) use pairing::{PairingDeviceRecord, PairingRecord};
+pub(crate) use pairing::PairingRecord;
 
 #[derive(Debug)]
 pub(crate) struct PersonalRecord {
@@ -33,6 +34,7 @@ pub(crate) struct PersonalRecord {
     pub refresh_available: bool,
     pub session_established: bool,
     pub refresh_retry_at: Option<u64>,
+    pub admitted: bool,
 }
 
 impl PersonalRecord {
@@ -45,7 +47,7 @@ impl PersonalRecord {
     }
 
     pub fn authentication_allowed(&self) -> bool {
-        self.enrollment_attempted || self.paired_handoff.is_some()
+        self.admitted
     }
 }
 
@@ -62,7 +64,7 @@ impl Store {
             .conn()
             .query_row(
                 "SELECT access_token FROM personal_server WHERE singleton = 1
-             AND (enrollment_attempted = 1 OR paired_handoff IS NOT NULL)
+             AND EXISTS (SELECT 1 FROM personal_admission a WHERE a.singleton=1 AND a.origin=personal_server.origin AND a.account_id=personal_server.account_id AND a.personal_vault_id=personal_server.personal_vault_id)
              AND access_expires_at > ?1 AND refresh_claimed = 0
              AND length(access_token) BETWEEN 1 AND ?2",
                 params![now.min(i64::MAX as u64) as i64, MAX_DEVICE_ACCESS_TOKEN_BYTES as i64],
@@ -92,6 +94,9 @@ impl Store {
         snapshot: &PersonalSyncRecord,
         now: u64,
     ) -> Result<bool, StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Ok(false);
+        }
         let (signing, kem) = identity.device_secrets()?;
         let mut conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
@@ -99,22 +104,22 @@ impl Store {
         let matches: bool = tx.query_row(
             "SELECT EXISTS (SELECT 1 FROM personal_server WHERE singleton = 1
                 AND origin = ?1 AND account_id = ?2 AND personal_vault_id = ?3
-                AND private_material = ?4 AND enrollment_request IS ?5 AND paired_handoff IS ?10
-                AND access_token = ?6 AND access_expires_at > ?7
-                AND (enrollment_attempted = 1 OR paired_handoff IS NOT NULL))
+                AND private_material = ?4
+                AND access_token = ?5 AND access_expires_at > ?6
+                AND auth_generation=?9 AND refresh_claimed=0
+                AND EXISTS (SELECT 1 FROM personal_admission a WHERE a.singleton=1 AND a.origin=personal_server.origin AND a.account_id=personal_server.account_id AND a.personal_vault_id=personal_server.personal_vault_id))
                 AND EXISTS (SELECT 1 FROM device_key_pair WHERE singleton = 1
-                    AND signing = ?8 AND kem = ?9)",
+                    AND signing = ?7 AND kem = ?8)",
             params![
                 identity.origin,
                 identity.account_id.as_bytes().as_slice(),
                 identity.personal_vault_id.as_bytes().as_slice(),
                 identity.private_material.as_bytes(),
-                identity.enrollment_request.as_ref().map(SecretVec::as_bytes),
                 access.as_bytes(),
                 now.min(i64::MAX as u64) as i64,
                 signing,
                 kem,
-                identity.paired_handoff.as_ref().map(SecretVec::as_bytes)
+                identity.auth_generation
             ],
             |row| row.get(0),
         )?;
@@ -143,15 +148,27 @@ impl Store {
     }
 
     pub(crate) fn personal_record(&self) -> Result<Option<PersonalRecord>, StoreError> {
-        let row = self
-            .conn()
+        let conn = self.conn();
+        let oversized: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM personal_server WHERE singleton=1
+                AND NOT EXISTS (SELECT 1 FROM personal_admission)
+                AND (length(enrollment_request)>1048576 OR length(paired_handoff)>4456408))",
+            [],
+            |row| row.get(0),
+        )?;
+        if oversized {
+            return Err(StoreError::AccountContext);
+        }
+        let row = conn
             .query_row(
                 "SELECT origin, account_id, personal_vault_id, device_name, private_material,
-                    enrollment_request, recovery_saved, recovery_confirmed,
+                    CASE WHEN length(enrollment_request)<=1048576 THEN enrollment_request END,
+                    recovery_saved, recovery_confirmed,
                     enrollment_attempted, access_expires_at, refresh_expires_at,
                     auth_generation, auth_scope,
                     refresh_claimed = 0 AND length(refresh_token) BETWEEN 1 AND 2048,
-                    session_established, refresh_retry_at, paired_handoff
+                    session_established, refresh_retry_at,
+                    CASE WHEN length(paired_handoff)<=4456408 THEN paired_handoff END
              FROM personal_server WHERE singleton = 1",
                 [],
                 |row| {
@@ -177,6 +194,7 @@ impl Store {
                 },
             )
             .optional()?;
+        drop(conn);
         row.map(
             |(
                 origin,
@@ -197,7 +215,7 @@ impl Store {
                 refresh_retry_at,
                 paired_handoff,
             )| {
-                Ok(PersonalRecord {
+                let mut identity = PersonalRecord {
                     origin,
                     account_id: uuid_from(&account)?,
                     personal_vault_id: uuid_from(&vault)?,
@@ -215,12 +233,16 @@ impl Store {
                     refresh_available,
                     session_established,
                     refresh_retry_at,
-                })
+                    admitted: false,
+                };
+                identity.admitted = self.personal_admission(&identity)?.is_some();
+                Ok(identity)
             },
         )
         .transpose()
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_personal_record(&self, record: &PersonalRecord) -> Result<(), StoreError> {
         let mut conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
@@ -239,37 +261,6 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) fn save_personal_recovery(&self) -> Result<bool, StoreError> {
-        Ok(self
-            .conn()
-            .execute("UPDATE personal_server SET recovery_saved = 1 WHERE singleton = 1", [])?
-            == 1)
-    }
-
-    pub(crate) fn confirm_personal_recovery(&self) -> Result<bool, StoreError> {
-        Ok(self.conn().execute("UPDATE personal_server SET recovery_confirmed = 1 WHERE singleton = 1 AND recovery_saved = 1", [])? == 1)
-    }
-
-    pub(crate) fn claim_personal_enrollment(&self) -> Result<bool, StoreError> {
-        // A crash after this commit must recover by authentication, never by redeeming again.
-        let conn = self.conn();
-        conn.pragma_update(None, "synchronous", "FULL")?;
-        Ok(conn.execute(
-            "UPDATE personal_server SET enrollment_attempted = 1
-             WHERE singleton = 1 AND recovery_confirmed = 1 AND enrollment_attempted = 0",
-            [],
-        )? == 1)
-    }
-
-    pub(crate) fn release_unsent_personal_enrollment(&self) -> Result<(), StoreError> {
-        self.conn().execute(
-            "UPDATE personal_server SET enrollment_attempted = 0
-            WHERE singleton = 1 AND enrollment_attempted = 1 AND access_token IS NULL",
-            [],
-        )?;
-        Ok(())
-    }
-
     #[cfg(test)]
     pub(crate) fn clear_personal_tokens(&self) -> Result<(), StoreError> {
         let conn = self.conn();
@@ -281,22 +272,6 @@ impl Store {
             [],
         )?;
         Ok(())
-    }
-
-    pub(crate) fn replace_personal_invitation(
-        &self,
-        expected: &SecretVec,
-        replacement: &SecretVec,
-    ) -> Result<bool, StoreError> {
-        let conn = self.conn();
-        conn.pragma_update(None, "synchronous", "FULL")?;
-        Ok(conn.execute(
-            "UPDATE personal_server SET enrollment_request = ?1, enrollment_attempted = 0,
-                auth_generation = auth_generation + 1
-             WHERE singleton = 1 AND enrollment_attempted = 1 AND recovery_confirmed = 1
-             AND enrollment_request = ?2 AND access_token IS NULL",
-            params![replacement.as_bytes(), expected.as_bytes()],
-        )? == 1)
     }
 
     #[cfg(test)]

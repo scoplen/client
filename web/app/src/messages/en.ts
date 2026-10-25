@@ -102,35 +102,27 @@ export const en = {
   "settings.section.terminal": "Terminal",
   "settings.section.data": "Local data",
   "settings.section.personal": "Personal account",
-  "settings.personal.title": "Connect a Personal account",
-  "settings.personal.body":
-    "Use an invitation from your own Scoplen server. Local SSH access stays available without an account.",
+  "settings.personal.title": "Personal account",
+  "settings.personal.signInUnavailable":
+    "Account registration and password sign-in are not available in this version. Local SSH access remains available. Existing confirmed profiles can still authenticate and sync.",
+  "settings.personal.error.retiredEntry":
+    "This unfinished setup uses a retired invitation or pairing protocol. Its data is unchanged. Open a confirmed profile or restore a verified local backup. This version cannot resume the old setup.",
+  "settings.personal.error.admissionUnverified":
+    "The saved account identity could not be verified. Its data is unchanged. Reopen its original profile or restore a verified local backup.",
   "settings.personal.loading": "Reading this device’s account…",
   "settings.personal.reload": "Reload account status",
   "settings.personal.error.storage":
     "The encrypted local data could not be reached. Unlock it or reopen Scoplen, then reload the account status.",
   "settings.personal.error.busy": "Another account operation is running. Wait for it to finish, then try again.",
-  "settings.personal.error.invitation":
-    "This invitation link is not valid. Paste the complete HTTPS Personal invitation from your server operator.",
-  "settings.personal.error.deviceName":
-    "Enter a device name of up to 128 UTF-8 bytes, without control characters. Chinese characters use more than one byte.",
-  "settings.personal.error.alreadyConfigured":
-    "This device already has a prepared account. Reload its status to continue with the saved identity.",
   "settings.personal.error.identity":
     "The account identity could not be read or prepared. Existing keys were retained. Reopen Scoplen and try again.",
-  "settings.personal.error.recoveryRequired":
-    "Save your recovery file and confirm that you have kept it safely before joining.",
-  "settings.personal.error.recoverySave":
-    "The recovery file could not be saved. Choose a new filename in a private location and try again; existing files are not overwritten.",
-  "settings.personal.error.alreadyAttempted":
-    "Joining was already attempted. Authenticate this device with its saved identity to check the result.",
-  "settings.personal.error.notConfigured": "Prepare your Personal invitation before continuing.",
+  "settings.personal.error.notConfigured": "Open an existing confirmed account profile before continuing.",
   "settings.personal.error.network":
     "The server exchange did not finish. Check your connection and authenticate this device to confirm access. Keep your recovery file.",
   "settings.personal.error.connectionBeforeRequest":
     "The server could not be reached before a request was sent. Check its address, certificate, and your connection, then try the action below.",
   "settings.personal.error.authentication":
-    "The server did not authenticate this device. Ask your operator to check enrollment, then authenticate again with the saved identity.",
+    "The server did not authenticate this device. Ask your operator to check device access before authenticating again with the saved identity.",
   "settings.personal.error.invalidResponse":
     "The server response could not be verified. No new credentials were accepted. Ask your operator to check this server, then authenticate again.",
   "settings.personal.error.authenticationRequired": "Authenticate this device above, then connect Personal sync again.",
@@ -171,35 +163,10 @@ export const en = {
     "The sync response could not be verified. Existing keys were retained. Ask your operator to check this server, then try again.",
   "settings.personal.error.rotationRequired":
     "This account needs key rotation support that is not available in this build. Keep your recovery file and update Scoplen before trying again.",
-  "settings.personal.invitation": "Invitation link",
-  "settings.personal.invitationHint":
-    "Paste the complete link from your server operator. It is hidden and cleared when you continue.",
   "settings.personal.deviceName": "Device name",
-  "settings.personal.prepare": "Prepare account",
   "settings.personal.working": "Working…",
   "settings.personal.server": "Server",
-  "settings.personal.recoveryTitle": "Save your recovery key",
-  "settings.personal.recoveryBody":
-    "Keep this file private and offline, separate from this device. This version cannot restore an account from a recovery key. After joining, retain access to at least one enrolled device. No account request has been sent yet.",
-  "settings.personal.saveRecovery": "Save recovery file",
-  "settings.personal.saveAgain": "Save recovery file again",
-  "settings.personal.recoveryConfirm": "I have saved the recovery file somewhere safe, separate from this device.",
-  "settings.personal.continue": "Confirm recovery file",
-  "settings.personal.readyBody":
-    "Check that this is the server you intend to join. Joining sends your invitation, public device identity, and encrypted account material to this server.",
-  "settings.personal.join": "Join this server",
-  "settings.personal.unconfirmedBody":
-    "Enrollment has been attempted, but this device’s access is not confirmed. Authenticate with the saved identity to check it. Keep your recovery file.",
   "settings.personal.authenticate": "Authenticate this device",
-  "settings.personal.replaceInvitation": "Use a new invitation",
-  "settings.personal.cancelReplacement": "Cancel new invitation",
-  "settings.personal.newInvitation": "New invitation link",
-  "settings.personal.newInvitationHint":
-    "Use an invitation for the server shown above. The link is hidden and cleared when you submit.",
-  "settings.personal.replacementBody":
-    "Scoplen first checks access with the saved identity. If access is confirmed, the new invitation is not used. A verified denial is required before saving it. Your identity and recovery file stay the same; joining is a separate action.",
-  "settings.personal.checkInvitation": "Check and use invitation",
-  "settings.personal.authenticated": "This device is authenticated",
   "settings.personal.authenticatedBody":
     "Your account identity is ready. Connect Personal sync below to verify its keys. Local inventory is not uploaded.",
   "settings.personal.sync.title": "Personal sync",
@@ -837,79 +804,6 @@ export const en = {
   "settings.personal.inventory.category.snippet": "Snippet and defaults",
   "settings.personal.inventory.category.forward": "Tunnel",
   "settings.personal.inventory.category.workspace": "Workspace",
-  "settings.personal.pairing.title": "Pair a device",
-  "settings.personal.pairing.body":
-    "Use a device already signed in to join the same Personal account. Your existing local hosts stay on this device until you choose to sync them.",
-  "settings.personal.pairing.loading": "Reading saved pairing state…",
-  "settings.personal.pairing.create": "Join an existing account",
-  "settings.personal.pairing.join": "Pair another device",
-  "settings.personal.pairing.start": "Create pairing session",
-  "settings.personal.pairing.verify": "Verify pairing password",
-  "settings.personal.pairing.origin": "Server address",
-  "settings.personal.pairing.originHint":
-    "Use the same HTTPS server as your existing device, such as https://ssh.example.com.",
-  "settings.personal.pairing.retained":
-    "This device’s saved identity is retained. A fresh session uses the same server and device name.",
-  "settings.personal.pairing.link": "Pairing link",
-  "settings.personal.pairing.linkHint":
-    "Paste the public pairing link shown on the new device. Its server must match this account.",
-  "settings.personal.pairing.password": "8-character secret password",
-  "settings.personal.pairing.qr": "Secret pairing QR",
-  "settings.personal.pairing.qrHint":
-    "On your existing device, choose Read PNG and pair, then select a screenshot of this QR. The QR contains the password. Share it privately and delete the screenshot after pairing.",
-  "settings.personal.pairing.readImage": "Read PNG and pair",
-  "settings.personal.pairing.imageHint":
-    "Choose a PNG screenshot containing only the new device’s pairing QR. It is read on this device and never uploaded. Or enter the link and password below.",
-  "settings.personal.pairing.passwordHint":
-    "On your existing device, open Personal account → Pair another device. Send the link separately and type this password there. It expires in five minutes and is shown only during this session.",
-  "settings.personal.pairing.inputHint":
-    "Type the eight uppercase letters and digits shown on the new device. The password is cleared immediately after submission.",
-  "settings.personal.pairing.copy": "Copy pairing link",
-  "settings.personal.pairing.copied": "Link copied",
-  "settings.personal.pairing.copyFailed": "Could not copy the link. Select the public link above and copy it manually.",
-  "settings.personal.pairing.platform": "Signed platform",
-  "settings.personal.pairing.review":
-    "Check that this name and platform belong to the device you are adding. Approving gives it access to this account and its Personal sync keys.",
-  "settings.personal.pairing.confirm": "Approve this device",
-  "settings.personal.pairing.recover": "Check and continue pairing",
-  "settings.personal.pairing.cancel": "Cancel pairing",
-  "settings.personal.pairing.close": "Close",
-  "settings.personal.pairing.authenticate": "Authenticate this device before pairing another device.",
-  "settings.personal.pairing.reload": "Reload pairing status",
-  "settings.personal.pairing.phase.idle": "No pairing is in progress.",
-  "settings.personal.pairing.phase.waiting": "Waiting for your existing device. Keep this screen open while you pair.",
-  "settings.personal.pairing.phase.exchanging": "Verifying the secret password and both devices…",
-  "settings.personal.pairing.phase.confirm_device": "Review the new device before approving.",
-  "settings.personal.pairing.phase.waiting_acceptance": "Waiting for the new device to verify and accept the account…",
-  "settings.personal.pairing.phase.admission_unconfirmed":
-    "The server may have added this device. Check its saved pairing before starting again. Its identity and keys have been retained.",
-  "settings.personal.pairing.phase.completed":
-    "Pairing complete. Device authentication and sync keys are verified. You can now review what to sync.",
-  "settings.personal.pairing.admissionConfirmed":
-    "Device admission confirmed. Complete verification on the new device before reviewing what to sync.",
-  "settings.personal.pairing.phase.restart_required":
-    "This pairing cannot continue. Start a fresh session with a new password; the new device’s existing keys are retained.",
-  "settings.personal.pairing.phase.cancelled":
-    "Pairing cancelled. Any saved identity remains available for admission checks.",
-  "settings.personal.pairing.error.invalid_input":
-    "Check the HTTPS server, pairing link, device name, and eight-character password.",
-  "settings.personal.pairing.error.qr_image":
-    "Could not read one pairing QR. Choose a static PNG up to 8 MiB and 4 megapixels, with each side no larger than 4096 pixels. No pairing request was sent.",
-  "settings.personal.pairing.error.qr_unavailable":
-    "The QR could not be displayed. Use the pairing link and separate password.",
-  "settings.personal.pairing.error.invalid_response":
-    "Pairing verification failed. No unverified account was accepted. Start a fresh pairing session.",
-  "settings.personal.pairing.error.expired": "Pairing expired. Create a fresh session and use its new password.",
-  "settings.personal.pairing.error.restart_required":
-    "This attempt cannot resume. Start a fresh pairing session; existing device keys are retained.",
-  "settings.personal.pairing.error.not_active":
-    "There is no pairing to continue. Create a session on the new device first.",
-  "settings.personal.pairing.error.conflict":
-    "Pairing state changed. Check the saved admission result before starting another session.",
-  "settings.personal.pairing.error.authentication_required":
-    "Authenticate this account’s existing device before pairing.",
-  "settings.personal.pairing.error.unavailable":
-    "Could not read pairing progress. The saved identity and exact checkpoint are retained. Reload or check pairing before starting again.",
   "settings.personal.inventory.category.other": "Other object",
   "settings.personal.inventory.error.storage":
     "Local sync data could not be read or saved. Unlock your local data, then refresh its status before retrying.",

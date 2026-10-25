@@ -479,20 +479,8 @@ mod tests {
             .unwrap(),
         );
         let manager = PersonalServer::default();
-        manager
-            .prepare(
-                store.clone(),
-                zeroize::Zeroizing::new(
-                    "https://example.test/invite#token=KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio"
-                        .into(),
-                ),
-                "Review test".into(),
-            )
-            .await
-            .unwrap();
-        store.save_personal_recovery().unwrap();
-        store.confirm_personal_recovery().unwrap();
-        store.claim_personal_enrollment().unwrap();
+        crate::personal_server::tests::legacy_profile(&store, "https://example.test", true);
+        manager.status(&store).unwrap();
         let object = store
             .write(LocalWrite {
                 id: None,

@@ -139,17 +139,8 @@ mod tests {
         let path = dir.path().join("history.db");
         let store = Arc::new(Store::open(&path, &SymmetricKey::new([61; 32])).unwrap());
         let manager = PersonalServer::default();
-        manager
-            .prepare(
-                store.clone(),
-                zeroize::Zeroizing::new(
-                    "https://example.test/invite#token=KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio"
-                        .into(),
-                ),
-                "Review test".into(),
-            )
-            .await
-            .unwrap();
+        crate::personal_server::tests::legacy_profile(&store, "https://example.test", true);
+        manager.status(&store).unwrap();
         let record = store.personal_record().unwrap().unwrap();
         let object = store
             .write(LocalWrite {

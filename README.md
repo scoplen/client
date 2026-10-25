@@ -241,38 +241,20 @@ recover its last durable checkpoint. A save failure keeps the tab/window open wi
 Close without saving option; it does not interrupt ordinary live SSH. Workspace restoration
 and remote-process resumption remain separate capabilities.
 
-Settings → Personal account can prepare a Personal invitation from a user-selected HTTPS
-Scoplen server, save and confirm a recovery file, join, and authenticate the first device.
-Keep the recovery file private and offline, separate from the device. This version cannot
-restore an account from a recovery key; after joining, retain access to at least one enrolled
-device. The same pending identity is retained across restarts and uncertain responses. The desktop
-can explicitly synchronize selected inventory after key verification. Rust rotates its native
-device session when needed by an account query, sync, key verification or the active background owner.
-Existing local SSH data is not uploaded by account setup.
+Settings -> Personal account keeps access for an existing confirmed profile. It can authenticate
+that device with its saved signing key, query account/device metadata, and explicitly verify
+sync keys. Registration and password sign-in are not available in this build; local SSH remains
+available. Invitation enrollment, invitation replacement, and device pairing have been retired.
+An unfinished old setup is preserved but cannot resume or gain account access.
 
-Second-device pairing joins the existing Personal account using a QR screenshot or a public
-pairing link and separate eight-character password. The new installation retains its device keys before requesting
-a five-minute session; the password is shown once in a dedicated transient dialog and is never
-part of the link or saved status. The same transient view displays a secret QR. The existing
-device explicitly selects its PNG screenshot through a native picker; Rust reads it locally,
-rejects a different server before claiming, and checks the QR key digest against authenticated
-device keys before review. The image is never uploaded. The manual link/password path remains
-available if QR rendering fails. The existing device confirms the
-authenticated device name and platform before approving admission. Rust owns CPace, the seven
-immutable relay slots, deadline and polling decisions. Only an explicitly started ceremony runs
-the foreground progress watcher; opening Settings reads local status.
-
-If the first session request fails before a valid session is saved, the server address and
-device name can be corrected explicitly without replacing the durable device keys or creation
-time. Once a session is saved, fresh sessions keep that exact server and device metadata.
-
-Both sides save their exact recovery checkpoints before sending. A restart before handoff needs
-a fresh session and password while retaining the new device keys. After handoff, Check admission
-uses the saved identity, frame, acceptance and exact approval request; an uncertain commit is
-queried before replay. The new device must authenticate and verify every retained Personal key
-epoch before pairing completes. It receives no fabricated enrollment request or recovery key,
-and account setup never adopts local inventory. Key rotation is not connected to the desktop
-workflow yet.
+Confirmed historical identities convert offline into neutral admitted provenance. The conversion
+verifies the original cryptographic artifacts and retained private roots, plus a previously
+established verified session, a complete verified bootstrap, or the matching completed new-device
+checkpoint. Attempt flags and a bare handoff are insufficient. Failed verification leaves the
+original data unchanged. The admitted profile binds its canonical origin, Account, Personal vault,
+device, and keys immutably to this encrypted store. Existing local SSH data stays local.
+This is the retirement/storage prerequisite for D-128; password admission and full multi-profile
+or Team context switching remain incomplete.
 
 Account and devices reads its saved results locally when Settings opens. Refresh account and
 devices explicitly queries the authenticated account profile and complete signed device statement
@@ -284,15 +266,9 @@ results; opening the page never starts a query. These results do not prove recen
 hardware protection, current server admission, or statements a server has withheld. Revocation
 publication and key rotation remain separate work.
 
-When enrollment remains unconfirmed, Use a new invitation accepts a link for the same server.
-Rust first authenticates the saved identity: success ends recovery without using the link;
-only the specified verified device denial allows saving the new invitation. The same keys and
-recovery file are retained, and Join remains a separate explicit action.
-
 The Rust core can bootstrap retained first or paired devices through the real sync session,
 account-key, and Personal vault-key endpoints. It requires a verified DPoP-bound access token,
-TLS 1.3, and HTTP/2; verifies certificates and every key wrap against the retained enrollment
-or authenticated handoff;
+TLS 1.3, and HTTP/2; verifies certificates and every key wrap against the neutral admission anchors;
 and atomically saves the complete result in SQLCipher for offline restart. Membership-only
 account revisions can advance while the account key ciphertexts, recovery blob and Personal
 epoch-1 wrapping remain exactly those in the signed enrollment. A paired device retains all
@@ -507,15 +483,13 @@ SPL_SMOKE_TEST=1 target/release/bundle/macos/Scoplen.app/Contents/MacOS/scoplen
 
 Scoplen keeps its local data in the application data directory (`~/Library/Application Support/com.scoplen.client` on macOS, `%APPDATA%\com.scoplen.client` on Windows). The store is a SQLCipher database encrypted with a random 256-bit key. That key is held in the macOS Keychain (only on this device, after the first unlock) or, on Windows, wrapped by a TPM-held key or by DPAPI for the current user. With a local passphrase, the key is additionally wrapped with a key derived from the passphrase by Argon2id; forgetting the passphrase makes the data unrecoverable. If the key is lost, Scoplen keeps the unreadable store under a new name and can start with empty data.
 
-Network access follows explicit SSH actions, Personal enrollment/authentication, and Personal
-sync after explicit key verification. Personal
-setup sends the invitation token, public identity metadata, signed certificates, and encrypted
-account material only to the selected origin. Its HTTPS transport verifies certificates,
+Network access follows explicit SSH actions, admitted-device authentication, and Personal
+sync after explicit key verification. Authentication sends signed device proof only to the
+profile origin. Its HTTPS transport verifies certificates,
 rejects redirects, and bounds exchanges and response bodies. Device signing/KEM keys currently
 use software implementations protected by SQLCipher; hardware device signing is not implemented.
-The recovery key is exported as a plaintext file only at the user's chosen location: Unix files
-are created with mode 0600, while Windows uses the destination directory's inherited ACLs.
-Keep that file private and offline. Access/refresh tokens and secret keys never cross IPC into the frontend.
+Historical recovery keys and ceremony artifacts remain encrypted in SQLCipher. This build has no
+recovery export or invitation/pairing controls. Access/refresh tokens and secret keys never cross IPC into the frontend.
 After a successful sync bootstrap, Rust maintains a TLS 1.3/HTTP/2 notification connection and
 synchronizes already adopted Personal objects in the background. Reopening locally verified
 saved keys resumes it. Notification failure enables a 60-second polling fallback. New local

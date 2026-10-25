@@ -146,11 +146,13 @@ fn an_expired_or_deferred_refresh_is_not_claimed_and_a_completion_checks_device_
             .finish_personal_session(&identity, claim.generation, true, &replacement(), None)
             .unwrap()
     );
-    store.conn().execute("UPDATE device_key_pair SET signing = X'00'", []).unwrap();
+    assert!(store.conn().execute("UPDATE device_key_pair SET signing = X'00'", []).is_err());
+    let mut foreign = store.personal_record().unwrap().unwrap();
+    foreign.personal_vault_id = scoplen_model::new_uuid_v7().unwrap();
     assert!(
-        !store
-            .finish_personal_session(&current, next.generation, true, &replacement(), None)
-            .unwrap()
+        store
+            .finish_personal_session(&foreign, next.generation, true, &replacement(), None)
+            .is_err()
     );
     assert!(store.personal_access_token(100).unwrap().is_none());
 }

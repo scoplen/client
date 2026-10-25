@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Retired Personal invitation enrollment, invitation replacement, and device pairing from
+  the desktop UI, IPC and network paths. Confirmed historical profiles convert offline to
+  verified, immutable account provenance; unfinished or invalid setups retain their data
+  without gaining access. Existing admitted devices can still authenticate and synchronize.
+  Live checks now require disposable, already confirmed profiles. Registration, password
+  sign-in and full multi-profile switching remain incomplete.
+
 - Added saved Dynamic SOCKS4/4a/5 CONNECT tunnels alongside Local TCP tunnels, with
   explicit Login and numeric bind selection, remote hostname resolution, fixed
   running configuration and application-only traffic counts. Negotiation, channel
