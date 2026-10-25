@@ -707,7 +707,10 @@ pub async fn prepare_connection(
     }
     .await;
     if let Err(error) = result {
-        control.cancel();
+        // Expire interrupted prompts without turning a failure into user cancellation.
+        if let Ok(mut state) = control.state.lock() {
+            state.pending.take();
+        }
         while let Some(connection) = connections.0.pop() {
             let _ = connection.close().await;
         }

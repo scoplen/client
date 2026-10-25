@@ -263,6 +263,7 @@ async fn pending_interactive_allows_another_terminal_and_cancellation_fences_lat
             .await
             .unwrap();
     assert!(result.is_err());
+    assert!(control.is_cancelled());
     assert!(control.state.lock().unwrap().pending.is_none());
 }
 
@@ -422,6 +423,7 @@ async fn public_preparation_keeps_one_budget_across_passphrase_retry_partial_suc
     let control = PreparationControl::default();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let started = Mutex::new(None);
+    let timed_out_prompt = Mutex::new(None);
     let finished = AtomicBool::new(false);
     let preparation = async {
         let result = prepare_connection(&store, profile, &control, |event| {
@@ -506,16 +508,10 @@ async fn public_preparation_keeps_one_budget_across_passphrase_retry_partial_suc
                             );
                             assert!(control.state.lock().unwrap().pending.is_some());
                             advance_to(began, 300).await;
-                            let error = control
-                                .respond(
-                                    &prompt_id,
-                                    PreparationResponse::keyboard_interactive(vec![
-                                        b"late-disposable".to_vec(),
-                                    ])
-                                    .unwrap(),
-                                )
-                                .unwrap_err();
-                            assert!(!error.contains("late-disposable"));
+                            assert_eq!(began.elapsed(), AUTHENTICATION_TIMEOUT);
+                            *timed_out_prompt.lock().unwrap() = Some(prompt_id);
+                            // Dispatch the expired timer while the socket-driving loop stays runnable.
+                            tokio::time::advance(Duration::from_millis(1)).await;
                             break;
                         }
                         _ => panic!("unexpected additional authentication round"),
@@ -534,7 +530,10 @@ async fn public_preparation_keeps_one_budget_across_passphrase_retry_partial_suc
             }
         }
         assert_eq!(rounds, 2);
-        assert_eq!(started.lock().unwrap().unwrap().elapsed(), AUTHENTICATION_TIMEOUT);
+        assert_eq!(
+            started.lock().unwrap().unwrap().elapsed(),
+            AUTHENTICATION_TIMEOUT + Duration::from_millis(1)
+        );
         while !finished.load(Ordering::SeqCst) {
             assert!(
                 std::time::Instant::now() < wall_deadline,
@@ -551,6 +550,14 @@ async fn public_preparation_keeps_one_budget_across_passphrase_retry_partial_suc
     tokio::time::resume();
     assert!(result.is_err());
     assert!(control.state.lock().unwrap().pending.is_none());
+    assert!(!control.is_cancelled());
+    let error = control
+        .respond(
+            timed_out_prompt.lock().unwrap().as_ref().unwrap(),
+            PreparationResponse::keyboard_interactive(vec![b"late-disposable".to_vec()]).unwrap(),
+        )
+        .unwrap_err();
+    assert!(!error.contains("late-disposable"));
     assert_eq!(peer.session_channels.load(Ordering::SeqCst), 0);
     while peer.closed_connections.load(Ordering::SeqCst) == 0 {
         assert!(
