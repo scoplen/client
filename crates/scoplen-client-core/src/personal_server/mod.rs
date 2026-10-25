@@ -10,8 +10,10 @@ mod background;
 mod identity;
 mod notification;
 
+mod password_login;
 mod refresh;
 mod registration;
+pub use password_login::{PasswordLoginError, PasswordLoginPhase, PasswordLoginStatus};
 mod retained;
 mod revalidation;
 mod sync;
@@ -53,7 +55,7 @@ use transport::Transport;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum PersonalServerPhase {
-    /// No Account is bound to this store; password sign-in is not implemented yet.
+    /// No usable Account identity is installed in this store.
     NotConfigured,
     /// Historical pending data is retained, but its entry protocol is retired.
     RetiredEntry,

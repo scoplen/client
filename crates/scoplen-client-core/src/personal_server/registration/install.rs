@@ -224,4 +224,4 @@ impl PersonalServer {
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::personal_server) mod tests;

@@ -1275,7 +1275,7 @@ export type PersonalServerError =
 
 /**  Redacted state of this device's retained Account identity. */
 export type PersonalServerPhase =
-/**  No Account is bound to this store; password sign-in is not implemented yet. */
+/**  No usable Account identity is installed in this store. */
 "not_configured" |
 /**  Historical pending data is retained, but its entry protocol is retired. */
 "retired_entry" |

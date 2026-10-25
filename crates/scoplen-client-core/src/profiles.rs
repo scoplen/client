@@ -17,7 +17,11 @@ use crate::{
     personal_server::{
         PersonalServerError, PersonalSyncRuntime, RegistrationError, load_retained_bootstrap,
     },
-    store::{Store, personal::RegistrationRecord, profiles::ProfileRecord},
+    store::{
+        Store,
+        personal::{PasswordLoginRecord, RegistrationRecord},
+        profiles::ProfileRecord,
+    },
 };
 
 /// Redacted catalog metadata. The Account identity is the canonical origin plus Account id.
@@ -31,9 +35,9 @@ pub struct AccountProfile {
     pub account_id: Uuid,
     /// This Account's Personal vault.
     pub personal_vault_id: Uuid,
-    /// The independent Device identity retained from registration.
+    /// The independent Device identity retained from confirmed Account entry.
     pub device_id: Uuid,
-    /// Original confirmed registration operation.
+    /// Original confirmed registration or Device-admission operation.
     pub operation_id: Uuid,
     /// Complete identity, current-device authentication and verified bootstrap were installed.
     /// This historical local flag does not claim the device is currently authorized online.
@@ -98,12 +102,10 @@ pub enum AccountProfileError {
     #[error("The account profile could not be saved. Its original data and keys were retained.")]
     Storage,
     /// The operation was explicitly cancelled.
-    #[error(
-        "Account installation was cancelled. Its confirmed registration and keys were retained."
-    )]
+    #[error("Account installation was cancelled. Its confirmed operation and keys were retained.")]
     Cancelled,
-    /// A registration has not reached exact committed confirmation.
-    #[error("Confirm this registration's original result before installing its profile.")]
+    /// Account entry has not reached exact committed confirmation.
+    #[error("Confirm this account setup's original result before installing its profile.")]
     ConfirmationRequired,
     /// Local origin, identity, roots or shared artifacts failed validation.
     #[error(
@@ -116,6 +118,9 @@ pub enum AccountProfileError {
     /// Preparation validation failed without exposing private inputs.
     #[error(transparent)]
     Registration(#[from] RegistrationError),
+    /// Password Device admission failed before usable installation.
+    #[error(transparent)]
+    PasswordLogin(#[from] crate::personal_server::PasswordLoginError),
 }
 
 type KeyStoreFactory = Arc<dyn Fn(&Path) -> Option<Box<dyn Keystore>> + Send + Sync>;
@@ -344,6 +349,30 @@ impl AccountProfiles {
                 .map_err(storage)?
                 .flatten();
             Ok((pending, profile))
+        })
+    }
+
+    pub(crate) fn root_password_login_record(
+        &self,
+        lease: &ProfileLease,
+        operation: Uuid,
+    ) -> Result<(Option<PasswordLoginRecord>, Option<ProfileRecord>), AccountProfileError> {
+        self.with_state(Some(lease), |state| {
+            if lease.profile.is_some() {
+                return Err(AccountProfileError::ContextChanged);
+            }
+            let pending = state.root.pending_password_login().map_err(storage)?;
+            let existing = state
+                .root
+                .profile_catalog()
+                .map_err(storage)?
+                .into_iter()
+                .find(|p| p.operation_id == operation)
+                .map(|p| state.root.profile_record(p.id))
+                .transpose()
+                .map_err(storage)?
+                .flatten();
+            Ok((pending, existing))
         })
     }
 

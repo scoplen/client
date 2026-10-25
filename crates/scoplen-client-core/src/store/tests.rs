@@ -73,6 +73,47 @@ fn registration_dispatch_migration_retains_legacy_prepared_unknown_and_committed
 }
 
 #[test]
+fn admission_catalog_migration_retains_selected_registered_profile_and_immutable_binding() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    for migration in &MIGRATIONS[..14] {
+        conn.execute_batch(migration).unwrap();
+    }
+    let ids = (0..5).map(|_| scoplen_model::new_uuid_v7().unwrap()).collect::<Vec<_>>();
+    conn.execute("INSERT INTO account_profiles(profile_id,origin,account_id,vault_id,device_id,operation_id,payload,signature,confirmation) VALUES(?1,'https://account.example',?2,?3,?4,?5,?6,?7,?8)",
+        params![ids[0].as_bytes().as_slice(),ids[1].as_bytes().as_slice(),ids[2].as_bytes().as_slice(),ids[3].as_bytes().as_slice(),ids[4].as_bytes().as_slice(),b"original protected registration".as_slice(),[7u8;64].as_slice(),b"original receipt".as_slice()]).unwrap();
+    conn.execute("UPDATE account_profiles SET ready=1", []).unwrap();
+    conn.execute(
+        "UPDATE profile_selection SET generation=1,profile_id=?1",
+        [ids[0].as_bytes().as_slice()],
+    )
+    .unwrap();
+    conn.pragma_update(None, "user_version", 14).unwrap();
+    migrate(&mut conn).unwrap();
+    let row: (Vec<u8>, Vec<u8>, Vec<u8>, i64) = conn
+        .query_row("SELECT payload,signature,confirmation,ready FROM account_profiles", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })
+        .unwrap();
+    assert_eq!(
+        row,
+        (b"original protected registration".to_vec(), vec![7; 64], b"original receipt".to_vec(), 1)
+    );
+    let selected: (i64, Vec<u8>) = conn
+        .query_row("SELECT generation,profile_id FROM profile_selection", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(selected, (1, ids[0].as_bytes().to_vec()));
+    assert!(conn.execute("UPDATE account_profiles SET payload=x'01'", []).is_err());
+    assert!(conn.execute("DELETE FROM account_profiles", []).is_err());
+    assert!(conn.execute("UPDATE profile_selection SET generation=0", []).is_err());
+    let violations: i64 =
+        conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+    assert_eq!(violations, 0);
+}
+
+#[test]
 fn the_file_is_encrypted_and_only_the_right_key_opens_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("local.db");

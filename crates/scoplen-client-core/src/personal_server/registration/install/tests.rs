@@ -37,7 +37,7 @@ use crate::{
 type Slots = Arc<StdMutex<BTreeMap<PathBuf, MemoryKeystore>>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Fault {
+pub(in crate::personal_server) enum Fault {
     None,
     Authentication,
     TokenSignature,
@@ -55,9 +55,9 @@ enum Fault {
     VaultWrap,
 }
 
-struct CurrentPeer {
+pub(in crate::personal_server) struct CurrentPeer {
     payload: AccountRegistrationPayload,
-    fault: Fault,
+    pub(in crate::personal_server) fault: Fault,
     revision: u64,
     challenges: u64,
     nonce: String,
@@ -85,7 +85,21 @@ impl CurrentPeer {
         state
     }
 
-    fn answer(
+    pub(in crate::personal_server) fn admitted(payload: AccountRegistrationPayload) -> Self {
+        let revision = SyncAccountKeyBundleUpdate::from_cbor(&payload.key_bundle).unwrap().revision;
+        Self {
+            payload,
+            fault: Fault::None,
+            revision,
+            challenges: 0,
+            nonce: String::new(),
+            token: String::new(),
+            proofs: HashSet::new(),
+            revocations: vec![],
+        }
+    }
+
+    pub(in crate::personal_server) fn answer(
         &mut self,
         request: &::http::request::Parts,
         body: &[u8],
