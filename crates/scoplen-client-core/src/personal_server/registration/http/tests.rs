@@ -16,14 +16,14 @@ use super::*;
 use crate::{personal_server::transport::Transport, testing::MemoryKeystore};
 
 #[derive(Clone)]
-pub(in crate::personal_server::registration) struct Reply {
-    pub(in crate::personal_server::registration) status: u16,
-    pub(in crate::personal_server::registration) body: SecretVec,
-    pub(in crate::personal_server::registration) headers: Vec<(&'static str, String)>,
+pub(in crate::personal_server) struct Reply {
+    pub(in crate::personal_server) status: u16,
+    pub(in crate::personal_server) body: SecretVec,
+    pub(in crate::personal_server) headers: Vec<(&'static str, String)>,
 }
 
 impl Reply {
-    pub(in crate::personal_server::registration) fn json(status: u16, body: Vec<u8>) -> Self {
+    pub(in crate::personal_server) fn json(status: u16, body: Vec<u8>) -> Self {
         Self {
             status,
             body: SecretVec::new(body),
@@ -35,7 +35,7 @@ impl Reply {
         }
     }
 
-    pub(in crate::personal_server::registration) fn problem(
+    pub(in crate::personal_server) fn problem(
         status: u16,
         code: &str,
         changed: bool,
@@ -85,8 +85,8 @@ struct PeerState {
     extra: Option<Extra>,
 }
 
-pub(in crate::personal_server::registration) struct Peer {
-    pub(in crate::personal_server::registration) origin: String,
+pub(in crate::personal_server) struct Peer {
+    pub(in crate::personal_server) origin: String,
     certificate: reqwest::Certificate,
     state: Arc<StdMutex<PeerState>>,
     task: tokio::task::JoinHandle<()>,
@@ -99,7 +99,7 @@ impl Drop for Peer {
 }
 
 impl Peer {
-    pub(in crate::personal_server::registration) async fn new() -> Self {
+    pub(in crate::personal_server) async fn new() -> Self {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let key = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
         let certificate = reqwest::Certificate::from_der(key.cert.der()).unwrap();
@@ -150,17 +150,14 @@ impl Peer {
         Self { origin, certificate, state, task }
     }
 
-    pub(in crate::personal_server::registration) fn manager(
-        &self,
-        timeout: Duration,
-    ) -> PersonalServer {
+    pub(in crate::personal_server) fn manager(&self, timeout: Duration) -> PersonalServer {
         PersonalServer {
             operation: tokio::sync::Mutex::new(()),
             transport: Ok(Transport::fixture(self.certificate.clone(), timeout)),
         }
     }
 
-    pub(in crate::personal_server::registration) fn registration_reply(
+    pub(in crate::personal_server) fn registration_reply(
         &self,
         reply: Option<Reply>,
         reject_commit: bool,
@@ -172,30 +169,27 @@ impl Peer {
         state.pause = None;
     }
 
-    pub(in crate::personal_server::registration) fn pause(
-        &self,
-        path: &str,
-    ) -> (Arc<Notify>, Arc<Notify>) {
+    pub(in crate::personal_server) fn pause(&self, path: &str) -> (Arc<Notify>, Arc<Notify>) {
         let reached = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
         self.state.lock().unwrap().pause = Some((path.into(), reached.clone(), release.clone()));
         (reached, release)
     }
 
-    pub(in crate::personal_server::registration) fn healthy(&self) {
+    pub(in crate::personal_server) fn healthy(&self) {
         let state = self.state.lock().unwrap();
         assert!(state.errors.is_empty(), "independent peer rejected a request: {:?}", state.errors);
     }
 
-    pub(in crate::personal_server::registration) fn extra(&self, handler: Extra) {
+    pub(in crate::personal_server) fn extra(&self, handler: Extra) {
         self.state.lock().unwrap().extra = Some(handler);
     }
 
-    pub(in crate::personal_server::registration) fn paths(&self) -> Vec<String> {
+    pub(in crate::personal_server) fn paths(&self) -> Vec<String> {
         self.state.lock().unwrap().paths.clone()
     }
 
-    pub(in crate::personal_server::registration) fn payload(&self) -> AccountRegistrationPayload {
+    pub(in crate::personal_server) fn payload(&self) -> AccountRegistrationPayload {
         let state = self.state.lock().unwrap();
         AccountRegistrationPayload::from_cbor(state.requests.first().unwrap().payload.as_bytes())
             .unwrap()
@@ -243,19 +237,25 @@ async fn answer(
             Some(AccountEntryOperation::RequestChallenge) => {
                 let request = AccountRequestChallengeRequest::from_json(&body)
                     .map_err(|_| "challenge codec")?;
-                let n = u8::try_from(state.challenges.len() + 1)
-                    .map_err(|_| "fixture challenge capacity")?;
-                let response = AccountRequestChallengeResponse {
-                    attempt_id: SecretBytes::new([n; 32]),
-                    nonce: SecretBytes::new([n + 1; 32]),
-                    expires_at_ms: now_ms().unwrap() + 120_000,
-                };
-                let reply = state
-                    .challenge_reply
-                    .clone()
-                    .unwrap_or_else(|| Reply::json(200, response.to_json().unwrap()));
-                state.challenges.push((request, response));
-                reply
+                if request.kind == AccountRequestKind::Admit {
+                    state.extra.as_mut().ok_or("unsupported admission fixture")?(
+                        &parts, &body, origin,
+                    )?
+                } else {
+                    let n = u8::try_from(state.challenges.len() + 1)
+                        .map_err(|_| "fixture challenge capacity")?;
+                    let response = AccountRequestChallengeResponse {
+                        attempt_id: SecretBytes::new([n; 32]),
+                        nonce: SecretBytes::new([n + 1; 32]),
+                        expires_at_ms: now_ms().unwrap() + 120_000,
+                    };
+                    let reply = state
+                        .challenge_reply
+                        .clone()
+                        .unwrap_or_else(|| Reply::json(200, response.to_json().unwrap()));
+                    state.challenges.push((request, response));
+                    reply
+                }
             }
             Some(AccountEntryOperation::Register) => {
                 let request = AccountRegistrationRequest::from_json(&body)
@@ -304,10 +304,14 @@ async fn answer(
                 state.requests.push(request);
                 reply
             }
-            None => {
+            Some(
+                AccountEntryOperation::PasswordOptions
+                | AccountEntryOperation::PasswordLogin
+                | AccountEntryOperation::DeviceAdmission,
+            )
+            | None => {
                 state.extra.as_mut().ok_or("unsupported fixture route")?(&parts, &body, origin)?
             }
-            _ => return Err("unsupported fixture operation".into()),
         };
         let pause = state.pause.clone().filter(|(expected, _, _)| expected == &path);
         (reply, state.lose_reply && operation == Some(AccountEntryOperation::Register), pause)
@@ -339,19 +343,19 @@ async fn answer(
     Ok(())
 }
 
-pub(in crate::personal_server::registration) struct Fixture {
-    pub(in crate::personal_server::registration) peer: Peer,
-    pub(in crate::personal_server::registration) server: PersonalServer,
-    pub(in crate::personal_server::registration) local: Arc<LocalData>,
-    pub(in crate::personal_server::registration) store: Arc<Store>,
-    pub(in crate::personal_server::registration) keys: MemoryKeystore,
-    pub(in crate::personal_server::registration) status: RegistrationStatus,
-    pub(in crate::personal_server::registration) dir: tempfile::TempDir,
+pub(in crate::personal_server) struct Fixture {
+    pub(in crate::personal_server) peer: Peer,
+    pub(in crate::personal_server) server: PersonalServer,
+    pub(in crate::personal_server) local: Arc<LocalData>,
+    pub(in crate::personal_server) store: Arc<Store>,
+    pub(in crate::personal_server) keys: MemoryKeystore,
+    pub(in crate::personal_server) status: RegistrationStatus,
+    pub(in crate::personal_server) dir: tempfile::TempDir,
     _serial: MutexGuard<'static, ()>,
 }
 
 impl Fixture {
-    pub(in crate::personal_server::registration) async fn new() -> Self {
+    pub(in crate::personal_server) async fn new() -> Self {
         let serial = TEST_SERIAL.lock().await;
         let peer = Peer::new().await;
         let server = peer.manager(Duration::from_secs(2));
@@ -381,7 +385,7 @@ impl Fixture {
         Self { peer, server, local, store, keys, status, dir, _serial: serial }
     }
 
-    pub(in crate::personal_server::registration) async fn exchange(
+    pub(in crate::personal_server) async fn exchange(
         &self,
         action: RegistrationAction,
     ) -> Result<RegistrationStatus, RegistrationError> {
@@ -409,7 +413,7 @@ impl Fixture {
         assert_ne!(store.device_id(), self.status.device_id);
     }
 
-    pub(in crate::personal_server::registration) fn database(&self) -> rusqlite::Connection {
+    pub(in crate::personal_server) fn database(&self) -> rusqlite::Connection {
         let conn = rusqlite::Connection::open(self.dir.path().join("local.db")).unwrap();
         let keys = self.keys.0.lock().unwrap();
         let hex = Zeroizing::new(

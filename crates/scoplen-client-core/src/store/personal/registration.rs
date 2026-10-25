@@ -6,7 +6,7 @@ use scoplen_crypto::SecretVec;
 
 use super::{Store, StoreError};
 
-#[derive(Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub(crate) struct RegistrationRecord {
     pub payload: SecretVec,
     pub account_signature: [u8; 64],
@@ -36,7 +36,8 @@ impl Store {
                 AND NOT EXISTS (SELECT 1 FROM personal_pairing_device)
                 AND NOT EXISTS (SELECT 1 FROM personal_pairing_attempts)
                 AND NOT EXISTS (SELECT 1 FROM device_key_pair)
-                AND NOT EXISTS (SELECT 1 FROM personal_registration)",
+                AND NOT EXISTS (SELECT 1 FROM personal_registration)
+                AND NOT EXISTS (SELECT 1 FROM personal_password_login)",
             [],
             |row| row.get(0),
         )?)

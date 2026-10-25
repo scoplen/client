@@ -41,12 +41,14 @@ impl RegistrationCancellation {
         self.cancelled.send_replace(true);
     }
 
-    pub(super) fn guard(&self) -> Result<watch::Ref<'_, bool>, RegistrationError> {
+    pub(in crate::personal_server) fn guard(
+        &self,
+    ) -> Result<watch::Ref<'_, bool>, RegistrationError> {
         let guard = self.cancelled.borrow();
         if *guard { Err(RegistrationError::Cancelled) } else { Ok(guard) }
     }
 
-    pub(super) async fn cancelled(&self) {
+    pub(in crate::personal_server) async fn cancelled(&self) {
         let mut receiver = self.cancelled.subscribe();
         let _ = receiver.wait_for(|cancelled| *cancelled).await;
     }
@@ -247,4 +249,4 @@ fn problem(response: &RegistrationResponse) -> Result<RegistrationError, Registr
 }
 
 #[cfg(test)]
-pub(super) mod tests;
+pub(in crate::personal_server) mod tests;

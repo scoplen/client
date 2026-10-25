@@ -29,7 +29,9 @@ impl Transport {
         let path = match operation {
             AccountEntryOperation::RequestChallenge => "/api/v1/auth/accounts/requests/challenge",
             AccountEntryOperation::Register => "/api/v1/auth/accounts/register",
-            _ => return Err(RegistrationError::InvalidInput),
+            AccountEntryOperation::PasswordOptions => "/api/v1/auth/accounts/password/options",
+            AccountEntryOperation::PasswordLogin => "/api/v1/auth/accounts/password/login",
+            AccountEntryOperation::DeviceAdmission => "/api/v1/auth/accounts/device-admissions",
         };
         let (request_limit, success_limit) = operation.body_limits();
         if body.len() > request_limit {

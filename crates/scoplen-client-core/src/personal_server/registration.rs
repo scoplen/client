@@ -27,13 +27,14 @@ use crate::{
     store::{Store, personal::RegistrationRecord},
 };
 
-mod http;
-mod install;
+pub(in crate::personal_server) mod http;
+pub(in crate::personal_server) mod install;
 pub use http::{RegistrationAction, RegistrationCancellation};
 
 // Process-wide, fail-fast admission also covers separate PersonalServer instances. A caller
 // runs these synchronous preparation methods on its blocking worker, never on the renderer.
-static PASSWORD_DERIVATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(super) static PASSWORD_DERIVATION: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(1);
 
 #[cfg(test)]
 static TEST_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -192,7 +193,7 @@ impl PersonalServer {
         password: SecretVec,
     ) -> Result<RegistrationStatus, RegistrationError> {
         let _operation = self.operation.try_lock().map_err(|_| RegistrationError::Busy)?;
-        let _derivation = PASSWORD_DERIVATION.try_lock().map_err(|_| RegistrationError::Busy)?;
+        let _derivation = PASSWORD_DERIVATION.try_acquire().map_err(|_| RegistrationError::Busy)?;
         current(local, store, || {
             if !store.registration_available().map_err(storage)? {
                 return Err(RegistrationError::ExistingProfile);

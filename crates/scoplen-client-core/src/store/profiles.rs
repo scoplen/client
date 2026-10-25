@@ -26,7 +26,7 @@ pub(crate) struct AccountInstallation<'a> {
     pub previous_admission: Option<&'a SecretVec>,
 }
 
-const COLUMNS: &str = "profile_id,origin,account_id,vault_id,device_id,operation_id,CASE WHEN length(payload) BETWEEN 1 AND 262144 THEN payload END,CASE WHEN length(signature)=64 THEN signature END,CASE WHEN length(confirmation) BETWEEN 1 AND 1024 THEN confirmation END";
+const COLUMNS: &str = "profile_id,origin,account_id,vault_id,device_id,operation_id,CASE WHEN length(payload) BETWEEN 1 AND 4325376 THEN payload END,CASE WHEN length(signature)=64 THEN signature END,CASE WHEN length(confirmation) BETWEEN 1 AND 1024 THEN confirmation END";
 
 fn read(row: &rusqlite::Row<'_>, ready: bool) -> rusqlite::Result<ProfileRecord> {
     let uuid = |index| {
@@ -35,7 +35,7 @@ fn read(row: &rusqlite::Row<'_>, ready: bool) -> rusqlite::Result<ProfileRecord>
     let payload = SecretVec::new(row.get(6)?);
     let signature: Vec<u8> = row.get(7)?;
     let confirmation = SecretVec::new(row.get(8)?);
-    if !(1..=262_144).contains(&payload.len()) || !(1..=1024).contains(&confirmation.len()) {
+    if !(1..=4_325_376).contains(&payload.len()) || !(1..=1024).contains(&confirmation.len()) {
         return Err(rusqlite::Error::InvalidQuery);
     }
     Ok(ProfileRecord {
@@ -183,7 +183,10 @@ impl Store {
         conn.pragma_update(None, "synchronous", "FULL")?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM personal_registration,profile_selection
+            "SELECT EXISTS(SELECT 1 FROM (
+                SELECT phase,payload,account_signature,private_material,confirmation FROM personal_registration
+                UNION ALL SELECT phase,payload,account_signature,private_material,confirmation FROM personal_password_login
+                ),profile_selection
                 WHERE phase=2 AND payload=?1 AND account_signature=?2 AND private_material=?3
                     AND confirmation=?4 AND generation=?5)",
             params![
@@ -261,11 +264,11 @@ impl Store {
             "INSERT INTO account_profile_binding(singleton,profile_id,origin,account_id,vault_id,device_id,operation_id,payload,signature,confirmation) VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![provenance.profile.id.as_bytes().as_slice(),provenance.profile.origin,provenance.profile.account_id.as_bytes().as_slice(),provenance.profile.personal_vault_id.as_bytes().as_slice(),provenance.profile.device_id.as_bytes().as_slice(),provenance.profile.operation_id.as_bytes().as_slice(),provenance.payload.as_bytes(),provenance.signature.as_slice(),provenance.confirmation.as_bytes()],
         )?;
-        if private.len() != 225 || private.as_bytes().first() != Some(&1) {
+        if !matches!((private.as_bytes().first(), private.len()), (Some(1), 225) | (Some(2), 193)) {
             return Err(StoreError::InvalidIdentifier);
         }
-        tx.execute("INSERT INTO personal_server(singleton,origin,account_id,personal_vault_id,device_name,private_material,recovery_saved,recovery_confirmed) VALUES(1,?1,?2,?3,?4,?5,1,1)",
-            params![provenance.profile.origin,provenance.profile.account_id.as_bytes().as_slice(),provenance.profile.personal_vault_id.as_bytes().as_slice(),device_name,private.as_bytes()])?;
+        tx.execute("INSERT INTO personal_server(singleton,origin,account_id,personal_vault_id,device_name,private_material,recovery_saved,recovery_confirmed) VALUES(1,?1,?2,?3,?4,?5,?6,?6)",
+            params![provenance.profile.origin,provenance.profile.account_id.as_bytes().as_slice(),provenance.profile.personal_vault_id.as_bytes().as_slice(),device_name,private.as_bytes(),private.len()==225])?;
         tx.execute(
             "INSERT INTO device_key_pair(singleton,signing,kem,created_at) VALUES(1,?1,?2,?3)",
             params![
@@ -295,8 +298,11 @@ impl Store {
             if changed != 1 {
                 return Err(StoreError::AccountContext);
             }
-            let changed=tx.execute("DELETE FROM personal_registration WHERE phase=2 AND payload=?1 AND account_signature=?2 AND private_material=?3 AND confirmation=?4",
-                params![pending.payload.as_bytes(),pending.account_signature.as_slice(),pending.private_material.as_bytes(),pending.confirmation.as_ref().map(SecretVec::as_bytes)])?;
+            let mut changed = 0;
+            for table in ["personal_registration", "personal_password_login"] {
+                changed+=tx.execute(&format!("DELETE FROM {table} WHERE phase=2 AND payload=?1 AND account_signature=?2 AND private_material=?3 AND confirmation=?4"),
+                    params![pending.payload.as_bytes(),pending.account_signature.as_slice(),pending.private_material.as_bytes(),pending.confirmation.as_ref().map(SecretVec::as_bytes)])?;
+            }
             if changed != 1 {
                 return Err(StoreError::AccountContext);
             }

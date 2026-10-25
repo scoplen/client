@@ -582,7 +582,7 @@ fn invalid_inputs_and_process_wide_kdf_admission_never_persist_state() {
         );
         assert!(f.server.registration_status(&f.local, &f.store).unwrap().is_none());
     }
-    let _gate = PASSWORD_DERIVATION.lock().unwrap();
+    let _gate = PASSWORD_DERIVATION.try_acquire().unwrap();
     assert_eq!(
         PersonalServer::default().prepare_registration(
             &f.local,

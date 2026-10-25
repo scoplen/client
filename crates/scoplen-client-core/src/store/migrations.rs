@@ -447,4 +447,220 @@ pub(crate) const MIGRATIONS: &[&str] = &[
             AND signature=OLD.account_signature AND confirmation=OLD.confirmation))
     BEGIN SELECT RAISE(ABORT, 'Registration requires confirmed independent installation'); END;
     "#,
+    // 15: admit provenance fits its published bound; retain every immutable catalog binding.
+    r#"
+    DROP TRIGGER account_catalog_local;
+    DROP TRIGGER account_catalog_immutable;
+    DROP TRIGGER account_catalog_retained;
+    DROP TRIGGER account_binding_empty;
+    DROP TRIGGER account_binding_immutable;
+    DROP TRIGGER account_binding_retained;
+    DROP TRIGGER profile_selection_monotonic;
+    DROP TRIGGER profile_selection_insert;
+    DROP TRIGGER profile_selection_retained;
+    DROP TRIGGER account_profile_identity_insert;
+    DROP TRIGGER account_profile_identity_update;
+    DROP TRIGGER account_profile_identity_delete;
+    DROP TRIGGER account_profile_device_update;
+    DROP TRIGGER account_profile_device_insert;
+    DROP TRIGGER account_profile_device_delete;
+    DROP TRIGGER account_profile_keys_insert;
+    DROP TRIGGER account_profile_keys_update;
+    DROP TRIGGER account_profile_keys_delete;
+    DROP TRIGGER personal_registration_retained;
+    CREATE TABLE profile_catalog_v14 AS SELECT * FROM account_profiles;
+    CREATE TABLE profile_binding_v14 AS SELECT * FROM account_profile_binding;
+    CREATE TABLE profile_selection_v14 AS SELECT * FROM profile_selection;
+    DROP TABLE profile_selection;
+    DROP TABLE account_profiles;
+    DROP TABLE account_profile_binding;
+
+    CREATE TABLE account_profiles (
+        profile_id BLOB PRIMARY KEY CHECK (length(profile_id)=16),
+        origin TEXT NOT NULL CHECK (length(origin) BETWEEN 1 AND 2048),
+        account_id BLOB NOT NULL CHECK (length(account_id)=16),
+        vault_id BLOB NOT NULL CHECK (length(vault_id)=16),
+        device_id BLOB NOT NULL CHECK (length(device_id)=16),
+        operation_id BLOB NOT NULL UNIQUE CHECK (length(operation_id)=16),
+        payload BLOB NOT NULL CHECK (length(payload) BETWEEN 1 AND 4325376),
+        signature BLOB NOT NULL CHECK (length(signature)=64),
+        confirmation BLOB NOT NULL CHECK (length(confirmation) BETWEEN 1 AND 1024),
+        ready INTEGER NOT NULL DEFAULT 0 CHECK (ready IN (0,1)),
+        UNIQUE(origin,account_id)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE profile_selection (
+        singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+        generation INTEGER NOT NULL DEFAULT 0 CHECK (generation>=0),
+        profile_id BLOB REFERENCES account_profiles(profile_id)
+    ) STRICT;
+    CREATE TABLE account_profile_binding (
+        singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+        profile_id BLOB NOT NULL CHECK (length(profile_id)=16),
+        origin TEXT NOT NULL CHECK (length(origin) BETWEEN 1 AND 2048),
+        account_id BLOB NOT NULL CHECK (length(account_id)=16),
+        vault_id BLOB NOT NULL CHECK (length(vault_id)=16),
+        device_id BLOB NOT NULL CHECK (length(device_id)=16),
+        operation_id BLOB NOT NULL CHECK (length(operation_id)=16),
+        payload BLOB NOT NULL CHECK (length(payload) BETWEEN 1 AND 4325376),
+        signature BLOB NOT NULL CHECK (length(signature)=64),
+        confirmation BLOB NOT NULL CHECK (length(confirmation) BETWEEN 1 AND 1024)
+    ) STRICT;
+
+    INSERT INTO account_profiles SELECT * FROM profile_catalog_v14;
+    INSERT INTO account_profile_binding SELECT * FROM profile_binding_v14;
+    INSERT INTO profile_selection SELECT * FROM profile_selection_v14;
+    DROP TABLE profile_catalog_v14;
+    DROP TABLE profile_binding_v14;
+    DROP TABLE profile_selection_v14;
+    CREATE TRIGGER account_catalog_local BEFORE INSERT ON account_profiles
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) OR EXISTS (SELECT 1 FROM personal_server)
+        OR NEW.ready!=0 OR (SELECT count(*) FROM account_profiles)>=128
+        OR EXISTS (SELECT 1 FROM account_profiles WHERE profile_id=NEW.profile_id
+            OR operation_id=NEW.operation_id OR (origin=NEW.origin AND account_id=NEW.account_id))
+    BEGIN SELECT RAISE(ABORT, 'Account catalogs belong to Local'); END;
+    CREATE TRIGGER account_catalog_immutable BEFORE UPDATE ON account_profiles
+    WHEN NEW.profile_id IS NOT OLD.profile_id OR NEW.origin IS NOT OLD.origin
+        OR NEW.account_id IS NOT OLD.account_id OR NEW.vault_id IS NOT OLD.vault_id
+        OR NEW.device_id IS NOT OLD.device_id OR NEW.operation_id IS NOT OLD.operation_id
+        OR NEW.payload IS NOT OLD.payload OR NEW.signature IS NOT OLD.signature
+        OR NEW.confirmation IS NOT OLD.confirmation OR NEW.ready < OLD.ready
+    BEGIN SELECT RAISE(ABORT, 'Account catalog identity is immutable'); END;
+    CREATE TRIGGER account_catalog_retained BEFORE DELETE ON account_profiles
+    BEGIN SELECT RAISE(ABORT, 'Account profiles must be retained'); END;
+    CREATE TRIGGER account_binding_empty BEFORE INSERT ON account_profile_binding
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) OR EXISTS (SELECT 1 FROM account_profiles)
+        OR EXISTS (SELECT 1 FROM objects) OR EXISTS (SELECT 1 FROM personal_server)
+        OR EXISTS (SELECT 1 FROM device_key_pair) OR EXISTS (SELECT 1 FROM personal_registration)
+        OR EXISTS (SELECT 1 FROM personal_pairing) OR EXISTS (SELECT 1 FROM personal_pairing_device)
+        OR EXISTS (SELECT 1 FROM personal_pairing_attempts)
+        OR NOT EXISTS (SELECT 1 FROM device WHERE device_id=NEW.device_id AND clock=0)
+    BEGIN SELECT RAISE(ABORT, 'Account identity requires its own empty store'); END;
+    CREATE TRIGGER account_binding_immutable BEFORE UPDATE ON account_profile_binding
+    BEGIN SELECT RAISE(ABORT, 'Account profile binding is immutable'); END;
+    CREATE TRIGGER account_binding_retained BEFORE DELETE ON account_profile_binding
+    BEGIN SELECT RAISE(ABORT, 'Account profile binding must be retained'); END;
+    CREATE TRIGGER profile_selection_monotonic BEFORE UPDATE ON profile_selection
+    WHEN NEW.generation != OLD.generation+1
+    BEGIN SELECT RAISE(ABORT, 'Profile owner generation must advance'); END;
+    CREATE TRIGGER profile_selection_insert BEFORE INSERT ON profile_selection
+    WHEN EXISTS (SELECT 1 FROM profile_selection)
+    BEGIN SELECT RAISE(ABORT, 'Profile owner generation cannot be replaced'); END;
+    CREATE TRIGGER profile_selection_retained BEFORE DELETE ON profile_selection
+    BEGIN SELECT RAISE(ABORT, 'Profile owner generation must be retained'); END;
+    CREATE TRIGGER account_profile_identity_insert BEFORE INSERT ON personal_server
+    WHEN EXISTS (SELECT 1 FROM account_profiles) OR (EXISTS (SELECT 1 FROM account_profile_binding) AND
+        (EXISTS (SELECT 1 FROM personal_server) OR NOT EXISTS (
+            SELECT 1 FROM account_profile_binding WHERE origin=NEW.origin
+                AND account_id=NEW.account_id AND vault_id=NEW.personal_vault_id)))
+    BEGIN SELECT RAISE(ABORT, 'Account identity does not match its store'); END;
+    CREATE TRIGGER account_profile_identity_update BEFORE UPDATE ON personal_server
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) AND
+        (NEW.origin IS NOT OLD.origin OR NEW.account_id IS NOT OLD.account_id
+            OR NEW.personal_vault_id IS NOT OLD.personal_vault_id
+            OR NEW.private_material IS NOT OLD.private_material)
+    BEGIN SELECT RAISE(ABORT, 'Account profile identity cannot be replaced'); END;
+    CREATE TRIGGER account_profile_identity_delete BEFORE DELETE ON personal_server
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding)
+    BEGIN SELECT RAISE(ABORT, 'Account profile identity must be retained'); END;
+    CREATE TRIGGER account_profile_device_update BEFORE UPDATE OF device_id ON device
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) AND NEW.device_id IS NOT OLD.device_id
+    BEGIN SELECT RAISE(ABORT, 'Account profile Device cannot be replaced'); END;
+    CREATE TRIGGER account_profile_device_insert BEFORE INSERT ON device
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding)
+    BEGIN SELECT RAISE(ABORT, 'Account profile Device already exists'); END;
+    CREATE TRIGGER account_profile_device_delete BEFORE DELETE ON device
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding)
+    BEGIN SELECT RAISE(ABORT, 'Account profile Device must be retained'); END;
+    CREATE TRIGGER account_profile_keys_insert BEFORE INSERT ON device_key_pair
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) AND
+        (EXISTS (SELECT 1 FROM device_key_pair) OR NOT EXISTS (
+            SELECT 1 FROM personal_server WHERE substr(private_material,2,32)=NEW.signing
+                AND substr(private_material,34,32)=NEW.kem))
+    BEGIN SELECT RAISE(ABORT, 'Account profile keys already exist'); END;
+    CREATE TRIGGER account_profile_keys_update BEFORE UPDATE ON device_key_pair
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding) AND
+        (NEW.signing IS NOT OLD.signing OR NEW.kem IS NOT OLD.kem)
+    BEGIN SELECT RAISE(ABORT, 'Account profile keys cannot be replaced'); END;
+    CREATE TRIGGER account_profile_keys_delete BEFORE DELETE ON device_key_pair
+    WHEN EXISTS (SELECT 1 FROM account_profile_binding)
+    BEGIN SELECT RAISE(ABORT, 'Account profile keys must be retained'); END;
+    CREATE TRIGGER personal_registration_retained BEFORE DELETE ON personal_registration
+    WHEN OLD.phase != 0 AND NOT (OLD.phase=2 AND EXISTS (
+        SELECT 1 FROM account_profiles WHERE ready=1 AND payload=OLD.payload
+            AND signature=OLD.account_signature AND confirmation=OLD.confirmation))
+    BEGIN SELECT RAISE(ABORT, 'Registration requires confirmed independent installation'); END;
+    "#,
+    // 16: password login retains exact independent admission identity and terminal outcome.
+    r#"
+    CREATE TABLE personal_password_login (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+        payload BLOB NOT NULL CHECK(length(payload) BETWEEN 1 AND 4325376),
+        account_signature BLOB NOT NULL CHECK(length(account_signature)=64),
+        private_material BLOB NOT NULL CHECK(length(private_material)=193),
+        snapshot BLOB NOT NULL CHECK(length(snapshot) BETWEEN 1 AND 9437184),
+        token BLOB NOT NULL CHECK(length(token)=32),
+        expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms>0),
+        restart_required INTEGER NOT NULL DEFAULT 0 CHECK(restart_required IN(0,1)),
+        phase INTEGER NOT NULL DEFAULT 0 CHECK(phase IN(0,1,2)),
+        confirmation BLOB CHECK(confirmation IS NULL OR length(confirmation) BETWEEN 1 AND 1024),
+        dispatch_generation INTEGER NOT NULL DEFAULT 0 CHECK(dispatch_generation>=0),
+        unchanged_generation INTEGER NOT NULL DEFAULT 0 CHECK(unchanged_generation>=0 AND unchanged_generation<=dispatch_generation),
+        retry_not_before_ms INTEGER NOT NULL DEFAULT 0 CHECK(retry_not_before_ms>=0),
+        CHECK((phase=2)=(confirmation IS NOT NULL)),
+        CHECK((phase=0)=(dispatch_generation=0))
+    ) STRICT;
+    CREATE TRIGGER password_login_insert BEFORE INSERT ON personal_password_login
+    WHEN EXISTS(SELECT 1 FROM personal_password_login) OR EXISTS(SELECT 1 FROM personal_registration)
+        OR EXISTS(SELECT 1 FROM personal_server) OR EXISTS(SELECT 1 FROM personal_admission)
+        OR EXISTS(SELECT 1 FROM device_key_pair) OR EXISTS(SELECT 1 FROM account_profile_binding)
+        OR EXISTS(SELECT 1 FROM personal_pairing) OR EXISTS(SELECT 1 FROM personal_pairing_device)
+        OR EXISTS(SELECT 1 FROM personal_pairing_attempts)
+        OR NEW.phase!=0 OR NEW.dispatch_generation!=0 OR NEW.unchanged_generation!=0
+    BEGIN SELECT RAISE(ABORT,'Password login requires the original Local namespace'); END;
+    CREATE TRIGGER password_login_immutable BEFORE UPDATE ON personal_password_login
+    WHEN NEW.payload IS NOT OLD.payload OR NEW.account_signature IS NOT OLD.account_signature
+        OR NEW.private_material IS NOT OLD.private_material OR NEW.snapshot IS NOT OLD.snapshot
+        OR NEW.token IS NOT OLD.token OR NEW.expires_at_ms IS NOT OLD.expires_at_ms
+        OR NEW.restart_required<OLD.restart_required
+        OR (NEW.restart_required!=OLD.restart_required AND (NEW.phase!=1 OR NEW.unchanged_generation!=NEW.dispatch_generation))
+        OR NEW.phase<OLD.phase OR NEW.phase>OLD.phase+1
+        OR (OLD.confirmation IS NOT NULL AND NEW.confirmation IS NOT OLD.confirmation)
+        OR NEW.dispatch_generation<OLD.dispatch_generation
+        OR NEW.dispatch_generation-OLD.dispatch_generation>1
+        OR NEW.unchanged_generation<OLD.unchanged_generation
+        OR (NEW.dispatch_generation!=OLD.dispatch_generation AND
+            (NEW.phase!=1 OR OLD.phase=2 OR (OLD.phase=1 AND OLD.dispatch_generation!=OLD.unchanged_generation)))
+        OR (NEW.unchanged_generation!=OLD.unchanged_generation AND
+            (NEW.phase!=1 OR NEW.dispatch_generation!=OLD.dispatch_generation OR NEW.unchanged_generation!=NEW.dispatch_generation))
+        OR (NEW.retry_not_before_ms!=OLD.retry_not_before_ms AND NEW.unchanged_generation=OLD.unchanged_generation)
+    BEGIN SELECT RAISE(ABORT,'Password admission outcome cannot be replaced'); END;
+    CREATE TRIGGER password_login_retained BEFORE DELETE ON personal_password_login
+    WHEN NOT(OLD.phase=0 OR (OLD.phase=1 AND OLD.dispatch_generation=OLD.unchanged_generation)
+        OR (OLD.phase=2 AND EXISTS(SELECT 1 FROM account_profiles WHERE ready=1
+            AND payload=OLD.payload AND signature=OLD.account_signature AND confirmation=OLD.confirmation)))
+    BEGIN SELECT RAISE(ABORT,'Unknown device admission must retain its identity'); END;
+    CREATE TRIGGER password_login_blocks_binding BEFORE INSERT ON account_profile_binding
+    WHEN EXISTS(SELECT 1 FROM personal_password_login)
+    BEGIN SELECT RAISE(ABORT,'Password admission requires a separate Account store'); END;
+    CREATE TRIGGER password_login_blocks_registration BEFORE INSERT ON personal_registration
+    WHEN EXISTS(SELECT 1 FROM personal_password_login)
+    BEGIN SELECT RAISE(ABORT,'Password admission is pending'); END;
+    CREATE TRIGGER password_login_blocks_identity BEFORE INSERT ON personal_server
+    WHEN EXISTS(SELECT 1 FROM personal_password_login)
+    BEGIN SELECT RAISE(ABORT,'Password admission is not current authority'); END;
+    CREATE TRIGGER password_login_blocks_keys BEFORE INSERT ON device_key_pair
+    WHEN EXISTS(SELECT 1 FROM personal_password_login)
+    BEGIN SELECT RAISE(ABORT,'Password admission owns only its pending keys'); END;
+    CREATE TABLE password_login_bootstrap(
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+        snapshot BLOB NOT NULL CHECK(length(snapshot) BETWEEN 1 AND 9437184)
+    ) STRICT;
+    CREATE TRIGGER login_bootstrap_insert BEFORE INSERT ON password_login_bootstrap
+    WHEN EXISTS(SELECT 1 FROM password_login_bootstrap) OR NOT EXISTS(SELECT 1 FROM account_profile_binding)
+    BEGIN SELECT RAISE(ABORT,'Login bootstrap belongs to its independent Account store'); END;
+    CREATE TRIGGER login_bootstrap_immutable BEFORE UPDATE ON password_login_bootstrap
+    BEGIN SELECT RAISE(ABORT,'Original login bootstrap is immutable'); END;
+    CREATE TRIGGER login_bootstrap_retained BEFORE DELETE ON password_login_bootstrap
+    BEGIN SELECT RAISE(ABORT,'Original login bootstrap must be retained'); END;
+    "#,
 ];
