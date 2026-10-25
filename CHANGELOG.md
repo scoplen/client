@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added an opt-in Personal process-restart integration check using two real consumer processes,
+  the platform secret provider and one owned encrypted data directory. It waits for the genuine
+  access lifetime, refreshes directly after restart, verifies retained identity and refresh-family
+  bounds, and synchronizes a durable offline Host edit with signed history and acknowledged
+  progress. Desktop-window and platform acceptance remain separate checks.
+
 - Fixed terminal menu paste to honor bracketed-paste mode and normalize line endings.
   Pending clipboard reads cannot enter a replacement connection or offline view. Paste
   now waits for its bounded primary input write and reports failures without duplicate errors.

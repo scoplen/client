@@ -13,6 +13,8 @@ use crate::{personal_inventory::PersonalInventorySettings, store::LocalWrite};
 
 mod history;
 mod pairing;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+mod process_restart;
 mod three_device;
 mod trust;
 

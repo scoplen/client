@@ -58,7 +58,7 @@ In PowerShell, point to that existing private descriptor and run:
 ```powershell
 $env:SCOPLEN_LIVE_PERSONAL_DEPLOYMENT = 'C:/private/disposable-personal.json'
 $env:SCOPLEN_LIVE_PAIRING_MODE = 'png' # omit for the manual link/password path
-cargo test -p scoplen-client-core --lib --features live-server-integration live_server:: -- --test-threads=1
+cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::live_personal_enrollment_and_inventory_roundtrip -- --exact --test-threads=1
 ```
 
 The test rejects a non-loopback origin, bounds descriptor and certificate reads, and adds
@@ -123,6 +123,40 @@ The deployment must expose the production pairing endpoints. Repeating the test 
 fresh disposable deployment and invitation. Run it separately for SQLite and PostgreSQL.
 Remove the private descriptor, test server and its temporary data after verification. This
 does not establish native desktop picker interaction, camera capture, physical passkey or macOS acceptance.
+
+### Personal consumer process restart
+
+The separate Windows/macOS process check needs its own fresh disposable deployment and unused
+invitation, with the descriptor above. Run exactly this test; the enrollment scenario and this
+scenario cannot share a consumed invitation:
+
+```text
+cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::process_restart::live_personal_process_restart -- --exact --test-threads=1
+```
+
+The controller starts two actual consumer processes from the same test executable under its
+inherited native user context. Both use `LocalData::start` and the real platform secret provider
+with identical canonical data-directory bytes. The first creates the random database key and
+Personal identity, enrolls once, explicitly adopts and synchronizes one Host, then leaves an
+offline edit in the durable outbox and exits normally. A second Host stays local throughout.
+
+The controller waits until the original access lifetime is within the production 60-second
+refresh threshold. This normally takes about nine minutes and is bounded by a 15-minute wait
+and an absolute run deadline. It changes neither cached expiry nor server clocks, tokens or
+quotas. Each consumer has its own two-minute deadline. The second starts fresh local-data and
+transport instances; its first network action is an account query that uses the retained refresh
+credential directly. No new enrollment or challenge precedes it. Identity and signed key
+bindings, session generation, access rotation and the non-extending refresh-family deadline
+must match across the process boundary.
+
+The offline Host edit must survive exit without advancing either cursor, then upload, download
+and decrypt through production synchronization, with a confirmed durable ACK. A separate real
+history read verifies both signed versions. The unadopted Host remains unchanged. Phase
+receipts contain identifiers, expiry metadata and digests; credentials and keys never enter
+arguments, environment variables or output. Failed or uncertain operations are not retried.
+After both consumers exit, cleanup addresses only the uniquely owned native slot. Successful
+artifacts are removed; failed private artifacts remain for diagnosis. This is a core consumer
+process check, separate from native desktop-window, picker and physical-platform acceptance.
 
 ## Membership-only Personal key revisions
 
