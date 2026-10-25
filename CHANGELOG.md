@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Fixed terminal menu paste to honor bracketed-paste mode and normalize line endings.
+  Pending clipboard reads cannot enter a replacement connection or offline view. Paste
+  now waits for its bounded primary input write and reports failures without duplicate errors.
+  Broadcast target or mode changes invalidate pending paste reads and secondary copies,
+  preventing old input and errors from reaching newly selected targets.
+
 - Added upload pause and explicit continuation on the same live SSH transport. Private staging
   keeps exclusive write creation and admits a separate read handle before enabling Pause;
   an associated read refusal preserves ordinary upload. Pausing settles a bounded segment
