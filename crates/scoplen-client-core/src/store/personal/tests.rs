@@ -92,6 +92,48 @@ fn sync_snapshot_rolls_back_storage_failures_and_survives_reopen() {
 }
 
 #[test]
+fn damaged_sync_snapshots_preserve_each_payload_byte_limit() {
+    let (_dir, store, identity, access, snapshot) = fixture();
+    assert!(store.save_personal_sync(&identity, &access, None, &snapshot, 100).unwrap());
+    store.conn().pragma_update(None, "ignore_check_constraints", "ON").unwrap();
+    for column in ["session", "account_keys", "vault_keys"] {
+        for size in [0, 4_194_304, 4_194_305] {
+            store
+                .conn()
+                .execute(&format!("UPDATE personal_sync SET {column}=zeroblob(?1)"), [size])
+                .unwrap();
+            let result = store.personal_sync_record();
+            if size == 4_194_304 {
+                let record = result.unwrap().unwrap();
+                assert_eq!(record.generation, 1);
+                assert_eq!(
+                    match column {
+                        "session" => record.session.len(),
+                        "account_keys" => record.account_keys.len(),
+                        _ => record.vault_keys.len(),
+                    },
+                    size as usize
+                );
+            } else {
+                assert!(matches!(result, Err(StoreError::Sqlite(rusqlite::Error::InvalidQuery))));
+            }
+            assert_eq!(
+                store
+                    .conn()
+                    .query_row(
+                        &format!("SELECT length(CAST({column} AS BLOB)) FROM personal_sync"),
+                        [],
+                        |row| row.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                i64::from(size)
+            );
+        }
+        store.conn().execute(&format!("UPDATE personal_sync SET {column}=X'01'"), []).unwrap();
+    }
+}
+
+#[test]
 fn competing_store_cannot_publish_an_outdated_snapshot() {
     let (dir, store, identity, access, snapshot) = fixture();
     assert!(store.save_personal_sync(&identity, &access, None, &snapshot, 100).unwrap());

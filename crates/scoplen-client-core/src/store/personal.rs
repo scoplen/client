@@ -77,8 +77,12 @@ impl Store {
         Ok(self
             .conn()
             .query_row(
-                "SELECT generation, session, account_keys, vault_keys,
-                length(session), length(account_keys), length(vault_keys)
+                "SELECT generation,
+                CASE WHEN length(CAST(session AS BLOB)) BETWEEN 1 AND 4194304 THEN session END,
+                CASE WHEN length(CAST(account_keys AS BLOB)) BETWEEN 1 AND 4194304 THEN account_keys END,
+                CASE WHEN length(CAST(vault_keys AS BLOB)) BETWEEN 1 AND 4194304 THEN vault_keys END,
+                length(CAST(session AS BLOB)), length(CAST(account_keys AS BLOB)),
+                length(CAST(vault_keys AS BLOB))
              FROM personal_sync WHERE singleton = 1",
                 [],
                 |row| {

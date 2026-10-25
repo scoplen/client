@@ -254,8 +254,8 @@ async fn retained_non_recovery_device_accepts_newer_membership_with_all_old_evid
     material[0] = 2;
     let conn = database(&dir);
     conn.execute(
-        "UPDATE personal_server SET private_material=?1, enrollment_request=?2",
-        params![&*material, vec![0xffu8; 1_048_577]],
+        "UPDATE personal_server SET private_material=?1, enrollment_request=zeroblob(1048577)",
+        params![&*material],
     )
     .unwrap();
     let mut bundle =
