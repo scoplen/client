@@ -41,6 +41,38 @@ fn a_new_store_is_migrated_and_given_a_device_identity() {
 }
 
 #[test]
+fn registration_dispatch_migration_retains_legacy_prepared_unknown_and_committed_material() {
+    for phase in 0..=2 {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("local.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "key", format!("x'{}'", "01".repeat(32))).unwrap();
+        for migration in &MIGRATIONS[..12] {
+            conn.execute_batch(migration).unwrap();
+        }
+        conn.execute("INSERT INTO personal_registration(singleton,payload,account_signature,private_material,recovery_saved,recovery_confirmed,phase,confirmation) VALUES(1,?1,?2,?3,?4,?4,?5,?6)",
+            rusqlite::params![b"original".as_slice(),[7u8;64].as_slice(),[9u8;225].as_slice(),phase>0,phase,
+                (phase==2).then_some(b"historical".as_slice())]).unwrap();
+        conn.pragma_update(None, "user_version", 12).unwrap();
+        drop(conn);
+        let store = Store::open(&path, &key(1)).unwrap();
+        let record = store.pending_registration().unwrap().unwrap();
+        assert_eq!(record.phase, phase);
+        assert_eq!(record.dispatch_generation, i64::from(phase > 0));
+        assert_eq!(record.unchanged_generation, 0);
+        assert_eq!(record.retry_not_before_ms, 0);
+        assert_eq!(record.payload.as_bytes(), b"original");
+        assert_eq!(record.private_material.as_bytes(), [9; 225]);
+        assert_eq!(
+            record.confirmation.as_ref().map(|value| value.as_bytes()),
+            (phase == 2).then_some(b"historical".as_slice())
+        );
+        assert!(store.personal_record().unwrap().is_none());
+        assert!(store.device_key_pair().unwrap().is_none());
+    }
+}
+
+#[test]
 fn the_file_is_encrypted_and_only_the_right_key_opens_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("local.db");

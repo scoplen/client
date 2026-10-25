@@ -160,12 +160,12 @@ Fixtures construct public K-2 artifacts and signed K-4 updates without retired D
 Retained fresh-challenge, JWKS, invalid-response, refresh, account, sync, history and notification
 regressions remain applicable. This closure does not implement the future password sign-in UI.
 
-## Password registration preparation
+## Password registration preparation and HTTPS
 
 The public Rust preparation API uses the production D-127 profile, not a cheaper test KDF:
 
 ```text
-cargo test -p scoplen-client-core --lib personal_server::registration::tests -- --test-threads=1
+cargo test -p scoplen-client-core --lib personal_server::registration:: -- --test-threads=1
 ```
 
 The suite independently opens all generated wrappers, checks the real verifier/password
@@ -176,10 +176,17 @@ The suite serializes its genuine derivations, while production uses a process-wi
 slot. Recovery output on Windows inherits the chosen directory ACL; Unix asserts mode 0600.
 No tokens, admission anchors or usable sync state may result from preparation or historical
 confirmation. A request handed to a sender is conservatively unknown even if the caller drops
-it without transmitting; the current slice offers only exact confirmation afterward.
-These tests perform no Account HTTP exchange or UI/native-picker acceptance. Real registration,
-password login, isolated Account-profile installation, trusted unchanged-failure retries and
-macOS/native acceptance remain separate outcomes. No bindings regeneration is required because
+it without transmitting. A trusted unchanged Submit result instead requires the explicit Retry
+action with fresh challenge/proof; its durable generation and rate deadline survive restart.
+
+The independent loopback TLS 1.3/H2 peer verifies real shared request codecs and both signatures,
+fresh challenge/proof binding, exact business bytes and native credential-free headers. Tests
+cover historical success, dropped replies, restart/exact confirmation, trusted unchanged failures,
+explicit retries, missing receipts, malformed/oversized/duplicate/inexact responses, cache/media
+metadata, redirects, untrusted TLS, timeout, cancellation, future drop, profile replacement and
+failed result transactions. These checks do not run production-server or native-picker acceptance.
+Full desktop registration, password login, isolated Account-profile installation and macOS/native
+acceptance remain separate outcomes. No bindings regeneration is required because
 this Rust-only surface adds no Tauri command or frontend type.
 
 ## Native Personal notification fault tests

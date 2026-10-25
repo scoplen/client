@@ -305,4 +305,34 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     WHEN EXISTS (SELECT 1 FROM personal_registration)
     BEGIN SELECT RAISE(ABORT, 'Pending registration keys belong only to its operation'); END;
     "#,
+    // 13: retain dispatch evidence while allowing only explicitly confirmed unchanged retries.
+    r#"
+    ALTER TABLE personal_registration ADD COLUMN dispatch_generation INTEGER NOT NULL DEFAULT 0
+        CHECK (dispatch_generation >= 0);
+    ALTER TABLE personal_registration ADD COLUMN unchanged_generation INTEGER NOT NULL DEFAULT 0
+        CHECK (unchanged_generation >= 0);
+    ALTER TABLE personal_registration ADD COLUMN retry_not_before_ms INTEGER NOT NULL DEFAULT 0
+        CHECK (retry_not_before_ms >= 0);
+    UPDATE personal_registration SET dispatch_generation=1 WHERE phase>0;
+    CREATE TRIGGER personal_registration_attempt_insert BEFORE INSERT ON personal_registration
+    WHEN NEW.phase != 0 OR NEW.dispatch_generation != 0 OR NEW.unchanged_generation != 0
+        OR NEW.retry_not_before_ms != 0
+    BEGIN SELECT RAISE(ABORT, 'Registration must begin without dispatch evidence'); END;
+    CREATE TRIGGER personal_registration_attempt_monotonic BEFORE UPDATE ON personal_registration
+    WHEN NEW.dispatch_generation < OLD.dispatch_generation
+        OR NEW.dispatch_generation - OLD.dispatch_generation > 1
+        OR NEW.unchanged_generation < OLD.unchanged_generation
+        OR NEW.unchanged_generation > NEW.dispatch_generation
+        OR (NEW.dispatch_generation != OLD.dispatch_generation AND (
+            NEW.phase != 1 OR OLD.phase=2 OR
+            (OLD.phase=1 AND OLD.unchanged_generation != OLD.dispatch_generation)))
+        OR (NEW.unchanged_generation != OLD.unchanged_generation AND (
+            NEW.phase != 1 OR NEW.dispatch_generation != OLD.dispatch_generation OR
+            NEW.unchanged_generation != NEW.dispatch_generation))
+        OR (NEW.retry_not_before_ms != OLD.retry_not_before_ms AND
+            NEW.unchanged_generation=OLD.unchanged_generation)
+        OR (NEW.phase=0 AND NEW.dispatch_generation != 0)
+        OR (NEW.phase>0 AND NEW.dispatch_generation=0)
+    BEGIN SELECT RAISE(ABORT, 'Registration dispatch evidence cannot be replaced'); END;
+    "#,
 ];

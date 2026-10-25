@@ -4,11 +4,19 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added a Rust-owned D-128 registration HTTPS driver with explicit Submit, Confirm and Retry
+  actions, verified TLS 1.3/H2, bounded shared codecs/problems and typed cancellation/failures.
+  Every proto dependency uses published `183cc5c`, including its shared strict JSON problem reader.
+  Durable dispatch evidence permits a fresh explicit retry only after a trusted unchanged
+  Submit result; lost responses, restart and absent receipts preserve exact unknown state.
+  Success records historical commit only. Desktop UI, isolated Account-profile installation,
+  password login and full admission remain incomplete.
+
 - Added Rust-only password registration preparation with the real D-127 derivation, independent
   software Device keys and locally opened password/Device/recovery/root/Personal wrappers.
   A separate SQLCipher pending record retains exact signed business bytes, mandatory recovery
   save/confirmation and conservative unknown handoff state through restart. Exact receipt
-  confirmation records historical outcome only. HTTP, desktop UI, isolated Account-profile
+  confirmation records historical outcome only. Desktop UI, isolated Account-profile
   installation, password login and full admission remain incomplete; admitted devices retain
   their existing authentication and sync paths.
 

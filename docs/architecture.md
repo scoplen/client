@@ -194,15 +194,30 @@ keeping the saved key. Both markers and the exact captured operation are require
 `registration_challenge` chooses `submit` only for a never-dispatched, recovery-confirmed
 preparation. `registration_request` signs a fresh shared D-128 proof and FULL/IMMEDIATE-commits
 the unknown marker before returning any Submit request to a caller. From that point cancellation,
-lost responses and restart preserve the original signed bytes and keys and select only `confirm`.
-There is no absent-receipt, denial or changed-false fallback to a mutation in this slice. Verified
-pre-transmission or unchanged-failure retry handling belongs to the later trusted HTTP driver.
+lost responses and restart preserve the original signed bytes and keys and select only `confirm`
+unless a trusted result independently establishes that this exact Submit made no business change.
 Exact bounded committed confirmation binds kind, operation, digest, all ids and revision using
 the shared validator and stores only historical outcome. Neither it nor a JWT installs neutral
 admission, ordinary tokens, sync/upload authority or an active profile. Pending records cannot
 enter retained-device revalidation. All local actions fence the original open-store generation
 and operation id; immutable pending business bytes and monotonic state also have SQL constraints.
-No registration/password HTTP driver, Tauri IPC or replacement Settings UI exists yet.
+`exchange_registration` owns one explicit Submit, Confirm or Retry action in Rust. Its native
+HTTP path uses verified TLS 1.3/H2, no proxy/cookies/redirects/automatic retries, bounded shared
+codecs, exact cache-prevention/media metadata and shared strict problem decoding. Typed errors
+never expose server detail, keys, request bodies or network diagnostics. Both exchanges are
+independently bounded by the transport deadline. Cancellation or profile replacement stops I/O;
+captured store and exact-record comparisons fence key use, dispatch and result transactions.
+Dropping the future after Submit handoff preserves uncertainty.
+
+Migration 13 adds monotonic dispatch and unchanged generations plus a durable retry deadline.
+The original phase, business bytes and keys never reset. Only a complete trusted Submit problem
+with the exact registered status/code/changed/retryable profile may mark that dispatch unchanged.
+The separate Retry action then obtains a fresh Submit challenge/proof, increments dispatch and
+retains the older unchanged evidence. A timeout, TLS/connect failure, cancellation, redirect,
+malformed or unknown problem never earns retry permission after handoff. A Confirm response
+cannot mark the original Submit unchanged, even when it reports no business change or no receipt.
+Attempted preparations remain retained; changing usernames or discarding their keys is outside
+this boundary. No password-login driver, Tauri IPC or replacement Settings UI exists yet.
 
 Migration 8 adds a monotonically increasing authentication generation, the verified scope ceiling,
 single-use refresh claim and an optional Retry-After deadline, alongside the saved absolute family
