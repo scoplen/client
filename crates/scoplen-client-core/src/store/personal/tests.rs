@@ -5,7 +5,6 @@ use scoplen_crypto::SymmetricKey;
 use super::*;
 
 mod auth;
-mod pairing;
 
 fn fixture() -> (tempfile::TempDir, Store, PersonalRecord, SecretVec, PersonalSyncRecord) {
     let dir = tempfile::tempdir().unwrap();
@@ -28,20 +27,21 @@ fn fixture() -> (tempfile::TempDir, Store, PersonalRecord, SecretVec, PersonalSy
         refresh_available: false,
         session_established: false,
         refresh_retry_at: None,
+        admitted: false,
     };
     store.insert_personal_record(&identity).unwrap();
-    store.save_personal_recovery().unwrap();
-    store.confirm_personal_recovery().unwrap();
-    store.claim_personal_enrollment().unwrap();
+
     let access = SecretVec::new(b"access".to_vec());
     store.save_personal_tokens(access.as_bytes(), b"refresh", 1_000, 2_000).unwrap();
+    let current = store.personal_record().unwrap().unwrap();
+    store.save_personal_admission(&current, b"store-fixture", None, None).unwrap();
     let snapshot = PersonalSyncRecord {
         generation: 0,
         session: SecretVec::new(vec![3]),
         account_keys: SecretVec::new(vec![4]),
         vault_keys: SecretVec::new(vec![5]),
     };
-    (dir, store, identity, access, snapshot)
+    (dir, store, current, access, snapshot)
 }
 
 #[test]
@@ -54,18 +54,18 @@ fn sync_snapshot_cas_rejects_stale_identity_credentials_generation_and_device() 
     store.save_personal_tokens(b"replacement", b"refresh", 1_000, 2_000).unwrap();
     assert!(!store.save_personal_sync(&identity, &access, Some(1), &snapshot, 100).unwrap());
     store.save_personal_tokens(access.as_bytes(), b"refresh", 1_000, 2_000).unwrap();
+    assert!(!store.save_personal_sync(&identity, &access, Some(1), &snapshot, 100).unwrap());
+    let identity = store.personal_record().unwrap().unwrap();
     store.conn().execute("UPDATE personal_server SET enrollment_request = X'00'", []).unwrap();
-    assert!(!store.save_personal_sync(&identity, &access, Some(1), &snapshot, 100).unwrap());
-    store
-        .conn()
-        .execute(
-            "UPDATE personal_server SET enrollment_request = ?1",
-            params![identity.enrollment_request.as_ref().unwrap().as_bytes()],
-        )
-        .unwrap();
-    store.conn().execute("UPDATE device_key_pair SET signing = X'00'", []).unwrap();
-    assert!(!store.save_personal_sync(&identity, &access, Some(1), &snapshot, 100).unwrap());
-    assert_eq!(store.personal_sync_record().unwrap().unwrap().generation, 1);
+    assert!(store.save_personal_sync(&identity, &access, Some(1), &snapshot, 100).unwrap());
+    assert!(store.conn().execute("UPDATE device_key_pair SET signing = X'00'", []).is_err());
+    assert!(
+        store
+            .conn()
+            .execute("UPDATE personal_server SET origin = 'https://other.example'", [])
+            .is_err()
+    );
+    assert_eq!(store.personal_sync_record().unwrap().unwrap().generation, 2);
 }
 
 #[test]

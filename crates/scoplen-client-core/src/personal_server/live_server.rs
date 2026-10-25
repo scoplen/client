@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Explicit opt-in checks against a disposable deployment, without server source dependencies.
 
-use std::{io::Read as _, path::PathBuf, time::Duration};
+use std::{
+    io::Read as _,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use rustls::pki_types::pem::PemObject as _;
 use scoplen_crypto::SymmetricKey;
@@ -11,8 +15,8 @@ use serde::Deserialize;
 use super::*;
 use crate::{personal_inventory::PersonalInventorySettings, store::LocalWrite};
 
+mod confirmed;
 mod history;
-mod pairing;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod process_restart;
 mod three_device;
@@ -23,8 +27,58 @@ mod trust;
 struct Deployment {
     disposable: bool,
     origin: String,
-    invitation_url: String,
+    profiles: [ConfirmedProfile; 3],
     ca_certificate: PathBuf,
+}
+
+impl Deployment {
+    fn verify_profiles(&self) {
+        let mut owner = None;
+        let mut devices = std::collections::HashSet::new();
+        let mut paths = std::collections::HashSet::new();
+        for profile in &self.profiles {
+            assert!(paths.insert(profile.store.canonicalize().expect("confirmed profile path")));
+            let store = profile.open();
+            let identity = record(&store).expect("verified profile identity");
+            assert_eq!(identity.origin, self.origin);
+            let context = (identity.account_id, identity.personal_vault_id);
+            assert_eq!(*owner.get_or_insert(context), context, "profiles must share one Account");
+            assert!(devices.insert(store.device_id()), "profiles must use distinct devices");
+            let inventory = PersonalInventorySettings::default().status(&store).unwrap();
+            assert!(
+                inventory.objects.is_empty()
+                    && inventory.backups.is_empty()
+                    && inventory.recovery.is_empty(),
+                "provide unused disposable inventory"
+            );
+            assert_eq!(inventory.pending, 0);
+            assert_eq!(inventory.applied_cursor, "0");
+            assert_eq!(inventory.acknowledged_cursor, "0");
+        }
+    }
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfirmedProfile {
+    store: PathBuf,
+    key_file: PathBuf,
+}
+
+impl ConfirmedProfile {
+    fn key(&self) -> SymmetricKey {
+        SymmetricKey::from_slice(&Zeroizing::new(bounded_file(&self.key_file, 32)))
+            .expect("the disposable profile key has exactly 32 bytes")
+    }
+
+    fn open(&self) -> Arc<Store> {
+        let store = Arc::new(
+            Store::open(&self.store, &self.key()).expect("open disposable confirmed profile"),
+        );
+        let identity = record(&store).expect("locally verify existing confirmed admission");
+        assert!(identity.admitted);
+        store
+    }
 }
 
 fn bounded_file(path: &Path, limit: u64) -> Vec<u8> {
@@ -75,10 +129,11 @@ async fn rotate_live_session(
     });
     assert_eq!(account.account_id, before.account_id.to_string());
     assert_eq!(account.email, None);
-    assert_eq!(account.devices.len(), 1);
-    assert_eq!(account.devices[0].id, store.device_id().to_string());
-    assert_eq!(account.devices[0].name, "Live integration device");
-    assert!(account.devices[0].current);
+    assert_eq!(account.devices.len(), 3);
+    let current =
+        account.devices.iter().find(|device| device.current).expect("current signed device");
+    assert_eq!(current.id, store.device_id().to_string());
+    assert_eq!(current.name, before.device_name);
     let after = record(store).expect("durable rotated session");
     assert_eq!(after.account_id, before.account_id);
     assert_eq!(after.personal_vault_id, before.personal_vault_id);
@@ -99,14 +154,14 @@ async fn rotate_live_session(
 }
 
 #[tokio::test]
-async fn live_personal_enrollment_and_inventory_roundtrip() {
+async fn live_confirmed_personal_inventory_roundtrip() {
     let artifact = std::env::var_os("SCOPLEN_LIVE_PERSONAL_DEPLOYMENT").expect(
         "set SCOPLEN_LIVE_PERSONAL_DEPLOYMENT to a private disposable-deployment JSON file",
     );
     let bytes = Zeroizing::new(bounded_file(Path::new(&artifact), 8_192));
-    let mut deployment: Deployment =
+    let deployment: Deployment =
         serde_json::from_slice(&bytes).expect("valid private deployment descriptor");
-    assert!(deployment.disposable, "this check consumes an invitation on a disposable server");
+    assert!(deployment.disposable, "this check mutates only disposable confirmed profiles");
     assert!(
         deployment
             .origin
@@ -115,32 +170,23 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
             .is_some_and(|port| port != 0),
         "the live check is restricted to a loopback HTTPS deployment"
     );
+    deployment.verify_profiles();
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
     let manager = Arc::new(PersonalServer {
         operation: Mutex::new(()),
         transport: Ok(trusted_transport(&ca)),
-        pairing: Default::default(),
     });
-    let directory = tempfile::tempdir().expect("private local store directory");
-    let path = directory.path().join("personal.sqlite");
-    let key = SymmetricKey::new([27; 32]);
-    let store = Arc::new(Store::open(&path, &key).expect("encrypted local store"));
-    let invitation = Zeroizing::new(std::mem::take(&mut deployment.invitation_url));
-    let ready = manager
-        .prepare(store.clone(), invitation, "Live integration device".into())
-        .await
-        .expect("prepare real first-device key hierarchy");
-    assert_eq!(ready.origin.as_deref(), Some(deployment.origin.as_str()));
-    assert_eq!(ready.phase, PersonalServerPhase::RecoveryRequired);
-    manager
-        .save_recovery_key(store.clone(), directory.path().join("recovery.txt"))
-        .await
-        .expect("export native recovery file");
-    manager.confirm_recovery_key(store.clone()).await.expect("confirm recovery export");
-    let authenticated = manager
-        .submit(store.clone())
-        .await
-        .expect("enroll through public HTTPS and authenticate with retained device identity");
+    let profile = &deployment.profiles[0];
+    let path = &profile.store;
+    let key = profile.key();
+    let store = profile.open();
+    assert_eq!(record(&store).unwrap().origin, deployment.origin);
+    assert!(
+        store.list(ObjectType::HOST).unwrap().is_empty(),
+        "provide unused disposable inventory"
+    );
+    let authenticated =
+        manager.authenticate(store.clone()).await.expect("authenticate existing confirmed device");
     assert_eq!(authenticated.phase, PersonalServerPhase::Authenticated);
     let bootstrap = manager
         .bootstrap_sync(store.clone())
@@ -235,7 +281,7 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
     assert_eq!(saved.applied_cursor, saved.acknowledged_cursor);
 
     drop(store);
-    let reopened = Arc::new(Store::open(&path, &key).expect("reopen encrypted local store"));
+    let reopened = Arc::new(Store::open(path, &key).expect("reopen encrypted local store"));
     let offline = PersonalServer::default();
     assert!(offline.load_sync_bootstrap(&reopened).expect("offline key revalidation").is_some());
     assert_eq!(
@@ -260,13 +306,13 @@ async fn live_personal_enrollment_and_inventory_roundtrip() {
     );
     assert_eq!(reopened.list(ObjectType::HOST).expect("local host copies").len(), 2);
     let (paired, unshared) =
-        pairing::verify(&deployment, &manager, reopened.clone(), object.id).await;
+        confirmed::verify(&deployment, &manager, reopened.clone(), object.id).await;
     let paired_host = reopened.get(object.id).expect("original-device synchronized host");
     let historical_copy = history::verify(&manager, reopened.clone(), &object).await;
     let (paired_account, converged, cursor, trust) =
         three_device::verify(&deployment, &manager, reopened.clone(), paired).await;
     drop(reopened);
-    let reopened = Store::open(&path, &key).expect("reopen original paired-account device");
+    let reopened = Store::open(path, &key).expect("reopen original paired-account device");
     trust::assert_offline(&reopened, &trust);
     assert!(
         offline.load_sync_bootstrap(&reopened).expect("original-device offline keys").is_some()

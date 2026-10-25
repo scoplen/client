@@ -207,4 +207,58 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         side INTEGER NOT NULL CHECK (side IN (1, 2))
     ) STRICT, WITHOUT ROWID;
     "#,
+    // 11: locally verified admission is independent of retired enrollment ceremonies.
+    r#"
+    CREATE TABLE personal_admission (
+        singleton INTEGER PRIMARY KEY REFERENCES personal_server(singleton) CHECK (singleton = 1),
+        origin TEXT NOT NULL CHECK (length(origin) BETWEEN 1 AND 2048),
+        account_id BLOB NOT NULL CHECK (length(account_id) = 16),
+        personal_vault_id BLOB NOT NULL CHECK (length(personal_vault_id) = 16),
+        device_id BLOB NOT NULL CHECK (length(device_id) = 16),
+        anchors BLOB NOT NULL CHECK (length(anchors) BETWEEN 1 AND 524288)
+    ) STRICT;
+    CREATE TRIGGER personal_admission_binding BEFORE INSERT ON personal_admission
+    WHEN NOT EXISTS (SELECT 1 FROM personal_server p, device d WHERE p.singleton=1
+        AND d.singleton=1 AND p.origin=NEW.origin AND p.account_id=NEW.account_id
+        AND p.personal_vault_id=NEW.personal_vault_id AND d.device_id=NEW.device_id)
+    BEGIN SELECT RAISE(ABORT, 'Personal account context mismatch'); END;
+    CREATE TRIGGER personal_admission_immutable BEFORE UPDATE ON personal_admission
+    BEGIN SELECT RAISE(ABORT, 'Personal admission is immutable'); END;
+    CREATE TRIGGER personal_admission_no_replace BEFORE INSERT ON personal_admission
+    WHEN EXISTS (SELECT 1 FROM personal_admission)
+    BEGIN SELECT RAISE(ABORT, 'Personal admission already belongs to this profile'); END;
+    CREATE TRIGGER personal_admission_retained BEFORE DELETE ON personal_admission
+    BEGIN SELECT RAISE(ABORT, 'Personal admission belongs to this profile'); END;
+    CREATE TRIGGER personal_identity_immutable
+    BEFORE UPDATE OF origin, account_id, personal_vault_id, private_material ON personal_server
+    WHEN EXISTS (SELECT 1 FROM personal_admission) AND
+        (NEW.origin IS NOT OLD.origin OR NEW.account_id IS NOT OLD.account_id
+        OR NEW.personal_vault_id IS NOT OLD.personal_vault_id
+        OR NEW.private_material IS NOT OLD.private_material)
+    BEGIN SELECT RAISE(ABORT, 'Personal account context is immutable'); END;
+    CREATE TRIGGER personal_identity_no_replace BEFORE INSERT ON personal_server
+    WHEN EXISTS (SELECT 1 FROM personal_admission)
+    BEGIN SELECT RAISE(ABORT, 'Personal account already belongs to this profile'); END;
+    CREATE TRIGGER personal_device_immutable BEFORE UPDATE OF device_id ON device
+    WHEN EXISTS (SELECT 1 FROM personal_admission) AND NEW.device_id IS NOT OLD.device_id
+    BEGIN SELECT RAISE(ABORT, 'Personal device context is immutable'); END;
+    CREATE TRIGGER personal_device_no_replace BEFORE INSERT ON device
+    WHEN EXISTS (SELECT 1 FROM personal_admission) AND
+        NEW.device_id IS NOT (SELECT device_id FROM personal_admission WHERE singleton=1)
+    BEGIN SELECT RAISE(ABORT, 'Personal device already belongs to this profile'); END;
+    CREATE TRIGGER personal_device_retained BEFORE DELETE ON device
+    WHEN EXISTS (SELECT 1 FROM personal_admission)
+    BEGIN SELECT RAISE(ABORT, 'Personal device belongs to this profile'); END;
+    CREATE TRIGGER personal_device_keys_immutable BEFORE UPDATE ON device_key_pair
+    WHEN EXISTS (SELECT 1 FROM personal_admission) AND
+        (NEW.signing IS NOT OLD.signing OR NEW.kem IS NOT OLD.kem)
+    BEGIN SELECT RAISE(ABORT, 'Personal device keys are immutable'); END;
+    CREATE TRIGGER personal_device_keys_no_replace BEFORE INSERT ON device_key_pair
+    WHEN EXISTS (SELECT 1 FROM personal_admission) AND NOT EXISTS (
+        SELECT 1 FROM device_key_pair WHERE singleton=1 AND signing=NEW.signing AND kem=NEW.kem)
+    BEGIN SELECT RAISE(ABORT, 'Personal device keys already belong to this profile'); END;
+    CREATE TRIGGER personal_device_keys_retained BEFORE DELETE ON device_key_pair
+    WHEN EXISTS (SELECT 1 FROM personal_admission)
+    BEGIN SELECT RAISE(ABORT, 'Personal device keys belong to this profile'); END;
+    "#,
 ];

@@ -21,10 +21,11 @@ impl PersonalTrustDevices {
         let Some(identity) = store.personal_record().map_err(storage)? else {
             return Ok(None);
         };
-        if !identity.session_established {
-            return Ok(None);
-        }
-        let retained = RetainedAccount::load(store, &identity)?;
+        let retained = match RetainedAccount::load(store, &identity) {
+            Ok(retained) => retained,
+            Err(PersonalServerError::RetiredEntry) => return Ok(None),
+            Err(error) => return Err(error),
+        };
         let mut devices = Self {
             account: identity.account_id,
             certificates: [(store.device_id(), retained.certificate)].into_iter().collect(),

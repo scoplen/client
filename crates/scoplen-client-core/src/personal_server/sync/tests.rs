@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use scoplen_api::{
     auth::{AuthJwk, AuthJwks},
@@ -21,7 +20,7 @@ use tokio_rustls::TlsAcceptor;
 use zeroize::Zeroizing;
 
 use super::*;
-use crate::personal_server::{Invitation, transport::Transport};
+use crate::personal_server::transport::Transport;
 
 #[derive(Clone)]
 struct Reply {
@@ -54,7 +53,6 @@ struct PeerState {
     errors: Vec<String>,
     inventory: Option<InventoryPeer>,
     refresh: Option<RefreshPeer>,
-    pairing: Option<pairing::PairingPeer>,
     pause: Option<(String, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     notification: Option<notification::NotificationPeer>,
 }
@@ -146,11 +144,7 @@ impl Peer {
                 .with_no_client_auth();
         tls.alpn_protocols = vec![b"h2".to_vec()];
         transport.notification_tls = Arc::new(tls);
-        PersonalServer {
-            operation: tokio::sync::Mutex::new(()),
-            transport: Ok(transport),
-            pairing: Default::default(),
-        }
+        PersonalServer { operation: tokio::sync::Mutex::new(()), transport: Ok(transport) }
     }
 
     fn reply(&self, path: &str, reply: Reply) {
@@ -159,22 +153,8 @@ impl Peer {
 
     async fn prepare(&self, store: &Arc<Store>) -> PersonalServer {
         let manager = self.manager();
-        manager
-            .prepare(
-                store.clone(),
-                Zeroizing::new(format!(
-                    "{}/invite#token={}",
-                    self.origin,
-                    URL_SAFE_NO_PAD.encode([42; 32])
-                )),
-                "Desktop".into(),
-            )
-            .await
-            .unwrap();
-        store.save_personal_recovery().unwrap();
-        store.confirm_personal_recovery().unwrap();
-        store.claim_personal_enrollment().unwrap();
-        let pending = record(store).unwrap();
+        crate::personal_server::tests::legacy_profile(store, &self.origin, true);
+        let pending = store.personal_record().unwrap().unwrap();
         let enrollment = PersonalEnrollmentRequest::from_json(
             pending.enrollment_request.as_ref().unwrap().as_bytes(),
         )
@@ -247,6 +227,11 @@ impl Peer {
             },
         );
         self.install_token(store, |_| {}, None);
+        crate::personal_server::retained::RetainedAccount::load(
+            store,
+            &store.personal_record().unwrap().unwrap(),
+        )
+        .unwrap();
         manager
     }
 
@@ -256,7 +241,7 @@ impl Peer {
         mutate: impl FnOnce(&mut DeviceAccessTokenClaims),
         foreign_device_key: Option<Vec<u8>>,
     ) {
-        let pending = record(store).unwrap();
+        let pending = store.personal_record().unwrap().unwrap();
         let secrets = identity::Secrets::parse(&pending.private_material).unwrap();
         let signing = P256SigningKey::from_bytes(secrets.signing()).unwrap();
         let key = foreign_device_key.unwrap_or_else(|| signing.public_key_sec1());
@@ -322,15 +307,7 @@ async fn answer(
         {
             return Err("unexpected credential transport".into());
         }
-        if state.pairing.is_some()
-            && (path.starts_with("/api/v1/auth/pairings")
-                || matches!(path, "/api/v1/auth/challenge" | "/api/v1/auth/device"))
         {
-            let mut pairing = state.pairing.take().unwrap();
-            let reply = pairing.answer(&request, &body, &mut state, origin);
-            state.pairing = Some(pairing);
-            reply?
-        } else {
             if path.starts_with("/sync/") || path.starts_with("/api/v1/accounts/me") {
                 let expected = state.expected.as_ref().ok_or("missing fixture identity")?;
                 let token = request
@@ -735,17 +712,9 @@ async fn malformed_cached_redirected_overbudget_and_stalled_responses_are_bounde
 fn retained_identity_and_cached_snapshot_are_revalidated() {
     let dir = tempfile::tempdir().unwrap();
     let store = local(&dir);
-    let pending = identity::prepare(
-        &store,
-        Invitation::parse(&format!(
-            "https://sync.example/invite#token={}",
-            URL_SAFE_NO_PAD.encode([42; 32])
-        ))
-        .unwrap(),
-        "Desktop".into(),
-    )
-    .unwrap();
-    store.insert_personal_record(&pending).unwrap();
+    let pending =
+        crate::personal_server::tests::legacy_profile(&store, "https://sync.example", true);
+    PersonalServer::default().status(&store).unwrap();
     let snapshot = PersonalSyncRecord {
         generation: 1,
         session: SecretVec::new(vec![0xff]),
@@ -761,17 +730,63 @@ fn retained_identity_and_cached_snapshot_are_revalidated() {
             signing: SecretVec::new(vec![44; 32]),
             kem: SecretVec::new(vec![44; 32]),
         })
-        .unwrap();
+        .unwrap_err();
     assert!(matches!(
         validate(&store, &pending, &snapshot, None),
-        Err(PersonalSyncError::Personal(PersonalServerError::Identity))
+        Err(PersonalSyncError::InvalidResponse)
     ));
 }
 
 mod history;
 mod inventory;
 mod notification;
-mod pairing;
+
 mod refresh;
 use inventory::InventoryPeer;
 use refresh::RefreshPeer;
+
+#[tokio::test]
+async fn a_complete_verified_historical_bootstrap_is_independent_confirmation_evidence() {
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let source = local(&dir);
+    let manager = peer.prepare(&source).await;
+    manager.bootstrap_sync(source.clone()).await.unwrap();
+    let identity = source.personal_record().unwrap().unwrap();
+    let snapshot = source.personal_sync_record().unwrap().unwrap();
+    for valid in [true, false] {
+        let historical = tempfile::tempdir().unwrap();
+        let original = local(&historical);
+        crate::personal_server::tests::database(&historical)
+            .execute("UPDATE device SET device_id=?1", [source.device_id().as_bytes().as_slice()])
+            .unwrap();
+        drop(original);
+        let restored = local(&historical);
+        restored.insert_personal_record(&identity).unwrap();
+        crate::personal_server::tests::database(&historical)
+            .execute(
+                "INSERT INTO personal_sync VALUES (1,1,?1,?2,?3)",
+                rusqlite::params![
+                    if valid { snapshot.session.as_bytes() } else { &[0xff] },
+                    snapshot.account_keys.as_bytes(),
+                    snapshot.vault_keys.as_bytes()
+                ],
+            )
+            .unwrap();
+        assert!(!restored.personal_record().unwrap().unwrap().session_established);
+        let result = PersonalServer::default().load_sync_bootstrap(&restored);
+        if valid {
+            assert!(result.unwrap().is_some());
+            assert!(restored.personal_record().unwrap().unwrap().admitted);
+        } else {
+            assert!(matches!(
+                result,
+                Err(PersonalSyncError::Personal(PersonalServerError::AdmissionUnverified))
+            ));
+            assert!(!restored.personal_record().unwrap().unwrap().admitted);
+            assert!(restored.personal_sync_record().unwrap().unwrap().session.as_bytes() == [0xff]);
+        }
+        assert!(!restored.personal_record().unwrap().unwrap().session_established);
+    }
+    peer.assert_healthy();
+}

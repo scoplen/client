@@ -26,6 +26,9 @@ impl Store {
         access: &SecretVec,
         now: u64,
     ) -> Result<bool, StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Ok(false);
+        }
         Ok(self.conn().query_row(
             "SELECT EXISTS (SELECT 1 FROM personal_server WHERE singleton = 1
             AND auth_generation = ?1 AND access_token = ?2 AND access_expires_at > ?3
@@ -40,6 +43,9 @@ impl Store {
         identity: &PersonalRecord,
         access: &SecretVec,
     ) -> Result<(), StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Ok(());
+        }
         let conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
         conn.execute(
@@ -58,6 +64,9 @@ impl Store {
         &self,
         identity: &PersonalRecord,
     ) -> Result<Option<i64>, StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Ok(None);
+        }
         let conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
         let generation = conn.query_row(
@@ -66,7 +75,7 @@ impl Store {
                 refresh_expires_at = NULL, auth_scope = NULL, refresh_claimed = 0, refresh_retry_at = NULL
              WHERE singleton = 1 AND auth_generation = ?1 AND origin = ?2
                 AND account_id = ?3 AND private_material = ?4
-                AND (enrollment_attempted = 1 OR paired_handoff IS NOT NULL)
+                AND EXISTS (SELECT 1 FROM personal_admission a WHERE a.singleton=1 AND a.origin=personal_server.origin AND a.account_id=personal_server.account_id AND a.personal_vault_id=personal_server.personal_vault_id)
              RETURNING auth_generation",
             params![identity.auth_generation, identity.origin, identity.account_id.as_bytes().as_slice(),
                 identity.private_material.as_bytes()],
@@ -81,6 +90,9 @@ impl Store {
         identity: &PersonalRecord,
         now: u64,
     ) -> Result<Option<PersonalRefreshClaim>, StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Ok(None);
+        }
         let mut conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -88,7 +100,7 @@ impl Store {
             "SELECT access_token, refresh_token, access_expires_at, refresh_expires_at, auth_scope
              FROM personal_server WHERE singleton = 1 AND auth_generation = ?1
                 AND origin = ?2 AND account_id = ?3 AND private_material = ?4
-                AND (enrollment_attempted = 1 OR paired_handoff IS NOT NULL) AND refresh_claimed = 0
+                AND EXISTS (SELECT 1 FROM personal_admission a WHERE a.singleton=1 AND a.origin=personal_server.origin AND a.account_id=personal_server.account_id AND a.personal_vault_id=personal_server.personal_vault_id) AND refresh_claimed = 0
                 AND refresh_expires_at > ?5 AND length(refresh_token) BETWEEN 1 AND 2048
                 AND length(access_token) BETWEEN 1 AND 4096 AND auth_scope IS NOT NULL
                 AND (refresh_retry_at IS NULL OR refresh_retry_at <= ?5)",
@@ -123,6 +135,9 @@ impl Store {
         tokens: &PersonalTokens,
         retry_at: Option<u64>,
     ) -> Result<bool, StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Ok(false);
+        }
         let material = identity.private_material.as_bytes();
         let (signing, kem) = identity.device_secrets()?;
         let conn = self.conn();
@@ -131,20 +146,18 @@ impl Store {
             "UPDATE personal_server SET access_token = ?1, refresh_token = ?2,
                 access_expires_at = ?3, refresh_expires_at = ?4, auth_scope = ?5,
                 refresh_claimed = 0, session_established = 1, auth_generation = auth_generation + 1,
-                refresh_retry_at = ?15
+                refresh_retry_at = ?14
              WHERE singleton = 1 AND auth_generation = ?6 AND refresh_claimed = ?7
                 AND origin = ?8 AND account_id = ?9 AND personal_vault_id = ?10
-                AND private_material = ?11 AND enrollment_request IS ?12 AND paired_handoff IS ?16
-                AND (enrollment_attempted = 1 OR paired_handoff IS NOT NULL)
-                AND EXISTS (SELECT 1 FROM device_key_pair WHERE singleton = 1 AND signing = ?13 AND kem = ?14)",
+                AND private_material = ?11
+                AND EXISTS (SELECT 1 FROM personal_admission a WHERE a.singleton=1 AND a.origin=personal_server.origin AND a.account_id=personal_server.account_id AND a.personal_vault_id=personal_server.personal_vault_id)
+                AND EXISTS (SELECT 1 FROM device_key_pair WHERE singleton = 1 AND signing = ?12 AND kem = ?13)",
             params![tokens.access.as_bytes(), tokens.refresh.as_bytes(),
                 tokens.access_expires_at.min(i64::MAX as u64) as i64,
                 tokens.refresh_expires_at.min(i64::MAX as u64) as i64, tokens.scope,
                 generation, refresh_claimed, identity.origin, identity.account_id.as_bytes().as_slice(),
                 identity.personal_vault_id.as_bytes().as_slice(), material,
-                identity.enrollment_request.as_ref().map(SecretVec::as_bytes), signing, kem,
-                retry_at.map(|value| value.min(i64::MAX as u64) as i64),
-                identity.paired_handoff.as_ref().map(SecretVec::as_bytes)],
+                signing, kem, retry_at.map(|value| value.min(i64::MAX as u64) as i64)],
         )? == 1;
         self.personal_changed();
         Ok(changed)

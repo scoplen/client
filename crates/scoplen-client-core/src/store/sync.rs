@@ -552,8 +552,10 @@ fn object_base(conn: &Connection, id: Uuid) -> Result<Option<u64>, StoreError> {
 
 fn require_identity(conn: &Connection, vault: Uuid) -> Result<(), StoreError> {
     let matches: bool = conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM personal_server WHERE personal_vault_id = ?1
-            AND (enrollment_attempted = 1 OR paired_handoff IS NOT NULL))
+        "SELECT EXISTS (SELECT 1 FROM personal_server p JOIN personal_admission a
+            ON a.singleton=p.singleton AND a.origin=p.origin AND a.account_id=p.account_id
+                AND a.personal_vault_id=p.personal_vault_id
+            WHERE p.personal_vault_id = ?1)
          AND EXISTS (SELECT 1 FROM personal_sync)",
         params![vault.as_bytes().as_slice()],
         |row| row.get(0),

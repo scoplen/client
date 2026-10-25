@@ -10,29 +10,21 @@ pub(super) async fn verify(
     deployment: &Deployment,
     old_manager: &PersonalServer,
     old: Arc<Store>,
-    paired: pairing::PairedDevice,
+    paired: confirmed::PairedDevice,
 ) -> (PersonalAccountSnapshot, [Object; 2], String, trust::Receipt) {
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
-    let third_manager = PersonalServer {
-        operation: Mutex::new(()),
-        transport: Ok(trusted_transport(&ca)),
-        pairing: Default::default(),
-    };
-    let directory = tempfile::tempdir().expect("independent third-device directory");
-    let path = directory.path().join("third.sqlite");
-    let key = SymmetricKey::new([61; 32]);
-    let third = Arc::new(Store::open(&path, &key).expect("independent encrypted third device"));
+    let third_manager =
+        PersonalServer { operation: Mutex::new(()), transport: Ok(trusted_transport(&ca)) };
+    let profile = &deployment.profiles[2];
+    let path = &profile.store;
+    let key = profile.key();
+    let third = profile.open();
+    assert_eq!(record(&third).unwrap().origin, deployment.origin);
     assert_ne!(third.device_id(), old.device_id());
     assert_ne!(third.device_id(), paired.store.device_id());
     host(&third, "Third-device local-only host", "192.0.2.73");
-    pairing::admit(
-        deployment,
-        (old_manager, &old),
-        (&third_manager, &third),
-        directory.path(),
-        "Live third device",
-    )
-    .await;
+    third_manager.authenticate(third.clone()).await.expect("authenticate confirmed third device");
+    third_manager.bootstrap_sync(third.clone()).await.expect("verify retained third-device keys");
 
     let (first, second, last) = tokio::join!(
         old_manager.query_account(old.clone()),
@@ -198,7 +190,7 @@ pub(super) async fn verify(
     assert_private(&paired.store, &private[1]);
     drop(third_manager);
     drop(third);
-    let third = Store::open(&path, &key).expect("reopen encrypted third device offline");
+    let third = Store::open(path, &key).expect("reopen encrypted third device offline");
     trust::assert_offline(&third, &trust);
     offline(&third, &accounts[2], &expected, &saved[2]);
     assert_private(&third, &private[2]);

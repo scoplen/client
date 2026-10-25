@@ -13,10 +13,8 @@ web/app (React)  ── typed commands, binary channels ──  src-tauri  ─�
 ```
 
 - `web/app` renders state and sends intents. It never performs cryptography or talks to the
-  network. Private keys, decrypted account packages and tokens remain in Rust. Dedicated
-  transient SSH/passphrase and D-114 pairing inputs are the narrow secret-input exception;
-  only the new-device pairing view may display its one-time password and QR matrix. Ordinary state never
-  carries these values.
+  network. Private keys, decrypted account packages and tokens remain in Rust. Dedicated transient SSH/passphrase inputs are the narrow secret-input exception. Ordinary state
+  never carries these values.
 - `src-tauri` adapts commands to `scoplen-client-core` and owns windows. Its capability file (`src-tauri/capabilities/main.json`) grants the main window only Tauri's core defaults and the application's own commands. The content security policy in `tauri.conf.json` allows only the application's own resources and IPC.
 - `scoplen-client-core` holds every behavior, so it is the same on both platforms and testable without a window.
 - `scoplen-client-platform` is the only crate that may contain `unsafe` code or FFI; it is denied by default there too and allowed per module with each block documented.
@@ -62,16 +60,6 @@ literal server text remains separate from trusted hop identity. Both echo polici
 are sensitive. Answers become zeroizing Rust values at IPC, never enter snapshots
 or stored records, and are not reused by reconnect. Zero-prompt requests require
 an explicit empty response.
-
-Pairing uses dedicated create/join commands for its transient password boundary. The general
-`personal_pairing_status` command reads only public local metadata. An explicit foreground
-`watch_personal_pairing` invocation drives bounded core progress and sends safe typed status;
-its Rust-registered observer id fences stale notifications. Registration precedes scheduling;
-a detached observer cannot restart when its async command arrives late. Detaching stops
-further cycles after the current bounded core operation without cancelling or deleting its
-durable checkpoint. A subsequent intent waits for the bounded tick to release its operation
-lock. No settings-mount effect resumes network activity. Confirmation and
-admission recovery require distinct intents; all protocol state remains in `PersonalServer`.
 
 ## Terminal package
 
@@ -145,65 +133,30 @@ After every committed change the shell sends the frontend a `storeChanged` event
 
 ## Personal account identity
 
-Migration 4 retains the chosen canonical HTTPS origin, generated account/device/vault identity,
-software private keys, recovery key, and exact signed enrollment artifacts inside SQLCipher before
-network access. Recovery export writes directly from Rust through a native picker; joining requires
-a separate explicit confirmation that the recovery file is safe. The frontend receives only public
-status and typed errors. Account setup does not move or upload existing local inventory.
+Migration 11 adds neutral, device-local admitted provenance with immutable canonical origin,
+Account, Personal vault and device bindings. The row stores compact root/certificate, revision,
+key-projection, encrypted-artifact and opened-epoch-set anchors; it does not duplicate every
+historical epoch ciphertext. `personal_sync` remains the complete verified bootstrap snapshot.
+Identity roots, device keys, origin and account ownership cannot change in place once admitted.
+This binds the current single-account encrypted store; it does not implement D-126 profile/Team
+switching or the D-128 password wire.
 
-An enrollment request is durably claimed before sending. A connector failure known to precede
-HTTP transmission restores readiness; a timeout, denial, or uncertain response retains the claim
-and requires fresh challenge/device authentication. Authentication verifies the exact selected
-issuer's JWKS, account/device identity, device-key binding, and access-token expiry. The original
-certificate, K-4 update, and wraps remain stored after authentication; none is regenerated as a
-recovery shortcut.
+Conversion is bounded and offline. The read-only historical decoder verifies the origin-bound
+D-101 possession proof and account-signed K-4 update, or the exact authenticated pairing handoff,
+then the certificate, stored device keys and opened account/vault/recovery wrappers. It requires
+historical confirmed use: the verified-session marker written after token verification, a complete
+locally reverified `personal_sync`, or a matching completed new-device checkpoint. An attempted
+request or bare handoff cannot authorize conversion. A FULL-synchronous IMMEDIATE transaction
+checks the unchanged identity, auth generation, device keys, snapshot bytes and completion
+checkpoint before inserting admission. Failure preserves every original byte.
 
-`update_personal_invitation` implements D-109. It first rejects malformed or different-origin
-links, then obtains a fresh challenge and signs a device request with the retained key. Verified
-authentication ends recovery without changing or redeeming the replacement invitation. Only a
-noncached, no-store `401 application/problem+json` response to that device request, parsed as
-the complete shared RFC 9457 problem with `status: 401`, exact `auth.authentication_required`,
-and `retryable: false`, allows replacement. A challenge denial, catch-all authentication error,
-explicit revocation, unknown code, malformed or oversized body, redirect, transport failure,
-or invalid token leaves the old request pending. Neither value of `changed` proves enrollment
-success or failure.
-
-Replacement changes only the token and its D-101 device possession signature, retains all ids,
-keys, recovery confirmation, certificate, bundle, and wraps, and atomically restores Join readiness
-only if the saved request still matches and no verified credentials have appeared. Import sends
-no invitation token; a separate explicit Join submits the new request. Missing or inconsistent
-saved artifacts fail closed rather than recreating identity. The transport bounds responses and
-timeouts, verifies TLS, and has no redirect, proxy, cookie, or automatic POST retry behavior.
-Hardware device signing remains a separate outcome.
-
-`PersonalServer` also owns D-114 second-device pairing. The new device durably retains its
-signing/KEM keys before creating the anonymous relay session. The existing device claims the
-public link using its current D-100 session and fresh, request-bound DPoP with `keys:write`.
-CPace, both confirmations and authenticated frames run only in Rust. SQLCipher records a
-per-session attempt ledger, so switching sessions or restarting cannot reuse a CPace attempt;
-the password, scalar and ISK are never persisted. A monotonic five-minute deadline and Rust's
-two-second polling interval bound each foreground ceremony.
-
-The existing device requires explicit approval of authenticated name/platform claims. Before
-disclosing slot 6 it saves the exact certificate, complete membership-only K-4 update and
-handoff. The new device verifies the existing-account roots, revision floor, account ciphertexts,
-Personal key projection and all retained epochs, then atomically saves its pending identity
-and exact possession signature before slot 7. The old device retains the exact acceptance and
-approval JSON before completion. Checkpoint recovery uses the stored bytes without CPace;
-an earlier interrupted ceremony requires a fresh session/password while keeping the new keys.
-Unknown completion is checked through the retained receipt or fresh device authentication.
-New-device completion additionally requires verified D-100 authentication and full K-4 bootstrap.
-Old-device completion confirms admission only. Pairing creates no invitation or recovery key,
-and the paired identity cannot export a fabricated recovery file.
-
-The dedicated create command returns the secret QR as a monochrome module matrix beside
-the one-time password. The UI draws that matrix without interpreting the payload. The native
-PNG picker keeps file paths, image bytes and recognized text in Rust. A foreground registration
-fences abandoned picker/decoder results before a claim. Bounded PNG decoding precedes strict
-QRv2 decoding; the account origin is checked before network work, and the QR digest is checked
-against authenticated peer keys before `confirm_device`. The expected QR binding is volatile,
-so restart behavior and saved checkpoints remain the same. Rendering failure retains the
-valid manual session, public link and password.
+After conversion, runtime authentication, account reads, bootstrap, inventory and trust use
+neutral admission rather than the archived ceremony. Original artifacts remain unchanged inside
+SQLCipher as recovery/audit data; runtime does not decode them again. Retired pending setups have
+no network or mutation entry point. Their status explains that the data was preserved. The
+production enrollment, invitation replacement, recovery export and pairing APIs, IPC and Settings
+controls are removed. Fresh registration and password sign-in remain unavailable until D-128 is
+implemented, and Settings says so without an inert registration form.
 
 Migration 8 adds a monotonically increasing authentication generation, the verified scope ceiling,
 single-use refresh claim and an optional Retry-After deadline, alongside the saved absolute family
@@ -264,21 +217,21 @@ Each complete response is independently capped at 4 MiB; server-announced quotas
 change this budget. Session descriptors, including unknown kinds, are retained verbatim.
 
 The bootstrap reads `POST /sync/v1/session`, `GET /sync/v1/keys`, and the retained Personal
-vault's keys. It verifies the retained enrollment or paired handoff, account signature, signed device list and
+vault's keys. It verifies neutral admission anchors, the account signature, signed device list and
 revocations, exact local certificate, device ARK wrap, encrypted account signing/KEM keys,
 recovery ARK, and Personal epoch key using shared `scoplen-crypto` constructions. Decrypted
 material must equal the retained private material. Membership-only revisions may advance while
 the anchored account ciphertexts, recovery artifact and complete Personal epoch-key projection
 stay unchanged. This device's unchanged ARK may have a fresh valid wrap. The persisted revision
-floor prevents rollback after restart; paired provenance anchors its first bootstrap. All
+floor prevents rollback after restart; admitted provenance anchors its first bootstrap. All
 retained Personal epochs remain available for older envelopes. New or pending key rotation
 returns the distinct `RotationRequired` result and preserves the old snapshot. Other vaults
 are metadata only.
 
 Migration 5 adds a single encrypted `personal_sync` snapshot with the raw session/account/vault
 responses. A FULL-synchronous transaction publishes all three only while the original
-identity, enrollment request or paired handoff, device keys, unexpired access token, and prior snapshot generation
-still match. A competing authentication, invitation update, or bootstrap cannot publish a
+admitted context, private material, device keys, authentication generation, unexpired access token,
+and prior snapshot generation still match. A competing authentication or bootstrap cannot publish a
 stale result. `load_sync_bootstrap` decodes and cryptographically revalidates all artifacts on
 restart without requiring network or an unexpired token. Its secret key handle stays in Rust;
 there is no IPC export or automatic inventory migration.

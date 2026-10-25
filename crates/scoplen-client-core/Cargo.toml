@@ -38,9 +38,6 @@ tokio-rustls.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 httpdate = "1.0.3"
-qrcode = { version = "=0.14.1", default-features = false }
-rqrr = { version = "=0.11.0", default-features = false }
-png = { version = "=0.18.1", default-features = false }
 tokio-tungstenite = { version = "=0.30.0", default-features = false }
 
 [target.'cfg(unix)'.dependencies]

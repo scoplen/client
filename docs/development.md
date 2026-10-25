@@ -38,133 +38,81 @@ The first launch rebuilds the Rust dependencies. A fresh checkout does not need 
 
 ## Disposable Personal server integration
 
-The opt-in `live-server-integration` feature checks the production Personal enrollment,
-device authentication, second-device pairing, sync-key verification, native notifications and reviewed inventory APIs against an
-independently running server. It does not read server source or seed its database.
+The opt-in `live-server-integration` feature checks retained admitted-device authentication,
+refresh, sync keys, reviewed inventory, native notifications, history, SSH trust propagation and
+three-device convergence against an independently running disposable server. It does not read
+server source or seed the server database. It no longer invokes retired invitation or pairing
+endpoints. D-128 registration/password sign-in is not implemented by this client yet.
 
-First-device setup requires private offline recovery-file export and explicit confirmation
-before Join. Preparing the identity, exporting the file and confirming its storage send no
-account request. The current client cannot restore an account from a recovery key; after
-enrollment, retain access to at least one enrolled device.
+Provide a loopback `https://localhost:<port>` deployment and three independently admitted,
+already confirmed disposable SQLCipher profiles for the same Account, with distinct device ids
+and empty inventory. Close every source profile before running the checks. The profiles must
+have genuine historical success evidence; attempt flags and incomplete handoffs are rejected.
+Provisioning these fixtures is external to this client, and a missing fixture is not passing live
+verification. Use a fresh deployment/profile set for each scenario and database backend.
 
-Prepare a fresh disposable server on `https://localhost:<port>` with a trusted test CA.
-Complete public Operator setup and login, then issue an unused Personal invitation. Put a
-JSON descriptor in a private file with exactly `disposable: true`, `origin`,
-`invitation_url` and `ca_certificate` (the PEM certificate's absolute path). Keep the
-descriptor and server output private; the invitation is a one-use credential.
-
-In PowerShell, point to that existing private descriptor and run:
+The private JSON descriptor has exactly `disposable: true`, `origin`, `ca_certificate` (absolute
+PEM path), and `profiles` (three objects, each with absolute `store` and `key_file` paths). Each
+key file contains exactly the corresponding disposable database's raw 32-byte key. These are
+sensitive test fixtures; never use real user profiles, commit them, or print the descriptor or
+keys. The integration test mutates these disposable stores in place. Source stores, SQLite WAL
+sidecars and key files must remain under the fixture owner's control.
 
 ```powershell
 $env:SCOPLEN_LIVE_PERSONAL_DEPLOYMENT = 'C:/private/disposable-personal.json'
-$env:SCOPLEN_LIVE_PAIRING_MODE = 'png' # omit for the manual link/password path
-cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::live_personal_enrollment_and_inventory_roundtrip -- --exact --test-threads=1
+cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::live_confirmed_personal_inventory_roundtrip -- --exact --test-threads=1
 ```
 
-The test rejects a non-loopback origin, bounds descriptor and certificate reads, and adds
-the test CA only to its own HTTPS and TLS 1.3/H2 notification clients. It consumes the invitation, creates and reopens
-an isolated SQLCipher store, uploads and downloads a signed encrypted host and its edit,
-checks durable acknowledgements, and restores the original local copy offline. Before the
-first transfer and again after reopening the store, it expires only the client's cached
-access lifetime and exercises the production refresh path using the genuine server-issued
-refresh credential through explicit account queries. The real profile and complete signed
-device list must bind to the retained account and current device, then revalidate offline
-after reopening SQLCipher. It checks durable session generation, a changed access credential and
-the retained refresh-family deadline ceiling; server clocks and signed JWTs are unchanged.
-The remaining whole seconds and JWT issuance time can be sampled independently. Rotation
-uses their lifetime estimate conservatively and never extends the retained ceiling.
+The check bounds descriptor/certificate reads and trusts the test CA only in its own TLS clients.
+It authenticates the first retained device, verifies complete K-4 keys, performs reviewed signed
+ciphertext upload/download/ACK and restores the original local copy offline. Before transfer and
+after encrypted-store reopen, it expires only the local access cache and exercises real refresh
+through explicit account queries, checking generation, credential rotation and the non-extending
+refresh-family deadline. It never changes signed JWTs, server clocks or quotas.
 
-After the first reviewed upload, the test starts the production Rust background owner without
-Settings. It requires a real D-75 extended CONNECT context/auth/ready exchange, then uploads and
-acknowledges an adopted local edit automatically. Expiring only the local cache exercises actual
-refresh and notification reconnect before orderly owner shutdown. No alternate WebSocket path
-or server-private test control is used.
-
-The same test then creates a second independent SQLCipher store and HTTPS client. It pairs
-through a public link and separate password by default, or through real QR rendering and local
-PNG recognition when `SCOPLEN_LIVE_PAIRING_MODE=png`. It verifies the old device's authenticated review,
-explicitly approves admission, and requires the new device's real native authentication and
-complete K-4 bootstrap. Both devices query the signed two-device list. A pre-existing local
-host stays local throughout setup and the first explicit download; only a later preview and
-confirmation uploads it. Both production background owners then run concurrently. Local store
-edits on each device must upload automatically and reach the connected peer through real
-notifications, with matching durable applied/acknowledged cursors. Each direction has a
-15-second deadline, shorter than the 60-second polling fallback; no manual sync intent follows
-either edit. New unadopted hosts remain local on both devices throughout these transfers.
-Both owners shut down normally, and retained keys, account statements, synchronized objects
-and local-only hosts revalidate after offline store reopen. No server database or private
-test control is accessed.
-
-After both devices have edited the same host, the scenario queries its complete retained
-history through real HTTPS. All three versions must verify, including the paired device's
-signature, without exposing host addresses or advancing local cursors. An explicit offline
-restore creates exactly one unadopted copy of the oldest version, preserves the current
-object and server history, consumes its review ticket, and survives SQLCipher reopen.
-
-A third independent device then completes the same public pairing ceremony, and all devices
-verify the signed three-device list. The original device explicitly confirms a disposable
-SSH peer's actual key, then adopts its Host, Login, Credential and generated trust record.
-Both paired devices verify that record through Personal synchronization and authenticate
-to the SSH peer without another trust prompt. Source provenance and key bindings revalidate
-after offline SQLCipher reopen. This Rust SSH peer does not establish OpenSSH or native
-desktop interoperability.
-
-Two separate hosts are explicitly adopted for an offline
-round with every background owner stopped. Each store changes the same name and a different
-field; the second device also edits and then tombstones the other host. Before reconnecting,
-each durable outbox and cursor must reflect only its own changes. One parallel synchronization
-round and one fixed catch-up round must succeed within 30 seconds, without retrying any failed
-or uncertain operation. All three devices must retain the merged fields, hide the deletion,
-acknowledge the same cursor, preserve unadopted local contents and reopen offline with the same
-objects and signed membership. The original three-version history object is unchanged. This
-does not exercise server retention or cursor expiry.
-
-The deployment must expose the production pairing endpoints. Repeating the test requires a
-fresh disposable deployment and invitation. Run it separately for SQLite and PostgreSQL.
-Remove the private descriptor, test server and its temporary data after verification. This
-does not establish native desktop picker interaction, camera capture, physical passkey or macOS acceptance.
+The production background owners require real D-75 extended CONNECT context/auth/ready. Adopted
+edits must upload and reach the connected peer within 15 seconds, before the polling fallback;
+unadopted hosts stay local. Both other preconfirmed devices authenticate and bootstrap using their
+own saved identities. The scenario verifies signed membership, retained three-version history,
+explicit offline history restoration, actual SSH host-key trust propagation, and a bounded
+three-device offline edit/deletion/convergence round. Stores reopen offline with the same keys,
+objects, provenance and cursors. No retired admission is performed during this coverage.
 
 ### Personal consumer process restart
 
-The separate Windows/macOS process check needs its own fresh disposable deployment and unused
-invitation, with the descriptor above. Run exactly this test; the enrollment scenario and this
-scenario cannot share a consumed invitation:
+Use a separate fresh disposable deployment/profile set and run this Windows/macOS test alone:
 
 ```text
 cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::process_restart::live_personal_process_restart -- --exact --test-threads=1
 ```
 
-The controller starts two actual consumer processes from the same test executable under its
-inherited native user context. Both use `LocalData::start` and the real platform secret provider
-with identical canonical data-directory bytes. The first creates the random database key and
-Personal identity, enrolls once, explicitly adopts and synchronizes one Host, then leaves an
-offline edit in the durable outbox and exits normally. A second Host stays local throughout.
+The controller starts two actual consumer processes under its inherited native user context.
+The first imports only the closed disposable SQLCipher fixture into a uniquely owned temporary
+data directory and protects that fixture's key with the real platform provider. This setup
+preserves an already confirmed device identity; it does not enroll a new one. Both consumers then
+use `LocalData::start` and the same canonical native slot. The first authenticates, verifies keys,
+adopts and synchronizes one Host, queues an offline edit, and exits normally. Another Host stays
+local. The controller waits for the genuine access lifetime to reach the production 60-second
+refresh threshold, bounded by 15 minutes and an absolute run deadline.
 
-The controller waits until the original access lifetime is within the production 60-second
-refresh threshold. This normally takes about nine minutes and is bounded by a 15-minute wait
-and an absolute run deadline. It changes neither cached expiry nor server clocks, tokens or
-quotas. Each consumer has its own two-minute deadline. The second starts fresh local-data and
-transport instances; its first network action is an account query that uses the retained refresh
-credential directly. No new enrollment or challenge precedes it. Identity and signed key
-bindings, session generation, access rotation and the non-extending refresh-family deadline
-must match across the process boundary.
+The second process's first network action is a production account query with persisted refresh;
+no new challenge precedes it. Identity, keys, session generation, access rotation and the family
+deadline must match across exit. The durable offline edit then uploads, decrypts and acknowledges;
+real remote history verifies both versions. No keys or tokens enter process arguments,
+environment or output. Failed or uncertain operations are not retried. Cleanup addresses only
+the exited consumers' uniquely owned native slot; success removes owned temporary artifacts and
+failure retains them. Source fixtures remain the owner's responsibility.
 
-The offline Host edit must survive exit without advancing either cursor, then upload, download
-and decrypt through production synchronization, with a confirmed durable ACK. A separate real
-history read verifies both signed versions. The unadopted Host remains unchanged. Phase
-receipts contain identifiers, expiry metadata and digests; credentials and keys never enter
-arguments, environment variables or output. Failed or uncertain operations are not retried.
-After both consumers exit, cleanup addresses only the uniquely owned native slot. Successful
-artifacts are removed; failed private artifacts remain for diagnosis. This is a core consumer
-process check, separate from native desktop-window, picker and physical-platform acceptance.
+These opt-in checks require runnable confirmed fixtures. Compilation does not establish live
+server, native desktop interaction, macOS, hardware signing or D-128 admission acceptance.
 
 ## Membership-only Personal key revisions
 
-Retained first and paired devices accept later K-4 account-key revisions without replacing
+Confirmed devices accept later K-4 account-key revisions without replacing
 their trusted account roots or private keys. Account signing/KEM ciphertexts and the recovery
-blob remain byte-identical to the retained enrollment or authenticated handoff. The first
-device retains its exact epoch-1 wrapping; a paired device opens every handoff epoch and
-requires the unchanged epoch/key set.
+blob must match their compact admission digests. An identity converted from historical invitation
+enrollment retains its exact epoch-1 wrapping digest; one converted from a historical handoff
+requires the unchanged opened epoch/key set.
 The device ARK wrap can be randomized again only at a higher revision and must open to the
 same retained ARK. Pending rotation, a different epoch or different keys still stops sync.
 
@@ -174,8 +122,8 @@ account signing/KEM ciphertexts and recovery blob). Certificates and revocations
 independently, so they are fully verified on every read rather than frozen into that
 projection. This device must keep its exact original, unrevoked certificate. The existing
 snapshot-generation, provenance, identity and credential transaction fences prevent a competing
-process from saving an older result after another process advances the floor. A paired identity
-also retains its initial floor/projection before the first `personal_sync` snapshot exists.
+process from saving an older result after another process advances the floor. Neutral admission
+also retains the initial floor/projection before the first `personal_sync` snapshot exists.
 Offline reopening revalidates the saved roots and artifacts.
 
 The GET response has no enclosing account signature. This local floor rejects rollback
@@ -189,56 +137,24 @@ DPoP proofs and SQLCipher stores, including competing bootstrap operations:
 cargo test -p scoplen-client-core --lib personal_server::sync::tests::membership
 ```
 
-## Second-device pairing
+## Retired entry conversion regressions
 
-The native core implements D-114 QR screenshot and public-link plus separate-password pairing. Create on the
-new device and join on an authenticated existing device are explicit actions against the exact
-selected HTTPS origin. Rust owns the CPace state, one-attempt ledger, monotonic five-minute
-ceiling, at least two seconds between polls, device confirmation, immutable slot replay and
-strict shared crypto/API codecs. A canonical public link contains only origin and UUID; the
-password and rendered QR matrix cross only the dedicated transient display/input boundary.
-
-The PNG entrance accepts a regular file up to 8 MiB, at most 4096 pixels on either side and
-4,194,304 total pixels. PNG decoder allocations and decoded output are each limited to 32 MiB;
-this is not a whole-process memory budget for the QR recognizer. Decoding validates the complete
-static PNG, including IEND and CRCs, rejects APNG and requires exactly one detected QR.
-Grayscale, grayscale-alpha, RGB and RGBA expand locally, with transparency composited on white.
-Recognition uses `rqrr`; shared `PairingQrPayload::decode` then rejects legacy or noncanonical
-text. Origin mismatch, malformed input and detached foreground intents fail before a claim.
-The QR digest is verified against authenticated CPace peer keys before device confirmation.
-Source bytes, decoded pixels and recognized output use zeroizing buffers; dependencies may
-retain temporary decoder/detector allocations until drop. Nothing is logged, uploaded, opened
-as a URL or saved to the application database. No camera permission is requested.
-
-Migration 10 stores pending device keys, exact transcripts/plans and an authenticated handoff
-as distinct Personal provenance. New identity and exact acceptance commit atomically before
-slot 7; the old device verifies possession and saves complete approval JSON before `complete`.
-Lost replies keep these checkpoints. Explicit recovery reads the receipt or authenticates the
-retained device before replaying the saved bytes. No CPace state or password is serialized.
-A restart before handoff requires a fresh session while retaining device keys. A paired
-installation has no enrollment request, no invented recovery key and no enrollment-attempt
-flag; it becomes complete only after native authentication and full K-4 verification.
-
-Device keys and their creation time are durable before the first session request. If no valid
-session checkpoint or account identity exists, an explicit retry can correct the origin/name
-with an atomic conditional metadata update. The first saved session checks that exact retained
-device record in the same transaction, so a competing process cannot bind stale metadata.
-Once a session exists, retries retain its original origin and device name.
-
-The independent TLS 1.3/H2 peer drives both public Client managers and verifies checkpoints
-before receiving messages. Focused coverage includes wrong passwords, changed duplicates,
-strict cache headers, restart before/after handoff and acceptance, uncertain complete with
-and without admission, exact replay, first-response rollback/projection rejection, higher
-membership revisions, account queries, explicit encrypted inventory sync and offline reopen:
+Invitation, replacement and pairing network code and desktop commands are removed. The only
+historical decoder is the bounded offline converter. Run its positive and failure-path checks:
 
 ```text
-cargo test -p scoplen-client-core --lib pairing
+cargo test -p scoplen-client-core --lib personal_server::tests::admission
+cargo test -p scoplen-client-core --lib personal_server::sync::tests::a_complete_verified_historical_bootstrap
+cargo test -p scoplen-client-core --lib store::personal::tests
+pnpm --filter @scoplen/app test -- personal-settings
 ```
 
-This fixture does not establish a released Server deployment or two physical desktop
-installations. Native QR display and PNG recognition are connected to desktop IPC/UI; key rotation remains
-unsupported. The public-link/password path retains every Personal epoch supplied by the
-verified handoff and never uploads pre-existing local inventory during account setup.
+Coverage includes confirmed expired sessions, matched completed new-device handoffs, independent
+complete-bootstrap evidence, preservation of pending/attempted profiles, malformed/foreign proof
+rejection, bounded reads, failed transaction rollback, restart idempotence and immutable origin,
+Account, vault, device and key ownership. Converted runtime ignores archived ceremony decoding.
+Retained fresh-challenge, JWKS, invalid-response, refresh, account, sync, history and notification
+regressions remain applicable. This closure does not implement the future password sign-in UI.
 
 ## Native Personal notification fault tests
 
