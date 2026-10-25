@@ -68,6 +68,24 @@ function dynamicSnapshot(overrides: Partial<ForwardSnapshot> = {}): ForwardSnaps
   });
 }
 
+function remoteSnapshot(overrides: Partial<ForwardSnapshot> = {}): ForwardSnapshot {
+  return snapshot({
+    configuration: {
+      kind: "remote",
+      forwardId: "f-remote",
+      name: "metrics-remote",
+      profileId: "l-5",
+      bindAddress: "::",
+      bindPort: 9090,
+      targetHost: "localhost",
+      targetPort: 9091,
+      login: challenge("trust").context,
+    },
+    boundAddress: null,
+    ...overrides,
+  });
+}
+
 function challenge(kind: "trust" | "passphrase" | "keyboardInteractive", promptId = "prompt-1"): PreparationEvent {
   const context = {
     profileId: "l-3",
@@ -284,6 +302,160 @@ it("clears Local targets when saved as Dynamic and requires fresh targets when c
   expect((within(dialog).getByLabelText("Target host") as HTMLInputElement).required).toBe(true);
 });
 
+it("saves Remote endpoints with a loopback default, requested-scope disclosure and keyboard submission", async () => {
+  const f = fixture();
+  const create = vi.spyOn(f.api, "createForward");
+  await screen.findByText("metrics-remote");
+  await userEvent.click(screen.getByRole("button", { name: "Add tunnel" }));
+  const dialog = screen.getByRole("dialog", { name: "New tunnel" });
+  await userEvent.selectOptions(within(dialog).getByLabelText("Mode"), "remote");
+  expect((within(dialog).getByLabelText("Requested remote address") as HTMLInputElement).value).toBe("127.0.0.1");
+  expect(within(dialog).getByText(/policy may override this address, including a loopback request/)).toBeTruthy();
+  await userEvent.type(within(dialog).getByLabelText("Name"), "remote-service");
+  await userEvent.clear(within(dialog).getByLabelText("Requested remote address"));
+  await userEvent.type(within(dialog).getByLabelText("Requested remote address"), "::");
+  expect(within(dialog).getByRole("note").textContent).toContain("access this local service through the tunnel");
+  await userEvent.type(within(dialog).getByLabelText("Remote port"), "19090");
+  await userEvent.type(within(dialog).getByLabelText("Local target host"), "localhost");
+  await userEvent.type(within(dialog).getByLabelText("Local target port"), "9091");
+  await userEvent.tab();
+  await userEvent.tab();
+  await userEvent.tab();
+  expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Save changes" }));
+  await userEvent.keyboard("{Enter}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(create).toHaveBeenCalledWith({
+    name: "remote-service",
+    kind: "remote",
+    bindAddress: "::",
+    bindPort: 19090,
+    targetHost: "localhost",
+    targetPort: 9091,
+    profile: null,
+  });
+  expect(f.calls.some((call) => call.command === "forward_start" || call.command.startsWith("session_"))).toBe(false);
+});
+
+it("edits a saved Remote without changing direction or losing its local target after an invalid save", async () => {
+  const f = fixture();
+  const pending = deferred<Awaited<ReturnType<typeof f.api.updateForward>>>();
+  f.api.updateForward = vi.fn().mockReturnValue(pending.promise);
+  await screen.findByText("metrics-remote");
+  await userEvent.click(screen.getByRole("button", { name: "Edit metrics-remote" }));
+  const dialog = screen.getByRole("dialog", { name: "Edit tunnel" });
+  expect((within(dialog).getByLabelText("Mode") as HTMLSelectElement).value).toBe("remote");
+  expect((within(dialog).getByLabelText("Local target host") as HTMLInputElement).value).toBe("localhost");
+  await userEvent.clear(within(dialog).getByLabelText("Local target port"));
+  await userEvent.type(within(dialog).getByLabelText("Local target port"), "9091");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  expect((within(dialog).getByLabelText("Mode") as HTMLSelectElement).disabled).toBe(true);
+  await act(() => pending.resolve({ status: "error", error: { kind: "invalidForward", field: "targetPort" } }));
+  expect(await within(dialog).findByText("Enter a port from 1 to 65535.")).toBeTruthy();
+  expect((within(dialog).getByLabelText("Local target port") as HTMLInputElement).value).toBe("9091");
+  expect(f.api.updateForward).toHaveBeenCalledWith(
+    "f-remote",
+    expect.objectContaining({ kind: "remote", targetHost: "localhost", targetPort: 9091 }),
+  );
+});
+
+it("starts Remote with an explicit Login and retains its fixed endpoints and Stop after saved replacement/deletion", async () => {
+  const f = fixture({ startRun: remoteSnapshot() });
+  await screen.findByText("metrics-remote");
+  await waitFor(() => expect(f.controller.loading).toBe(false));
+  const saved = screen.getByText("metrics-remote").closest("li")!;
+  await userEvent.click(within(saved).getByRole("button", { name: "Start" }));
+  const dialog = screen.getByRole("dialog", { name: "Start metrics-remote" });
+  await userEvent.selectOptions(within(dialog).getByLabelText("Login"), "l-3");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Start" }));
+  await screen.findByText("Listening");
+  expect(f.calls.find((call) => call.command === "forward_start")?.args).toEqual({
+    forwardId: "f-remote",
+    profileId: "l-3",
+  });
+  const runs = screen.getByRole("list", { name: "Runs" });
+  expect(within(runs).getByText("Requested remote listener")).toBeTruthy();
+  expect(within(runs).getByText("[::]:9090")).toBeTruthy();
+  expect(within(runs).getByText("localhost:9091")).toBeTruthy();
+  expect(within(runs).getByRole("note")).toBeTruthy();
+  await act(() =>
+    f.api.updateForward("f-remote", {
+      name: "replacement",
+      kind: "local",
+      bindAddress: "127.0.0.1",
+      bindPort: 8000,
+      targetHost: "other.example",
+      targetPort: 80,
+      profile: null,
+    }),
+  );
+  await screen.findByText("replacement");
+  const profiles = await f.api.accessProfiles();
+  if (profiles.status !== "ok") throw new Error("fixture Logins unavailable");
+  for (const profile of profiles.data.filter((item) => item.forwards.includes("f-remote"))) {
+    await act(() =>
+      f.api.updateAccessProfile(profile.id, {
+        ...profile,
+        credential: profile.credentialId,
+        route: profile.routeId,
+        defaultProfile: profile.isDefault,
+        forwards: [],
+      }),
+    );
+  }
+  await act(() => f.api.deleteForward("f-remote"));
+  await waitFor(() => expect(screen.queryByText("replacement")).toBeNull());
+  expect(within(runs).getByText("localhost:9091")).toBeTruthy();
+  f.hide();
+  f.reopen();
+  await screen.findByText("Listening");
+  await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+  expect(f.calls.find((call) => call.command === "forward_stop")?.args).toEqual({ runId: "run-1" });
+  expect(f.calls.some((call) => call.command.startsWith("session_"))).toBe(false);
+});
+
+it.each(["en", "zh-Hans"] as const)(
+  "renders Remote scope, pending peers, refusal and uncertain cleanup in %s",
+  async (locale) => {
+    const f = fixture({ locale, runs: [remoteSnapshot({ lastIssue: "peerRejected" })] });
+    const runs = await screen.findByRole("list", { name: locale === "en" ? "Runs" : "运行记录" });
+    expect(within(runs).getByText(locale === "en" ? "Requested remote listener" : "请求的远端监听端点")).toBeTruthy();
+    expect(
+      within(runs).getByText(locale === "en" ? /policy may override this address/ : /服务器策略可能覆盖请求的地址/),
+    ).toBeTruthy();
+    expect(within(runs).getByText(locale === "en" ? /unexpected incoming channel/ : /非预期的传入通道/)).toBeTruthy();
+    await f.changed(remoteSnapshot({ phase: "stopping", activeConnections: 1, revision: "9007199254740994" }));
+    expect(
+      within(runs)
+        .getByRole("button", { name: locale === "en" ? "Stop" : "停止" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    await f.changed(
+      remoteSnapshot({
+        phase: "failed",
+        activeConnections: 0,
+        lastIssue: "listenTimedOut",
+        revision: "9007199254740995",
+      }),
+    );
+    expect(
+      within(runs).getByText(locale === "en" ? /remote listener request timed out/ : /远端监听请求已超时/),
+    ).toBeTruthy();
+    await f.changed(
+      remoteSnapshot({
+        phase: "failed",
+        activeConnections: 0,
+        lastIssue: "shutdownFailed",
+        revision: "9007199254740996",
+      }),
+    );
+    expect(
+      within(runs).getByText(locale === "en" ? /shutdown could not be confirmed/ : /尚未确认隧道已完成停止/),
+    ).toBeTruthy();
+    expect(within(runs).getByText("9,007,199,254,740,993 B")).toBeTruthy();
+    expect(await violations(f.container)).toEqual([]);
+  },
+);
+
 it.each(
   (["Add tunnel", "Edit staging-socks"] as const).flatMap((opener) =>
     (["escape", "cancel", "save"] as const).map((dismissal) => [opener, dismissal] as const),
@@ -397,10 +569,10 @@ it("starts an independent run using a selected Login and retains its Stop after 
 
 it.each(
   (["trust", "passphrase", "keyboardInteractive"] as const).flatMap((kind) =>
-    (["local", "dynamic"] as const).map((mode) => [kind, mode] as const),
+    (["local", "dynamic", "remote"] as const).map((mode) => [kind, mode] as const),
   ),
 )("reuses %s preparation for %s without opening a terminal and cancels the exact run", async (kind, mode) => {
-  const run = mode === "dynamic" ? dynamicSnapshot : snapshot;
+  const run = mode === "dynamic" ? dynamicSnapshot : mode === "remote" ? remoteSnapshot : snapshot;
   const f = fixture({ runs: [run({ phase: "preparing", preparation: challenge(kind), boundAddress: null })] });
   await screen.findByText("Needs attention");
   await userEvent.click(screen.getByRole("button", { name: "Continue setup" }));
@@ -515,9 +687,9 @@ it("keeps Start unavailable after a run-list failure and offers refresh", async 
   await screen.findByText("staging-socks");
   for (const button of screen.getAllByRole("button", { name: "Start" }))
     expect(button.hasAttribute("disabled")).toBe(true);
-  const unsupported = screen.getByText("metrics-remote").closest("li")!;
-  expect(within(unsupported).queryByRole("button", { name: "Start" })).toBeNull();
-  expect(within(unsupported).queryByRole("button", { name: "Edit metrics-remote" })).toBeNull();
+  const remote = screen.getByText("metrics-remote").closest("li")!;
+  expect(within(remote).getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(true);
+  expect(within(remote).getByRole("button", { name: "Edit metrics-remote" })).toBeTruthy();
 });
 
 it("clears Interactive input on view changes, leaves the owner running and recovers the current challenge", async () => {
@@ -550,7 +722,7 @@ it("keeps Chinese stopping and failed runs accessible with visible final counter
   await screen.findByText("停止中");
   expect(screen.getByRole("button", { name: "停止" }).hasAttribute("disabled")).toBe(true);
   expect(screen.getByText("失败")).toBeTruthy();
-  expect(screen.getByText(/本地地址或端口不可用/)).toBeTruthy();
+  expect(screen.getByText(/监听端点不可用/)).toBeTruthy();
   expect(await violations(f.container)).toEqual([]);
 });
 

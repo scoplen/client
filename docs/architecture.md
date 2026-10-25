@@ -504,15 +504,15 @@ The Hosts source navigation remains available as a horizontally scrolling row
 when the window is narrower than the desktop sidebar breakpoint, including at
 the desktop window's minimum width.
 
-## Independent local TCP tunnels
+## Independent tunnels
 
-`forward_manager::ForwardManager` owns standalone Local Forward runs separately from
+`forward_manager::ForwardManager` owns standalone Local, Remote and Dynamic Forward runs separately from
 `SessionManager`. Start validates a saved definition and fixes its endpoints and complete
 saved connection plan synchronously, including a display-safe target Login context. The
 common preparation executor retains per-hop trust and authentication. It opens no session,
 shell or PTY. Editing inventory after Start cannot change that run's connection or identity.
 
-Each run owns one numeric-IP listener, at most 32 accepted or opening peers, and the target
+Each Local or Dynamic run owns one numeric-IP listener, at most 32 accepted or opening peers, and the target
 SSH connection with its Jump parents. Peers open independent `direct-tcpip` channels with a
 15-second deadline, then copy both directions concurrently with half-close and 32 KiB buffers.
 Traffic snapshots are coalesced at 250 milliseconds and expose decimal-text counters and
@@ -525,7 +525,25 @@ The generated `forward_start`, `forward_list`, `forward_snapshot`, `forward_resp
 require the current one-use preparation token. Stop fences new peers and replies, then
 settles the listener, peers and complete SSH chain. Store replacement drains all owners;
 application exit first permanently fences Starts and waits under one 35-second cleanup
-budget. Remote, dynamic, Unix-socket and automatic profile forwards remain separate work.
+budget. A failed owner does not skip awaiting the other owners' cleanup. Unix-socket and
+automatic profile forwards remain separate work.
+
+Dynamic uses the shared SOCKS4/4a/5 CONNECT codecs, with an absolute 15-second negotiation
+deadline and application-only counters. Its immutable configuration contains no fixed target.
+The unauthenticated listener disclosure remains visible in the editor and running view.
+
+Remote creates no local listener. After authentication, its owner requests the exact saved
+remote address and nonzero port under a 15-second deadline; the adapter's fixed-port `Ok(0)`
+acknowledgement preserves the requested port. The owner exclusively drains delivered channels,
+admitting only matching TCP endpoint bytes and ignoring originator fields for local selection.
+At most 32 peers include resolution, connection and copying. Each peer resolves the captured
+local target and tries at most 16 raw candidates within one absolute 15-second budget;
+cancellation fences late resolution results. Counters measure successful application writes:
+local-to-SSH is uploaded, SSH-to-local is downloaded. Stop fences admission, cancels peers,
+attempts the exact remote cancellation tuple for one second and closes the complete route
+regardless of the result, within the shared 35-second shutdown budget. Unknown outcomes retain
+a shutdown failure rather than claiming that the remote port is free. Snapshots expose the
+requested endpoint and no purported actual bound address, because server policy can override it.
 
 ## Session upload sources
 

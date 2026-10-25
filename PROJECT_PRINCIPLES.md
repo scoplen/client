@@ -52,13 +52,17 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   30-second Rust ticket bound to the current window, Files view, queue and remote directory.
   Whole-batch capacity and source checks precede FIFO admission. Scaled Windows and Retina
   macOS native drop acceptance and the remaining C6 workflows are incomplete.
-  Saved Local TCP and Dynamic SOCKS tunnels run independently of terminal tabs with explicit Login selection,
+  Saved Local TCP, Remote TCP and Dynamic SOCKS tunnels run independently of terminal tabs with explicit Login selection,
   ordinary per-hop trust/authentication, fixed running identity and bounded peers. New
   definitions default to loopback; the editor explains other-device access for non-loopback
   binding. Dynamic uses shared SOCKS4/4a/5 CONNECT codecs, preserves remote hostname resolution,
   bounds negotiation with an absolute deadline and counts application bytes only. Its editor
   and fixed running view disclose unauthenticated proxy access. Stop, store replacement and
-  application exit release owned forwarding resources. Remote, Unix-socket and ad-hoc forwarding
+  application exit release owned forwarding resources. Remote binds only an explicit requested
+  server endpoint to its fixed local service, rejects foreign delivered channels before dialing,
+  bounds local resolution and connection, and reports unconfirmed cancellation conservatively.
+  The editor and run view disclose that server policy controls the actual listening scope,
+  including overrides of loopback requests. Unix-socket and ad-hoc forwarding
   and the complete C7 gate remain incomplete.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.

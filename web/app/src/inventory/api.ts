@@ -231,7 +231,6 @@ export type ObjectEditError =
   | { kind: "invalidProxyAuthentication" }
   | { kind: "invalidCommand" }
   | { kind: "invalidForward"; field: string }
-  | { kind: "unsupportedForward" }
   | { kind: "invalidCredentialBinding" }
   | { kind: "secretRequired" }
   | { kind: "secretNotAllowed" }

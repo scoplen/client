@@ -168,12 +168,17 @@ export function TunnelsHome() {
                       </Button>
                     ) : null}
                   </div>
-                  <p className="mt-1 mb-0 break-all font-mono text-xs text-muted-foreground select-text">
-                    {run.boundAddress ?? endpoint(configuration.bindAddress, configuration.bindPort)}
-                    {configuration.kind === "local"
-                      ? ` → ${endpoint(configuration.targetHost, configuration.targetPort)}`
-                      : null}
-                  </p>
+                  {configuration.kind === "remote" ? (
+                    <RemoteEndpoints {...configuration} />
+                  ) : (
+                    <p className="mt-1 mb-0 break-all font-mono text-xs text-muted-foreground select-text">
+                      {run.boundAddress ?? endpoint(configuration.bindAddress, configuration.bindPort)}
+                      {configuration.kind === "local"
+                        ? ` → ${endpoint(configuration.targetHost, configuration.targetPort)}`
+                        : null}
+                    </p>
+                  )}
+                  {configuration.kind === "remote" ? <RemoteScope address={configuration.bindAddress} /> : null}
                   {configuration.kind === "dynamic" ? (
                     <>
                       <p className="mt-1 mb-0 text-xs text-muted-foreground">{t("tunnels.dynamicBody")}</p>
@@ -230,52 +235,48 @@ export function TunnelsHome() {
             <ul aria-label={t("tunnels.saved")} className="m-0 mt-3 list-none divide-y divide-border p-0">
               {forwards.data.map((forward) => {
                 const live = runs.some((run) => run.configuration.forwardId === forward.id && isLiveForward(run));
-                const supported = forward.kind === "local" || forward.kind === "dynamic";
                 return (
                   <li key={forward.id} className="flex min-w-0 flex-wrap items-center gap-3 py-4">
                     <div className="min-w-0 flex-1 basis-52">
                       <h3 className="m-0 break-words text-sm font-medium">{forward.name}</h3>
-                      <p className="mt-1 mb-0 break-all font-mono text-xs text-muted-foreground">
-                        {endpoint(forward.bindAddress, forward.bindPort)}
-                        {forward.kind === "dynamic" ? null : ` → ${endpoint(forward.targetHost, forward.targetPort)}`}
-                      </p>
+                      {forward.kind === "remote" ? (
+                        <RemoteEndpoints {...forward} />
+                      ) : (
+                        <p className="mt-1 mb-0 break-all font-mono text-xs text-muted-foreground">
+                          {endpoint(forward.bindAddress, forward.bindPort)}
+                          {forward.kind === "dynamic" ? null : ` → ${endpoint(forward.targetHost, forward.targetPort)}`}
+                        </p>
+                      )}
                       {forward.kind === "dynamic" ? (
                         <p className="mt-1 mb-0 text-xs text-muted-foreground">{t("tunnels.dynamicSocks")}</p>
-                      ) : null}
-                      {!supported ? (
-                        <p className="mt-1 mb-0 text-xs text-muted-foreground">{t("tunnels.unsupported")}</p>
                       ) : null}
                       {forward.restored ? (
                         <p className="mt-1 mb-0 text-xs text-attention">{t("hosts.restored")}</p>
                       ) : null}
                     </div>
                     <div className="ml-auto flex shrink-0 items-center gap-1">
-                      {supported ? (
-                        <Button
-                          variant="secondary"
-                          onClick={() => setStarting(forward)}
-                          disabled={
-                            !runtime ||
-                            runtime.loading ||
-                            runtime.issue === "unavailable" ||
-                            live ||
-                            profiles.state !== "ready"
-                          }
-                        >
-                          {live ? t("tunnels.running") : t("tunnels.start")}
-                        </Button>
-                      ) : null}
-                      {supported ? (
-                        <IconButton
-                          label={t("tunnels.edit", { name: forward.name })}
-                          onClick={(event) => {
-                            editorTrigger.current = event.currentTarget;
-                            setEditing(forward);
-                          }}
-                        >
-                          <Pencil aria-hidden="true" className="size-4" />
-                        </IconButton>
-                      ) : null}
+                      <Button
+                        variant="secondary"
+                        onClick={() => setStarting(forward)}
+                        disabled={
+                          !runtime ||
+                          runtime.loading ||
+                          runtime.issue === "unavailable" ||
+                          live ||
+                          profiles.state !== "ready"
+                        }
+                      >
+                        {live ? t("tunnels.running") : t("tunnels.start")}
+                      </Button>
+                      <IconButton
+                        label={t("tunnels.edit", { name: forward.name })}
+                        onClick={(event) => {
+                          editorTrigger.current = event.currentTarget;
+                          setEditing(forward);
+                        }}
+                      >
+                        <Pencil aria-hidden="true" className="size-4" />
+                      </IconButton>
                       <IconButton
                         label={t("tunnels.delete", { name: forward.name })}
                         onClick={() => {
@@ -359,6 +360,42 @@ export function TunnelsHome() {
 
 function loginLabel(profile: AccessProfileSummary): string {
   return `${profile.hostName ?? profile.host} · ${profile.name ?? profile.username}`;
+}
+
+function RemoteEndpoints({
+  bindAddress,
+  bindPort,
+  targetHost,
+  targetPort,
+}: Pick<ForwardSummary, "bindAddress" | "bindPort" | "targetHost" | "targetPort">) {
+  const { t } = useI18n();
+  return (
+    <dl className="mt-1 mb-0 text-xs text-muted-foreground">
+      {[
+        [t("tunnels.remoteListener"), endpoint(bindAddress, bindPort)],
+        [t("tunnels.localTarget"), endpoint(targetHost, targetPort)],
+      ].map(([label, value]) => (
+        <div key={label} className="flex flex-wrap gap-x-2">
+          <dt>{label}</dt>
+          <dd className="m-0 break-all font-mono select-text">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function RemoteScope({ address }: { address: string }) {
+  const { t } = useI18n();
+  return (
+    <>
+      <p className="mt-2 mb-0 text-xs text-muted-foreground">{t("tunnels.remoteScope")}</p>
+      {address && !isLoopback(address) ? (
+        <p role="note" className="mt-2 mb-0 text-sm text-attention">
+          {t("tunnels.remoteNonLoopback")}
+        </p>
+      ) : null}
+    </>
+  );
 }
 
 function RunPreparation({ run, onCancel }: { run: ForwardSnapshot; onCancel: () => void }) {
@@ -554,13 +591,13 @@ function TunnelEditor({
   const form = useId();
   const select = useId();
   const mode = useId();
-  const [kind, setKind] = useState<"local" | "dynamic">(existing?.kind === "dynamic" ? "dynamic" : "local");
+  const [kind, setKind] = useState<ForwardInput["kind"]>(existing?.kind ?? "local");
   const [value, setValue] = useState({
     name: existing?.name ?? "",
     bindAddress: existing?.bindAddress ?? "127.0.0.1",
     bindPort: existing?.bindPort?.toString() ?? "",
-    targetHost: existing?.kind === "local" ? (existing.targetHost ?? "") : "",
-    targetPort: existing?.kind === "local" ? (existing.targetPort?.toString() ?? "") : "",
+    targetHost: existing?.kind !== "dynamic" ? (existing?.targetHost ?? "") : "",
+    targetPort: existing?.kind !== "dynamic" ? (existing?.targetPort?.toString() ?? "") : "",
     profile: existing?.profile ?? "",
   });
   const [error, setError] = useState<ObjectEditError | null>(null);
@@ -581,8 +618,8 @@ function TunnelEditor({
       ...value,
       kind,
       bindPort: Number(value.bindPort),
-      targetHost: kind === "local" ? value.targetHost : null,
-      targetPort: kind === "local" ? Number(value.targetPort) : null,
+      targetHost: kind !== "dynamic" ? value.targetHost : null,
+      targetPort: kind !== "dynamic" ? Number(value.targetPort) : null,
       profile: value.profile || null,
     };
     try {
@@ -640,25 +677,27 @@ function TunnelEditor({
             value={kind}
             disabled={busy}
             onChange={(event) => {
-              setKind(event.target.value as "local" | "dynamic");
+              setKind(event.target.value as ForwardInput["kind"]);
               setError(null);
             }}
             className={selectStyle}
           >
             <option value="local">{t("tunnels.localTcp")}</option>
+            <option value="remote">{t("tunnels.remoteTcp")}</option>
             <option value="dynamic">{t("tunnels.dynamicSocks")}</option>
           </select>
         </div>
         {kind === "dynamic" ? <p className="text-sm text-muted-foreground">{t("tunnels.dynamicBody")}</p> : null}
+        {kind === "remote" ? <p className="text-sm text-muted-foreground">{t("tunnels.remoteBody")}</p> : null}
         <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_7rem]">
           <Field
-            label={t("tunnels.bindAddress")}
+            label={t(kind === "remote" ? "tunnels.remoteBindAddress" : "tunnels.bindAddress")}
             {...field("bindAddress")}
             required
             error={invalid === "bindAddress" ? t("tunnels.error.bindAddress") : undefined}
           />
           <Field
-            label={t("tunnels.bindPort")}
+            label={t(kind === "remote" ? "tunnels.remoteBindPort" : "tunnels.bindPort")}
             {...field("bindPort")}
             type="number"
             min={1}
@@ -667,21 +706,23 @@ function TunnelEditor({
             error={invalid === "bindPort" ? t("tunnels.error.port") : undefined}
           />
         </div>
-        {!isLoopback(address) && address ? (
+        {kind === "remote" ? (
+          <RemoteScope address={address} />
+        ) : !isLoopback(address) && address ? (
           <p role="note" className="text-sm text-attention">
             {t(kind === "dynamic" ? "tunnels.dynamicNonLoopback" : "tunnels.nonLoopback")}
           </p>
         ) : null}
-        {kind === "local" ? (
+        {kind !== "dynamic" ? (
           <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_7rem]">
             <Field
-              label={t("tunnels.targetHost")}
+              label={t(kind === "remote" ? "tunnels.localTargetHost" : "tunnels.targetHost")}
               {...field("targetHost")}
               required
               error={invalid === "targetHost" ? t("tunnels.error.targetHost") : undefined}
             />
             <Field
-              label={t("tunnels.targetPort")}
+              label={t(kind === "remote" ? "tunnels.localTargetPort" : "tunnels.targetPort")}
               {...field("targetPort")}
               type="number"
               min={1}
@@ -727,7 +768,6 @@ const selectStyle = "mt-2 h-10 w-full min-w-0 rounded-md border border-border bg
 
 function editError(t: ReturnType<typeof useI18n>["t"], error: ObjectEditError): string {
   if (error.kind === "inUse") return t("tunnels.error.inUse");
-  if (error.kind === "unsupportedForward") return t("tunnels.unsupported");
   if (error.kind === "failed") return t("startup.error.reference", { reference: error.reference });
   if (error.kind === "invalidForward") return t("tunnels.error.invalidField");
   if (error.kind === "notFound" || error.kind === "invalidId") return t("tunnels.error.missingReference");
