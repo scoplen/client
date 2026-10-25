@@ -11,6 +11,7 @@ mod identity;
 mod notification;
 
 mod refresh;
+mod registration;
 mod retained;
 mod revalidation;
 mod sync;
@@ -19,6 +20,7 @@ pub(crate) mod trust;
 
 pub use account::{PersonalAccountDevice, PersonalAccountSnapshot};
 pub use background::{PersonalBackgroundStatus, PersonalSyncRuntime};
+pub use registration::{RegistrationError, RegistrationPhase, RegistrationStatus};
 pub use sync::{
     PersonalInventoryIntent, PersonalInventoryProgress, PersonalSyncBootstrap, PersonalSyncError,
 };
