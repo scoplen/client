@@ -1367,8 +1367,6 @@ function objectErrorText(t: Translator, error: ObjectEditError): string {
       return t("objects.error.invalidCommand");
     case "invalidForward":
       return t("tunnels.error.invalidField");
-    case "unsupportedForward":
-      return t("tunnels.unsupported");
     case "invalidCredentialBinding":
       return t("objects.error.invalidCredentialBinding");
     case "secretRequired":

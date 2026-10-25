@@ -329,13 +329,15 @@ the public queue with later queued work, terminal input/resize and exact saved b
 These checks do not establish cross-transport or process recovery, immutable source/staging
 files, inode identity, or physical-platform UI acceptance.
 
-## Standalone local TCP tunnel checks
+## Standalone tunnel checks
 
 ```text
 cargo test -p scoplen-client-core --lib forward_manager::tests
 cargo test -p scoplen-client-core --lib forward
 pnpm --filter @scoplen/app test -- tunnels
 pwsh -NoProfile -File scripts/test-ssh-local-forward.ps1
+pwsh -NoProfile -File scripts/test-ssh-dynamic-forward.ps1
+pwsh -NoProfile -File scripts/test-ssh-remote-forward.ps1
 ```
 
 Core regressions cover frozen configuration and Login identity, concurrent peers and
@@ -351,6 +353,17 @@ secret-input cleanup, stale revisions and replies, deletion during a run, keyboa
 operation and English/Chinese states. Synthetic IPC and browser rendering do not establish
 native desktop or complete C7 acceptance. Failed OpenSSH runs retain private diagnostics
 in their owned temporary directory and stop the owned container; successful runs clean up.
+
+Remote additionally checks exact delivered-channel metadata, Streamlocal/Agent refusal,
+bounded local resolution/connect, late resolver fencing, fixed-port acknowledgements and
+unknown registration/cancellation. Its disposable OpenSSH fixture uses `MaxSessions 0`
+and actual incoming connections to client-owned TCP services. Direct and Jump runs require
+two peers to deliver a prefix before either can continue, then verify binary payloads,
+half-close in both directions and exact counter direction. The fixture covers encrypted-key
+and Interactive preparation, occupied ports, forwarding denial, local refusal/recovery,
+requested versus actual `GatewayPorts` scope, Stop, SSH loss, complete parent release and
+an independent terminal. Only the fixture's container/listeners and private scratch files
+are inspected or changed; it needs Docker and `ssh-keygen` in addition to the Rust toolchain.
 
 ## Generated files
 

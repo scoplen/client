@@ -1061,13 +1061,13 @@ export const en = {
   "session.transfers.issue.staleItem": "This transfer changed or ended. Refresh Files to see its current result.",
   "tunnels.title": "Tunnels",
   "tunnels.description":
-    "Forward local TCP or SOCKS traffic through a saved Login. Tunnels keep running when you change views.",
+    "Forward local, remote or SOCKS traffic through a saved Login. Tunnels keep running when you change views.",
   "tunnels.add": "Add tunnel",
   "tunnels.name": "Name",
   "tunnels.runs": "Runs",
   "tunnels.saved": "Saved tunnels",
-  "tunnels.runs.empty": "No tunnel runs yet. Start a saved tunnel when you need its local port.",
-  "tunnels.saved.empty": "No saved tunnels yet. Add a local TCP or dynamic SOCKS tunnel to choose its listening port.",
+  "tunnels.runs.empty": "No tunnel runs yet. Start a saved tunnel when you need it.",
+  "tunnels.saved.empty": "No saved tunnels yet. Add a local TCP, remote TCP or dynamic SOCKS tunnel.",
   "tunnels.desktopOnly": "Start and monitor tunnels in the desktop app.",
   "tunnels.loading": "Loading tunnels…",
   "tunnels.refresh": "Refresh runs",
@@ -1086,7 +1086,6 @@ export const en = {
   "tunnels.deleteTitle": "Delete {name}?",
   "tunnels.deleteBody":
     "Remove this saved definition. Any running tunnel keeps its current endpoints and can still be stopped under Runs.",
-  "tunnels.unsupported": "Only local TCP and dynamic SOCKS tunnels can be started or edited in this version.",
   "tunnels.login": "Login",
   "tunnels.defaultLogin": "Default Login",
   "tunnels.chooseLogin": "Choose a Login",
@@ -1102,6 +1101,19 @@ export const en = {
   "tunnels.editorBody":
     "Saving changes the definition for the next Start. Running tunnels keep their current configuration.",
   "tunnels.localTcp": "Local TCP",
+  "tunnels.remoteTcp": "Remote TCP",
+  "tunnels.remoteBody":
+    "Accept connections on the SSH server and forward them to a fixed service on this device. This device resolves the local target hostname.",
+  "tunnels.remoteListener": "Requested remote listener",
+  "tunnels.localTarget": "Local target",
+  "tunnels.remoteBindAddress": "Requested remote address",
+  "tunnels.remoteBindPort": "Remote port",
+  "tunnels.localTargetHost": "Local target host",
+  "tunnels.localTargetPort": "Local target port",
+  "tunnels.remoteScope":
+    "The SSH server controls the actual listening interfaces. Its policy may override this address, including a loopback request; a successful start does not confirm the actual scope.",
+  "tunnels.remoteNonLoopback":
+    "Devices that can reach the remote listener can access this local service through the tunnel. Review the server's listening policy before starting.",
   "tunnels.mode": "Mode",
   "tunnels.dynamicSocks": "Dynamic SOCKS",
   "tunnels.dynamicBody":
@@ -1129,17 +1141,20 @@ export const en = {
   "tunnels.issue.invalidConfiguration": "Check the saved tunnel endpoints and selected Login before starting again.",
   "tunnels.issue.notFound":
     "The tunnel or selected Login is no longer available. Choose an existing definition and Login.",
-  "tunnels.issue.unsupportedKind": "Choose a local TCP or dynamic SOCKS tunnel.",
   "tunnels.issue.alreadyRunning": "This tunnel is already preparing, running or stopping.",
   "tunnels.issue.capacityReached": "Stop another tunnel before starting this one. Up to 16 can run at once.",
   "tunnels.issue.unavailable": "Tunnel management is unavailable. Refresh runs to try again.",
   "tunnels.issue.expired": "This run or authentication prompt has ended. Check its current state before continuing.",
   "tunnels.issue.preparationFailed": "SSH setup failed. Check the selected Login and start again.",
   "tunnels.issue.listenFailed":
-    "The local address or port is unavailable. Check whether another program is using it, then start again.",
+    "The listening endpoint is unavailable. Check the address, port and SSH forwarding policy before starting again.",
+  "tunnels.issue.listenTimedOut":
+    "The remote listener request timed out. Cleanup could not be confirmed; check the server before starting again.",
+  "tunnels.issue.peerRejected":
+    "An unexpected incoming channel was closed without contacting the local target. Other tunnel connections can continue.",
   "tunnels.issue.connectionLost": "The SSH connection ended. Start the tunnel again when the host is available.",
   "tunnels.issue.targetRejected":
-    "The SSH server refused a target connection. Check the destination and forwarding permissions.",
+    "A target connection was refused. Check the destination and forwarding permissions. Other tunnel connections can continue.",
   "tunnels.issue.targetTimedOut": "A target connection timed out. Check the destination before connecting again.",
   "tunnels.issue.handshakeRejected":
     "A SOCKS request was refused. Use SOCKS4/4a or SOCKS5 CONNECT without proxy authentication. Other connections can continue.",
@@ -1147,7 +1162,7 @@ export const en = {
     "A SOCKS handshake timed out and its connection closed. Reconnect the requesting app to try again. Other connections can continue.",
   "tunnels.issue.peerLimitReached": "This tunnel reached its limit of 32 connections. Extra connections were closed.",
   "tunnels.issue.peerIo": "One connection ended before copying completed. Other tunnel connections can continue.",
-  "tunnels.issue.shutdownFailed": "Tunnel shutdown could not be confirmed.",
+  "tunnels.issue.shutdownFailed": "Tunnel shutdown could not be confirmed. Check the listener before starting again.",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };

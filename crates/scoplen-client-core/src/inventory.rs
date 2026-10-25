@@ -490,13 +490,13 @@ pub struct ForwardSummary {
     pub kind: ForwardKindInput,
     /// The optional default profile configured on the tunnel.
     pub profile: Option<String>,
-    /// Saved local listening address, when specified.
+    /// Saved local bind or requested remote bind, when specified.
     pub bind_address: Option<String>,
-    /// Saved nonzero local port, when specified.
+    /// Saved listening port; execution requires a nonzero value.
     pub bind_port: Option<u16>,
-    /// Destination resolved by the SSH server, when specified.
+    /// Destination resolved by the SSH server for Local or this client for Remote.
     pub target_host: Option<String>,
-    /// Saved nonzero destination port, when specified.
+    /// Saved destination port; execution requires a nonzero value.
     pub target_port: Option<u16>,
     /// Number of Logins that attach this tunnel.
     pub profile_count: u32,
@@ -504,22 +504,22 @@ pub struct ForwardSummary {
     pub restored: bool,
 }
 
-/// Complete replacement of a saved Local TCP or Dynamic SOCKS definition.
+/// Complete replacement of a saved Local, Remote or Dynamic definition.
 #[derive(Clone, Debug, Deserialize, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ForwardInput {
     /// Nonempty display name.
     pub name: String,
-    /// Local and Dynamic are editable; Remote remains unsupported.
+    /// Saved forwarding direction.
     pub kind: ForwardKindInput,
-    /// Explicit IPv4 or IPv6 literal; never replaced with a broader listener.
+    /// Explicit IPv4 or IPv6 literal; Remote retains the requested listener address.
     pub bind_address: String,
     /// Nonzero TCP listening port.
     pub bind_port: u32,
-    /// Required Local destination; ignored and cleared for Dynamic.
+    /// Required Local or Remote destination; ignored and cleared for Dynamic.
     #[serde(default)]
     pub target_host: Option<String>,
-    /// Required nonzero Local destination port; ignored and cleared for Dynamic.
+    /// Required nonzero Local or Remote destination port; cleared for Dynamic.
     #[serde(default)]
     pub target_port: Option<u32>,
     /// Optional default Login; starting still selects an explicit Login.
@@ -629,9 +629,6 @@ pub enum ObjectEditError {
     /// A saved tunnel endpoint is invalid.
     #[error("the tunnel {field} is invalid")]
     InvalidForward { field: String },
-    /// Only Local TCP and Dynamic SOCKS definitions can be created or edited here.
-    #[error("only Local TCP and Dynamic SOCKS tunnel definitions can be edited")]
-    UnsupportedForward,
     /// Kind and binding do not satisfy the object model.
     #[error("the credential kind and binding are incompatible")]
     InvalidCredentialBinding,
@@ -1210,7 +1207,7 @@ impl Inventory {
         Ok(result)
     }
 
-    /// Creates a Local or Dynamic definition without starting any network operation.
+    /// Creates a saved tunnel definition without starting any network operation.
     pub fn create_forward(&self, input: ForwardInput) -> Result<ForwardSummary, ObjectEditError> {
         let change = self.validate_forward_input(input)?;
         let forward =
@@ -1226,13 +1223,7 @@ impl Inventory {
     ) -> Result<ForwardSummary, ObjectEditError> {
         let id = parse_object_id(&forward_id, "tunnel")?;
         let forwards = Repository::<Forward>::new(&self.store);
-        let existing = forwards
-            .get(id)
-            .map_err(object_from_record)?
-            .ok_or_else(|| object_not_found("tunnel"))?;
-        if existing.kind == ForwardKind::Remote {
-            return Err(ObjectEditError::UnsupportedForward);
-        }
+        forwards.get(id).map_err(object_from_record)?.ok_or_else(|| object_not_found("tunnel"))?;
         let change = self.validate_forward_input(input)?;
         let profiles = self.profiles().map_err(object_from_failure)?;
         let forward = forwards.update(id, change).map_err(object_from_record)?;
@@ -1266,9 +1257,6 @@ impl Inventory {
         &self,
         input: ForwardInput,
     ) -> Result<ForwardChange, ObjectEditError> {
-        if input.kind == ForwardKindInput::Remote {
-            return Err(ObjectEditError::UnsupportedForward);
-        }
         let name = validate_name(input.name)?;
         let invalid = |field: &str| ObjectEditError::InvalidForward { field: field.to_owned() };
         let bind_address = input.bind_address.trim().to_owned();
@@ -1280,7 +1268,7 @@ impl Inventory {
             .filter(|port| *port != 0)
             .ok_or_else(|| invalid("bindPort"))?;
         let (kind, target_host, target_port) = match input.kind {
-            ForwardKindInput::Local => {
+            ForwardKindInput::Local | ForwardKindInput::Remote => {
                 let target_host = input.target_host.ok_or_else(|| invalid("targetHost"))?;
                 let target_host = target_host.trim().to_owned();
                 if target_host.len() > 1024 {
@@ -1297,10 +1285,14 @@ impl Inventory {
                     .and_then(|port| u16::try_from(port).ok())
                     .filter(|port| *port != 0)
                     .ok_or_else(|| invalid("targetPort"))?;
-                (ForwardKind::Local, Edit::Set(target_host), Edit::Set(target_port))
+                let kind = if input.kind == ForwardKindInput::Remote {
+                    ForwardKind::Remote
+                } else {
+                    ForwardKind::Local
+                };
+                (kind, Edit::Set(target_host), Edit::Set(target_port))
             }
             ForwardKindInput::Dynamic => (ForwardKind::Dynamic, Edit::Clear, Edit::Clear),
-            ForwardKindInput::Remote => return Err(ObjectEditError::UnsupportedForward),
         };
         let profile = match input.profile {
             None => None,
@@ -5147,27 +5139,47 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_forward_edits_leave_the_original_record_untouched() {
+    fn remote_forward_crud_preserves_requested_binding_and_fixed_local_target() {
         let inventory = inventory();
-        let mut unsupported = local_forward_input(None);
-        unsupported.kind = ForwardKindInput::Remote;
-        assert_eq!(inventory.create_forward(unsupported), Err(ObjectEditError::UnsupportedForward));
+        let remote = ForwardInput {
+            kind: ForwardKindInput::Remote,
+            target_host: Some("localhost".into()),
+            ..local_forward_input(None)
+        };
+        let created = inventory.create_forward(remote.clone()).unwrap();
+        assert_eq!(created.kind, ForwardKindInput::Remote);
+        assert_eq!(created.bind_address.as_deref(), Some("127.0.0.1"));
+        assert_eq!(created.bind_port, Some(5433));
+        assert_eq!(created.target_host.as_deref(), Some("localhost"));
+        assert_eq!(created.target_port, Some(5432));
+        let remote = ForwardInput { bind_address: "::".into(), ..remote };
+        let updated = inventory.update_forward(created.id.clone(), remote.clone()).unwrap();
+        assert_eq!(updated.bind_address.as_deref(), Some("::"));
+        for (field, invalid) in [
+            ("bindPort", ForwardInput { bind_port: 0, ..remote.clone() }),
+            ("bindPort", ForwardInput { bind_port: 65536, ..remote.clone() }),
+            ("bindAddress", ForwardInput { bind_address: "localhost".into(), ..remote.clone() }),
+            ("targetPort", ForwardInput { target_port: Some(0), ..remote.clone() }),
+            ("targetHost", ForwardInput { target_host: None, ..remote.clone() }),
+            (
+                "targetHost",
+                ForwardInput { target_host: Some("local host".into()), ..remote.clone() },
+            ),
+        ] {
+            let expected = Err(ObjectEditError::InvalidForward { field: field.into() });
+            assert_eq!(inventory.create_forward(invalid.clone()), expected);
+            assert_eq!(inventory.update_forward(created.id.clone(), invalid), expected);
+            assert_eq!(inventory.forwards_objects().unwrap(), vec![updated.clone()]);
+        }
+        let local =
+            inventory.update_forward(created.id.clone(), local_forward_input(None)).unwrap();
+        assert_eq!(local.kind, ForwardKindInput::Local);
+        assert_eq!(
+            inventory.update_forward(created.id.clone(), remote).unwrap().kind,
+            ForwardKindInput::Remote
+        );
+        inventory.delete_forward(created.id).unwrap();
         assert!(inventory.forwards_objects().unwrap().is_empty());
-        let remote = Repository::<Forward>::new(&inventory.store)
-            .create(ForwardChange {
-                name: Some("remote".into()),
-                kind: Some(ForwardKind::Remote),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(
-            inventory.update_forward(id(remote.meta.id), local_forward_input(None)),
-            Err(ObjectEditError::UnsupportedForward)
-        );
-        assert_eq!(
-            Repository::<Forward>::new(&inventory.store).get(remote.meta.id).unwrap(),
-            Some(remote)
-        );
     }
 
     #[test]

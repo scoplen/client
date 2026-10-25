@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Notify, mpsc};
 
 mod dynamic;
+mod remote;
 
 struct Fixture {
     _directory: tempfile::TempDir,
@@ -807,6 +808,7 @@ async fn forward_manager_validates_before_network_and_admits_only_one_run_per_de
             id,
             ForwardChange {
                 bind_address: Edit::Set(base.bind_address.unwrap()),
+                bind_port: Edit::Set(0),
                 kind: Some(ForwardKind::Remote),
                 ..Default::default()
             },
@@ -814,10 +816,17 @@ async fn forward_manager_validates_before_network_and_admits_only_one_run_per_de
         .unwrap();
     assert_eq!(
         manager.start(fixture.store.clone(), &fixture.forward, &fixture.profile, |_| {}).err(),
-        Some(ForwardIssue::UnsupportedKind)
+        Some(ForwardIssue::InvalidConfiguration)
     );
     Repository::<Forward>::new(&fixture.store)
-        .update(id, ForwardChange { kind: Some(ForwardKind::Local), ..Default::default() })
+        .update(
+            id,
+            ForwardChange {
+                kind: Some(ForwardKind::Local),
+                bind_port: Edit::Set(fixture.port),
+                ..Default::default()
+            },
+        )
         .unwrap();
     assert_eq!(
         manager

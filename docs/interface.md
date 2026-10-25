@@ -97,9 +97,9 @@ and other remote edits remain separate work.
 
 `web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 92 px for the window controls, which sit centered in it, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.
 
-## Independent local tunnels
+## Independent tunnels
 
-Hosts → Tunnels lists saved local TCP definitions and their independent runs. Saving only
+Hosts → Tunnels lists saved Local TCP, Remote TCP and Dynamic SOCKS definitions and their independent runs. Saving only
 writes inventory. Start selects an existing Login and uses the terminal's shared trust,
 passphrase and Interactive dialogs without opening a terminal tab. The editor defaults to
 loopback and explains access from other devices when another bind address is entered.
@@ -115,6 +115,14 @@ count, uploaded/downloaded bytes and refusal count. Editing or deleting inventor
 relabels a running connection or removes its Stop action. Stopped and failed runs remain
 visible; another attempt requires Start. The renderer receives no socket, key or credential
 handle and sends no network traffic.
+
+Remote labels the requested server listener separately from the fixed local target in the
+editor and running snapshot. A successful Start does not report the actual interfaces:
+server policy can override even a loopback request. Non-loopback requests also explain
+access to the local service from devices reaching the remote listener. Saving requires
+both nonzero ports, an explicit bind literal and a local target. Switching to Dynamic
+clears the irrelevant fixed target. Unknown listener/cancellation outcomes remain failures
+with an explicit instruction to check the listener before another Start.
 
 ## Remote text preview
 

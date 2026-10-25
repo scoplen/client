@@ -101,6 +101,9 @@ jobs:
       - name: Standalone Dynamic SOCKS forwarding, remote resolution, application counters, and cleanup
         shell: pwsh
         run: ./scripts/test-ssh-dynamic-forward.ps1
+      - name: Standalone Remote TCP forwarding, fixed local targets, requested scope, and cleanup
+        shell: pwsh
+        run: ./scripts/test-ssh-remote-forward.ps1
 
   windows-agent-interop:
     name: Windows native agent login

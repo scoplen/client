@@ -91,8 +91,8 @@ Interactive SSH sessions become ready after authentication and shell setup,
 even when the server sends no initial output. Terminal input and PTY resizing
 are available without waiting for a welcome message or prompt.
 
-Tunnels manages saved Local TCP and Dynamic SOCKS forwards independently of terminal
-tabs. Add a definition with a numeric local IPv4 or IPv6 address and a nonzero local
+Tunnels manages saved Local TCP, Remote TCP and Dynamic SOCKS forwards independently of terminal
+tabs. Local and Dynamic use a numeric local IPv4 or IPv6 address and a nonzero local
 port. Local also needs a destination hostname or address and nonzero destination
 port; Dynamic takes each destination from SOCKS4/4a or SOCKS5 CONNECT. New definitions
 use `127.0.0.1`. Dynamic provides no SOCKS authentication: devices able to reach its
@@ -109,8 +109,21 @@ channel opening. Dynamic negotiation has an absolute 15-second deadline; channel
 opening and the final SOCKS response each have their own 15-second deadline. Traffic
 counts include only application bytes successfully written, excluding SOCKS messages.
 A failed run requires an explicit new Start; tunnels do not reconnect or start
-automatically. Application exit or local-store replacement stops every run. Remote,
-Unix-socket and ad-hoc forwarding remain incomplete.
+automatically. Application exit or local-store replacement stops every run. Unix-socket
+and ad-hoc forwarding remain incomplete.
+
+Remote requests a fixed nonzero listening port and numeric IPv4 or IPv6 address on the
+SSH server, and reaches a fixed local target whose hostname is resolved by this device.
+It opens no local listener or terminal. The editor and run view distinguish the requested
+remote listener from the local service. Devices able to reach that listener can reach the
+local service; review the server's forwarding and listening policies before starting.
+Even a loopback request does not prove loopback-only access: OpenSSH `GatewayPorts` can
+override the requested address, and SSH does not report the actual listening interfaces.
+Incoming channels must match the acknowledged request exactly before a local connection
+is attempted. Local resolution and dialing share a 15-second deadline. Stop attempts
+remote cancellation, then closes the owned SSH route regardless of the reply. An unknown
+registration or cancellation result reports unconfirmed cleanup; check the listener
+before starting again.
 
 A connected terminal's Files button opens an SFTP browser on that terminal's
 authenticated SSH connection. It starts in the server's initial SFTP directory,
@@ -428,6 +441,13 @@ refusals, the absolute handshake deadline and cleanup during negotiation, channe
 opening and copying. Saved edits/deletion leave the running configuration fixed;
 an independent terminal remains usable. It uses the same prerequisites and fixture
 retention rules as the Local check.
+
+`scripts/test-ssh-remote-forward.ps1` checks saved Remote TCP tunnels with fixed local
+targets and no SSH session channels. It verifies Direct, encrypted-key, Interactive and
+Jump preparation, concurrent binary peers, both half-close directions, exact counters,
+local refusal/recovery, occupied and denied listeners, requested versus actual
+`GatewayPorts` scope, Stop, SSH loss and complete route cleanup while a separate terminal
+stays usable. It uses the same prerequisites and fixture retention rules as the Local check.
 
 With PowerShell 7, Docker, and `ssh-keygen` available, `scripts/test-ssh-private-key.ps1`
 starts disposable OpenSSH servers and verifies Ed25519, P-256/P-384/P-521, and RSA key

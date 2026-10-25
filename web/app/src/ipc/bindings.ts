@@ -12,7 +12,7 @@ export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	/**  Called by the frontend once its first screen has rendered. */
 	shellReady: () => __TAURI_INVOKE<void>("shell_ready"),
-	/**  Start a saved Local or Dynamic tunnel using the explicitly selected Login. */
+	/**  Start a saved tunnel using the explicitly selected Login. */
 	forwardStart: (forwardId: string, profileId: string) => typedError<ForwardSnapshot, ForwardIssue>(__TAURI_INVOKE("forward_start", { forwardId, profileId })),
 	/**  List the current store's live runs and retained terminal snapshots. */
 	forwardList: () => typedError<ForwardSnapshot[], ForwardIssue>(__TAURI_INVOKE("forward_list")),
@@ -620,6 +620,24 @@ bindPort: number;
 targetHost: string;
 /**  Exact nonzero remote target port. */
 targetPort: number } |
+/**  A requested remote TCP listener reaching one fixed destination on this client. */
+{ kind: "remote";
+/**  Saved Forward identity. */
+forwardId: string;
+/**  Saved display label. */
+name: string;
+/**  Explicitly selected existing Login. */
+profileId: string;
+/**  Login identity from the immutable preparation plan. */
+login: PreparationContext;
+/**  Exact requested remote IPv4 or IPv6 address; server policy controls actual scope. */
+bindAddress: string;
+/**  Exact nonzero requested remote port. */
+bindPort: number;
+/**  Exact local target, resolved by this client. */
+targetHost: string;
+/**  Exact nonzero local target port. */
+targetPort: number } |
 /**  An unauthenticated SOCKS4/4a/5 CONNECT proxy through the selected Login. */
 { kind: "dynamic";
 /**  Saved Forward identity. */
@@ -635,19 +653,19 @@ bindAddress: string;
 /**  Exact nonzero saved local port. */
 bindPort: number };
 
-/**  Complete replacement of a saved Local TCP or Dynamic SOCKS definition. */
+/**  Complete replacement of a saved Local, Remote or Dynamic definition. */
 export type ForwardInput = {
 	/**  Nonempty display name. */
 	name: string,
-	/**  Local and Dynamic are editable; Remote remains unsupported. */
+	/**  Saved forwarding direction. */
 	kind: ForwardKindInput,
-	/**  Explicit IPv4 or IPv6 literal; never replaced with a broader listener. */
+	/**  Explicit IPv4 or IPv6 literal; Remote retains the requested listener address. */
 	bindAddress: string,
 	/**  Nonzero TCP listening port. */
 	bindPort: number,
-	/**  Required Local destination; ignored and cleared for Dynamic. */
+	/**  Required Local or Remote destination; ignored and cleared for Dynamic. */
 	targetHost?: string | null,
-	/**  Required nonzero Local destination port; ignored and cleared for Dynamic. */
+	/**  Required nonzero Local or Remote destination port; cleared for Dynamic. */
 	targetPort?: number | null,
 	/**  Optional default Login; starting still selects an explicit Login. */
 	profile: string | null,
@@ -659,8 +677,6 @@ export type ForwardIssue =
 "invalidConfiguration" |
 /**  The saved tunnel or selected Login no longer exists. */
 "notFound" |
-/**  This definition's kind is not an independently executable tunnel mode. */
-"unsupportedKind" |
 /**  That saved definition already owns a live execution. */
 "alreadyRunning" |
 /**  Live execution capacity is reserved before any network operation. */
@@ -671,19 +687,23 @@ export type ForwardIssue =
 "expired" |
 /**  Existing SSH preparation rejected the configuration, trust or authentication. */
 "preparationFailed" |
-/**  The saved local socket cannot be bound or its listener failed. */
+/**  The saved listening endpoint could not be admitted or its listener failed. */
 "listenFailed" |
+/**  The remote listener request was not acknowledged within its complete budget. */
+"listenTimedOut" |
 /**  The SSH event loop or transport ended. */
 "connectionLost" |
-/**  One accepted peer's target channel was refused. */
+/**  One admitted peer's target connection was refused. */
 "targetRejected" |
-/**  One accepted peer's target channel did not open within its budget. */
+/**  One admitted peer's complete target setup exhausted its budget. */
 "targetTimedOut" |
 /**  One peer sent an invalid or unsupported SOCKS negotiation. */
 "handshakeRejected" |
 /**  One peer did not finish SOCKS negotiation within its complete budget. */
 "handshakeTimedOut" |
-/**  An excess accepted socket was closed without opening an SSH channel. */
+/**  A delivered reverse channel did not match this run's authorized TCP endpoint. */
+"peerRejected" |
+/**  An excess observed peer was closed before target admission. */
 "peerLimitReached" |
 /**  One peer failed while copying bytes; other peers remain independent. */
 "peerIo" |
@@ -703,7 +723,7 @@ export type ForwardKindInput =
 export type ForwardPhase =
 /**  Resolving the saved Login and completing trust and authentication. */
 "preparing" |
-/**  The selected local socket is accepting connections. */
+/**  The local listener is active or the requested remote listener was acknowledged. */
 "listening" |
 /**  New peers and prompt replies are fenced while owned resources settle. */
 "stopping" |
@@ -722,15 +742,15 @@ export type ForwardSnapshot = {
 	phase: ForwardPhase,
 	/**  Latest preparation state, including any current one-use prompt. */
 	preparation: PreparationEvent | null,
-	/**  Actual bound socket, present only after successful listener admission. */
+	/**  Actual local bound socket; remote listener scope is not reported by SSH. */
 	boundAddress: string | null,
-	/**  Negotiating, opening and copying peers, bounded by `MAX_FORWARD_PEERS`. */
+	/**  Negotiating, resolving, connecting and copying peers, bounded by `MAX_FORWARD_PEERS`. */
 	activeConnections: number,
-	/**  Bytes successfully written toward the SSH target. */
+	/**  Application bytes successfully written toward SSH. */
 	uploadedBytes: string,
-	/**  Bytes successfully written toward the local peer. */
+	/**  Application bytes successfully written from SSH to the local socket. */
 	downloadedBytes: string,
-	/**  Peers refused by target admission, capacity or I/O failure. */
+	/**  Observed peers rejected by endpoint policy, target admission, capacity or I/O failure. */
 	rejectedConnections: string,
 	/**  Latest fixed issue category; no remote payload or native error text. */
 	lastIssue: ForwardIssue | null,
@@ -748,13 +768,13 @@ export type ForwardSummary = {
 	kind: ForwardKindInput,
 	/**  The optional default profile configured on the tunnel. */
 	profile: string | null,
-	/**  Saved local listening address, when specified. */
+	/**  Saved local bind or requested remote bind, when specified. */
 	bindAddress: string | null,
-	/**  Saved nonzero local port, when specified. */
+	/**  Saved listening port; execution requires a nonzero value. */
 	bindPort: number | null,
-	/**  Destination resolved by the SSH server, when specified. */
+	/**  Destination resolved by the SSH server for Local or this client for Remote. */
 	targetHost: string | null,
-	/**  Saved nonzero destination port, when specified. */
+	/**  Saved destination port; execution requires a nonzero value. */
 	targetPort: number | null,
 	/**  Number of Logins that attach this tunnel. */
 	profileCount: number,
@@ -958,8 +978,6 @@ export type ObjectEditError =
 { kind: "invalidCommand" } |
 /**  A saved tunnel endpoint is invalid. */
 { kind: "invalidForward"; field: string } |
-/**  Only Local TCP and Dynamic SOCKS definitions can be created or edited here. */
-{ kind: "unsupportedForward" } |
 /**  Kind and binding do not satisfy the object model. */
 { kind: "invalidCredentialBinding" } |
 /**  Shared password/private-key credentials require material on creation. */

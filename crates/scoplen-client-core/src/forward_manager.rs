@@ -36,11 +36,12 @@ use crate::{
     store::Store,
 };
 
+mod remote;
 mod socks;
 
 /// Maximum live tunnels, including preparation and shutdown.
 pub const MAX_RUNNING_FORWARDS: usize = 16;
-/// Maximum accepted peers, including SOCKS negotiation and pending SSH channel opens.
+/// Maximum admitted peers, including negotiation, name resolution and connection attempts.
 pub const MAX_FORWARD_PEERS: usize = 32;
 /// Maximum retained completed tunnel snapshots.
 pub const MAX_COMPLETED_FORWARDS: usize = 32;
@@ -72,6 +73,25 @@ pub enum ForwardConfiguration {
         /// Exact nonzero remote target port.
         target_port: u16,
     },
+    /// A requested remote TCP listener reaching one fixed destination on this client.
+    Remote {
+        /// Saved Forward identity.
+        forward_id: String,
+        /// Saved display label.
+        name: String,
+        /// Explicitly selected existing Login.
+        profile_id: String,
+        /// Login identity from the immutable preparation plan.
+        login: PreparationContext,
+        /// Exact requested remote IPv4 or IPv6 address; server policy controls actual scope.
+        bind_address: String,
+        /// Exact nonzero requested remote port.
+        bind_port: u16,
+        /// Exact local target, resolved by this client.
+        target_host: String,
+        /// Exact nonzero local target port.
+        target_port: u16,
+    },
     /// An unauthenticated SOCKS4/4a/5 CONNECT proxy through the selected Login.
     Dynamic {
         /// Saved Forward identity.
@@ -94,7 +114,9 @@ impl ForwardConfiguration {
     #[must_use]
     pub fn forward_id(&self) -> &str {
         match self {
-            Self::Local { forward_id, .. } | Self::Dynamic { forward_id, .. } => forward_id,
+            Self::Local { forward_id, .. }
+            | Self::Remote { forward_id, .. }
+            | Self::Dynamic { forward_id, .. } => forward_id,
         }
     }
 
@@ -102,13 +124,16 @@ impl ForwardConfiguration {
     #[must_use]
     pub fn login(&self) -> &PreparationContext {
         match self {
-            Self::Local { login, .. } | Self::Dynamic { login, .. } => login,
+            Self::Local { login, .. }
+            | Self::Remote { login, .. }
+            | Self::Dynamic { login, .. } => login,
         }
     }
 
     fn bind(&self) -> (&str, u16) {
         match self {
             Self::Local { bind_address, bind_port, .. }
+            | Self::Remote { bind_address, bind_port, .. }
             | Self::Dynamic { bind_address, bind_port, .. } => (bind_address, *bind_port),
         }
     }
@@ -120,7 +145,7 @@ impl ForwardConfiguration {
 pub enum ForwardPhase {
     /// Resolving the saved Login and completing trust and authentication.
     Preparing,
-    /// The selected local socket is accepting connections.
+    /// The local listener is active or the requested remote listener was acknowledged.
     Listening,
     /// New peers and prompt replies are fenced while owned resources settle.
     Stopping,
@@ -146,9 +171,6 @@ pub enum ForwardIssue {
     /// The saved tunnel or selected Login no longer exists.
     #[error("the saved tunnel or Login is no longer available")]
     NotFound,
-    /// This definition's kind is not an independently executable tunnel mode.
-    #[error("select a local TCP or dynamic SOCKS tunnel")]
-    UnsupportedKind,
     /// That saved definition already owns a live execution.
     #[error("this tunnel is already running or stopping")]
     AlreadyRunning,
@@ -164,16 +186,19 @@ pub enum ForwardIssue {
     /// Existing SSH preparation rejected the configuration, trust or authentication.
     #[error("SSH preparation failed; check the selected Login and connect again")]
     PreparationFailed,
-    /// The saved local socket cannot be bound or its listener failed.
-    #[error("the local listening address is unavailable")]
+    /// The saved listening endpoint could not be admitted or its listener failed.
+    #[error("the listening endpoint is unavailable")]
     ListenFailed,
+    /// The remote listener request was not acknowledged within its complete budget.
+    #[error("the remote listener request timed out")]
+    ListenTimedOut,
     /// The SSH event loop or transport ended.
     #[error("the SSH connection ended; start the tunnel again")]
     ConnectionLost,
-    /// One accepted peer's target channel was refused.
-    #[error("the SSH server refused a target connection")]
+    /// One admitted peer's target connection was refused.
+    #[error("a target connection was refused")]
     TargetRejected,
-    /// One accepted peer's target channel did not open within its budget.
+    /// One admitted peer's complete target setup exhausted its budget.
     #[error("a target connection timed out")]
     TargetTimedOut,
     /// One peer sent an invalid or unsupported SOCKS negotiation.
@@ -182,7 +207,10 @@ pub enum ForwardIssue {
     /// One peer did not finish SOCKS negotiation within its complete budget.
     #[error("a SOCKS connection did not finish negotiation in time")]
     HandshakeTimedOut,
-    /// An excess accepted socket was closed without opening an SSH channel.
+    /// A delivered reverse channel did not match this run's authorized TCP endpoint.
+    #[error("an unexpected tunnel connection was rejected")]
+    PeerRejected,
+    /// An excess observed peer was closed before target admission.
     #[error("the tunnel has reached its connection limit")]
     PeerLimitReached,
     /// One peer failed while copying bytes; other peers remain independent.
@@ -205,15 +233,15 @@ pub struct ForwardSnapshot {
     pub phase: ForwardPhase,
     /// Latest preparation state, including any current one-use prompt.
     pub preparation: Option<PreparationEvent>,
-    /// Actual bound socket, present only after successful listener admission.
+    /// Actual local bound socket; remote listener scope is not reported by SSH.
     pub bound_address: Option<String>,
-    /// Negotiating, opening and copying peers, bounded by `MAX_FORWARD_PEERS`.
+    /// Negotiating, resolving, connecting and copying peers, bounded by `MAX_FORWARD_PEERS`.
     pub active_connections: u32,
-    /// Bytes successfully written toward the SSH target.
+    /// Application bytes successfully written toward SSH.
     pub uploaded_bytes: String,
-    /// Bytes successfully written toward the local peer.
+    /// Application bytes successfully written from SSH to the local socket.
     pub downloaded_bytes: String,
-    /// Peers refused by target admission, capacity or I/O failure.
+    /// Observed peers rejected by endpoint policy, target admission, capacity or I/O failure.
     pub rejected_connections: String,
     /// Latest fixed issue category; no remote payload or native error text.
     pub last_issue: Option<ForwardIssue>,
@@ -305,7 +333,7 @@ impl Run {
     }
 }
 
-/// Owns independent Local TCP and Dynamic SOCKS runs when the observing interface detaches.
+/// Owns independent TCP and SOCKS runs when the observing interface detaches.
 #[derive(Clone, Default)]
 pub struct ForwardManager {
     registry: Arc<Mutex<Registry>>,
@@ -318,7 +346,7 @@ struct Registry {
 }
 
 impl ForwardManager {
-    /// Validate and snapshot a saved Local or Dynamic Forward, then spawn its owner.
+    /// Validate and snapshot a saved Forward, then spawn its independent owner.
     ///
     /// The observer is optional notification only: losing a renderer never stops a tunnel.
     /// `list` and `snapshot` retain pending preparation prompts for a new observer.
@@ -477,6 +505,7 @@ impl ForwardManager {
             run.stop();
         }
         tokio::time::timeout(CLOSE_TIMEOUT, async {
+            let mut shutdown_failed = false;
             for run in runs {
                 let mut finished = run.finished.subscribe();
                 finished
@@ -484,10 +513,10 @@ impl ForwardManager {
                     .await
                     .map_err(|_| ForwardIssue::ShutdownFailed)?;
                 if run.snapshot()?.last_issue == Some(ForwardIssue::ShutdownFailed) {
-                    return Err(ForwardIssue::ShutdownFailed);
+                    shutdown_failed = true;
                 }
             }
-            Ok(())
+            if shutdown_failed { Err(ForwardIssue::ShutdownFailed) } else { Ok(()) }
         })
         .await
         .map_err(|_| ForwardIssue::ShutdownFailed)??;
@@ -534,9 +563,6 @@ fn saved_configuration(
         .get(forward)
         .map_err(|_| ForwardIssue::Unavailable)?
         .ok_or(ForwardIssue::NotFound)?;
-    if forward.kind == ForwardKind::Remote {
-        return Err(ForwardIssue::UnsupportedKind);
-    }
     let bind_address = forward.bind_address.ok_or(ForwardIssue::InvalidConfiguration)?;
     let bind_port = forward.bind_port.ok_or(ForwardIssue::InvalidConfiguration)?;
     if forward.name.trim().is_empty()
@@ -546,7 +572,7 @@ fn saved_configuration(
     {
         return Err(ForwardIssue::InvalidConfiguration);
     }
-    let target = if forward.kind == ForwardKind::Local {
+    let target = if matches!(forward.kind, ForwardKind::Local | ForwardKind::Remote) {
         let host = forward.target_host.ok_or(ForwardIssue::InvalidConfiguration)?;
         let port = forward.target_port.ok_or(ForwardIssue::InvalidConfiguration)?;
         if port == 0
@@ -570,6 +596,18 @@ fn saved_configuration(
     let plan =
         resolve_preparation_plan(store, profile).map_err(|_| ForwardIssue::PreparationFailed)?;
     let configuration = match target {
+        Some((target_host, target_port)) if forward.kind == ForwardKind::Remote => {
+            ForwardConfiguration::Remote {
+                forward_id: forward.meta.id.to_string(),
+                name: forward.name,
+                profile_id: profile.to_string(),
+                login: plan.target_context().clone(),
+                bind_address,
+                bind_port,
+                target_host,
+                target_port,
+            }
+        }
         Some((target_host, target_port)) => ForwardConfiguration::Local {
             forward_id: forward.meta.id.to_string(),
             name: forward.name,
@@ -619,6 +657,9 @@ async fn execute(
             }
         }
     };
+    if matches!(run.configuration, ForwardConfiguration::Remote { .. }) {
+        return remote::execute(run, connection, &mut stop).await;
+    }
     let mut connection = Arc::new(connection);
     let result = serve(run, &mut connection, &mut stop).await;
     let connection = Arc::try_unwrap(connection).map_err(|_| ForwardIssue::ShutdownFailed)?;
@@ -756,6 +797,9 @@ async fn serve(
                                 .await
                                 .map(|peer| PeerOutcome::Negotiated(Box::new(peer)))
                         });
+                    }
+                    ForwardConfiguration::Remote { .. } => {
+                        break Err(ForwardIssue::InvalidConfiguration);
                     }
                 }
             }
