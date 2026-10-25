@@ -8,6 +8,8 @@ use crate::{
 
 use super::*;
 
+mod isolation;
+
 const LOCAL_PASSPHRASE: &str = "Disposable local data passphrase";
 
 #[derive(Deserialize)]
@@ -288,6 +290,12 @@ async fn roundtrip(deployment: PasswordDeployment, directory: &Path) {
         first_store.get(shared.id).expect("bidirectional synchronized Host"),
         Some(edited.clone())
     );
+    let foreign_host =
+        isolation::verify(&deployment, directory, &ca, &first_manager, &first_store, &edited).await;
+    settings
+        .synchronize(&second_manager, second_store.clone(), None)
+        .await
+        .expect("the other original Account Device remains usable after foreign reads");
     for store in [&first_store, &second_store] {
         let progress = settings.status(store).expect("durable synchronized progress");
         assert_eq!(progress.pending, 0);
@@ -295,6 +303,11 @@ async fn roundtrip(deployment: PasswordDeployment, directory: &Path) {
         assert_ne!(progress.applied_cursor, "0");
         assert!(store.get(first_local.id).expect("Local remains separate").is_none());
         assert!(store.get(second_local.id).expect("Local remains separate").is_none());
+        assert!(store.get(foreign_host.id).expect("foreign Account Host stays separate").is_none());
+        assert_eq!(
+            store.get(shared.id).expect("own Account Host stays intact"),
+            Some(edited.clone())
+        );
     }
     assert_eq!(first_root.get(first_local.id).expect("original Local Host"), Some(first_local));
     assert_eq!(second_root.get(second_local.id).expect("original Local Host"), Some(second_local));

@@ -60,7 +60,14 @@ After the documented first-denial cooldown, correct password sign-in admits a fr
 the same Account/vault. Both devices rotate native refresh credentials, verify signed membership,
 exchange reviewed encrypted Host data and a second-device edit, and durably acknowledge progress.
 Local-only Hosts stay outside both Account stores; retained keys and synchronized data verify
-after Account reopen. Local store protection uses test passphrases, not native keystore acceptance.
+after Account reopen. The same scenario registers an unrelated Account on the same server. Its
+verified session lists only its own Personal vault; fresh authenticated requests in both
+directions cannot read the other Account's vault keys and return the same not-found problem as
+an absent vault. Reviewed Host uploads remain confined to their Account, and all three Devices
+continue normal synchronization after the denied reads. This covers Personal discovery, key
+reads and ordinary inventory separation; Organization membership/policy, foreign writes and the
+complete isolation matrix remain separate checks.
+Local store protection uses test passphrases, not native keystore acceptance.
 Passwords and account names are generated per run and are not printed. Successful owned client
 fixtures are removed; failures retain the original encrypted stores and pending state.
 This core integration check does not establish native desktop interaction, native picker or

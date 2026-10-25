@@ -4,6 +4,9 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Extended public HTTPS password acceptance to independent Accounts on one deployment, checking
+  Personal vault discovery, symmetric foreign-key-read denial and separate encrypted inventories.
+
 - Added an opt-in public HTTPS integration check for password registration, independent-device
   sign-in, native refresh and bidirectional encrypted Host synchronization using fresh deployments.
 
