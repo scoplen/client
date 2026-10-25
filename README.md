@@ -521,13 +521,17 @@ SPL_SMOKE_TEST=1 target/release/bundle/macos/Scoplen.app/Contents/MacOS/scoplen
 
 Scoplen keeps its local data in the application data directory (`~/Library/Application Support/com.scoplen.client` on macOS, `%APPDATA%\com.scoplen.client` on Windows). The store is a SQLCipher database encrypted with a random 256-bit key. That key is held in the macOS Keychain (only on this device, after the first unlock) or, on Windows, wrapped by a TPM-held key or by DPAPI for the current user. With a local passphrase, the key is additionally wrapped with a key derived from the passphrase by Argon2id; forgetting the passphrase makes the data unrecoverable. If the key is lost, Scoplen keeps the unreadable store under a new name and can start with empty data.
 
-Network access follows explicit SSH actions, admitted-device authentication, and Personal
-sync after explicit key verification. Authentication sends signed device proof only to the
-profile origin. Its HTTPS transport verifies certificates,
-rejects redirects, and bounds exchanges and response bodies. Device signing/KEM keys currently
-use software implementations protected by SQLCipher; hardware device signing is not implemented.
-Historical recovery keys and ceremony artifacts remain encrypted in SQLCipher. This build has no
-recovery export or invitation/pairing controls. Access/refresh tokens and secret keys never cross IPC into the frontend.
+Network access follows explicit SSH actions, Account registration/sign-in, admitted-device
+authentication, and Personal sync after explicit key verification. Rust derives the password
+verifier locally and sends it only to the chosen server over verified HTTPS. Account-entry
+passwords are transient; retained pending operation material stays encrypted in SQLCipher.
+Device authentication sends signed proof only to the profile origin. HTTPS rejects redirects
+and bounds exchanges and response bodies. Device signing/KEM keys currently use software
+implementations protected by SQLCipher; hardware device signing is not implemented.
+Registration exports its recovery key as a plaintext file through the native Save dialog and
+requires a separate safe-storage confirmation. Keep that file private and offline. Retained
+recovery keys and ceremony artifacts remain encrypted in SQLCipher. Invitation/pairing controls
+are retired. Access/refresh tokens and secret keys never cross IPC into the frontend.
 After a successful sync bootstrap, Rust maintains a TLS 1.3/HTTP/2 notification connection and
 synchronizes already adopted Personal objects in the background. Reopening locally verified
 saved keys resumes it. Notification failure enables a 60-second polling fallback. New local
