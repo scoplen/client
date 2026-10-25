@@ -4,21 +4,29 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added Rust-owned independent Account profile installation and selection. The encrypted Local
+  catalog reserves one immutable directory per canonical origin/Account id, with separate local
+  key protection and the original registration Device. Exact historical confirmation must be
+  followed by fresh Device authentication and complete verified K-4 before admission, tokens and
+  bootstrap commit together. Failed or interrupted publication retains the original keys and
+  reservation for reauthenticated retry. Local and other Accounts remain separate, and fresh
+  generations fence old leases and background owners. Native registration/profile UI, password
+  sign-in, next-Device admission and Team switching remain incomplete.
+
 - Added a Rust-owned D-128 registration HTTPS driver with explicit Submit, Confirm and Retry
   actions, verified TLS 1.3/H2, bounded shared codecs/problems and typed cancellation/failures.
   Every proto dependency uses published `183cc5c`, including its shared strict JSON problem reader.
   Durable dispatch evidence permits a fresh explicit retry only after a trusted unchanged
   Submit result; lost responses, restart and absent receipts preserve exact unknown state.
-  Success records historical commit only. Desktop UI, isolated Account-profile installation,
-  password login and full admission remain incomplete.
+  Success records historical commit only; the separate verified profile installer establishes
+  current authority. Desktop UI, password login and full admission remain incomplete.
 
 - Added Rust-only password registration preparation with the real D-127 derivation, independent
   software Device keys and locally opened password/Device/recovery/root/Personal wrappers.
   A separate SQLCipher pending record retains exact signed business bytes, mandatory recovery
   save/confirmation and conservative unknown handoff state through restart. Exact receipt
-  confirmation records historical outcome only. Desktop UI, isolated Account-profile
-  installation, password login and full admission remain incomplete; admitted devices retain
-  their existing authentication and sync paths.
+  confirmation records historical outcome only. Desktop UI, password login and full admission
+  remain incomplete; admitted devices retain their existing authentication and sync paths.
 
 - Updated the single shared proto revision to published `a604b72` password-account contracts,
   removing retired invitation and pairing protocols from resolved dependencies. Retained

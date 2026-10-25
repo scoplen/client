@@ -269,11 +269,17 @@ impl PersonalServer {
         store: &Store,
     ) -> Result<Option<PersonalSyncBootstrap>, PersonalSyncError> {
         let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
-        let Some(snapshot) = store.personal_sync_record().map_err(storage)? else {
-            return Ok(None);
-        };
-        validate(store, &record(store)?, &snapshot, None).map(Some)
+        load_retained_bootstrap(store)
     }
+}
+
+pub(crate) fn load_retained_bootstrap(
+    store: &Store,
+) -> Result<Option<PersonalSyncBootstrap>, PersonalSyncError> {
+    let Some(snapshot) = store.personal_sync_record().map_err(storage)? else {
+        return Ok(None);
+    };
+    validate(store, &record(store)?, &snapshot, None).map(Some)
 }
 
 fn invalid(_: impl std::fmt::Debug) -> PersonalSyncError {
@@ -461,6 +467,72 @@ pub(super) fn validate_against(
         personal_keys,
         active_devices: active,
         known_devices: certificates,
+    })
+}
+
+pub(super) async fn fetch_current<G>(
+    store: &Store,
+    identity: &PersonalRecord,
+    transport: &super::transport::Transport,
+    tokens: &crate::store::personal::PersonalTokens,
+    current: impl Fn() -> Result<G, PersonalServerError>,
+) -> Result<PersonalSyncRecord, PersonalServerError> {
+    current()?;
+    let token = std::str::from_utf8(tokens.access.as_bytes())
+        .map_err(|_| PersonalServerError::InvalidResponse)?;
+    let request = SyncSessionRequest {
+        client_version: env!("CARGO_PKG_VERSION").into(),
+        model_version: scoplen_model::CURRENT_SCHEMA_VERSION,
+        device_id: store.device_id(),
+    }
+    .to_cbor()
+    .map_err(|_| PersonalServerError::InvalidResponse)?;
+    let path = format!("/sync/v1/vaults/{}/keys", identity.personal_vault_id);
+    let mut bodies = Vec::with_capacity(3);
+    for (path, body) in [
+        ("/sync/v1/session", Some(request.as_slice())),
+        ("/sync/v1/keys", None),
+        (path.as_str(), None),
+    ] {
+        let proof = {
+            let _active = current()?;
+            if tokens.access_expires_at <= now()? {
+                return Err(PersonalServerError::AuthenticationRequired);
+            }
+            let secrets = identity::Secrets::parse(&identity.private_material)?;
+            let signing = P256SigningKey::from_bytes(secrets.signing())
+                .map_err(|_| PersonalServerError::Identity)?;
+            let target = DpopTarget::new(
+                if body.is_some() { "POST" } else { "GET" },
+                &identity.origin,
+                path,
+            )
+            .map_err(|_| PersonalServerError::Identity)?;
+            DpopProof::sign(
+                &signing,
+                &signing.public_key_sec1(),
+                &target,
+                DpopToken::Protected(token),
+                now()?,
+                None,
+            )
+            .map_err(|_| PersonalServerError::Identity)?
+        };
+        let response =
+            transport.protected(&identity.origin, path, body, token, &proof, BODY_LIMIT).await?;
+        current()?;
+        match response.status {
+            200 => bodies.push(response.body),
+            401 | 403 => return Err(PersonalServerError::Authentication),
+            _ => return Err(PersonalServerError::InvalidResponse),
+        }
+    }
+    let mut bodies = bodies.into_iter();
+    Ok(PersonalSyncRecord {
+        generation: 0,
+        session: bodies.next().ok_or(PersonalServerError::InvalidResponse)?,
+        account_keys: bodies.next().ok_or(PersonalServerError::InvalidResponse)?,
+        vault_keys: bodies.next().ok_or(PersonalServerError::InvalidResponse)?,
     })
 }
 

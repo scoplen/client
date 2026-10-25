@@ -24,6 +24,7 @@ pub use registration::{
     RegistrationAction, RegistrationCancellation, RegistrationError, RegistrationPhase,
     RegistrationStatus,
 };
+pub(crate) use sync::load_retained_bootstrap;
 pub use sync::{
     PersonalInventoryIntent, PersonalInventoryProgress, PersonalSyncBootstrap, PersonalSyncError,
 };
@@ -294,11 +295,11 @@ async fn authenticate(
     Ok(AuthenticationOutcome::Authenticated)
 }
 
-async fn authentication_tokens(
+async fn authentication_tokens<G>(
     store: &Store,
     pending: &PersonalRecord,
     transport: &Transport,
-    current: impl Fn() -> Result<(), PersonalServerError>,
+    current: impl Fn() -> Result<G, PersonalServerError>,
 ) -> Result<Option<PersonalTokens>, PersonalServerError> {
     current()?;
     let request =
@@ -316,16 +317,19 @@ async fn authentication_tokens(
     }
     let challenge = AuthChallengeResponse::from_json(response.text()?)
         .map_err(|_| PersonalServerError::InvalidResponse)?;
-    current()?;
-    let secrets = identity::Secrets::parse(&pending.private_material)?;
-    let signing =
-        P256SigningKey::from_bytes(secrets.signing()).map_err(|_| PersonalServerError::Identity)?;
-    let context = DeviceAuthContext::new(&pending.origin, &challenge.nonce, store.device_id())
-        .map_err(|_| PersonalServerError::InvalidResponse)?;
-    let signature = signing.sign(&context.signature_input());
-    let hex: String = signature.iter().map(|byte| format!("{byte:02x}")).collect();
-    let request = AuthDeviceRequest::new(store.device_id(), challenge.nonce, hex)
-        .map_err(|_| PersonalServerError::Identity)?;
+    let (request, signing_public) = {
+        let _active = current()?;
+        let secrets = identity::Secrets::parse(&pending.private_material)?;
+        let signing = P256SigningKey::from_bytes(secrets.signing())
+            .map_err(|_| PersonalServerError::Identity)?;
+        let context = DeviceAuthContext::new(&pending.origin, &challenge.nonce, store.device_id())
+            .map_err(|_| PersonalServerError::InvalidResponse)?;
+        let signature = signing.sign(&context.signature_input());
+        let hex: String = signature.iter().map(|byte| format!("{byte:02x}")).collect();
+        let request = AuthDeviceRequest::new(store.device_id(), challenge.nonce, hex)
+            .map_err(|_| PersonalServerError::Identity)?;
+        (request, signing.public_key_sec1())
+    };
     let response = transport
         .post(
             &pending.origin,
@@ -365,8 +369,7 @@ async fn authentication_tokens(
     if claims.sub != pending.account_id
         || claims.did != store.device_id()
         || claims.cnf_jkt
-            != dpop_jwk_thumbprint(&signing.public_key_sec1())
-                .map_err(|_| PersonalServerError::Identity)?
+            != dpop_jwk_thumbprint(&signing_public).map_err(|_| PersonalServerError::Identity)?
         || claims.scope != scoplen_api::auth::INITIAL_DEVICE_ACCESS_SCOPE
         || !claims.org.is_empty()
     {

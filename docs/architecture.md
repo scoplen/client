@@ -19,8 +19,9 @@ web/app (React)  ── typed commands, binary channels ──  src-tauri  ─�
 - `scoplen-client-core` holds every behavior, so it is the same on both platforms and testable without a window.
 - `scoplen-client-platform` is the only crate that may contain `unsafe` code or FFI; it is denied by default there too and allowed per module with each block documented.
 
-The shared libraries and Pageant patch are pinned to `proto@b1748dd`. That revision
-supplies kind-8 descriptor validation and the D-121 asynchronous challenge API with
+The shared libraries and Pageant patch are pinned to published `proto@183cc5c`, including the
+D-127/D-128 password-account contracts and shared strict JSON problem reader. It retains
+kind-8 descriptor validation and the D-121 asynchronous challenge API with
 zeroizing response custody. D-116 adds the object-safe
 `Signer::sign_async` hook, awaited by concrete SSH authentication. The built-in agent signer
 runs each serialized signing exchange on Tokio's blocking pool. Existing synchronous signers
@@ -138,8 +139,8 @@ Account, Personal vault and device bindings. The row stores compact root/certifi
 key-projection, encrypted-artifact and opened-epoch-set anchors; it does not duplicate every
 historical epoch ciphertext. `personal_sync` remains the complete verified bootstrap snapshot.
 Identity roots, device keys, origin and account ownership cannot change in place once admitted.
-This binds the current single-account encrypted store; it does not implement D-126 profile/Team
-switching or the D-128 password wire.
+Each store belongs to one immutable Account; the independent Rust profile catalog described below
+selects stores. Native D-126 profile/Team switching remains incomplete.
 
 Runtime authentication, account reads, bootstrap, inventory and trust require saved neutral
 admission anchors, verified locally against the retained private roots. The archived entry decoder
@@ -181,8 +182,8 @@ admission anchors and sync snapshots. Preparation refuses profiles with current 
 Account setup material. Pending software private material is redacted, zeroizing and protected
 by SQLCipher; no hardware-backed/non-exportable signer or KEM provider is claimed. The pending
 Device id never replaces `Store.device_id()`, which still owns account-free local writes.
-Local objects remain local. Later confirmed installation must create an isolated Account store;
-this boundary does not rebind the existing singleton or implement profile switching.
+Local objects remain local. The separate confirmed installer creates an isolated Account store;
+preparation never rebinds the existing singleton.
 
 Recovery export writes only to a new native-selected path and flushes the file before durably
 marking it saved. Unix uses mode 0600; Windows inherits the destination directory ACL, so the
@@ -218,6 +219,49 @@ malformed or unknown problem never earns retry permission after handoff. A Confi
 cannot mark the original Submit unchanged, even when it reports no business change or no receipt.
 Attempted preparations remain retained; changing usernames or discarding their keys is outside
 this boundary. No password-login driver, Tauri IPC or replacement Settings UI exists yet.
+
+Migration 14 adds an encrypted Local-owned `account_profiles` catalog, durable `profile_selection`
+generation and an immutable `account_profile_binding` in each Account store. Account identity is
+the composite canonical origin and Account id. At most 128 Accounts are retained on one device;
+each receives a random device-local directory under `accounts/<profile-id>/`, its own SQLCipher
+key and platform keystore slot. Without a keystore the caller must separately provide that
+profile's local passphrase; no Account password is reused automatically. This argument unlocks
+existing protection or creates the no-keystore fallback. It does not add a passphrase to an
+already unlocked keystore-backed profile. The immutable binding
+includes original operation, Device, vault, complete signed registration payload and exact receipt.
+An ordinary `Store::open` rejects a bound Account store; the contextual factory verifies the
+binding before migrations and cannot replace existing identities or use another Account's Store.
+
+`PersonalServer::install_registration_profile` requires a current Local `ProfileLease` and exact
+positive phase-two confirmation. A durable reservation precedes key/file work. The new store
+retains the original generated Device id and private material but initially has no admission,
+tokens or usable sync state. Ordinary challenge/Device authentication verifies same-origin JWKS
+and the full JWT identity/scope binding; fresh DPoP protects complete K-4 session, Account-key and
+Personal-vault-key reads. The original signed registration anchors Account roots, Device
+certificate, encrypted key artifacts and epoch-one Personal key. Higher membership revisions with
+the same supported roots/key generation and valid wraps are legal. Unsupported root/epoch changes,
+revocation, substitution or incomplete bootstrap fail closed.
+
+After verification a FULL/IMMEDIATE target transaction checks original provenance, private keys,
+auth generation and previous anchors/snapshot, then installs admission, tokens and bootstrap
+together. A second FULL/IMMEDIATE Local transaction marks the catalog entry ready, advances the
+selection generation and archives the exact confirmed pending record. Unknown registrations
+cannot be deleted. Clearing only this completed record permits preparation of a second Account.
+A crash between these transactions retains both the original pending record and the reservation;
+retry reopens the same target and reauthenticates against current K-4 before publishing it. Once
+publication completed, catalog provenance permits a fresh explicit installation retry without
+repeating registration. Receipt and JWT alone never grant admission.
+
+`AccountProfiles` starts after Local unlock with the native Personal background runtime. Safe
+listing exposes metadata only; the last durable selection is a reopen hint. Every explicit
+Account/Local reopen allocates a fresh Store Arc and durable owner generation. Consumers capture
+opaque leases and resolve bounded operations with `with_current_store`; foreign or old leases
+fail before executing. Bounded private signing also holds the exact profile and root Local locks;
+network waits hold neither. Cancellation, root replacement and profile selection stop pending
+installation, and final transactions reject stale results. Switching cancels the old Personal
+background owner before publishing the new one. No inventory is copied, adopted or uploaded.
+This Rust library boundary has no Tauri command, IPC type or desktop profile UI; native workspace,
+session and Team context integration remains separate work.
 
 Migration 8 adds a monotonically increasing authentication generation, the verified scope ceiling,
 single-use refresh claim and an optional Retry-After deadline, alongside the saved absolute family

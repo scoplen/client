@@ -18,7 +18,8 @@ impl Store {
              WHERE p.singleton=1 AND d.singleton=1 AND k.singleton=1 AND p.origin=?1
                 AND p.account_id=?2 AND p.personal_vault_id=?3 AND p.private_material=?4
                 AND p.auth_generation=?5 AND d.device_id=?6 AND k.signing=?7 AND k.kem=?8
-                AND NOT EXISTS (SELECT 1 FROM personal_admission))",
+                AND NOT EXISTS (SELECT 1 FROM personal_admission)
+                AND NOT EXISTS (SELECT 1 FROM account_profile_binding))",
             params![
                 identity.origin,
                 identity.account_id.as_bytes().as_slice(),
@@ -62,6 +63,7 @@ impl Store {
                 AND p.account_id=?2 AND p.personal_vault_id=?3 AND p.private_material=?4
                 AND p.auth_generation=?5 AND d.device_id=?6 AND k.signing=?7 AND k.kem=?8
                 AND NOT EXISTS (SELECT 1 FROM personal_admission)
+                AND NOT EXISTS (SELECT 1 FROM account_profile_binding)
                 AND ((?9 IS NULL AND NOT EXISTS (SELECT 1 FROM personal_sync))
                     OR EXISTS (SELECT 1 FROM personal_sync WHERE singleton=1 AND generation=?9
                         AND session=?10 AND account_keys=?11 AND vault_keys=?12))
