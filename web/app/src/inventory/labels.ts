@@ -12,6 +12,7 @@ const routeKeys = {
 } as const;
 
 const credentialKeys = {
+  keyboardInteractive: "host.credential.keyboardInteractive",
   password: "host.credential.password",
   agent: "host.credential.agent",
   securityKey: "host.credential.securityKey",

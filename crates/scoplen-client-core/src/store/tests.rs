@@ -168,6 +168,64 @@ fn snapshot_writes_hold_the_store_transaction_until_commit() {
 }
 
 #[test]
+fn snapshot_creates_and_writes_hold_the_store_until_all_changes_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("local.db"), &key(1)).unwrap());
+    let original = store.write(host("initial", "example.test")).unwrap();
+    let new_id = Uuid::now_v7();
+    let (started, snapshot_ready) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let first = std::thread::spawn({
+        let store = store.clone();
+        move || {
+            store
+                .create_and_write_batch_with_snapshot::<StoreError>(|snapshot| {
+                    assert_eq!(
+                        text(&snapshot.get(original.id, ObjectType::HOST)?.unwrap(), 1),
+                        "initial"
+                    );
+                    started.send(()).unwrap();
+                    released.recv().unwrap();
+                    Ok((
+                        vec![NewObject {
+                            id: new_id,
+                            object_type: ObjectType::HOST,
+                            fields: host("new", "new.test").fields,
+                        }],
+                        vec![LocalWrite {
+                            id: Some(original.id),
+                            object_type: ObjectType::HOST,
+                            fields: vec![(FieldPath::Field(1), Value::Text("committed".into()))],
+                        }],
+                    ))
+                })
+                .unwrap();
+        }
+    });
+    snapshot_ready.recv().unwrap();
+    assert!(store.conn.try_lock().is_err());
+    let (attempting, attempted) = std::sync::mpsc::channel();
+    let second = std::thread::spawn({
+        let store = store.clone();
+        move || {
+            attempting.send(()).unwrap();
+            store.create_and_write_batch_with_snapshot::<StoreError>(|snapshot| {
+                assert_eq!(
+                    text(&snapshot.get(original.id, ObjectType::HOST)?.unwrap(), 1),
+                    "committed"
+                );
+                assert!(snapshot.get(new_id, ObjectType::HOST)?.is_some());
+                Err(StoreError::NotFound(original.id))
+            })
+        }
+    });
+    attempted.recv().unwrap();
+    release.send(()).unwrap();
+    first.join().unwrap();
+    assert!(matches!(second.join().unwrap(), Err(StoreError::NotFound(_))));
+}
+
+#[test]
 fn invalid_objects_are_rejected_and_nothing_is_written() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("local.db"), &key(1)).unwrap();

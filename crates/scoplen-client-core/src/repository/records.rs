@@ -216,6 +216,7 @@ pub enum CredentialKind {
     SecurityKey = 5,
     DeviceBoundKey = 6,
     ExternalProvider = 7,
+    KeyboardInteractive = 8,
 }
 
 /// Where a credential's secret lives (`04` §4.4 field 3).
@@ -232,9 +233,18 @@ pub enum CredentialBinding {
 impl CredentialKind {
     fn from_wire(n: u64) -> Option<Self> {
         use CredentialKind::*;
-        [Password, PrivateKey, Certificate, Agent, SecurityKey, DeviceBoundKey, ExternalProvider]
-            .into_iter()
-            .find(|k| *k as u64 == n)
+        [
+            Password,
+            PrivateKey,
+            Certificate,
+            Agent,
+            SecurityKey,
+            DeviceBoundKey,
+            ExternalProvider,
+            KeyboardInteractive,
+        ]
+        .into_iter()
+        .find(|k| *k as u64 == n)
     }
 }
 
@@ -753,14 +763,17 @@ impl Record for Forward {
         use ForwardKind::*;
         let kind = fields::uint(o, 2)?
             .and_then(|n| [Local, Remote, Dynamic].into_iter().find(|k| *k as u64 == n));
+        let kind = known(o, 2, kind)?;
+        let (target_host, target_port) =
+            if kind == Dynamic { (None, None) } else { (fields::text(o, 5)?, fields::port(o, 6)?) };
         Ok(Forward {
             meta: Meta::of(o),
             name: fields::required_text(o, 1)?,
-            kind: known(o, 2, kind)?,
+            kind,
             bind_address: fields::text(o, 3)?,
             bind_port: fields::port(o, 4)?,
-            target_host: fields::text(o, 5)?,
-            target_port: fields::port(o, 6)?,
+            target_host,
+            target_port,
             profile: fields::uuid(o, 7)?,
         })
     }

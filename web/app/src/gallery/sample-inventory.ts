@@ -13,6 +13,7 @@ import type {
   CredentialSummary,
   EditHost,
   ForwardSummary,
+  ForwardInput,
   GroupSummary,
   GroupInput,
   HostDetails,
@@ -146,9 +147,42 @@ const sampleRouteSeeds: RouteSummary[] = [
 ];
 
 const sampleForwardSeeds: ForwardSummary[] = [
-  { id: "f-db", name: "postgres-prod", kind: "local", profile: "l-3" },
-  { id: "f-socks", name: "staging-socks", kind: "dynamic", profile: null },
-  { id: "f-remote", name: "metrics-remote", kind: "remote", profile: "l-5" },
+  {
+    id: "f-db",
+    name: "postgres-prod",
+    kind: "local",
+    profile: "l-3",
+    bindAddress: "127.0.0.1",
+    bindPort: 5433,
+    targetHost: "prod-db",
+    targetPort: 5432,
+    profileCount: 0,
+    restored: false,
+  },
+  {
+    id: "f-socks",
+    name: "staging-socks",
+    kind: "dynamic",
+    profile: null,
+    bindAddress: "127.0.0.1",
+    bindPort: 1080,
+    targetHost: null,
+    targetPort: null,
+    profileCount: 0,
+    restored: false,
+  },
+  {
+    id: "f-remote",
+    name: "metrics-remote",
+    kind: "remote",
+    profile: "l-5",
+    bindAddress: "127.0.0.1",
+    bindPort: 9090,
+    targetHost: "localhost",
+    targetPort: 9090,
+    profileCount: 0,
+    restored: false,
+  },
 ];
 
 function login(
@@ -398,7 +432,7 @@ export function sampleInventory(
     ...route,
     definition: { ...route.definition } as RouteDefinition,
   }));
-  const objectForwards = sampleForwardSeeds.map((forward) => ({ ...forward }));
+  let objectForwards = sampleForwardSeeds.map((forward) => ({ ...forward }));
   let sessionSequence = 0;
   const deleted = new Map<string, HostDetails>();
   const listeners = new Set<() => void>();
@@ -579,9 +613,18 @@ export function sampleInventory(
       const credential: CredentialLabel =
         input.signIn.kind === "password"
           ? { id: `c-${Date.now()}`, kind: "password", name: null, fingerprint: null, comment: null, publicKey: null }
-          : input.signIn.kind === "agent"
-            ? agent
-            : { ...deployKey, id: `c-${Date.now()}`, name: null, comment: `${input.username}@scoplen` };
+          : input.signIn.kind === "keyboardInteractive"
+            ? {
+                id: `c-${Date.now()}`,
+                kind: "keyboardInteractive",
+                name: null,
+                fingerprint: null,
+                comment: null,
+                publicKey: null,
+              }
+            : input.signIn.kind === "agent"
+              ? agent
+              : { ...deployKey, id: `c-${Date.now()}`, name: null, comment: `${input.username}@scoplen` };
       const created = host({
         id: `h-${Date.now()}`,
         name: input.name ?? input.address,
@@ -622,12 +665,56 @@ export function sampleInventory(
       if (requestedGroups.some((groupId) => !availableGroups.some((group) => group.id === groupId))) {
         return wait({ status: "error" as const, error: { kind: "groupNotFound" as const } });
       }
+      for (const [loginId, choice] of Object.entries(input.loginCredentials)) {
+        if (!current.logins.some((login) => login.id === loginId)) {
+          return wait({ status: "error" as const, error: { kind: "invalidLogin" as const } });
+        }
+        if (
+          choice.kind === "saved" &&
+          choice.credential &&
+          !objectCredentials.some((credential) => credential.id === choice.credential)
+        ) {
+          return wait({ status: "error" as const, error: { kind: "invalidCredential" as const } });
+        }
+      }
+      const logins = current.logins.map((login) => {
+        const choice = input.loginCredentials[login.id];
+        if (!choice) return login;
+        let credential =
+          choice.kind === "saved"
+            ? credentialLabelForSummary(objectCredentials.find((item) => item.id === choice.credential))
+            : login.credential?.kind === "keyboardInteractive"
+              ? login.credential
+              : null;
+        if (choice.kind === "keyboardInteractive" && !credential) {
+          const descriptor: CredentialSummary = {
+            id: `c-interactive-${login.id}-${Date.now()}`,
+            name: null,
+            kind: "keyboardInteractive",
+            binding: "none",
+            hasSecret: false,
+            publicKey: null,
+            provider: {},
+            certificateScope: null,
+            profileCount: 0,
+            routeCount: 0,
+            restored: false,
+          };
+          objectCredentials = [...objectCredentials, descriptor];
+          credential = credentialLabelForSummary(descriptor);
+        }
+        profiles = profiles.map((profile) =>
+          profile.id === login.id ? { ...profile, credential, credentialId: credential?.id ?? null } : profile,
+        );
+        return { ...login, credential };
+      });
       const updated = {
         ...current,
         ...input,
         notes: input.notes?.trim() || null,
         groups: requestedGroups,
         tags: { ...input.tags },
+        logins,
       };
       hosts = hosts.map((host) => (host.id === id ? updated : host));
       changed();
@@ -663,7 +750,43 @@ export function sampleInventory(
       return wait(ok(updated));
     },
     accessProfiles: () => wait(ok(profileRows())),
-    forwards: () => wait(ok(objectForwards.map((forward) => ({ ...forward })))),
+    forwards: () =>
+      wait(
+        ok(
+          objectForwards.map((forward) => ({
+            ...forward,
+            profileCount: profiles.filter((profile) => profile.forwards.includes(forward.id)).length,
+          })),
+        ),
+      ),
+    createForward: (input: ForwardInput) => {
+      if (!input.name.trim()) return wait({ status: "error" as const, error: { kind: "emptyName" as const } });
+      const created: ForwardSummary = {
+        ...input,
+        id: crypto.randomUUID(),
+        name: input.name.trim(),
+        profileCount: 0,
+        restored: false,
+      };
+      objectForwards = [...objectForwards, created];
+      changed();
+      return wait(ok(created));
+    },
+    updateForward: (id: Id, input: ForwardInput) => {
+      const current = objectForwards.find((forward) => forward.id === id);
+      if (!current) return wait(objectEditFailure("tunnel not found"));
+      const updated = { ...current, ...input, name: input.name.trim() };
+      objectForwards = objectForwards.map((forward) => (forward.id === id ? updated : forward));
+      changed();
+      return wait(ok(updated));
+    },
+    deleteForward: (id: Id) => {
+      if (profiles.some((profile) => profile.forwards.includes(id)))
+        return wait({ status: "error" as const, error: { kind: "inUse" as const } });
+      objectForwards = objectForwards.filter((forward) => forward.id !== id);
+      changed();
+      return wait(ok(null));
+    },
     createAccessProfile: (input: AccessProfileInput) => {
       const currentHost = hosts.find((host) => host.id === input.host);
       if (!currentHost) return wait(objectEditFailure("host not found"));

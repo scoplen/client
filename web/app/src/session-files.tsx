@@ -1,27 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 import { Button, Dialog, Field, IconButton } from "@scoplen/ui";
-import { Download, File, Folder, FolderPlus, Pencil, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { Download, Eye, File, Folder, FolderPlus, Pencil, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
 import {
   commands,
   type RemoteFileEntry,
   type SessionFileMutationResult,
-  type SessionUploadResult,
+  type SessionTransferIssue,
+  type SessionTransferQueueSnapshot,
 } from "./ipc/bindings";
+import { SessionTransferQueue } from "./session-transfer-queue";
+import { SessionFilePreview } from "./session-file-preview";
+import { useSessionFileDrop } from "./use-session-file-drop";
 
 type Location = { name: string; path: number[] };
-type Activity =
-  "listing" | "downloading" | "uploading" | "creating" | "renaming" | "deleting" | "cancelling" | "waiting" | null;
+type Activity = "listing" | "creating" | "renaming" | "deleting" | "cancelling" | "waiting" | null;
 type FileError = { message: string; listing: boolean };
-type UploadFeedback = Pick<SessionUploadResult, "status" | "stagingMayRemain">;
 type MutationKind = "create" | "rename" | "delete";
 type MutationFeedback = { kind: MutationKind; status: SessionFileMutationResult["status"] };
 type NameDialog = { kind: "create" } | { kind: "rename"; entry: RemoteFileEntry };
-
-export type FileOperationOutcome = UploadFeedback & {
+export type FileOperationOutcome = {
   transportId: string;
   operationId: string;
+  status: SessionFileMutationResult["status"];
+  stagingMayRemain: boolean;
+};
+export type EnqueueFeedback = {
+  requestId: string;
+  phase: "started" | "settled";
+  issue: SessionTransferIssue | null;
 };
 
 function message(cause: unknown): string {
@@ -32,40 +40,107 @@ function message(cause: unknown): string {
 export function SessionFiles({
   sessionId,
   transportId,
+  connectionLabel,
+  active,
   onClose,
   onFileOutcome,
+  onEnqueueFeedback,
+  queue,
+  queueIssue,
 }: {
   sessionId: string;
-  transportId: string;
+  transportId: string | null;
+  connectionLabel: string;
+  active: boolean;
+  queue: SessionTransferQueueSnapshot | null;
+  queueIssue: SessionTransferIssue | null;
   onClose: () => void;
   onFileOutcome: (outcome: FileOperationOutcome) => void;
+  onEnqueueFeedback: (feedback: EnqueueFeedback) => void;
 }) {
   const { t, locale } = useI18n();
   const formId = useId();
   const [locations, setLocations] = useState<Location[]>([{ name: "", path: [46] }]);
   const [entries, setEntries] = useState<RemoteFileEntry[]>([]);
-  const [activity, setActivity] = useState<Activity>("listing");
+  const [loadedLocation, setLoadedLocation] = useState<string | null>(null);
+  const [activity, setActivity] = useState<Activity>(null);
   const [error, setError] = useState<FileError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(null);
+  const [enqueueIssue, setEnqueueIssue] = useState<SessionTransferIssue | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const selectionPending = useRef(false);
   const [mutationFeedback, setMutationFeedback] = useState<MutationFeedback | null>(null);
   const [nameDialog, setNameDialog] = useState<NameDialog | null>(null);
   const [name, setName] = useState("");
   const [reload, setReload] = useState(0);
+  const [preview, setPreview] = useState<{ id: string; owner: string; entry: RemoteFileEntry } | null>(null);
   const operation = useRef<string | null>(null);
   const cancelled = useRef<string | null>(null);
   const pendingCancellation = useRef<Promise<unknown>>(Promise.resolve());
   const mounted = useRef(true);
+  const previewFocus = useRef<{ owner: string; path: string } | null>(null);
+  const previewButtons = useRef(new Map<string, HTMLButtonElement>());
+  const dropList = useRef<HTMLDivElement>(null);
   const translator = useRef(t);
   const currentPath = locations[locations.length - 1]!.path;
+  const previewOwner = `${sessionId}:${transportId}:${currentPath.join(",")}`;
+  if (preview && (!active || preview.owner !== previewOwner)) setPreview(null);
+  const previewOpen = active && preview?.owner === previewOwner;
+  const queueReady = queue !== null;
+  const queueBlocked = !queueReady || !!queue?.blocksFileOperations;
+  const fileOperationsDisabled = activity !== null || queueBlocked || !transportId || selecting || previewOpen;
+  const selectionDisabled =
+    activity !== null ||
+    previewOpen ||
+    !transportId ||
+    !queueReady ||
+    selecting ||
+    !!queue?.pickerBusy ||
+    (queue !== null && queue.outstanding >= queue.capacity);
+  const dropEnabled =
+    active &&
+    loadedLocation === previewOwner &&
+    activity === null &&
+    !error &&
+    !selecting &&
+    !nameDialog &&
+    !previewOpen;
+  const drop = useSessionFileDrop({
+    sessionId,
+    transportId,
+    queueId: queue?.sessionId === sessionId ? queue.queueId : null,
+    directoryPath: currentPath,
+    enabled: dropEnabled,
+    pickerBusy: queue?.pickerBusy ?? true,
+    list: dropList,
+    locale: locale === "zh-Hans" ? "zh-Hans" : "en",
+    onEnqueueFeedback,
+  });
 
   useEffect(() => {
     translator.current = t;
   }, [t]);
 
+  useEffect(() => {
+    if (!active || previewFocus.current?.owner !== previewOwner) {
+      previewFocus.current = null;
+      return;
+    }
+    if (previewOpen || activity !== null) return;
+    const frame = requestAnimationFrame(() => {
+      const target = previewFocus.current;
+      const element = target ? previewButtons.current.get(target.path) : null;
+      if (element?.isConnected && !element.disabled) {
+        element.focus();
+        previewFocus.current = null;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active, previewOwner, previewOpen, activity]);
+
   const cancelCurrent = useCallback(() => {
     const id = operation.current;
-    if (!id) return;
+    if (!id || !transportId) return;
     operation.current = null;
     pendingCancellation.current = commands
       .sessionCancelFileOperation(sessionId, transportId, id)
@@ -81,12 +156,14 @@ export function SessionFiles({
   }, [cancelCurrent]);
 
   useEffect(() => {
+    if (queueBlocked || !transportId || previewOpen) return;
     let current = true;
     let id: string | null = null;
     void (async () => {
       await pendingCancellation.current;
       if (!current || !mounted.current) return;
       setActivity("listing");
+      setLoadedLocation(null);
       setError(null);
       setNotice(null);
       setEntries([]);
@@ -98,7 +175,10 @@ export function SessionFiles({
         if (result.status === "error") {
           if (cancelled.current === id) setNotice(translator.current("session.files.cancelled"));
           else setError({ message: result.error, listing: true });
-        } else setEntries(result.data.entries);
+        } else {
+          setEntries(result.data.entries);
+          setLoadedLocation(previewOwner);
+        }
       } catch (cause) {
         if (!current || !mounted.current || operation.current !== id) return;
         if (cancelled.current === id) setNotice(translator.current("session.files.cancelled"));
@@ -115,73 +195,34 @@ export function SessionFiles({
       current = false;
       if (operation.current === id) cancelCurrent();
     };
-  }, [cancelCurrent, sessionId, transportId, currentPath, reload]);
+  }, [cancelCurrent, sessionId, transportId, currentPath, reload, queueBlocked, previewOpen, previewOwner]);
 
-  const download = (entry: RemoteFileEntry) => {
-    if (activity || operation.current || entry.kind !== "file") return;
-    const id = crypto.randomUUID();
-    operation.current = id;
-    setActivity("downloading");
-    setError(null);
-    setNotice(null);
-    setUploadFeedback(null);
-    setMutationFeedback(null);
-    void commands
-      .sessionDownloadFile(sessionId, transportId, id, entry.path)
+  const enqueue = (entry?: RemoteFileEntry) => {
+    if (selectionDisabled || selectionPending.current || !transportId || (entry && entry.kind !== "file")) return;
+    selectionPending.current = true;
+    setSelecting(true);
+    setEnqueueIssue(null);
+    const requestId = crypto.randomUUID();
+    onEnqueueFeedback({ requestId, phase: "started", issue: null });
+    const language = locale === "zh-Hans" ? "zh-Hans" : "en";
+    const pending = entry
+      ? commands.sessionEnqueueDownload(sessionId, transportId, entry.path, language)
+      : commands.sessionEnqueueUpload(sessionId, transportId, currentPath, language);
+    void pending
       .then((result) => {
-        if (!mounted.current || operation.current !== id) return;
-        if (result.status === "error") {
-          if (cancelled.current === id) setNotice(translator.current("session.files.cancelled"));
-          else setError({ message: result.error, listing: false });
-        } else setNotice(translator.current(result.data ? "session.files.saved" : "session.files.saveCancelled"));
+        onEnqueueFeedback({ requestId, phase: "settled", issue: result.status === "error" ? result.error : null });
+        if (!mounted.current) return;
+        if (result.status === "error") setEnqueueIssue(result.error);
+        else if (result.data.status === "cancelled")
+          setNotice(translator.current("session.transfers.selectionCancelled"));
       })
-      .catch((cause: unknown) => {
-        if (!mounted.current || operation.current !== id) return;
-        if (cancelled.current === id) setNotice(translator.current("session.files.cancelled"));
-        else setError({ message: message(cause), listing: false });
+      .catch(() => {
+        onEnqueueFeedback({ requestId, phase: "settled", issue: "transferFailed" });
+        if (mounted.current) setEnqueueIssue("transferFailed");
       })
       .finally(() => {
-        if (!mounted.current || operation.current !== id) return;
-        operation.current = null;
-        cancelled.current = null;
-        setActivity(null);
-      });
-  };
-
-  const upload = () => {
-    if (activity || operation.current) return;
-    const id = crypto.randomUUID();
-    operation.current = id;
-    setActivity("uploading");
-    setError(null);
-    setNotice(null);
-    setUploadFeedback(null);
-    setMutationFeedback(null);
-    const report = (result: SessionUploadResult) => {
-      const current = mounted.current && operation.current === id;
-      if (result.status === "unknown" || result.stagingMayRemain) {
-        onFileOutcome({
-          transportId,
-          operationId: id,
-          status: result.status,
-          stagingMayRemain: result.stagingMayRemain,
-        });
-      }
-      if (!current || result.status === "unknown") return;
-      setUploadFeedback({ status: result.status, stagingMayRemain: result.stagingMayRemain });
-      if (result.status === "saved") setReload((value) => value + 1);
-    };
-    void commands
-      .sessionUploadFile(sessionId, transportId, id, currentPath, locale === "zh-Hans" ? "zh-Hans" : "en")
-      .then((result) =>
-        report(result.status === "ok" ? result.data : { status: "failed", message: null, stagingMayRemain: false }),
-      )
-      .catch(() => report({ status: "unknown", message: null, stagingMayRemain: true }))
-      .finally(() => {
-        if (!mounted.current || operation.current !== id) return;
-        operation.current = null;
-        cancelled.current = null;
-        setActivity(null);
+        selectionPending.current = false;
+        if (mounted.current) setSelecting(false);
       });
   };
 
@@ -191,13 +232,12 @@ export function SessionFiles({
       id: string,
     ) => Promise<{ status: "ok"; data: SessionFileMutationResult } | { status: "error"; error: string }>,
   ) => {
-    if (activity || operation.current) return;
+    if (fileOperationsDisabled || operation.current || !transportId) return;
     const id = crypto.randomUUID();
     operation.current = id;
     setActivity(kind === "create" ? "creating" : kind === "rename" ? "renaming" : "deleting");
     setError(null);
     setNotice(null);
-    setUploadFeedback(null);
     setMutationFeedback(null);
     const report = (result: SessionFileMutationResult) => {
       if (result.status === "unknown") {
@@ -220,7 +260,7 @@ export function SessionFiles({
 
   const submitName = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!nameDialog || !name.trim() || activity || operation.current) return;
+    if (!nameDialog || !name.trim() || fileOperationsDisabled || operation.current || !transportId) return;
     const target = nameDialog;
     const newName = name;
     setNameDialog(null);
@@ -246,7 +286,7 @@ export function SessionFiles({
   };
 
   const deleteEntry = (entry: RemoteFileEntry) => {
-    if (entry.kind !== "file" && entry.kind !== "directory") return;
+    if (!transportId || (entry.kind !== "file" && entry.kind !== "directory")) return;
     mutate("delete", (id) =>
       commands.sessionDeleteRemoteEntry(
         sessionId,
@@ -261,34 +301,40 @@ export function SessionFiles({
 
   const cancel = () => {
     const id = operation.current;
-    if (!id || activity === "cancelling" || activity === "waiting") return;
+    if (!id || !transportId || activity === "cancelling" || activity === "waiting") return;
     cancelled.current = id;
     setActivity("cancelling");
     void commands
       .sessionCancelFileOperation(sessionId, transportId, id)
       .then((result) => {
-        if (result.status === "error" && mounted.current && operation.current === id) setActivity("waiting");
+        if (result.status === "error" && mounted.current && operation.current === id) {
+          cancelled.current = null;
+          setActivity("waiting");
+        }
       })
       .catch(() => {
-        if (mounted.current && operation.current === id) setActivity("waiting");
+        if (mounted.current && operation.current === id) {
+          cancelled.current = null;
+          setActivity("waiting");
+        }
       });
   };
 
   return (
     <section
       aria-label={t("session.files.title")}
-      className="flex h-56 min-h-0 min-w-0 shrink-0 flex-col border-t border-border bg-background lg:h-auto lg:w-80 lg:border-t-0 lg:border-l"
+      className="flex h-[min(28rem,60vh)] min-h-0 min-w-0 shrink-0 flex-col overflow-y-auto border-t border-border bg-background lg:h-auto lg:w-80 lg:border-t-0 lg:border-l"
     >
       <header className="flex shrink-0 items-center justify-between gap-2 px-3 py-2">
         <h2 className="m-0 text-sm font-semibold">{t("session.files.title")}</h2>
         <div className="flex min-w-0 items-center gap-1">
-          <Button variant="ghost" className="gap-1 px-2" disabled={activity !== null} onClick={upload}>
+          <Button variant="ghost" className="gap-1 px-2" disabled={selectionDisabled} onClick={() => enqueue()}>
             <Upload aria-hidden="true" className="size-4" />
             {t("session.files.upload.action")}
           </Button>
           <IconButton
             label={t("session.files.create.action")}
-            disabled={activity !== null}
+            disabled={fileOperationsDisabled}
             onClick={() => {
               setName("");
               setNameDialog({ kind: "create" });
@@ -298,7 +344,7 @@ export function SessionFiles({
           </IconButton>
           <IconButton
             label={t("session.files.refresh")}
-            disabled={activity !== null}
+            disabled={fileOperationsDisabled}
             onClick={() => setReload((value) => value + 1)}
           >
             <RefreshCw aria-hidden="true" className="size-4" />
@@ -327,11 +373,10 @@ export function SessionFiles({
             <Button
               key={`${index}-${item.path.join(",")}`}
               variant="ghost"
-              disabled={activity !== null}
+              disabled={fileOperationsDisabled}
               title={name}
               className="max-w-40 shrink-0 px-2"
               onClick={() => {
-                setUploadFeedback(null);
                 setMutationFeedback(null);
                 setLocations((current) => current.slice(0, index + 1));
               }}
@@ -354,7 +399,11 @@ export function SessionFiles({
           <p className="m-0">{t("session.files.error")}</p>
           <p className="m-0 mt-1 break-words">{error.message}</p>
           {error.listing ? (
-            <Button variant="ghost" onClick={() => setReload((current) => current + 1)}>
+            <Button
+              variant="ghost"
+              disabled={fileOperationsDisabled}
+              onClick={() => setReload((current) => current + 1)}
+            >
               {t("session.files.retry")}
             </Button>
           ) : null}
@@ -364,15 +413,6 @@ export function SessionFiles({
         <p role="status" className="m-0 px-3 py-2 text-xs">
           {notice}
         </p>
-      ) : null}
-      {uploadFeedback ? (
-        <div
-          role={uploadFeedback.status === "saved" || uploadFeedback.status === "cancelled" ? "status" : "alert"}
-          className={`px-3 py-2 text-xs ${uploadFeedback.status === "saved" || uploadFeedback.status === "cancelled" ? "" : "text-attention"}`}
-        >
-          <p className="m-0">{t(`session.files.upload.${uploadFeedback.status}`)}</p>
-          {uploadFeedback.stagingMayRemain ? <p className="m-0 mt-1">{t("session.files.upload.staging")}</p> : null}
-        </div>
       ) : null}
       {mutationFeedback ? (
         <p
@@ -386,7 +426,12 @@ export function SessionFiles({
           )}
         </p>
       ) : null}
-      <div className="min-h-0 flex-1 overflow-auto px-2 pb-2">
+      <div
+        ref={dropList}
+        role="region"
+        aria-label={t("session.files.drop.list")}
+        className={`min-h-16 flex-1 overflow-auto px-2 pb-2 ${drop?.phase === "over" ? "ring-2 ring-primary ring-inset" : ""}`}
+      >
         {!activity && !error && entries.length === 0 ? (
           <p className="m-0 px-1 py-2 text-xs text-muted-foreground">{t("session.files.empty")}</p>
         ) : null}
@@ -404,11 +449,10 @@ export function SessionFiles({
               {entry.kind === "directory" ? (
                 <button
                   type="button"
-                  disabled={activity !== null}
+                  disabled={fileOperationsDisabled}
                   title={entry.name}
                   className="min-w-0 flex-1 truncate text-left text-sm text-foreground underline-offset-2 hover:underline focus-visible:rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-50"
                   onClick={() => {
-                    setUploadFeedback(null);
                     setMutationFeedback(null);
                     setLocations((current) => [...current, { name: entry.name, path: entry.path }]);
                   }}
@@ -422,9 +466,26 @@ export function SessionFiles({
               )}
               {entry.kind === "file" ? (
                 <IconButton
+                  ref={(element) => {
+                    const path = entry.path.join(",");
+                    if (element) previewButtons.current.set(path, element);
+                    else previewButtons.current.delete(path);
+                  }}
+                  label={t("session.files.preview.action", { name: entry.name })}
+                  disabled={fileOperationsDisabled}
+                  onClick={() => {
+                    previewFocus.current = { owner: previewOwner, path: entry.path.join(",") };
+                    setPreview({ id: crypto.randomUUID(), owner: previewOwner, entry });
+                  }}
+                >
+                  <Eye aria-hidden="true" className="size-4" />
+                </IconButton>
+              ) : null}
+              {entry.kind === "file" ? (
+                <IconButton
                   label={t("session.files.download", { name: entry.name })}
-                  disabled={activity !== null}
-                  onClick={() => download(entry)}
+                  disabled={selectionDisabled}
+                  onClick={() => enqueue(entry)}
                 >
                   <Download aria-hidden="true" className="size-4" />
                 </IconButton>
@@ -433,7 +494,7 @@ export function SessionFiles({
                 <>
                   <IconButton
                     label={t("session.files.rename.action", { name: entry.name })}
-                    disabled={activity !== null}
+                    disabled={fileOperationsDisabled}
                     onClick={() => {
                       setName("");
                       setNameDialog({ kind: "rename", entry });
@@ -443,7 +504,7 @@ export function SessionFiles({
                   </IconButton>
                   <IconButton
                     label={t("session.files.delete.action", { name: entry.name })}
-                    disabled={activity !== null}
+                    disabled={fileOperationsDisabled}
                     className="hover:bg-[color-mix(in_srgb,var(--attention)_10%,transparent)] hover:text-attention"
                     onClick={() => deleteEntry(entry)}
                   >
@@ -455,6 +516,43 @@ export function SessionFiles({
           ))}
         </ul>
       </div>
+      <div
+        role="status"
+        aria-live="polite"
+        className="h-16 shrink-0 overflow-y-auto px-3 py-2 text-xs text-muted-foreground"
+      >
+        {drop
+          ? t(
+              drop.count === null
+                ? drop.phase === "over"
+                  ? "session.files.drop.overUnknown"
+                  : "session.files.drop.invalid"
+                : `session.files.drop.${drop.phase}`,
+              {
+                count: drop.count ?? 0,
+              },
+            )
+          : queueBlocked || !transportId
+            ? t(!transportId ? "session.transfers.disconnected" : "session.transfers.browsingBlocked")
+            : dropEnabled
+              ? t("session.files.drop.hint")
+              : null}
+      </div>
+      <SessionTransferQueue
+        snapshot={queue}
+        issue={drop?.issue ?? enqueueIssue ?? queueIssue}
+        admittingDrop={drop?.phase === "checking"}
+      />
+      {previewOpen && preview && transportId ? (
+        <SessionFilePreview
+          key={preview.id}
+          sessionId={sessionId}
+          transportId={transportId}
+          connectionLabel={connectionLabel}
+          entry={preview.entry}
+          onClose={() => setPreview((current) => (current?.id === preview.id ? null : current))}
+        />
+      ) : null}
       <Dialog
         open={nameDialog !== null}
         onOpenChange={(open) => {
@@ -472,7 +570,7 @@ export function SessionFiles({
             <Button variant="ghost" onClick={() => setNameDialog(null)}>
               {t("session.files.cancel")}
             </Button>
-            <Button variant="primary" type="submit" form={formId} disabled={!name.trim()}>
+            <Button variant="primary" type="submit" form={formId} disabled={!name.trim() || fileOperationsDisabled}>
               {t(nameDialog?.kind === "rename" ? "session.files.rename.submit" : "session.files.create.submit")}
             </Button>
           </>

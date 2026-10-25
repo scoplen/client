@@ -8,15 +8,18 @@
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use windows::Win32::Foundation::{HLOCAL, LocalFree};
+use windows::Win32::Foundation::{
+    HLOCAL, LocalFree, NTE_BAD_KEYSET, NTE_DEVICE_NOT_READY, TBS_E_TPM_NOT_FOUND,
+};
 use windows::Win32::Security::Cryptography::{
     BCRYPT_OAEP_PADDING_INFO, BCRYPT_RSA_ALGORITHM, BCRYPT_SHA256_ALGORITHM, CERT_KEY_SPEC,
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
     MS_PLATFORM_CRYPTO_PROVIDER, NCRYPT_FLAGS, NCRYPT_HANDLE, NCRYPT_KEY_HANDLE,
-    NCRYPT_PAD_OAEP_FLAG, NCRYPT_PROV_HANDLE, NCryptCreatePersistedKey, NCryptDecrypt,
-    NCryptDeleteKey, NCryptEncrypt, NCryptFinalizeKey, NCryptFreeObject, NCryptOpenKey,
-    NCryptOpenStorageProvider,
+    NCRYPT_PAD_OAEP_FLAG, NCRYPT_PROV_HANDLE, NCRYPT_SILENT_FLAG, NCryptCreatePersistedKey,
+    NCryptDecrypt, NCryptDeleteKey, NCryptEncrypt, NCryptFinalizeKey, NCryptFreeObject,
+    NCryptOpenKey, NCryptOpenStorageProvider,
 };
+use windows::Win32::System::TpmBaseServices::{TPM_DEVICE_INFO, Tbsi_GetDeviceInfo};
 use windows::core::{HSTRING, PCWSTR, w};
 use zeroize::Zeroizing;
 
@@ -66,6 +69,41 @@ impl WindowsKeystore {
     fn file_error(operation: &'static str) -> impl FnOnce(std::io::Error) -> KeystoreError {
         move |source| KeystoreError::File { operation, source }
     }
+
+    fn delete_with_native(
+        &self,
+        delete_native: impl FnOnce(&HSTRING) -> Result<(), NativeDeleteError>,
+        tpm_status: impl FnOnce() -> u32,
+    ) -> Result<(), KeystoreError> {
+        // A DPAPI blob or a missing file does not rule out a key left by an
+        // earlier TPM wrapping attempt. An unavailable probe needs independent
+        // proof of no TPM and an authenticated software blob (or no blob).
+        match delete_native(&self.tpm_key_name) {
+            Ok(()) => {}
+            Err(NativeDeleteError::Probe(error))
+                if error.code() == NTE_DEVICE_NOT_READY
+                    && tpm_status() == TBS_E_TPM_NOT_FOUND.0 as u32
+                    && self.is_software_or_empty_slot() => {}
+            Err(NativeDeleteError::Probe(error) | NativeDeleteError::Delete(error)) => {
+                return Err(platform("delete", error));
+            }
+        }
+        match std::fs::remove_file(&self.file) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(Self::file_error("removed")(e)),
+        }
+    }
+
+    fn is_software_or_empty_slot(&self) -> bool {
+        match std::fs::read(&self.file) {
+            Ok(bytes) => match bytes.split_first() {
+                Some((&METHOD_DPAPI, wrapped)) => dpapi_unprotect(wrapped).is_ok(),
+                _ => false,
+            },
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        }
+    }
 }
 
 impl Keystore for WindowsKeystore {
@@ -101,13 +139,7 @@ impl Keystore for WindowsKeystore {
     }
 
     fn delete(&self) -> Result<(), KeystoreError> {
-        match std::fs::remove_file(&self.file) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(Self::file_error("removed")(e)),
-        }
-        tpm_delete(&self.tpm_key_name);
-        Ok(())
+        self.delete_with_native(tpm_delete, tpm_device_status)
     }
 }
 
@@ -282,14 +314,250 @@ fn tpm_unwrap(name: &HSTRING, wrapped: &[u8]) -> Result<Zeroizing<Vec<u8>>, Keys
     ncrypt(NCryptDecrypt, &key, wrapped).map(Zeroizing::new).map_err(unrecoverable)
 }
 
-fn tpm_delete(name: &HSTRING) {
-    let Ok(provider) = open_provider() else { return };
-    let Ok(key) = open_key(&provider, name, false) else { return };
-    let raw = NCRYPT_KEY_HANDLE(key.0.0);
+#[derive(Debug)]
+enum NativeDeleteError {
+    Probe(windows::core::Error),
+    Delete(windows::core::Error),
+}
+
+fn tpm_device_status() -> u32 {
+    let mut info = TPM_DEVICE_INFO::default();
+    // SAFETY: `info` is writable for the full structure size passed to TBS.
+    // Only its distinct TPM_NOT_FOUND result proves absence; other failures
+    // and a present but unavailable TPM cannot authorize software cleanup.
+    unsafe {
+        Tbsi_GetDeviceInfo(
+            std::mem::size_of::<TPM_DEVICE_INFO>() as u32,
+            std::ptr::from_mut(&mut info).cast(),
+        )
+    }
+}
+
+fn tpm_delete(name: &HSTRING) -> Result<(), NativeDeleteError> {
+    let provider = open_provider().map_err(NativeDeleteError::Probe)?;
+    let mut raw = NCRYPT_KEY_HANDLE::default();
+    // SAFETY: `provider` is open, `name` outlives the call, and `raw` is a
+    // valid place for the returned handle. Without MACHINE_KEY this opens
+    // only this current user's exact named key; SILENT prevents provider UI.
+    let opened = unsafe {
+        NCryptOpenKey(
+            NCRYPT_PROV_HANDLE(provider.0.0),
+            &mut raw,
+            PCWSTR(name.as_ptr()),
+            CERT_KEY_SPEC(0),
+            NCRYPT_SILENT_FLAG,
+        )
+    };
+    match opened {
+        Err(e) if e.code() == NTE_BAD_KEYSET => return Ok(()),
+        Err(e) => return Err(NativeDeleteError::Probe(e)),
+        Ok(()) => {}
+    }
+    let key = Handle(NCRYPT_HANDLE(raw.0));
     // SAFETY: the key handle is open. NCryptDeleteKey frees it on success, so
     // the guard is then forgotten; on failure the guard frees it.
-    let deleted = unsafe { NCryptDeleteKey(raw, 0) };
-    if deleted.is_ok() {
-        std::mem::forget(key);
+    unsafe { NCryptDeleteKey(raw, 0) }.map_err(NativeDeleteError::Delete)?;
+    std::mem::forget(key);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    use super::*;
+    use windows::Win32::Foundation::{
+        NTE_BAD_FLAGS, NTE_FAIL, NTE_NOT_SUPPORTED, NTE_PERM, NTE_SILENT_CONTEXT,
+        TBS_E_INTERNAL_ERROR, TBS_E_SERVICE_DISABLED, TBS_E_SERVICE_NOT_RUNNING,
+    };
+    use windows::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+    fn dpapi_slot() -> (tempfile::TempDir, WindowsKeystore, Vec<u8>) {
+        let directory = tempfile::Builder::new()
+            .prefix("scoplen-keystore-")
+            .disable_cleanup(true)
+            .tempdir()
+            .unwrap();
+        let data = directory.path().canonicalize().unwrap();
+        let keystore = WindowsKeystore::for_data_dir(&data);
+        let wrapped = dpapi_protect(b"owned DPAPI test secret").unwrap();
+        let protected = [&[METHOD_DPAPI][..], &wrapped].concat();
+        std::fs::write(&keystore.file, &protected).unwrap();
+        (directory, keystore, protected)
+    }
+
+    fn unavailable_probe(_: &HSTRING) -> Result<(), NativeDeleteError> {
+        Err(NativeDeleteError::Probe(windows::core::Error::from_hresult(NTE_DEVICE_NOT_READY)))
+    }
+
+    fn assert_native_slot_absent(slot: &WindowsKeystore) {
+        let missing = match open_provider() {
+            Ok(provider) => match open_key(&provider, &slot.tpm_key_name, false) {
+                Err(error) if error.code() == NTE_BAD_KEYSET => true,
+                Err(error) if error.code() == NTE_DEVICE_NOT_READY => {
+                    tpm_device_status() == TBS_E_TPM_NOT_FOUND.0 as u32
+                }
+                _ => false,
+            },
+            Err(error) if error.code() == NTE_DEVICE_NOT_READY => {
+                tpm_device_status() == TBS_E_TPM_NOT_FOUND.0 as u32
+            }
+            Err(_) => false,
+        };
+        assert!(missing, "the owned fixture must not have a native key");
+    }
+
+    #[test]
+    fn confirmed_no_tpm_allows_dpapi_and_idempotent_empty_slot_deletion() {
+        let (directory, keystore, _) = dpapi_slot();
+        assert_eq!(keystore.load().unwrap().unwrap().as_slice(), b"owned DPAPI test secret");
+        keystore.delete_with_native(unavailable_probe, || TBS_E_TPM_NOT_FOUND.0 as u32).unwrap();
+        assert!(!keystore.file.exists());
+        assert!(keystore.load().unwrap().is_none());
+        keystore.delete_with_native(unavailable_probe, || TBS_E_TPM_NOT_FOUND.0 as u32).unwrap();
+        directory.close().unwrap();
+    }
+
+    #[test]
+    fn present_tpm_or_failed_detection_does_not_authorize_cleanup() {
+        let (directory, keystore, protected) = dpapi_slot();
+        for has_blob in [true, false] {
+            if !has_blob {
+                std::fs::remove_file(&keystore.file).unwrap();
+            }
+            for status in [
+                0,
+                TBS_E_INTERNAL_ERROR.0 as u32,
+                TBS_E_SERVICE_DISABLED.0 as u32,
+                TBS_E_SERVICE_NOT_RUNNING.0 as u32,
+            ] {
+                let result = keystore.delete_with_native(unavailable_probe, || status);
+                assert!(matches!(result, Err(KeystoreError::Platform { operation: "delete", .. })));
+                if has_blob {
+                    assert_eq!(std::fs::read(&keystore.file).unwrap(), protected);
+                    assert_eq!(
+                        keystore.load().unwrap().unwrap().as_slice(),
+                        b"owned DPAPI test secret"
+                    );
+                } else {
+                    assert!(!keystore.file.exists());
+                }
+            }
+        }
+        directory.close().unwrap();
+    }
+
+    #[test]
+    fn confirmed_no_tpm_does_not_authorize_tpm_unknown_or_corrupt_blobs() {
+        let (directory, keystore, _) = dpapi_slot();
+        for protected in [vec![METHOD_TPM, 1, 2], vec![3, 1, 2], vec![], vec![METHOD_DPAPI, 1, 2]] {
+            std::fs::write(&keystore.file, &protected).unwrap();
+            let result =
+                keystore.delete_with_native(unavailable_probe, || TBS_E_TPM_NOT_FOUND.0 as u32);
+            assert!(matches!(result, Err(KeystoreError::Platform { operation: "delete", .. })));
+            assert_eq!(std::fs::read(&keystore.file).unwrap(), protected);
+        }
+        directory.close().unwrap();
+    }
+
+    #[test]
+    fn confirmed_no_tpm_does_not_hide_a_blob_read_error() {
+        let (directory, keystore, protected) = dpapi_slot();
+        let retained =
+            std::fs::OpenOptions::new().read(true).share_mode(0).open(&keystore.file).unwrap();
+        assert!(matches!(keystore.load(), Err(KeystoreError::File { operation: "read", .. })));
+        let result =
+            keystore.delete_with_native(unavailable_probe, || TBS_E_TPM_NOT_FOUND.0 as u32);
+        assert!(matches!(result, Err(KeystoreError::Platform { operation: "delete", .. })));
+        drop(retained);
+        assert_eq!(std::fs::read(&keystore.file).unwrap(), protected);
+        directory.close().unwrap();
+    }
+
+    #[test]
+    fn native_errors_preserve_the_dpapi_blob_and_its_readability() {
+        let (directory, keystore, protected) = dpapi_slot();
+        // BAD_KEYSET from a native step other than exact OpenKey is still an error.
+        for code in [
+            NTE_BAD_FLAGS,
+            NTE_NOT_SUPPORTED,
+            NTE_PERM,
+            NTE_SILENT_CONTEXT,
+            NTE_FAIL,
+            NTE_BAD_KEYSET,
+            NTE_DEVICE_NOT_READY,
+        ] {
+            let result = keystore.delete_with_native(
+                |_| Err(NativeDeleteError::Delete(windows::core::Error::from_hresult(code))),
+                || panic!("an opened key's delete error must not probe hardware absence"),
+            );
+            match result {
+                Err(KeystoreError::Platform { operation: "delete", detail, .. }) => {
+                    assert_eq!(detail, windows::core::Error::from_hresult(code).message());
+                }
+                _ => panic!("native deletion failures must be returned"),
+            }
+            assert_eq!(std::fs::read(&keystore.file).unwrap(), protected);
+            assert_eq!(keystore.load().unwrap().unwrap().as_slice(), b"owned DPAPI test secret");
+        }
+        keystore.delete().unwrap();
+        directory.close().unwrap();
+    }
+
+    #[test]
+    fn a_missing_blob_does_not_hide_native_errors() {
+        let directory = tempfile::Builder::new()
+            .prefix("scoplen-keystore-")
+            .disable_cleanup(true)
+            .tempdir()
+            .unwrap();
+        let data = directory.path().canonicalize().unwrap();
+        let keystore = WindowsKeystore::for_data_dir(&data);
+        let result = keystore.delete_with_native(
+            |_| {
+                Err(NativeDeleteError::Probe(windows::core::Error::from_hresult(NTE_NOT_SUPPORTED)))
+            },
+            || panic!("other provider errors must not probe hardware absence"),
+        );
+        assert!(matches!(result, Err(KeystoreError::Platform { operation: "delete", .. })));
+        assert!(!keystore.file.exists());
+        keystore.delete().unwrap();
+        directory.close().unwrap();
+    }
+
+    #[test]
+    fn the_public_keystore_deletes_a_real_dpapi_blob_and_an_absent_slot() {
+        let (directory, slot, _) = dpapi_slot();
+        let data = directory.path().canonicalize().unwrap();
+        let keystore = super::super::local_key_store(&data).unwrap();
+        assert_eq!(keystore.load().unwrap().unwrap().as_slice(), b"owned DPAPI test secret");
+        assert_native_slot_absent(&slot);
+        keystore.delete().unwrap();
+        assert!(!slot.file.exists());
+        assert!(keystore.load().unwrap().is_none());
+        keystore.delete().unwrap();
+        assert_native_slot_absent(&slot);
+        directory.close().unwrap();
+    }
+
+    #[test]
+    fn the_public_keystore_retries_file_removal_after_native_absence() {
+        let (directory, slot, protected) = dpapi_slot();
+        let data = directory.path().canonicalize().unwrap();
+        let keystore = super::super::local_key_store(&data).unwrap();
+        let retained = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
+            .open(&slot.file)
+            .unwrap();
+        assert!(matches!(keystore.delete(), Err(KeystoreError::File { operation: "removed", .. })));
+        assert_eq!(std::fs::read(&slot.file).unwrap(), protected);
+        assert_eq!(keystore.load().unwrap().unwrap().as_slice(), b"owned DPAPI test secret");
+        drop(retained);
+        keystore.delete().unwrap();
+        assert!(!slot.file.exists());
+        assert!(keystore.load().unwrap().is_none());
+        keystore.delete().unwrap();
+        directory.close().unwrap();
     }
 }

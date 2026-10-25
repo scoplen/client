@@ -20,6 +20,7 @@ const faces: Record<SessionState, { mood: MarkMood; active: boolean; attention: 
   verifying: { mood: "awake", active: true, attention: false },
   trusting: { mood: "awake", active: true, attention: true },
   passphrase: { mood: "awake", active: true, attention: true },
+  keyboardInteractive: { mood: "awake", active: true, attention: true },
   connecting: { mood: "awake", active: true, attention: false },
   reconnecting: { mood: "awake", active: true, attention: false },
   connected: { mood: "rest", active: true, attention: false },
@@ -61,7 +62,7 @@ export function Frame({
   const menu = useContextMenu();
   const sessionIds = tabs.slice(1).map((tab) => tab.id);
   return (
-    <div className="flex h-screen flex-col bg-background">
+    <div className="isolate flex h-screen flex-col bg-background">
       <header
         data-tauri-drag-region
         className={`flex h-12 shrink-0 items-center gap-1.5 border-b-(length:--scoplen-border-width) border-border pr-2 ${platform === "macos" ? "pl-[5.75rem]" : "pl-2"}`}

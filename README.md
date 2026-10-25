@@ -23,6 +23,18 @@ Changed keys require a separate review. Forwarded connection setup has a
 ten-second deadline. Cancellation or failure closes the current connection and
 its parents in reverse order; the target owns that chain until the session ends.
 
+Choose Interactive when adding a host, or for a Login in Edit Host, for OTP or PAM
+login without a stored password or key. The Credential editor also offers Interactive (OTP/PAM), which
+can be assigned to a saved Login, including a Direct jump Login. Server requests
+show each prompt in order and respect its echo setting. Informational requests
+with no inputs require Continue. Answers are cleared after submission or hiding
+the prompt and are never saved or reused by reconnect. A selected password, key,
+or agent continues into Interactive only after the server accepts that factor
+and advertises keyboard-interactive; a rejected credential does not fall back.
+Each hop has five minutes for authentication, including key passphrase entry,
+and each server request has at most two minutes for a reply. Cancellation or
+expiry closes that connection attempt; reconnect starts with blank inputs.
+
 To use ProxyCommand, create that kind of Route and assign it to the target Login.
 Enter a program followed by arguments; quote paths or arguments containing spaces.
 Space and tab separate arguments outside single or double quotes. Outside single
@@ -79,6 +91,27 @@ Interactive SSH sessions become ready after authentication and shell setup,
 even when the server sends no initial output. Terminal input and PTY resizing
 are available without waiting for a welcome message or prompt.
 
+Tunnels manages saved Local TCP and Dynamic SOCKS forwards independently of terminal
+tabs. Add a definition with a numeric local IPv4 or IPv6 address and a nonzero local
+port. Local also needs a destination hostname or address and nonzero destination
+port; Dynamic takes each destination from SOCKS4/4a or SOCKS5 CONNECT. New definitions
+use `127.0.0.1`. Dynamic provides no SOCKS authentication: devices able to reach its
+listener can request destinations through the selected SSH connection. Review that
+access before choosing a non-loopback listening address. Choose Start and an existing
+Login, then complete its ordinary host-key, key-passphrase or Interactive review.
+The tunnel opens no terminal or shell. The SSH server resolves destination hostnames.
+
+Running tunnels show their fixed configuration, connection count and traffic.
+Leaving Tunnels keeps them running; editing or deleting a saved definition does
+not change an existing run. Stop closes its listener, peers and SSH route. At most
+16 tunnels and 32 peers per tunnel run at once, including SOCKS negotiation and
+channel opening. Dynamic negotiation has an absolute 15-second deadline; channel
+opening and the final SOCKS response each have their own 15-second deadline. Traffic
+counts include only application bytes successfully written, excluding SOCKS messages.
+A failed run requires an explicit new Start; tunnels do not reconnect or start
+automatically. Application exit or local-store replacement stops every run. Remote,
+Unix-socket and ad-hoc forwarding remain incomplete.
+
 A connected terminal's Files button opens an SFTP browser on that terminal's
 authenticated SSH connection. It starts in the server's initial SFTP directory,
 opens subdirectories, and downloads regular files to a location selected in the
@@ -90,17 +123,71 @@ the current directory, rename a regular file or directory after checking that
 the new name is unused, and delete a regular file or empty directory after native
 confirmation. Standard SFTP v3 rename may still replace a concurrently created
 target on some servers. Other remote entry types are shown but cannot be changed here.
-Cancel and closing Files request cancellation without closing the terminal.
-For uploads, once final remote rename starts,
-the client waits for its result; reconnect fences off the old operation. A
-download that fails or is cancelled before the final save leaves the selected
-destination unchanged. An upload whose final remote rename has started may have
-an unknown outcome if its reply is lost. The terminal keeps that warning across
-reconnects and asks you to refresh and check the remote directory before trying
-again. It also keeps a warning when the operation may
-have left a temporary remote upload file. It never retries automatically. Drag
-and drop, transfer queues, resume, and preview remain
-separate C6 work.
+
+Upload source admission rejects final symbolic links on Unix and final reparse
+points on Windows, including substitutions after the initial path check. Ancestor
+directories resolve normally. Rust retains the admitted ordinary-file handle, so
+later path replacement does not redirect reads; concurrent writes to that file
+remain possible. Keep the source stable until the upload saves.
+
+Uploads and downloads join a FIFO queue owned by the logical terminal session.
+Up to 16 selections, queued files, running or paused transfers and unacknowledged unknown
+results may be outstanding; the latest 32 known results remain visible. Hiding
+Files leaves transfers running. You can add files from the current listing while
+a transfer runs; directory navigation and remote changes wait until the queue is
+settled; paused transfers release execution so later queued work and file navigation can run.
+One native picker or replacement review is open per queue.
+
+Files also accepts a native drop of 1 to 16 ordinary local files onto its visible remote
+directory list, including an empty list. The entire selection must fit the queue and pass
+local source/name checks before any item is added. A rejected batch starts no upload; an
+accepted batch keeps native selection order and its original remote directory. Each item
+then uses the ordinary replacement review, cancellation and publication rules. Leaving Files
+does not cancel admitted items. Folders, links and special files are refused. The Upload file
+button remains the keyboard alternative. Native scaled Windows and Retina macOS drag/drop
+acceptance remains unverified.
+
+Files shows confirmed contiguous bytes and a separate finalizing state. Only a
+confirmed remote publication or local save shows Saved. Cancellation stops an
+unstarted item or waits for cleanup of its running attempt; once final save has
+started it cannot report a successful cancellation. Replacement review names
+the bound Host and Login. A queued upload rechecks its retained source; a download
+rechecks its local destination before replacing it. Metadata checks cannot detect
+content changes that preserve all compared metadata or eliminate a change between
+check and rename.
+
+Disconnect interrupts unstarted items and never sends them over a new transport.
+Unknown results stay visible across hiding Files and reconnecting. Check the
+destination before adding the file again; Dismiss reminder releases its queue
+slot without verifying or retrying the transfer. Cleanup warnings state when an
+incomplete file may remain. Closing the logical tab cancels pending work and
+settles a save already in progress. The queue has no recovery after tab or process
+closure. A download can pause after its current bounded segment settles and resume explicitly
+on the same connected SSH transport. Resume keeps the original open remote file and local
+partial, verifies both confirmed prefixes, and queues a fresh execution at the FIFO tail.
+Verification rereads the complete confirmed prefix locally and remotely on every resume; its
+cost grows with that prefix and does not increase displayed payload progress. Metadata and an
+open handle do not provide an immutable source snapshot: unread suffix changes or concurrent
+writes after verification can still affect a download. Keep the source stable until it saves.
+Cancellation and disconnect settle owned partial cleanup; a detected replacement is preserved.
+Uploads can also pause on the original live transport when the server admits a separate
+read handle for the exclusively created private staging file. A server refusing staging
+reads still supports ordinary uploads without Pause. Pausing settles a bounded segment and
+supported remote synchronization, then checks both confirmed prefixes. Resume retains the
+original local source and remote write/read handles, verifies source, staging and destination,
+and continues at the confirmed offset under a fresh FIFO execution. Validation reads do not
+increase payload progress. SFTP v3 has no stable file identity: matching staging attributes
+and prefix hashes cannot prove inode identity, an unchanged unread suffix or absence of
+concurrent writes after validation. Keep the source and staging stable until publication.
+Continuation after reconnect or tab/process closure remains separate C6 work.
+
+Preview reads one complete ordinary UTF-8 file of at most 256 KiB through the current
+terminal's SSH connection. It shows literal read-only text in a transient dialog, without
+opening an editor, writing a local copy or starting synchronization. Empty files are supported.
+Larger files, invalid UTF-8 and non-text controls require Download instead. Closing the preview,
+changing tabs or ending the connection discards the text. Runnable transfers take priority;
+paused or unknown-result items do not prevent preview. Remote handle and path metadata and EOF
+are checked, but SFTP v3 provides neither an immutable snapshot nor atomic no-follow opening.
 
 When a session closes or fails, choose Reconnect in its header to connect again
 in the same tab. Its displayed terminal output stays available. Reconnect waits
@@ -143,7 +230,9 @@ and remote-process resumption remain separate capabilities.
 
 Settings → Personal account can prepare a Personal invitation from a user-selected HTTPS
 Scoplen server, save and confirm a recovery file, join, and authenticate the first device.
-The same pending identity is retained across restarts and uncertain responses. The desktop
+Keep the recovery file private and offline, separate from the device. This version cannot
+restore an account from a recovery key; after joining, retain access to at least one enrolled
+device. The same pending identity is retained across restarts and uncertain responses. The desktop
 can explicitly synchronize selected inventory after key verification. Rust rotates its native
 device session when needed by an account query, sync, key verification or the active background owner.
 Existing local SSH data is not uploaded by account setup.
@@ -315,6 +404,31 @@ pnpm test
 pnpm license-check
 ```
 
+`scripts/test-ssh-keyboard-interactive.ps1` uses PowerShell 7 and Docker to start
+disposable OpenSSH 9.9/PAM listeners with exact package versions. Through public
+saved client preparation it checks explicit Interactive, accepted password/key/agent
+continuation, wrong-answer/key refusal, fresh successful attempts, cancellation
+and late replies, another terminal while one challenge waits, and Interactive
+Jump plus target authentication. Every successful connection must execute the
+exact expected command with exit status zero. The fixture cleans up its own
+containers and temporary keys.
+
+`scripts/test-ssh-local-forward.ps1` checks saved standalone TCP tunnels against
+disposable OpenSSH listeners with session channels disabled. It exercises password,
+encrypted-key, Interactive and Jump preparation, concurrent binary streams, half-close,
+exact traffic counts, refusal, cancellation and SSH loss while another terminal stays
+usable. It requires PowerShell 7, Docker and `ssh-keygen`. Successful runs remove their
+owned resources; failed runs retain private diagnostics and stop their owned container.
+
+`scripts/test-ssh-dynamic-forward.ps1` checks saved SOCKS4a/5 tunnels through Direct
+and Jump routes against disposable OpenSSH listeners with session channels disabled.
+It verifies literal destination names and server-side resolution, concurrent binary
+streams with coalesced application bytes, half-close, application-only counters,
+refusals, the absolute handshake deadline and cleanup during negotiation, channel
+opening and copying. Saved edits/deletion leave the running configuration fixed;
+an independent terminal remains usable. It uses the same prerequisites and fixture
+retention rules as the Local check.
+
 With PowerShell 7, Docker, and `ssh-keygen` available, `scripts/test-ssh-private-key.ps1`
 starts disposable OpenSSH servers and verifies Ed25519, P-256/P-384/P-521, and RSA key
 authentication, encrypted-key passphrases, constrained RSA-SHA2-256/512
@@ -351,8 +465,9 @@ runner and checks the complete saved-key path through the real Microsoft agent,
 using a disposable loopback Rust SSH protocol peer. That peer does not establish
 Windows OpenSSH-server interoperability. Each fixture cleans up its own resources.
 `scripts/test-ssh-session-files.ps1` runs a connected terminal and Files operations
-against a disposable OpenSSH server. It checks directory browsing and binary
-download on the same authenticated connection, plus folder creation, file rename
+against a disposable OpenSSH server. It checks directory browsing, binary
+transfer progress and finalization, including a failed local save after all bytes
+arrive, on the same authenticated connection, plus folder creation, file rename
 and collision handling, delete-confirmation outcomes, empty-directory deletion,
 cancellation and failure recovery while terminal input and resizing remain available. It requires
 PowerShell 7 and Docker, and removes its container and temporary files afterward.

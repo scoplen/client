@@ -11,6 +11,7 @@ use std::{
     collections::BTreeMap,
     ffi::OsString,
     fmt,
+    future::Future,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -23,9 +24,9 @@ use scoplen_client_platform::credentials;
 use scoplen_crypto::{Ed25519SigningKey, SecretVec};
 use scoplen_ssh::{
     ChannelEvent, ClientChannel, ClientConfig, ClientConnection, ClientError, EcdsaSshSigner,
-    Ed25519SshSigner, HostKey, HostKeyVerificationError, HostKeyVerifier, ProxyCredentials,
-    PtyRequest, RsaSshSigner, ServerRsaSha2Selection, SignatureAlgorithm, UserAuthContext,
-    WindowChangeRequest,
+    Ed25519SshSigner, HostKey, HostKeyVerificationError, HostKeyVerifier,
+    KeyboardInteractiveInfoRequest, KeyboardInteractiveResponse, ProxyCredentials, PtyRequest,
+    RsaSshSigner, ServerRsaSha2Selection, SignatureAlgorithm, UserAuthContext, WindowChangeRequest,
 };
 use sha2::{Digest as _, Sha256};
 use ssh_key::{Kdf, PrivateKey};
@@ -52,6 +53,8 @@ pub use trust::{HostKeyAssessment, HostKeyReview, HostKeyTrustSource, assess_hos
 /// the Tauri boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CredentialMaterial {
+    /// Explicit server challenges with no stored authentication material.
+    KeyboardInteractive,
     /// A password held in the encrypted local store.
     Password(SecretVec),
     /// An OpenSSH private key held in the encrypted local store.
@@ -409,6 +412,7 @@ pub fn resolve_connection_plan(
         }
         None => credentials
             .iter()
+            .filter(|record| record.kind != CredentialKind::KeyboardInteractive)
             .filter_map(|record| resolve_credential(store, record).ok())
             .next()
             .ok_or(ConnectionPlanError::CredentialUnavailable)?,
@@ -481,6 +485,9 @@ fn resolve_credential(
     credential: &Credential,
 ) -> Result<CredentialMaterial, ConnectionPlanError> {
     match (credential.kind, credential.binding) {
+        (CredentialKind::KeyboardInteractive, CredentialBinding::None) => {
+            Ok(CredentialMaterial::KeyboardInteractive)
+        }
         (CredentialKind::Password, CredentialBinding::Shared) => {
             Ok(CredentialMaterial::Password(shared_secret(store, credential)?))
         }
@@ -721,11 +728,11 @@ pub enum SshConnectionError {
     /// The server advertised only SHA-1 for RSA public-key authentication.
     #[error("the SSH server advertises only legacy ssh-rsa for RSA keys; SHA-1 is not permitted")]
     RsaSha2Unavailable,
-    /// The server rejected the selected RSA SHA-2 authentication request.
+    /// The server accepted a factor but requires a method outside this preparation.
     #[error(
-        "RSA key authentication was rejected; verify the key and the server's RSA SHA-2 policy"
+        "the SSH server requires an additional authentication factor that this login does not support"
     )]
-    RsaAuthenticationRejected,
+    UnsupportedAuthenticationFactor,
     /// The peer completed key exchange without a key callback result.
     #[error("SSH server did not present a host key")]
     HostKeyProbeMissing,
@@ -879,7 +886,9 @@ async fn connect_route(
 
 fn validate_credential(credential: &CredentialMaterial) -> Result<(), SshConnectionError> {
     match credential {
-        CredentialMaterial::Password(_) | CredentialMaterial::PrivateKey(_) => Ok(()),
+        CredentialMaterial::Password(_)
+        | CredentialMaterial::PrivateKey(_)
+        | CredentialMaterial::KeyboardInteractive => Ok(()),
         CredentialMaterial::Agent { public_key } => {
             agent::parse_public_key(public_key.as_deref()).map(|_| ())
         }
@@ -1087,6 +1096,73 @@ impl SshConnection {
         &mut self,
         passphrase: Option<SecretVec>,
     ) -> Result<(), SshConnectionError> {
+        let result = self.authenticate_selected(passphrase).await;
+        if matches!(result, Err(SshConnectionError::InvalidPrivateKeyPassphrase)) {
+            return result;
+        }
+        self.finish_authentication(result)
+    }
+
+    /// Authenticate the saved choice, continuing only an accepted factor into challenges.
+    pub async fn authenticate_with_challenges<F, R>(
+        &mut self,
+        passphrase: Option<SecretVec>,
+        responder: F,
+    ) -> Result<(), SshConnectionError>
+    where
+        F: FnMut(KeyboardInteractiveInfoRequest) -> R + Send,
+        R: Future<Output = Result<KeyboardInteractiveResponse, ClientError>> + Send,
+    {
+        let interactive = matches!(self.credential, Some(CredentialMaterial::KeyboardInteractive));
+        let selected = if interactive {
+            self.lifecycle.transition(ConnectionState::Authenticating)?;
+            self.credential.take();
+            None
+        } else {
+            Some(self.authenticate_selected(passphrase).await)
+        };
+        let result = match selected {
+            None => self.authenticate_challenges(responder).await,
+            Some(Err(SshConnectionError::Engine(ClientError::AuthenticationRejected {
+                partial_success: true,
+                remaining_methods,
+            }))) if remaining_methods.iter().any(|method| method == "keyboard-interactive") => {
+                self.authenticate_challenges(responder).await
+            }
+            Some(result) => result,
+        };
+        if matches!(result, Err(SshConnectionError::InvalidPrivateKeyPassphrase)) {
+            return result;
+        }
+        let result = match result {
+            Err(SshConnectionError::Engine(ClientError::AuthenticationRejected {
+                partial_success: true,
+                ..
+            })) => Err(SshConnectionError::UnsupportedAuthenticationFactor),
+            result => result,
+        };
+        self.finish_authentication(result)
+    }
+
+    async fn authenticate_challenges<F, R>(
+        &mut self,
+        responder: F,
+    ) -> Result<(), SshConnectionError>
+    where
+        F: FnMut(KeyboardInteractiveInfoRequest) -> R + Send,
+        R: Future<Output = Result<KeyboardInteractiveResponse, ClientError>> + Send,
+    {
+        let username = self.username.clone();
+        self.connection_mut()?
+            .authenticate_keyboard_interactive(&username, None, responder)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn authenticate_selected(
+        &mut self,
+        passphrase: Option<SecretVec>,
+    ) -> Result<(), SshConnectionError> {
         // Local decryption can be retried on this same, already reviewed KEX.
         // It must complete before consuming the credential or starting auth.
         if let Some(CredentialMaterial::PrivateKey(material)) = &self.credential {
@@ -1100,12 +1176,12 @@ impl SshConnection {
             self.credential.take();
             let username = self.username.clone();
             let result = self.authenticate_software_key(&username, signer).await;
-            return self.finish_authentication(result);
+            return result;
         }
         self.lifecycle.transition(ConnectionState::Authenticating)?;
         let username = self.username.clone();
         let credential = self.credential.take().ok_or(SshConnectionError::UnsupportedCredential)?;
-        let result = match credential {
+        match credential {
             CredentialMaterial::Password(password) => {
                 if password.len() > MAX_SSH_INPUT {
                     Err(SshConnectionError::InputTooLarge {
@@ -1123,8 +1199,7 @@ impl SshConnection {
                 self.authenticate_agent(&username, public_key.as_deref()).await
             }
             _ => Err(SshConnectionError::UnsupportedCredential),
-        };
-        self.finish_authentication(result)
+        }
     }
 
     /// Authenticate with an explicit username and password.
@@ -1167,15 +1242,10 @@ impl SshConnection {
                 let algorithm = rsa_signature_algorithm(selection)?;
                 let signer = RsaSshSigner::new(*key, algorithm)
                     .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
-                self.connection_mut()?.authenticate_publickey(username, &signer).await.map_err(
-                    |error| {
-                        if matches!(error, ClientError::AuthenticationRejected { .. }) {
-                            SshConnectionError::RsaAuthenticationRejected
-                        } else {
-                            SshConnectionError::Engine(error)
-                        }
-                    },
-                )
+                self.connection_mut()?
+                    .authenticate_publickey(username, &signer)
+                    .await
+                    .map_err(Into::into)
             }
         }
     }
@@ -1211,6 +1281,15 @@ impl SshConnection {
             return Err(SshConnectionError::Engine(ClientError::NotAuthenticated));
         }
         self.connection.as_ref().ok_or(SshConnectionError::AgentCancelled)
+    }
+
+    pub(crate) fn authenticated_connection_mut(
+        &mut self,
+    ) -> Result<&mut ClientConnection, SshConnectionError> {
+        if self.state() != ConnectionState::Open {
+            return Err(SshConnectionError::Engine(ClientError::NotAuthenticated));
+        }
+        self.connection.as_mut().ok_or(SshConnectionError::AgentCancelled)
     }
 
     /// Close the SSH connection and mark it closed.

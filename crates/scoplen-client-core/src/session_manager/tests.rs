@@ -32,9 +32,228 @@ fn ready_file_manager()
         files,
         file: None,
         ready: true,
+        context: None,
     });
     drop(sessions);
     (manager, transport, commands, file_requests)
+}
+
+#[tokio::test]
+async fn preview_serializes_file_access_without_blocking_terminal_commands() {
+    let (manager, transport, mut commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .preview_file(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./text".to_vec(),
+                )
+                .await
+        }
+    });
+    let FileCommand::Preview { path, reply } = files.recv().await.unwrap() else {
+        panic!("preview request expected")
+    };
+    assert_eq!(path, b"./text");
+    assert_eq!(
+        manager
+            .preview_file(
+                "terminal",
+                &transport.to_string(),
+                &Uuid::now_v7().to_string(),
+                b"./second".to_vec()
+            )
+            .await
+            .unwrap_err(),
+        RemoteTextPreviewIssue::Unavailable
+    );
+    manager.input("terminal", &transport.to_string(), b"echo alive\n".to_vec()).unwrap();
+    manager.resize("terminal", &transport.to_string(), 100, 30).unwrap();
+    assert!(matches!(commands.recv().await.unwrap(), TransportCommand::Input(_)));
+    assert!(matches!(commands.recv().await.unwrap(), TransportCommand::Resize { .. }));
+    reply.send(Ok(RemoteTextPreview { text: "complete".into(), size_bytes: 8 })).unwrap();
+    assert_eq!(pending.await.unwrap().unwrap().text, "complete");
+    assert!(manager.sessions.lock().unwrap()["terminal"].active.as_ref().unwrap().file.is_none());
+}
+
+#[tokio::test]
+async fn preview_cancel_is_operation_fenced_and_closes_its_response_receiver() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .preview_file(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./text".to_vec(),
+                )
+                .await
+        }
+    });
+    let FileCommand::Preview { mut reply, .. } = files.recv().await.unwrap() else {
+        panic!("preview request expected")
+    };
+    assert!(
+        manager
+            .cancel_file_operation("terminal", &transport.to_string(), &Uuid::now_v7().to_string())
+            .is_err()
+    );
+    assert!(!pending.is_finished());
+    manager
+        .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+        .unwrap();
+    assert_eq!(pending.await.unwrap().unwrap_err(), RemoteTextPreviewIssue::Cancelled);
+    reply.closed().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn preview_has_a_sixty_second_absolute_deadline_and_releases_admission() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .preview_file(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./text".to_vec(),
+                )
+                .await
+        }
+    });
+    let FileCommand::Preview { mut reply, .. } = files.recv().await.unwrap() else {
+        panic!("preview request expected")
+    };
+    tokio::time::advance(Duration::from_secs(59)).await;
+    assert!(!pending.is_finished());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(pending.await.unwrap().unwrap_err(), RemoteTextPreviewIssue::Timeout);
+    reply.closed().await;
+    assert!(manager.sessions.lock().unwrap()["terminal"].active.as_ref().unwrap().file.is_none());
+}
+
+#[tokio::test]
+async fn preview_cannot_disclose_a_reply_after_transport_replacement() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        async move {
+            manager
+                .preview_file(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./text".to_vec(),
+                )
+                .await
+        }
+    });
+    let FileCommand::Preview { reply, .. } = files.recv().await.unwrap() else {
+        panic!("preview request expected")
+    };
+    manager.sessions.lock().unwrap().get_mut("terminal").unwrap().active.as_mut().unwrap().id =
+        Uuid::now_v7();
+    reply.send(Ok(RemoteTextPreview { text: "old transport".into(), size_bytes: 13 })).unwrap();
+    assert_eq!(pending.await.unwrap().unwrap_err(), RemoteTextPreviewIssue::Unavailable);
+}
+
+#[test]
+fn file_progress_is_decimal_and_fenced_to_the_current_operation() {
+    let (manager, transport, _commands, _files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let (abort, _) = AbortHandle::new_pair();
+    let _guard = manager
+        .reserve_file_operation("terminal", &transport.to_string(), &operation.to_string(), abort)
+        .unwrap();
+    let mut updates = Vec::new();
+    let mut report = |update| updates.push(update);
+    let large = 9_007_199_254_740_993_u64;
+    let transfer = FileTransferProgress {
+        transferred: large,
+        total: Some(large + 1),
+        phase: SessionFileTransferPhase::Transferring,
+    };
+    SessionManager::report_file_progress(
+        &manager.sessions,
+        "terminal",
+        Uuid::now_v7(),
+        operation,
+        &mut report,
+        transfer,
+    );
+    SessionManager::report_file_progress(
+        &manager.sessions,
+        "terminal",
+        transport,
+        operation,
+        &mut report,
+        transfer,
+    );
+    manager
+        .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+        .unwrap();
+    SessionManager::report_file_progress(
+        &manager.sessions,
+        "terminal",
+        transport,
+        operation,
+        &mut report,
+        transfer,
+    );
+    let next_operation = Uuid::now_v7();
+    let (next_abort, _) = AbortHandle::new_pair();
+    let _next_guard = manager
+        .reserve_file_operation(
+            "terminal",
+            &transport.to_string(),
+            &next_operation.to_string(),
+            next_abort,
+        )
+        .unwrap();
+    manager.finish_remote_effect("terminal", transport, next_operation);
+    SessionManager::report_file_progress(
+        &manager.sessions,
+        "terminal",
+        transport,
+        next_operation,
+        &mut report,
+        transfer,
+    );
+    let expired_operation = Uuid::now_v7();
+    let (expired_abort, _) = AbortHandle::new_pair();
+    let _expired_guard = manager
+        .reserve_file_operation(
+            "terminal",
+            &transport.to_string(),
+            &expired_operation.to_string(),
+            expired_abort,
+        )
+        .unwrap();
+    manager.expire_ready_transport("terminal", transport).unwrap();
+    SessionManager::report_file_progress(
+        &manager.sessions,
+        "terminal",
+        transport,
+        expired_operation,
+        &mut report,
+        transfer,
+    );
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].session_id, "terminal");
+    assert_eq!(updates[0].transport_id, transport.to_string());
+    assert_eq!(updates[0].operation_id, operation.to_string());
+    assert_eq!(updates[0].transferred_bytes, large.to_string());
+    assert_eq!(updates[0].total_bytes, Some((large + 1).to_string()));
 }
 
 #[tokio::test]
@@ -59,6 +278,7 @@ async fn upload_refuses_existing_target_without_atomic_replace_extension() {
                         confirmed.store(true, Ordering::SeqCst);
                         Ok(true)
                     },
+                    |_| {},
                 )
                 .await
         }
@@ -103,6 +323,7 @@ async fn upload_publication_rejects_cancel_and_lost_worker_is_unknown() {
                     b".".to_vec(),
                     || async { Ok(Some(source)) },
                     |_| async { Ok(true) },
+                    |_| {},
                 )
                 .await
         }
@@ -123,7 +344,7 @@ async fn upload_publication_rejects_cancel_and_lost_worker_is_unknown() {
         manager
             .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
             .unwrap_err()
-            .contains("remote change has started")
+            .contains("result must be checked")
     );
     manager.expire_ready_transport("terminal", transport).unwrap();
     drop(reply);
@@ -155,6 +376,7 @@ async fn cancelled_upload_confirmation_cannot_queue_late_transfer() {
                         entered.send(()).unwrap();
                         Ok(decided.await.unwrap())
                     },
+                    |_| {},
                 )
                 .await
         }
@@ -200,6 +422,7 @@ async fn cancel_before_upload_publication_waits_for_worker_cleanup() {
                     b".".to_vec(),
                     || async { Ok(Some(source)) },
                     |_| async { Ok(true) },
+                    |_| {},
                 )
                 .await
         }
@@ -267,7 +490,7 @@ async fn remote_create_lost_acknowledgement_is_unknown_and_never_requeued() {
         manager
             .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
             .unwrap_err()
-            .contains("remote change has started")
+            .contains("result must be checked")
     );
     manager.expire_ready_transport("terminal", transport).unwrap();
     drop(reply);
@@ -426,6 +649,7 @@ async fn cancelled_picker_cannot_queue_a_late_download() {
                     picker_opened.store(true, Ordering::SeqCst);
                     Ok(None)
                 },
+                |_| {},
             )
             .await
             .is_err()
@@ -447,6 +671,7 @@ async fn cancelled_picker_cannot_queue_a_late_download() {
                         picker_started.send(()).unwrap();
                         Ok(Some(chosen.await.unwrap()))
                     },
+                    |_| {},
                 )
                 .await
         }
@@ -455,7 +680,7 @@ async fn cancelled_picker_cannot_queue_a_late_download() {
     manager
         .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
         .unwrap();
-    assert!(pending.await.unwrap().unwrap_err().contains("cancelled"));
+    assert_eq!(pending.await.unwrap().unwrap().status, SessionDownloadStatus::Cancelled);
     assert!(picker_result.send(PathBuf::from("late-choice")).is_err());
     assert!(files.try_recv().is_err());
 }
@@ -479,13 +704,14 @@ async fn ended_transport_cancels_a_picker_before_its_late_result() {
                         picker_started.send(()).unwrap();
                         Ok(Some(chosen.await.unwrap()))
                     },
+                    |_| {},
                 )
                 .await
         }
     });
     started.await.unwrap();
     manager.phase("terminal", Phase::Ended).unwrap();
-    assert!(pending.await.unwrap().unwrap_err().contains("cancelled"));
+    assert_eq!(pending.await.unwrap().unwrap().status, SessionDownloadStatus::Cancelled);
     assert!(files.try_recv().is_err());
 }
 
@@ -504,18 +730,219 @@ fn old_transport_cannot_commit_a_download() {
     std::fs::write(&destination, b"original").unwrap();
     manager.sessions.lock().unwrap().get_mut("terminal").unwrap().active.as_mut().unwrap().id =
         Uuid::now_v7();
-    assert!(matches!(
+    assert_eq!(
         SessionManager::commit_download(
             &manager.sessions,
             "terminal",
             transport,
             operation,
-            &temporary,
-            &destination
-        ),
-        Err(session_files::FileAccessError::ConnectionEnded)
-    ));
+            None,
+            || std::fs::rename(&temporary, &destination)
+                .map_err(session_files::FileAccessError::LocalIo),
+        )
+        .status,
+        SessionDownloadStatus::Failed
+    );
     assert_eq!(std::fs::read(destination).unwrap(), b"original");
+}
+
+#[test]
+fn cancellation_before_local_commit_leaves_the_destination_untouched() {
+    let (manager, transport, _commands, _files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let (abort, _) = AbortHandle::new_pair();
+    let _guard = manager
+        .reserve_file_operation("terminal", &transport.to_string(), &operation.to_string(), abort)
+        .unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let temporary = folder.path().join("partial");
+    let destination = folder.path().join("existing");
+    std::fs::write(&temporary, b"new").unwrap();
+    std::fs::write(&destination, b"original").unwrap();
+    manager
+        .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+        .unwrap();
+    let result = SessionManager::commit_download(
+        &manager.sessions,
+        "terminal",
+        transport,
+        operation,
+        None,
+        || {
+            std::fs::rename(&temporary, &destination)
+                .map_err(session_files::FileAccessError::LocalIo)
+        },
+    );
+    assert_eq!(result.status, SessionDownloadStatus::Failed);
+    assert_eq!(std::fs::read(destination).unwrap(), b"original");
+    assert_eq!(std::fs::read(temporary).unwrap(), b"new");
+}
+
+#[tokio::test]
+async fn started_local_commit_rejects_cancel_and_keeps_its_result_after_disconnect_or_close() {
+    for close in [false, true] {
+        let (manager, transport, _commands, _files) = ready_file_manager();
+        let operation = Uuid::now_v7();
+        let (abort, _) = AbortHandle::new_pair();
+        let _guard = manager
+            .reserve_file_operation(
+                "terminal",
+                &transport.to_string(),
+                &operation.to_string(),
+                abort.clone(),
+            )
+            .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let temporary = folder.path().join("partial");
+        let destination = folder.path().join("existing");
+        std::fs::write(&temporary, b"new").unwrap();
+        std::fs::write(&destination, b"original").unwrap();
+        let (commit_started, started) = oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let sessions = manager.sessions.clone();
+        let commit = tokio::task::spawn_blocking(move || {
+            SessionManager::commit_download(
+                &sessions,
+                "terminal",
+                transport,
+                operation,
+                None,
+                || {
+                    commit_started.send(()).unwrap();
+                    released.recv().unwrap();
+                    std::fs::rename(&temporary, &destination)
+                        .map_err(session_files::FileAccessError::LocalIo)
+                },
+            )
+        });
+        started.await.unwrap();
+        assert!(
+            manager
+                .cancel_file_operation("terminal", &transport.to_string(), &operation.to_string())
+                .unwrap_err()
+                .contains("result must be checked")
+        );
+        if close {
+            manager.phase("terminal", Phase::Ended).unwrap();
+        } else {
+            manager.expire_ready_transport("terminal", transport).unwrap();
+        }
+        assert!(!abort.is_aborted());
+        release.send(()).unwrap();
+        assert_eq!(commit.await.unwrap().status, SessionDownloadStatus::Saved);
+        assert_eq!(std::fs::read(folder.path().join("existing")).unwrap(), b"new");
+    }
+}
+
+#[tokio::test]
+async fn claimed_download_delivers_saved_after_stop_fail_close_or_registration_drop() {
+    for action in [Intent::Stop, Intent::Fail, Intent::Close, Intent::None] {
+        let (manager, transport, _commands, mut files) = ready_file_manager();
+        let operation = Uuid::now_v7();
+        let folder = tempfile::tempdir().unwrap();
+        let destination = folder.path().join("existing");
+        let temporary = folder.path().join("partial");
+        std::fs::write(&destination, b"original").unwrap();
+        std::fs::write(&temporary, b"new").unwrap();
+        let pending = tokio::spawn({
+            let manager = manager.clone();
+            let destination = destination.clone();
+            async move {
+                manager
+                    .download_file_with_picker(
+                        "terminal",
+                        &transport.to_string(),
+                        &operation.to_string(),
+                        b"./document".to_vec(),
+                        || async { Ok(Some(destination)) },
+                        |_| {},
+                    )
+                    .await
+            }
+        });
+        let FileCommand::Download { reply, .. } = files.recv().await.unwrap() else {
+            panic!("expected download worker")
+        };
+        let (claimed, started) = oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let sessions = manager.sessions.clone();
+        let worker = tokio::task::spawn_blocking(move || {
+            let result = SessionManager::commit_download(
+                &sessions,
+                "terminal",
+                transport,
+                operation,
+                None,
+                || {
+                    claimed.send(()).unwrap();
+                    released.recv().unwrap();
+                    std::fs::rename(&temporary, &destination)
+                        .map_err(session_files::FileAccessError::LocalIo)
+                },
+            );
+            SessionManager::finish_file_effect(&sessions, "terminal", transport, operation);
+            let _ = reply.send(result.clone());
+            result
+        });
+        started.await.unwrap();
+        match action {
+            Intent::Stop => manager.stop("terminal").unwrap(),
+            Intent::Fail => manager.fail("terminal").unwrap(),
+            Intent::Close => manager.close("terminal").unwrap(),
+            Intent::None => drop(Registration { manager: &manager, id: "terminal" }),
+            Intent::Retry => unreachable!(),
+        }
+        release.send(()).unwrap();
+        assert_eq!(worker.await.unwrap().status, SessionDownloadStatus::Saved);
+        assert_eq!(pending.await.unwrap().unwrap().status, SessionDownloadStatus::Saved);
+        assert_eq!(std::fs::read(folder.path().join("existing")).unwrap(), b"new");
+    }
+}
+
+#[tokio::test]
+async fn lost_download_worker_reply_is_unknown_after_commit_and_is_not_requeued() {
+    let (manager, transport, _commands, mut files) = ready_file_manager();
+    let operation = Uuid::now_v7();
+    let folder = tempfile::tempdir().unwrap();
+    let destination = folder.path().join("existing");
+    let temporary = folder.path().join("partial");
+    std::fs::write(&destination, b"original").unwrap();
+    std::fs::write(&temporary, b"new").unwrap();
+    let pending = tokio::spawn({
+        let manager = manager.clone();
+        let destination = destination.clone();
+        async move {
+            manager
+                .download_file_with_picker(
+                    "terminal",
+                    &transport.to_string(),
+                    &operation.to_string(),
+                    b"./document".to_vec(),
+                    || async { Ok(Some(destination)) },
+                    |_| {},
+                )
+                .await
+        }
+    });
+    let FileCommand::Download { reply, .. } = files.recv().await.unwrap() else {
+        panic!("expected download worker")
+    };
+    let committed = SessionManager::commit_download(
+        &manager.sessions,
+        "terminal",
+        transport,
+        operation,
+        None,
+        || {
+            std::fs::rename(&temporary, &destination)
+                .map_err(session_files::FileAccessError::LocalIo)
+        },
+    );
+    assert_eq!(committed.status, SessionDownloadStatus::Saved);
+    drop(reply);
+    assert_eq!(pending.await.unwrap().unwrap().status, SessionDownloadStatus::Unknown);
+    assert_eq!(std::fs::read(destination).unwrap(), b"new");
+    assert!(files.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -545,8 +972,11 @@ async fn ended_ready_transport_fences_a_delayed_file_commit() {
                 "terminal",
                 transport,
                 operation,
-                &temporary,
-                &destination,
+                None,
+                || {
+                    std::fs::rename(&temporary, &destination)
+                        .map_err(session_files::FileAccessError::LocalIo)
+                },
             )
         }
     });
@@ -554,7 +984,7 @@ async fn ended_ready_transport_fences_a_delayed_file_commit() {
     manager.expire_ready_transport("terminal", transport).unwrap();
     assert!(manager.input("terminal", &transport.to_string(), b"late\n".to_vec()).is_err());
     release.send(()).unwrap();
-    assert!(matches!(commit.await.unwrap(), Err(session_files::FileAccessError::ConnectionEnded)));
+    assert_eq!(commit.await.unwrap().status, SessionDownloadStatus::Failed);
     assert_eq!(std::fs::read(destination).unwrap(), b"original");
     assert_eq!(std::fs::read(temporary).unwrap(), b"new");
 }
@@ -637,6 +1067,213 @@ fn checkpoint_ownership_rejects_cross_store_attempt_sequence_and_forgotten_histo
 }
 
 #[tokio::test]
+async fn interactive_answers_reject_wrong_and_previous_transports_without_consuming_the_current_prompt()
+ {
+    use crate::connection::preparation::{PreparationEvent, PreparationResponse};
+    use crate::connection::test_peer::{Authentication, Peer};
+    let peer = Peer::with_authentication(Authentication::Interactive).await;
+    let (_dir, store) = store();
+    let inventory = Inventory::new(store.clone());
+    let host = inventory
+        .add_host(NewHost {
+            name: Some("interactive peer".into()),
+            address: "127.0.0.1".into(),
+            port: Some(peer.port),
+            username: "trust-fixture".into(),
+            sign_in: SignIn::KeyboardInteractive,
+        })
+        .unwrap();
+    let manager = SessionManager::default();
+    manager.reserve("terminal", true).unwrap();
+    let transports = Mutex::new(Vec::new());
+    let old_prompt = Mutex::new(None);
+    let rounds = AtomicUsize::new(0);
+    let ready = AtomicUsize::new(0);
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        manager.run(
+            "terminal",
+            &host.logins[0].id,
+            None,
+            true,
+            store,
+            |event| {
+                match event {
+                    SessionEvent::Starting { transport_id, .. } => {
+                        transports.lock().unwrap().push(transport_id)
+                    }
+                    SessionEvent::Preparation { transport_id, event } => match *event {
+                        PreparationEvent::Trust { prompt_id, .. } => {
+                            manager.respond(
+                                "terminal",
+                                &transport_id,
+                                &prompt_id,
+                                PreparationResponse::AcceptHostKey,
+                            )?;
+                        }
+                        PreparationEvent::KeyboardInteractive { prompt_id, .. } => {
+                            let response = || {
+                                PreparationResponse::keyboard_interactive(vec![
+                                    b"visible".to_vec(),
+                                    vec![],
+                                ])
+                                .unwrap()
+                            };
+                            assert!(
+                                manager
+                                    .respond(
+                                        "terminal",
+                                        &Uuid::now_v7().to_string(),
+                                        &prompt_id,
+                                        response()
+                                    )
+                                    .is_err()
+                            );
+                            assert!(
+                                manager
+                                    .respond("unknown", &transport_id, &prompt_id, response())
+                                    .is_err()
+                            );
+                            let first = transports.lock().unwrap()[0].clone();
+                            if first == transport_id {
+                                *old_prompt.lock().unwrap() = Some(prompt_id);
+                                manager.stop("terminal")?;
+                            } else {
+                                let old = old_prompt.lock().unwrap().clone().unwrap();
+                                assert!(
+                                    manager.respond("terminal", &first, &old, response()).is_err()
+                                );
+                                assert!(
+                                    manager
+                                        .respond("terminal", &first, &prompt_id, response())
+                                        .is_err()
+                                );
+                                assert!(
+                                    manager
+                                        .respond("terminal", &transport_id, &old, response())
+                                        .is_err()
+                                );
+                                let answer = match rounds.fetch_add(1, Ordering::SeqCst) {
+                                    0 => vec![b"visible".to_vec(), vec![]],
+                                    1 => vec![],
+                                    2 => vec![b"123456".to_vec()],
+                                    _ => panic!("unexpected authentication round"),
+                                };
+                                manager.respond(
+                                    "terminal",
+                                    &transport_id,
+                                    &prompt_id,
+                                    PreparationResponse::keyboard_interactive(answer).unwrap(),
+                                )?;
+                            }
+                        }
+                        _ => {}
+                    },
+                    SessionEvent::Closed => manager.retry("terminal")?,
+                    SessionEvent::Ready { .. } => {
+                        ready.fetch_add(1, Ordering::SeqCst);
+                        manager.close("terminal")?;
+                    }
+                    SessionEvent::Failed { error, .. } => {
+                        panic!("interactive session failed: {error}")
+                    }
+                    _ => {}
+                }
+                Ok(())
+            },
+            |_, _| Ok(()),
+            |_, _| {},
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(transports.lock().unwrap().len(), 2);
+    assert_eq!(rounds.load(Ordering::SeqCst), 3);
+    assert_eq!(ready.load(Ordering::SeqCst), 1);
+    assert!(manager.sessions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn rejected_saved_password_fails_and_preserves_manual_retry_without_automatic_reconnect() {
+    use crate::connection::preparation::{PreparationEvent, PreparationResponse};
+    let peer = crate::connection::test_peer::Peer::start().await;
+    let (_dir, store) = store();
+    let inventory = Inventory::new(store.clone());
+    let host = inventory
+        .add_host(NewHost {
+            name: Some("rejected-password peer".into()),
+            address: "127.0.0.1".into(),
+            port: Some(peer.port),
+            username: "trust-fixture".into(),
+            sign_in: SignIn::Password { password: "wrong-disposable-password".into() },
+        })
+        .unwrap();
+    let manager = SessionManager::default();
+    manager.reserve("terminal", true).unwrap();
+    let transports = Mutex::new(Vec::new());
+    let failures = AtomicUsize::new(0);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        manager.run(
+            "terminal",
+            &host.logins[0].id,
+            None,
+            true,
+            store.clone(),
+            |event| {
+                match event {
+                    SessionEvent::Starting { transport_id, automatic } => {
+                        assert!(!automatic);
+                        transports.lock().unwrap().push(transport_id);
+                    }
+                    SessionEvent::Preparation { transport_id, event } => {
+                        if let PreparationEvent::Trust { prompt_id, .. } = *event {
+                            manager.respond(
+                                "terminal",
+                                &transport_id,
+                                &prompt_id,
+                                PreparationResponse::AcceptHostKey,
+                            )?;
+                        }
+                    }
+                    SessionEvent::Failed { exhausted, .. } => {
+                        assert!(!exhausted);
+                        if failures.fetch_add(1, Ordering::SeqCst) == 0 {
+                            manager.retry("terminal")?;
+                        } else {
+                            manager.close("terminal")?;
+                        }
+                    }
+                    _ => {
+                        panic!("rejected authentication must fail without closing or reconnecting")
+                    }
+                }
+                Ok(())
+            },
+            |_, _| panic!("rejected authentication must not open a shell"),
+            |_, _| {},
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(failures.load(Ordering::SeqCst), 2);
+    assert_eq!(peer.authentications.load(Ordering::SeqCst), 2);
+    assert_eq!(peer.challenges.load(Ordering::SeqCst), 0);
+    assert_eq!(peer.session_channels.load(Ordering::SeqCst), 0);
+    let transports = transports.lock().unwrap();
+    assert_eq!(transports.len(), 2);
+    assert_ne!(transports[0], transports[1]);
+    assert!(manager.sessions.lock().unwrap().is_empty());
+    let recent = inventory.recent_sessions().unwrap();
+    assert_eq!(recent.len(), 2);
+    assert!(recent.iter().all(|entry| {
+        entry.ended_at.is_some() && entry.outcome == Some(RecentSessionOutcome::Failed)
+    }));
+}
+
+#[tokio::test]
 async fn real_ssh_output_checkpoint_survives_encrypted_reopen_and_offline_read() {
     use crate::connection::preparation::{PreparationEvent, PreparationResponse};
     let peer = crate::connection::test_peer::Peer::start().await;
@@ -673,6 +1310,7 @@ async fn real_ssh_output_checkpoint_survives_encrypted_reopen_and_offline_read()
                             assert_eq!(peer.authentications.load(Ordering::SeqCst), 0);
                             manager.respond(
                                 "terminal",
+                                transport.lock().unwrap().as_ref().unwrap(),
                                 &prompt_id,
                                 PreparationResponse::AcceptHostKey,
                             )?;
@@ -977,6 +1615,7 @@ fn input_is_bounded_and_old_transport_input_cannot_reach_the_replacement() {
         files,
         file: None,
         ready: false,
+        context: None,
     });
     assert!(manager.input("logical", &old.to_string(), vec![1]).is_err());
     manager.sessions.lock().unwrap().get_mut("logical").unwrap().active.as_mut().unwrap().ready =
@@ -999,6 +1638,7 @@ fn input_is_bounded_and_old_transport_input_cannot_reach_the_replacement() {
         files,
         file: None,
         ready: true,
+        context: None,
     });
     assert!(manager.input("logical", &old.to_string(), vec![2]).is_err());
     assert!(new_receiver.try_recv().is_err());

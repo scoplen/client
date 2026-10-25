@@ -2,7 +2,7 @@
 import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { X } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { Button } from "./button";
 
 const backdrop =
@@ -23,39 +23,53 @@ export interface DialogProps {
   footer: ReactNode;
   /** A character beside the title, such as the mark reacting to the form. Decorative. */
   mark?: ReactNode;
+  /** Where focus returns when the opener is outside the dialog's trigger system. */
+  finalFocus?: ComponentProps<typeof BaseDialog.Popup>["finalFocus"];
 }
 
 /** A modal dialog: focus stays inside, Escape closes, focus returns on close. */
-export function Dialog({ open, onOpenChange, title, description, closeLabel, children, footer, mark }: DialogProps) {
+export function Dialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  closeLabel,
+  children,
+  footer,
+  mark,
+  finalFocus,
+}: DialogProps) {
   return (
     <BaseDialog.Root open={open} onOpenChange={onOpenChange}>
       <BaseDialog.Portal>
         <BaseDialog.Backdrop className={backdrop} />
-        <BaseDialog.Popup className={popup}>
-          <div className="flex items-start gap-3.5 px-6 pt-5">
-            {mark ? (
-              <span aria-hidden="true" className="-mt-0.5 shrink-0 text-primary">
-                {mark}
-              </span>
-            ) : null}
-            <div className="min-w-0 flex-1">
-              <BaseDialog.Title className="ui-display m-0 text-lg">{title}</BaseDialog.Title>
-              {description ? (
-                <BaseDialog.Description className="mt-1 text-sm text-muted-foreground">
-                  {description}
-                </BaseDialog.Description>
+        <BaseDialog.Popup className={`${popup} overflow-hidden`} finalFocus={finalFocus}>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="flex items-start gap-3.5 px-6 pt-5">
+              {mark ? (
+                <span aria-hidden="true" className="-mt-0.5 shrink-0 text-primary">
+                  {mark}
+                </span>
               ) : null}
+              <div className="min-w-0 flex-1">
+                <BaseDialog.Title className="ui-display m-0 text-lg wrap-anywhere">{title}</BaseDialog.Title>
+                {description ? (
+                  <BaseDialog.Description className="mt-1 text-sm wrap-anywhere text-muted-foreground">
+                    {description}
+                  </BaseDialog.Description>
+                ) : null}
+              </div>
+              <BaseDialog.Close
+                aria-label={closeLabel}
+                title={closeLabel}
+                className="-mr-2 grid size-8 place-items-center rounded-full text-muted-foreground transition-colors duration-(--duration-micro) hover:bg-inset hover:text-foreground"
+              >
+                <X aria-hidden="true" className="size-4" />
+              </BaseDialog.Close>
             </div>
-            <BaseDialog.Close
-              aria-label={closeLabel}
-              title={closeLabel}
-              className="-mr-2 grid size-8 place-items-center rounded-full text-muted-foreground transition-colors duration-(--duration-micro) hover:bg-inset hover:text-foreground"
-            >
-              <X aria-hidden="true" className="size-4" />
-            </BaseDialog.Close>
+            <div className="px-6 py-5">{children}</div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">{children}</div>
-          <div className="flex justify-end gap-3 px-6 pt-2 pb-5">{footer}</div>
+          <div className="flex shrink-0 flex-wrap justify-end gap-3 px-6 pt-2 pb-5">{footer}</div>
         </BaseDialog.Popup>
       </BaseDialog.Portal>
     </BaseDialog.Root>

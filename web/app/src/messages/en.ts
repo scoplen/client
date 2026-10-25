@@ -180,7 +180,7 @@ export const en = {
   "settings.personal.server": "Server",
   "settings.personal.recoveryTitle": "Save your recovery key",
   "settings.personal.recoveryBody":
-    "Keep this file private and offline, separate from this device. Without another enrolled device or this key, you cannot recover your Personal data. No account request has been sent yet.",
+    "Keep this file private and offline, separate from this device. This version cannot restore an account from a recovery key. After joining, retain access to at least one enrolled device. No account request has been sent yet.",
   "settings.personal.saveRecovery": "Save recovery file",
   "settings.personal.saveAgain": "Save recovery file again",
   "settings.personal.recoveryConfirm": "I have saved the recovery file somewhere safe, separate from this device.",
@@ -287,6 +287,7 @@ export const en = {
   "frame.state.verifying": "Checking the host key",
   "frame.state.trusting": "Waiting for you to check the host key",
   "frame.state.passphrase": "Waiting for key passphrase",
+  "frame.state.keyboardInteractive": "Waiting for authentication answers",
   "frame.state.connecting": "Connecting",
   "frame.state.reconnecting": "Reconnecting",
   "frame.state.connected": "Connected",
@@ -317,6 +318,10 @@ export const en = {
   "session.files.listing": "Loading remote files…",
   "session.files.downloading": "Downloading file…",
   "session.files.uploading": "Uploading file…",
+  "session.files.transfer.progress": "File transfer progress",
+  "session.files.transfer.knownTotal": "{transferred} / {total} bytes · {percent}%",
+  "session.files.transfer.unknownTotal": "{transferred} bytes transferred",
+  "session.files.transfer.finalizing": "Transfer complete. Waiting for save confirmation.",
   "session.files.creating": "Creating folder…",
   "session.files.renaming": "Renaming remote item…",
   "session.files.deleting": "Deleting remote item…",
@@ -328,9 +333,50 @@ export const en = {
   "session.files.retry": "Try again",
   "session.files.refresh": "Refresh files",
   "session.files.empty": "This directory is empty.",
+  "session.files.drop.list": "Remote directory files",
+  "session.files.drop.hint": "Drop 1–16 files into this list, or choose Upload file.",
+  "session.files.drop.over": "{count, plural, one {Drop # file to upload here} other {Drop # files to upload here}}",
+  "session.files.drop.overUnknown": "Drop files to upload to this directory.",
+  "session.files.drop.checking": "{count, plural, one {Checking # dropped file…} other {Checking # dropped files…}}",
+  "session.files.drop.accepted":
+    "{count, plural, one {# file added to the upload queue.} other {# files added to the upload queue.}}",
+  "session.files.drop.refused":
+    "{count, plural, one {# dropped file was not added.} other {# dropped files were not added.}} Try again or choose Upload file.",
+  "session.files.drop.invalid":
+    "No files were added. Drop 1–16 ordinary files into this directory list, or choose Upload file.",
   "session.files.download": "Download {name}",
+  "session.files.preview.action": "Preview {name}",
+  "session.files.preview.title": "Preview: {name}",
+  "session.files.preview.description": "Read-only text from {connection}. This is a single read, not a live view.",
+  "session.files.preview.close": "Close preview",
+  "session.files.preview.loading": "Reading remote text…",
+  "session.files.preview.content": "Remote file text",
+  "session.files.preview.bytes": "{bytes} bytes · UTF-8",
+  "session.files.preview.empty": "This text file is empty.",
+  "session.files.preview.downloadHint": "Close this preview to download the file instead.",
+  "session.files.preview.issue.notRegularFile":
+    "Only ordinary remote files can be previewed. Refresh Files and choose a file.",
+  "session.files.preview.issue.missingMetadata":
+    "The server did not provide the file metadata needed for a complete preview.",
+  "session.files.preview.issue.tooLarge": "This file exceeds the 256 KiB preview limit.",
+  "session.files.preview.issue.fileChanged": "The remote file changed while reading. Keep it stable and try again.",
+  "session.files.preview.issue.notText":
+    "This file is not supported UTF-8 text. Binary data and non-text control characters cannot be previewed.",
+  "session.files.preview.issue.timeout": "Reading the file timed out. Check the connection and try again.",
+  "session.files.preview.issue.cancelled": "The preview was cancelled. Try again when you are ready.",
+  "session.files.preview.issue.unavailable":
+    "This connection or its file access is unavailable. Wait for other file work or reconnect before trying again.",
+  "session.files.preview.issue.remoteDenied":
+    "The SSH server refused the preview. Check file access before trying again.",
+  "session.files.preview.issue.failed": "The file could not be previewed safely. Check the connection and try again.",
   "session.files.saved": "Download saved to the selected location.",
   "session.files.saveCancelled": "No file was saved.",
+  "session.files.download.failed":
+    "The download could not be saved. Check the connection and destination before trying again.",
+  "session.files.download.unknown":
+    "The download result is unknown. Check the selected local location before downloading again.",
+  "session.files.download.attentionUnknown":
+    "A download may have been saved. Check the selected local location before downloading it again.",
   "session.files.upload.action": "Upload file",
   "session.files.name": "Name",
   "session.files.create.action": "New folder",
@@ -395,6 +441,14 @@ export const en = {
   "session.trust.connect": "Trust and connect",
   "session.trust.cancel": "Cancel",
   "session.trust.cancelled": "Connection cancelled because the host key was not trusted.",
+  "session.interactive.status": "Waiting for authentication response",
+  "session.interactive.title": "Answer this server's request",
+  "session.interactive.body":
+    "The server supplied the text below. Your answers are used only for this connection and are never saved.",
+  "session.interactive.response": "Response {count}",
+  "session.interactive.continue": "Continue",
+  "session.interactive.cancel": "Cancel",
+  "session.interactive.cancelled": "Connection cancelled during authentication.",
   "session.passphrase.status": "Waiting for key passphrase",
   "session.passphrase.title": "Unlock this SSH key",
   "session.passphrase.body":
@@ -515,6 +569,7 @@ export const en = {
   "objects.credential.kind.key": "Private key",
   "objects.credential.kind.certificate": "Certificate",
   "objects.credential.kind.agent": "SSH agent",
+  "objects.credential.kind.keyboardInteractive": "Interactive (OTP/PAM)",
   "objects.credential.kind.securityKey": "Security key",
   "objects.credential.kind.deviceKey": "Device-bound key",
   "objects.credential.deviceKeyHint":
@@ -576,6 +631,7 @@ export const en = {
   "host.credential.password": "Password",
   "host.credential.key": "Key {label}",
   "host.credential.agent": "SSH agent",
+  "host.credential.keyboardInteractive": "Interactive (OTP/PAM)",
   "host.credential.securityKey": "Security key",
   "host.credential.deviceKey": "Key on this device",
   "host.credential.external": "External credential",
@@ -594,7 +650,11 @@ export const en = {
   "host.delete": "Delete host",
   "host.edit": "Edit host",
   "host.edit.title": "Edit host",
-  "host.edit.description": "Update this host's details, tags, and groups.",
+  "host.edit.description": "Update this host's details, login credentials, tags, and groups.",
+  "host.edit.loginCredential": "Sign in as {name}",
+  "host.edit.credentialLoading": "Loading saved credentials…",
+  "host.edit.credentialFailed": "Saved credentials could not be loaded. Keep the current choice or use Interactive.",
+  "host.edit.error.invalidLoginCredential": "A login or credential changed. Close this dialog and try again.",
   "host.edit.name": "Name",
   "host.edit.address": "Address",
   "host.edit.port": "Port",
@@ -641,6 +701,9 @@ export const en = {
   "add.signIn.password": "Password",
   "add.signIn.key": "Key",
   "add.signIn.agent": "SSH agent",
+  "add.signIn.keyboardInteractive": "Interactive",
+  "add.interactive.hint":
+    "Answer the server's authentication requests when connecting, including OTP or PAM prompts. No password or key is saved.",
   "add.password": "Password",
   "add.password.hint": "Stored encrypted on this device.",
   "add.key.source": "Which key",
@@ -917,6 +980,174 @@ export const en = {
   "session.output.closeWithoutSaving": "Close without saving",
   "session.output.windowCloseFailed":
     "The window could not finish closing. Close the session tabs, then try closing the window again.",
+  "session.transfers.title": "Transfers",
+  "session.transfers.direction.upload": "Upload",
+  "session.transfers.direction.download": "Download",
+  "session.transfers.capacity": "{count} / {capacity} pending",
+  "session.transfers.background": "Transfers continue when you hide Files.",
+  "session.transfers.pausedHelp":
+    "Resume joins the end of the queue and checks transferred bytes before continuing. Closing or reconnecting this session ends paused transfers.",
+  "session.transfers.browsingBlocked":
+    "Directory navigation and file changes are paused while transfers are pending. You can add files from this listing.",
+  "session.transfers.disconnected":
+    "This connection has ended. Review retained transfer results below; reconnect to browse files or add transfers.",
+  "session.transfers.pending": "{count} file transfers pending.",
+  "session.transfers.attentionUnknown":
+    "A transfer result is unknown. Check the destination before adding the file again.",
+  "session.transfers.review": "Review transfers",
+  "session.transfers.selectionCancelled": "No transfer was added.",
+  "session.transfers.attentionCleanup":
+    "Temporary file cleanup could not be confirmed. Review the transfer result and check the destination.",
+  "session.transfers.loading": "Loading transfers…",
+  "session.transfers.nativeDialog": "Finish the open file selection or replacement confirmation.",
+  "session.transfers.empty": "Upload a file or choose Download to add a transfer.",
+  "session.transfers.unknownHelp":
+    "Check the destination before adding the file again. Dismiss only clears this reminder; it does not verify or retry the transfer.",
+  "session.transfers.dismiss": "Dismiss reminder",
+  "session.transfers.dismissNamed": "Dismiss unknown-result reminder for {name}",
+  "session.transfers.cancelNamed": "Cancel transfer of {name}",
+  "session.transfers.pause": "Pause",
+  "session.transfers.pauseNamed": "Pause transfer of {name}",
+  "session.transfers.resume": "Resume",
+  "session.transfers.resumeNamed": "Resume transfer of {name}",
+  "session.transfers.progressNamed": "Transfer progress for {name}",
+  "session.transfers.state.queued": "Queued",
+  "session.transfers.state.awaitingConfirmation": "Waiting for replacement confirmation",
+  "session.transfers.state.transferring": "Transferring",
+  "session.transfers.state.pausing": "Finishing the current part before pausing",
+  "session.transfers.state.paused": "Paused",
+  "session.transfers.state.validating": "Checking transferred bytes",
+  "session.transfers.state.finalizing": "Verifying and saving",
+  "session.transfers.state.cancelling": "Stopping and cleaning up",
+  "session.transfers.state.saved": "Saved",
+  "session.transfers.state.cancelled": "Cancelled",
+  "session.transfers.state.conflict": "File changed · Transfer stopped",
+  "session.transfers.state.failed": "Failed",
+  "session.transfers.state.interrupted": "Connection ended · Not retried",
+  "session.transfers.state.unknown": "Save result unknown",
+  "session.transfers.issue.invalidIdentifier": "This transfer reference is invalid. Refresh Files before trying again.",
+  "session.transfers.issue.invalidPath":
+    "This remote path cannot be used. Refresh the directory and choose the file again.",
+  "session.transfers.issue.sessionUnavailable":
+    "This terminal session is unavailable. Open a connected session to add files.",
+  "session.transfers.issue.transportEnded":
+    "The SSH connection ended. Pending and paused transfers will not resume. Reconnect to add files again.",
+  "session.transfers.issue.queueFull":
+    "The transfer queue is full. Finish or cancel pending transfers, or review unknown results.",
+  "session.transfers.issue.nativeDialogBusy":
+    "Finish the current file selection or replacement confirmation before adding another file.",
+  "session.transfers.issue.selectionFailed":
+    "The file selection or replacement confirmation could not finish. Check the queue before trying the action again.",
+  "session.transfers.issue.invalidSelection":
+    "Choose an ordinary local file or file destination. Links and special files cannot be used.",
+  "session.transfers.issue.sourceChanged":
+    "The source or retained partial changed. No replacement was made. Check the files before adding the transfer again.",
+  "session.transfers.issue.targetChanged":
+    "The destination changed. It was not replaced by this attempt. Review it before adding the transfer again.",
+  "session.transfers.issue.unsupported":
+    "This server does not support the required file operation. Check its SFTP capabilities.",
+  "session.transfers.issue.remoteRefused":
+    "The server refused the file operation. Check the destination and your permissions.",
+  "session.transfers.issue.localIo":
+    "The local file could not be read or saved. Check its availability and permissions before adding it again.",
+  "session.transfers.issue.transferFailed":
+    "The transfer or status request failed. Refresh Files and check the result before adding the file again.",
+  "session.transfers.issue.cleanupIncomplete":
+    "Temporary file cleanup could not be confirmed. An incomplete file may remain at the destination.",
+  "session.transfers.issue.publicationUnknown":
+    "The file may have been saved. Check the destination before starting another transfer.",
+  "session.transfers.issue.publicationStarted":
+    "Saving has started and can no longer be paused or cancelled. Wait for the result.",
+  "session.transfers.issue.staleItem": "This transfer changed or ended. Refresh Files to see its current result.",
+  "tunnels.title": "Tunnels",
+  "tunnels.description":
+    "Forward local TCP or SOCKS traffic through a saved Login. Tunnels keep running when you change views.",
+  "tunnels.add": "Add tunnel",
+  "tunnels.name": "Name",
+  "tunnels.runs": "Runs",
+  "tunnels.saved": "Saved tunnels",
+  "tunnels.runs.empty": "No tunnel runs yet. Start a saved tunnel when you need its local port.",
+  "tunnels.saved.empty": "No saved tunnels yet. Add a local TCP or dynamic SOCKS tunnel to choose its listening port.",
+  "tunnels.desktopOnly": "Start and monitor tunnels in the desktop app.",
+  "tunnels.loading": "Loading tunnels…",
+  "tunnels.refresh": "Refresh runs",
+  "tunnels.start": "Start",
+  "tunnels.stop": "Stop",
+  "tunnels.running": "Running",
+  "tunnels.continue": "Continue setup",
+  "tunnels.attention": "Needs attention",
+  "tunnels.attentionCount": "{count} waiting",
+  "tunnels.connections": "Connections",
+  "tunnels.uploaded": "Uploaded",
+  "tunnels.downloaded": "Downloaded",
+  "tunnels.rejected": "Rejected",
+  "tunnels.edit": "Edit {name}",
+  "tunnels.delete": "Delete {name}",
+  "tunnels.deleteTitle": "Delete {name}?",
+  "tunnels.deleteBody":
+    "Remove this saved definition. Any running tunnel keeps its current endpoints and can still be stopped under Runs.",
+  "tunnels.unsupported": "Only local TCP and dynamic SOCKS tunnels can be started or edited in this version.",
+  "tunnels.login": "Login",
+  "tunnels.defaultLogin": "Default Login",
+  "tunnels.chooseLogin": "Choose a Login",
+  "tunnels.chooseAtStart": "Choose when starting",
+  "tunnels.loginUnavailable": "Saved Login unavailable",
+  "tunnels.noLogins": "Add or repair a Login under Manage inventory before starting this tunnel.",
+  "tunnels.profilesFailed": "Logins could not be loaded. Reopen Tunnels to try again.",
+  "tunnels.startTitle": "Start {name}",
+  "tunnels.startBody":
+    "Use this Login for the tunnel's SSH connection. Review host keys and authentication when asked.",
+  "tunnels.newTitle": "New tunnel",
+  "tunnels.editTitle": "Edit tunnel",
+  "tunnels.editorBody":
+    "Saving changes the definition for the next Start. Running tunnels keep their current configuration.",
+  "tunnels.localTcp": "Local TCP",
+  "tunnels.mode": "Mode",
+  "tunnels.dynamicSocks": "Dynamic SOCKS",
+  "tunnels.dynamicBody":
+    "SOCKS4/4a and SOCKS5 CONNECT without proxy authentication. The SSH server resolves destination names.",
+  "tunnels.dynamicNonLoopback":
+    "Any device that can reach this listener can request destinations through the selected SSH connection. Use 127.0.0.1 or ::1 to keep access on this device.",
+  "tunnels.bindAddress": "Bind address",
+  "tunnels.bindPort": "Bind port",
+  "tunnels.targetHost": "Target host",
+  "tunnels.targetPort": "Target port",
+  "tunnels.nonLoopback":
+    "Other devices may reach this listening port. Use 127.0.0.1 or ::1 to keep access on this device.",
+  "tunnels.phase.preparing": "Preparing",
+  "tunnels.phase.listening": "Listening",
+  "tunnels.phase.stopping": "Stopping",
+  "tunnels.phase.stopped": "Stopped",
+  "tunnels.phase.failed": "Failed",
+  "tunnels.error.invalidField": "Check the tunnel endpoints and try saving again.",
+  "tunnels.error.bindAddress": "Enter an IPv4 or IPv6 address.",
+  "tunnels.error.port": "Enter a port from 1 to 65535.",
+  "tunnels.error.targetHost": "Enter a hostname or IP address without spaces, up to 1024 UTF-8 bytes.",
+  "tunnels.error.inUse": "A Login or Workspace still uses this tunnel. Remove those references before deleting it.",
+  "tunnels.error.missingReference":
+    "The tunnel or selected Login is no longer available. Reopen this editor to refresh it.",
+  "tunnels.issue.invalidConfiguration": "Check the saved tunnel endpoints and selected Login before starting again.",
+  "tunnels.issue.notFound":
+    "The tunnel or selected Login is no longer available. Choose an existing definition and Login.",
+  "tunnels.issue.unsupportedKind": "Choose a local TCP or dynamic SOCKS tunnel.",
+  "tunnels.issue.alreadyRunning": "This tunnel is already preparing, running or stopping.",
+  "tunnels.issue.capacityReached": "Stop another tunnel before starting this one. Up to 16 can run at once.",
+  "tunnels.issue.unavailable": "Tunnel management is unavailable. Refresh runs to try again.",
+  "tunnels.issue.expired": "This run or authentication prompt has ended. Check its current state before continuing.",
+  "tunnels.issue.preparationFailed": "SSH setup failed. Check the selected Login and start again.",
+  "tunnels.issue.listenFailed":
+    "The local address or port is unavailable. Check whether another program is using it, then start again.",
+  "tunnels.issue.connectionLost": "The SSH connection ended. Start the tunnel again when the host is available.",
+  "tunnels.issue.targetRejected":
+    "The SSH server refused a target connection. Check the destination and forwarding permissions.",
+  "tunnels.issue.targetTimedOut": "A target connection timed out. Check the destination before connecting again.",
+  "tunnels.issue.handshakeRejected":
+    "A SOCKS request was refused. Use SOCKS4/4a or SOCKS5 CONNECT without proxy authentication. Other connections can continue.",
+  "tunnels.issue.handshakeTimedOut":
+    "A SOCKS handshake timed out and its connection closed. Reconnect the requesting app to try again. Other connections can continue.",
+  "tunnels.issue.peerLimitReached": "This tunnel reached its limit of 32 connections. Extra connections were closed.",
+  "tunnels.issue.peerIo": "One connection ended before copying completed. Other tunnel connections can continue.",
+  "tunnels.issue.shutdownFailed": "Tunnel shutdown could not be confirmed.",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };

@@ -8,11 +8,11 @@ use crate::events::{SessionChangeKind, SessionChanged};
 use crate::local_data::LocalDataState;
 use scoplen_client_core::inventory::{
     AccessProfileInput, AccessProfileSummary, AddHostError, Areas, CredentialInput,
-    CredentialSummary, Deletion, DeletionStore, EditHost, EditHostError, Failure, ForwardSummary,
-    GroupError, GroupInput, GroupSummary, HostDetails, HostSource, HostSummary, Inventory, NewHost,
-    ObjectEditError, OpenSshImportError, OpenSshImportPreview, OpenSshImportResult, RecentSession,
-    RecentSessionKind, RecentSessionOutcome, ReconnectTarget, RouteInput, RouteSummary,
-    SessionError,
+    CredentialSummary, Deletion, DeletionStore, EditHost, EditHostError, Failure, ForwardInput,
+    ForwardSummary, GroupError, GroupInput, GroupSummary, HostDetails, HostSource, HostSummary,
+    Inventory, NewHost, ObjectEditError, OpenSshImportError, OpenSshImportPreview,
+    OpenSshImportResult, RecentSession, RecentSessionKind, RecentSessionOutcome, ReconnectTarget,
+    RouteInput, RouteSummary, SessionError,
 };
 use tauri_specta::Event as _;
 
@@ -320,6 +320,58 @@ pub async fn inventory_forwards(
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
     let inventory = Inventory::with_deletions(store, state.deletions.clone());
     tauri::async_runtime::spawn_blocking(move || inventory.forwards_objects())
+        .await
+        .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
+}
+
+/// Saves a Local TCP or Dynamic SOCKS definition without starting it.
+#[tauri::command]
+#[specta::specta]
+pub async fn inventory_create_forward(
+    local: tauri::State<'_, LocalDataState>,
+    state: tauri::State<'_, InventoryState>,
+    forward: ForwardInput,
+) -> Result<ForwardSummary, ObjectEditError> {
+    let store = local
+        .store()
+        .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
+    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    tauri::async_runtime::spawn_blocking(move || inventory.create_forward(forward))
+        .await
+        .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
+}
+
+/// Replaces saved endpoints without changing a live run.
+#[tauri::command]
+#[specta::specta]
+pub async fn inventory_update_forward(
+    local: tauri::State<'_, LocalDataState>,
+    state: tauri::State<'_, InventoryState>,
+    id: String,
+    forward: ForwardInput,
+) -> Result<ForwardSummary, ObjectEditError> {
+    let store = local
+        .store()
+        .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
+    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    tauri::async_runtime::spawn_blocking(move || inventory.update_forward(id, forward))
+        .await
+        .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
+}
+
+/// Removes an unreferenced saved definition, preserving a live run's snapshot.
+#[tauri::command]
+#[specta::specta]
+pub async fn inventory_delete_forward(
+    local: tauri::State<'_, LocalDataState>,
+    state: tauri::State<'_, InventoryState>,
+    id: String,
+) -> Result<(), ObjectEditError> {
+    let store = local
+        .store()
+        .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
+    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    tauri::async_runtime::spawn_blocking(move || inventory.delete_forward(id))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
 }

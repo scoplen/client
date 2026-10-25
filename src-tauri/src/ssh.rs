@@ -8,7 +8,8 @@ use crate::local_data::LocalDataState;
 use scoplen_client_core::connection::preparation::PreparationResponse;
 use scoplen_client_core::locale::Locale;
 use scoplen_client_core::session_files::{
-    RemoteDirectory, RemoteFileKind, SessionFileMutationResult, SessionUploadResult,
+    RemoteDirectory, RemoteFileKind, RemoteTextPreview, RemoteTextPreviewIssue,
+    SessionFileMutationResult,
 };
 use scoplen_client_core::session_manager::HistoryChange;
 use scoplen_crypto::SecretVec;
@@ -53,6 +54,11 @@ pub fn session_reserve_transport(
 #[derive(Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SessionPreparationIntent {
+    /// Ordered one-time answers to the exact current server challenge.
+    KeyboardInteractive {
+        /// Answers are consumed and never returned to the renderer.
+        answers: Vec<String>,
+    },
     /// Accept only the exact host key retained by Rust.
     AcceptHostKey,
     /// Supply a write-only key passphrase, never returned to the renderer.
@@ -62,22 +68,33 @@ pub enum SessionPreparationIntent {
     },
 }
 
+impl SessionPreparationIntent {
+    /// Consume write-only answers immediately into the common redacting response.
+    pub(crate) fn into_response(self) -> Result<PreparationResponse, String> {
+        match self {
+            Self::KeyboardInteractive { answers } => PreparationResponse::keyboard_interactive(
+                answers.into_iter().map(String::into_bytes).collect(),
+            ),
+            Self::AcceptHostKey => Ok(PreparationResponse::AcceptHostKey),
+            Self::Passphrase { value } => {
+                Ok(PreparationResponse::Passphrase(SecretVec::new(value.into_bytes())))
+            }
+        }
+    }
+}
+
 /// Reply to the current session-owned, one-use preparation prompt.
 #[tauri::command]
 #[specta::specta]
 pub fn session_respond(
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
+    transport_id: String,
     prompt_id: String,
     intent: SessionPreparationIntent,
 ) -> Result<(), String> {
-    let response = match intent {
-        SessionPreparationIntent::AcceptHostKey => PreparationResponse::AcceptHostKey,
-        SessionPreparationIntent::Passphrase { value } => {
-            PreparationResponse::Passphrase(SecretVec::new(value.into_bytes()))
-        }
-    };
-    manager.respond(&session_id, &prompt_id, response)
+    let response = intent.into_response()?;
+    manager.respond(&session_id, &transport_id, &prompt_id, response)
 }
 
 /// Own one logical terminal until tab closure. Ended terminals await manual retry.
@@ -167,112 +184,17 @@ pub async fn session_list_files(
     manager.list_files(&session_id, &transport_id, &operation_id, path).await
 }
 
-/// Download a regular remote file to a destination chosen in the native picker.
+/// Preview complete bounded text without saving or executing it.
 #[tauri::command]
 #[specta::specta]
-pub async fn session_download_file(
-    app: tauri::AppHandle,
+pub async fn session_preview_file(
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     transport_id: String,
     operation_id: String,
-    remote_path: Vec<u8>,
-) -> Result<bool, String> {
-    let suggested = suggested_download_name(&remote_path);
-    manager
-        .download_file_with_picker(
-            &session_id,
-            &transport_id,
-            &operation_id,
-            remote_path,
-            || async move {
-                let destination = tauri::async_runtime::spawn_blocking(move || {
-                    use tauri_plugin_dialog::DialogExt as _;
-                    app.dialog()
-                        .file()
-                        .set_title("Download remote file")
-                        .set_file_name(&suggested)
-                        .blocking_save_file()
-                })
-                .await
-                .map_err(|_| "the download destination picker failed".to_owned())?;
-                destination
-                    .map(|path| {
-                        path.into_path().map_err(|_| "choose a local file destination".to_owned())
-                    })
-                    .transpose()
-            },
-        )
-        .await
-}
-
-/// Select one regular local file and publish it in the terminal's remote directory.
-#[tauri::command]
-#[specta::specta]
-pub async fn session_upload_file(
-    app: tauri::AppHandle,
-    manager: tauri::State<'_, SessionManager>,
-    session_id: String,
-    transport_id: String,
-    operation_id: String,
-    directory_path: Vec<u8>,
-    locale: Locale,
-) -> Result<SessionUploadResult, String> {
-    let confirm_app = app.clone();
-    let picker_title = match locale {
-        Locale::En => "Upload local file",
-        Locale::ZhHans => "选择要上传的本地文件",
-    };
-    manager
-        .upload_file_with_picker(
-            &session_id,
-            &transport_id,
-            &operation_id,
-            directory_path,
-            || async move {
-                let source = tauri::async_runtime::spawn_blocking(move || {
-                    use tauri_plugin_dialog::DialogExt as _;
-                    app.dialog().file().set_title(picker_title).blocking_pick_file()
-                })
-                .await
-                .map_err(|_| "the upload source picker failed".to_owned())?;
-                source
-                    .map(|path| path.into_path().map_err(|_| "choose a local file".to_owned()))
-                    .transpose()
-            },
-            move |name| async move {
-                tauri::async_runtime::spawn_blocking(move || {
-                    use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
-                    let (title, message, replace, keep) = match locale {
-                        Locale::En => (
-                            "Replace remote file",
-                            format!("Replace remote file \"{name}\"?\n\nThe existing file stays in place until the upload is complete."),
-                            "Replace file",
-                            "Keep existing",
-                        ),
-                        Locale::ZhHans => (
-                            "替换远程文件",
-                            format!("要替换远程文件“{name}”吗？\n\n上传完成前，原文件会保持不变。"),
-                            "替换文件",
-                            "保留原文件",
-                        ),
-                    };
-                    confirm_app
-                        .dialog()
-                        .message(message)
-                        .title(title)
-                        .kind(MessageDialogKind::Warning)
-                        .buttons(MessageDialogButtons::OkCancelCustom(
-                            replace.into(),
-                            keep.into(),
-                        ))
-                        .blocking_show()
-                })
-                .await
-                .map_err(|_| "the overwrite confirmation failed".to_owned())
-            },
-        )
-        .await
+    path: Vec<u8>,
+) -> Result<RemoteTextPreview, RemoteTextPreviewIssue> {
+    manager.preview_file(&session_id, &transport_id, &operation_id, path).await
 }
 
 /// Create one directory inside the current remote Files directory.
@@ -397,7 +319,7 @@ pub fn session_cancel_file_operation(
     manager.cancel_file_operation(&session_id, &transport_id, &operation_id)
 }
 
-fn suggested_download_name(remote_path: &[u8]) -> String {
+pub(crate) fn suggested_download_name(remote_path: &[u8]) -> String {
     let name = remote_path.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
     let mut suggested: String = String::from_utf8_lossy(name)
         .chars()

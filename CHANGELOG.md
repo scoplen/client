@@ -4,6 +4,86 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added saved Dynamic SOCKS4/4a/5 CONNECT tunnels alongside Local TCP tunnels, with
+  explicit Login and numeric bind selection, remote hostname resolution, fixed
+  running configuration and application-only traffic counts. Negotiation, channel
+  opening and copying share bounded peer capacity; an absolute handshake deadline
+  prevents fragmented input from renewing negotiation. The editor and running view
+  explain the unauthenticated proxy's access, and Dynamic saves clear fixed targets.
+  Stop, SSH loss, store replacement and exit use the existing forwarding lifecycle.
+  Local and Dynamic share run limits; Remote, Unix-socket and ad-hoc modes remain open.
+
+- Added saved local TCP tunnels with explicit Login selection and independent
+  Start/Stop, host-key and authentication preparation, fixed running configuration,
+  bounded concurrent peers, half-close and traffic snapshots. Tunnels keep running
+  across view changes and release their listener and SSH route on Stop, application
+  exit or local-store replacement. Failed runs require a new Start. Automatic startup
+  remains incomplete.
+
+- Added an opt-in Personal process-restart integration check using two real consumer processes,
+  the platform secret provider and one owned encrypted data directory. It waits for the genuine
+  access lifetime, refreshes directly after restart, verifies retained identity and refresh-family
+  bounds, and synchronizes a durable offline Host edit with signed history and acknowledged
+  progress. Desktop-window and platform acceptance remain separate checks.
+
+- Fixed Windows keystore deletion to check the exact current-user native slot before removing
+  its protected file. An unavailable native probe permits software cleanup only when Windows
+  independently confirms no compatible TPM and the file is valid DPAPI or absent. An opened
+  native key's deletion failure, a present but unavailable TPM, other provider failures and
+  unverified files remain errors with the file retained. Repeated deletion remains safe after
+  confirmed absence.
+
+- Fixed terminal menu paste to honor bracketed-paste mode and normalize line endings.
+  Pending clipboard reads cannot enter a replacement connection or offline view. Paste
+  now waits for its bounded primary input write and reports failures without duplicate errors.
+  Broadcast target or mode changes invalidate pending paste reads and secondary copies,
+  preventing old input and errors from reaching newly selected targets.
+
+- Added saved Interactive (OTP/PAM) Logins for targets and Direct Jump hops without
+  stored answers. Accepted password/key/agent factors may continue into Interactive;
+  ordinary rejection never falls back. Per-hop authentication and per-request reply
+  deadlines, ordered echo-aware inputs, and attempt-bound one-use replies fence stale
+  answers across cancellation and reconnect. Credential kind 8 is a breaking pre-Stable
+  registry extension and requires updated clients.
+
+- Added upload pause and explicit continuation on the same live SSH transport. Private staging
+  keeps exclusive write creation and admits a separate read handle before enabling Pause;
+  an associated read refusal preserves ordinary upload. Pausing settles a bounded segment
+  and verifies both confirmed prefixes. Resume keeps the original handles, checks source,
+  staging and destination, and joins the FIFO tail with a new execution. Changed files refuse
+  continuation; uncertain publication remains Unknown. SFTP attributes and hashes do not
+  establish immutable files or inode identity. Cross-transport and durable recovery remain open.
+
+- Added bounded native multi-file drop upload to the visible Files directory list. Rust
+  retains one window/context-bound 30-second ticket, reserves capacity for the whole batch,
+  rejects invalid sources or duplicate names together, and appends accepted files in order
+  through the existing transfer queue. Product drag events contain no native paths. Stale
+  views and changed geometry refuse pending drops. Native scaled-platform acceptance remains
+  unverified.
+
+- Added explicit read-only preview for complete ordinary UTF-8 files up to 256 KiB in Files.
+  Rust checks metadata and EOF over the current SSH transport; typed refusals guide larger or
+  non-text files to Download. The English/Chinese dialog keeps literal text transient, supports
+  cancellation and retry, restores keyboard focus and discards content across connection or
+  tab changes. It starts no editor, local write, remote write or synchronization.
+  Long dialog titles and descriptions wrap within scrollable content, keeping closing
+  controls visible in narrow windows.
+
+- Added download pause and explicit continuation on the same live SSH transport. Pausing settles
+  the current bounded segment before retaining the original remote handle and local partial;
+  the paused item retains capacity while later queued work can run. Resume verifies both
+  confirmed prefixes and the destination, then continues from that offset under a fresh FIFO
+  execution. Partial cleanup and publication check native file identity. Cross-transport
+  continuation and recovery after session/process closure remain incomplete.
+
+- Added a bounded per-terminal upload/download queue that keeps running while Files is hidden.
+  Typed snapshots show contiguous byte progress, finalizing, conflicts, cancellation and known
+  results. Unknown saves retain a reminder until explicitly acknowledged, without retrying or
+  claiming success. Reconnection retains results but never replays old transfers. Native
+  replacement review identifies the bound host, login and selected filename. Closing the
+  logical tab releases pending work and settles a local save already in progress. Recovery
+  after closing the tab remains separate work.
+
 - Added terminal-owned SFTP create-directory, rename, and delete actions in connected Files.
   Rust accepts only one direct child with its original remote filename bytes, checks ordinary
   file or directory type and destination absence before dispatch, and requires native deletion

@@ -3,7 +3,8 @@
 The interface (`web/app`, `web/ui`) and the core (`crates/`, `src-tauri`) are built separately. Each screen states what it needs from the core as a TypeScript contract; the core implements that contract with typed commands. This page lists the contracts, what each operation must do, and how a contract is connected once its commands exist.
 
 The screens never read the store or decide business rules. Private keys, account material and
-tokens remain in Rust. Dedicated transient inputs accept SSH passphrases and the D-114 pairing
+tokens remain in Rust. Dedicated transient inputs accept SSH passphrases, keyboard-interactive
+answers, and the D-114 pairing
 password; the new-device pairing screen may display that password and its secret QR once. These exceptions never
 enter ordinary state snapshots or clipboard automation. Anything the screens must not decide —
 validation beyond "is this field empty", what a deletion removes, which areas the user has
@@ -41,22 +42,102 @@ absence before dispatch, but standard SFTP v3 rename can still replace a target
 created concurrently on some servers. Delete is available only for listed regular
 files and directories. Rust checks the current remote type and asks for native
 confirmation before removing a regular file or empty directory. Other entry
-types remain visible but cannot be changed here. One file operation runs per
-terminal at a time. Cancel and closing the panel request cancellation without
-ending the terminal; Rust rejects cancellation after an upload's final remote
-rename begins and waits for the outcome. Tab close and reconnect fence
-old operations from new transports. A directory error offers another list; a
-download or upload error leaves the directory visible. If final remote rename
-has started and its reply cannot be confirmed, or if a temporary upload file
-may remain, an attention notice stays on the terminal after Files unmounts or
-reconnects. It asks the person to refresh and inspect the remote
-directory and never retries automatically. An uncertain create, rename, or
-delete also keeps that reminder across Files closure or reconnect. The panel
-refreshes after a confirmed change; conflicts require a manual refresh. Drag
-and drop, queues, resume, and other remote edits remain separate work.
+types remain visible but cannot be changed here.
+
+Upload and download intents enqueue Rust-owned work instead of waiting for the
+transfer in a mounted panel. `use-session-transfers.ts` reads typed snapshots with
+at most one request in flight. Session, queue identity and decimal revision fence
+stale replies. Snapshots contain bounded names, exact item/execution/transport
+identity, direction, fixed issue categories and decimal byte counts. Native paths
+and selected handles remain in Rust. The queue allows 16 outstanding slots,
+including native selection reservations and unacknowledged Unknown results, and
+retains the latest 32 known terminal records.
+
+Closing Files hides transfers; it never cancels or replays them. The existing
+listing can add files while transfers run, but navigation, refresh and remote
+changes are disabled during actual queue work. Unknown results and paused downloads
+alone allow browsing so the destination can be inspected. Cancellation and acknowledgement
+identify the exact queue, item and execution. Reaching the byte total shows
+finalizing, and only confirmed publication shows Saved. Cancellation is refused
+after publication starts. Native replacement review identifies the authenticated
+Host and Login from Rust's bound connection. Source and destination metadata are
+rechecked before execution and local publication. These metadata checks do not
+provide atomic filesystem compare-and-swap or detect every content change that
+preserves metadata.
+
+Disconnect interrupts unstarted items. Reconnect keeps the logical queue and its
+results while creating a new authenticated transport; old items never run there.
+The terminal offers Review transfers even after disconnect. Unknown results
+require explicit acknowledgement, which clears a reminder without retrying or
+claiming success. Cleanup uncertainty remains explicit. A directory error offers
+another list; an uncertain create, rename or delete keeps the existing terminal
+attention notice. Closing the logical tab settles its current save and releases
+pending work.
+
+An active download offers Pause while payload transfer is active. Pausing shows that
+the current bounded part is still settling; only Rust's Paused snapshot confirms
+the checkpoint is retained. Paused downloads keep their confirmed byte count and
+queue capacity, while later files may run. Resume sends the same item identity to
+Rust, which allocates a new execution at the FIFO tail and verifies retained local
+and remote prefix bytes before continuing from the confirmed offset. The queue
+shows Checking downloaded bytes without counting validation reads as new payload.
+No picker is reopened, and the renderer never receives the retained partial path,
+handle or digest. Pause, Resume and Cancel are fenced by queue, item and execution;
+a fresh snapshot can settle a pending action even if its IPC reply is lost. Late
+replies cannot override a newer action.
+
+Pause and Resume are available only for downloads on their original ready
+connection. Publication, interrupted transfers and Unknown results have no Resume
+action. Reconnecting or closing the session ends paused downloads and settles
+their owned cleanup. A retained remote handle is not an immutable snapshot; the
+source must remain stable for a consistent complete-file download. Upload resume,
+cross-connection recovery, queue recovery after tab/process closure, drag and drop
+and other remote edits remain separate work.
 
 
 `web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 92 px for the window controls, which sit centered in it, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.
+
+## Independent local tunnels
+
+Hosts → Tunnels lists saved local TCP definitions and their independent runs. Saving only
+writes inventory. Start selects an existing Login and uses the terminal's shared trust,
+passphrase and Interactive dialogs without opening a terminal tab. The editor defaults to
+loopback and explains access from other devices when another bind address is entered.
+
+`useForwards` subscribes before listing native owners. Decimal revisions reject stale
+snapshots without losing integer precision; refresh and unmount fence pending action replies.
+The Shell keeps observing across view changes. A background challenge shows Needs attention
+and an explicit Continue setup action. Leaving the view clears transient inputs and keeps the
+native owner running; cancelling its preparation dialog sends Stop for that exact run.
+
+Runs display the fixed Host, Login and endpoints captured by Rust, with current connection
+count, uploaded/downloaded bytes and refusal count. Editing or deleting inventory never
+relabels a running connection or removes its Stop action. Stopped and failed runs remain
+visible; another attempt requires Start. The renderer receives no socket, key or credential
+handle and sends no network traffic.
+
+## Remote text preview
+
+Each ordinary file has an explicit Preview action beside Download. A transient dialog names
+the file and current connection and shows complete literal read-only UTF-8 text. Empty files
+have their own state. Rust permits at most 262,144 bytes, probes EOF, rechecks the ordinary
+opened handle and path size/type/available modification time, and rejects oversized, changed,
+incomplete or invalid text. TAB, CR and LF are permitted; NUL, other C0 controls, DEL and C1
+controls are refused. The dialog interprets no HTML, Markdown, terminal escapes or active links.
+
+`sessionPreviewFile(sessionId, transportId, operationId, path)` returns only typed text/byte
+length or a fixed localized issue. Reading has a 60-second absolute deadline and 15-second
+bounded SFTP steps. The current file-operation admission prevents preview from overtaking
+runnable queued work. Paused and Unknown items retain their resources and allow browsing.
+Input and resize continue through the independent terminal path.
+
+Closing the dialog or Files, changing tabs/directories or replacing the transport discards
+the text and cancels pending reading. Unique display and request identifiers prevent late
+results or cancellation acknowledgements from replacing or closing a newer preview. Keyboard
+closing restores the corresponding action after directory loading settles. No text enters
+the local store, Recent, terminal snapshots, synchronization or diagnostics; no editor,
+local write or remote write is started. SFTP v3 path resolution is not confinement or atomic
+no-follow opening. Matching metadata and EOF do not establish an immutable snapshot.
 
 ## Personal account setup
 
@@ -69,7 +150,11 @@ persists the same pending identity in SQLCipher before any request.
 
 Save recovery file opens a native picker and writes the plaintext backup directly from Rust
 to a new file; existing files are not overwritten. Cancellation retains the current phase.
-The user separately confirms that the file is kept safely before Join becomes available.
+The prompt asks the user to keep the file private and offline, separate from the device,
+and states that this version cannot restore an account from a recovery key. After joining,
+the user must retain access to at least one enrolled device. It also confirms that no account
+request has been sent yet. The user separately confirms that the file is kept safely before
+Join becomes available.
 Clear connector failures before any HTTP request allow explicit Join again with the same
 identity. Timeouts, lost responses, and unknown outcomes retain the pending identity and show
 Authenticate this device, which uses a fresh challenge without replaying the invitation.
@@ -315,7 +400,15 @@ first negotiated key is pinned for all rekeys. Before agent access, private-key
 decryption, or remote authentication, Rust requires exact saved trust or
 explicit acceptance of that connection's key.
 
-`sessionRespond(sessionId, promptId, intent)` accepts only the current,
+Add Host and each Login in Edit Host offer Interactive (OTP/PAM). Saving creates a
+kind-8, binding-None descriptor and explicitly references it from that Login; editing
+Host metadata and these Login choices commits atomically. The Credential editor can
+also create or convert this descriptor, clearing all previous authentication material.
+Other saved credential choices retain their meaning. Any usable local credential
+does not implicitly select Interactive. Reconnect and Direct Jump hops resolve each
+saved Login independently.
+
+`sessionRespond(sessionId, transportId, promptId, intent)` accepts only the current,
 correctly typed, one-use prompt. Trust intents contain no renderer-supplied
 host or key. Passphrase intents are write-only, clear the input before sending,
 and never enter React state; wrong local decryption requests a fresh prompt on
@@ -325,7 +418,19 @@ closing the tab cancels preparation, with reverse cleanup of the entire chain.
 Delayed IPC acknowledgments cannot replace a newer hop's prompt. Background
 sessions retain their pending prompts without opening a portal over the active
 tab. Selecting that tab shows its prompt; hiding it clears any unsubmitted
-passphrase field. The tab's host mark indicates that attention is needed.
+passphrase or challenge fields. The tab's host mark indicates that attention is needed.
+
+Interactive dialogs have a fixed localized title and trusted hop identity, with literal
+server name, instructions and ordered prompts shown separately. Echo-true controls show
+text and echo-false controls hide it. Both use uncontrolled DOM values, clear immediately
+on submit, hide, replacement, cancellation or unmount, and send only ordered answers.
+Empty answers are permitted; zero-prompt rounds require Continue and send an empty vector.
+Rust enforces shared answer bounds and prompt count, a 120-second challenge deadline and
+a 300-second absolute authentication budget per trusted hop, including key-passphrase
+waiting. Wrong, overdue, duplicate and old-transport replies are refused. Answers never
+enter React state, history, terminal output, saved objects or reconnect state. An accepted
+password/key/agent factor continues into Interactive only through a typed partial-success
+rejection advertising that method; ordinary rejection never selects a fallback.
 
 ## Connecting a contract
 

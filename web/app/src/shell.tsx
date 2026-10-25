@@ -10,6 +10,7 @@ import { InventoryContext } from "./inventory/api";
 import { createInventoryApi } from "./inventory/core-api";
 import { SessionTerminal, type SessionState } from "./session";
 import { SettingsView, type SettingsSection } from "./settings";
+import { ForwardsContext, useForwards } from "./use-forwards";
 
 type View = "hosts" | "settings";
 
@@ -32,6 +33,7 @@ export function Shell({
   const [states, setStates] = useState<Record<string, SessionState>>({});
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const inventory = useMemo(() => createInventoryApi(), []);
+  const forwards = useForwards();
   const closeControllers = useRef(new Map<string, (discard?: boolean) => Promise<boolean>>());
   const closingTabs = useRef(false);
   const allowWindowClose = useRef(false);
@@ -175,9 +177,11 @@ export function Shell({
         <SettingsView key={settingsSection} status={status} onStatus={onStatus} section={settingsSection} />
       ) : activeTab !== "hosts" ? null : (
         <InventoryContext.Provider value={inventory}>
-          <main id="main" tabIndex={-1} className="h-full min-h-0 focus:outline-none">
-            <HostsHome manage onConnect={openSession} onViewOutput={viewOutput} />
-          </main>
+          <ForwardsContext.Provider value={forwards}>
+            <main id="main" tabIndex={-1} className="h-full min-h-0 focus:outline-none">
+              <HostsHome manage onConnect={openSession} onViewOutput={viewOutput} />
+            </main>
+          </ForwardsContext.Provider>
         </InventoryContext.Provider>
       )}
       {/* Sessions stay mounted, and connected, while another tab or Settings is shown. */}

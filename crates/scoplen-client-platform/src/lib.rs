@@ -9,6 +9,7 @@
 //! every block states why it is sound.
 
 pub mod credentials;
+pub mod file_identity;
 pub mod keystore;
 pub mod ssh_agent;
 

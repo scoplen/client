@@ -21,7 +21,9 @@ web/app (React)  ── typed commands, binary channels ──  src-tauri  ─�
 - `scoplen-client-core` holds every behavior, so it is the same on both platforms and testable without a window.
 - `scoplen-client-platform` is the only crate that may contain `unsafe` code or FFI; it is denied by default there too and allowed per module with each block documented.
 
-The shared libraries and Pageant patch are pinned to `proto@e2b8817`. D-116 adds the object-safe
+The shared libraries and Pageant patch are pinned to `proto@b1748dd`. That revision
+supplies kind-8 descriptor validation and the D-121 asynchronous challenge API with
+zeroizing response custody. D-116 adds the object-safe
 `Signer::sign_async` hook, awaited by concrete SSH authentication. The built-in agent signer
 runs each serialized signing exchange on Tokio's blocking pool. Existing synchronous signers
 retain the default hook; other blocking providers need their own override. SSH and agent wire
@@ -42,6 +44,24 @@ The interactive `session_connect` command has a separate typed readiness channel
 It sends once authentication, optional PTY allocation, and the shell request
 succeed. The view becomes connected on that notification, independently of
 terminal output. Ended and unsubscribed views ignore late notifications.
+
+Keyboard-interactive preparation resolves an explicit kind-8 Credential on each
+saved target or Jump Login. Missing Credential references retain the existing
+local-material selection policy. Ordinary authentication continues only from valid
+partial success advertising keyboard-interactive. Rust retains the same reviewed
+connection, preserves RSA rejection metadata, and opens channels only after full
+success. Unsupported further factors fail explicitly.
+
+Each hop's authentication has a 300-second absolute deadline after trust, including
+key passphrase entry. Every server challenge has a 120-second reply deadline capped
+by that budget. Pending metadata checks its deadline, expected answer count, response
+kind and one-use prompt id under the response lock. `session_respond` also names the
+active transport. Cancellation and errors discard pending state and release the chain.
+Uncontrolled, echo-aware DOM fields are the dedicated transient input boundary;
+literal server text remains separate from trusted hop identity. Both echo policies
+are sensitive. Answers become zeroizing Rust values at IPC, never enter snapshots
+or stored records, and are not reused by reconnect. Zero-prompt requests require
+an explicit empty response.
 
 Pairing uses dedicated create/join commands for its transient password boundary. The general
 `personal_pairing_status` command reads only public local metadata. An explicit foreground
@@ -79,6 +99,20 @@ the component in both desktop and browser consumers.
 `scoplen-client-core::store` is the SQLCipher store. It is opened with a raw 32-byte key, so SQLCipher runs no key derivation of its own; a wrong key fails on the first page. Migrations in `store/migrations.rs` run at startup in one transaction, and a store with a newer schema than the build knows is refused rather than modified. Replicated objects are kept as their deterministic CBOR envelopes with per-field clocks. A local write is stamped with the next device clock, applied to the stored object, merged with the stored version through `scoplen_model::merge`, validated, and committed; subscribers hear about it only after the commit. The store also enforces the 100,000-objects-per-vault limit (D-36). Objects created before sync enrollment have no vault.
 
 `local_key` decides how the database key is protected: by the platform keystore (`scoplen-client-platform::keystore`), by the keystore plus a passphrase envelope (`scoplen_crypto::LocalDatabaseKeyEnvelope`), or by the passphrase alone on a system without a keystore. Setting or changing the passphrase rewraps the same key, so the store is never re-encrypted. `local_data` is the state machine the interface drives: open, needs passphrase, needs a new passphrase, or unreadable. An unreadable store is renamed and kept, never deleted.
+
+Windows keystore deletion opens only the slot's exact current-user name in the Platform Crypto
+Provider. Key opening uses `NCRYPT_SILENT_FLAG`; deletion uses the provider's default flags.
+`NTE_BAD_KEYSET` from that key-open call confirms absence. If opening the provider or key
+instead returns `NTE_DEVICE_NOT_READY`, software cleanup additionally requires
+`Tbsi_GetDeviceInfo` to report exactly `TBS_E_TPM_NOT_FOUND` and the protected file to be
+absent or successfully authenticated by DPAPI. A present TPM or any other detection failure
+does not permit cleanup; TPM, unknown, damaged or unreadable files remain untouched. Once a
+native key handle is open, every deletion error is returned without this fallback. The native slot is
+checked even for DPAPI or missing blobs: an earlier TPM wrapping attempt can leave a native key.
+Once native deletion succeeds or absence is confirmed, the adapter removes the blob. A file
+removal failure is returned; deletion can be retried against the now-absent native slot.
+The native deletion and file removal are separate operations. TPM-backed deletion still
+requires acceptance on a real TPM-equipped device.
 
 `repository` gives typed access to every object type of `04-object-model.md` §4. A record is a read view of a stored object; a change names only the fields it sets, with `Edit::Clear` writing `null` to clear an optional field (D-57) and map changes naming the entries to set or remove. Because a change touches only its own fields, fields this build does not know survive every write. Credential secrets are never part of a record: `credential_secret` reads one when a connection needs it, and a change containing a secret is redacted when formatted. Gateway networks are authored by the organization's server and are read-only on a device.
 
@@ -469,6 +503,132 @@ profiles or hosts fail lookup without creating a new session.
 The Hosts source navigation remains available as a horizontally scrolling row
 when the window is narrower than the desktop sidebar breakpoint, including at
 the desktop window's minimum width.
+
+## Independent local TCP tunnels
+
+`forward_manager::ForwardManager` owns standalone Local Forward runs separately from
+`SessionManager`. Start validates a saved definition and fixes its endpoints and complete
+saved connection plan synchronously, including a display-safe target Login context. The
+common preparation executor retains per-hop trust and authentication. It opens no session,
+shell or PTY. Editing inventory after Start cannot change that run's connection or identity.
+
+Each run owns one numeric-IP listener, at most 32 accepted or opening peers, and the target
+SSH connection with its Jump parents. Peers open independent `direct-tcpip` channels with a
+15-second deadline, then copy both directions concurrently with half-close and 32 KiB buffers.
+Traffic snapshots are coalesced at 250 milliseconds and expose decimal-text counters and
+revisions. Sixteen runs may be live, with at most 32 completed snapshots retained. A retained
+snapshot holds only a weak store identity; completion releases its observer and strong store
+ownership. A failed connection never triggers reconnect.
+
+The generated `forward_start`, `forward_list`, `forward_snapshot`, `forward_respond` and
+`forward_stop` commands bind actions to the exact open store and run. Prompt replies also
+require the current one-use preparation token. Stop fences new peers and replies, then
+settles the listener, peers and complete SSH chain. Store replacement drains all owners;
+application exit first permanently fences Starts and waits under one 35-second cleanup
+budget. Remote, dynamic, Unix-socket and automatic profile forwards remain separate work.
+
+## Session upload sources
+
+The native picker supplies an upload path; Rust performs an ordinary-file preflight,
+opens it once and validates the resulting handle before reading. Unix retains
+`O_NOFOLLOW | O_NONBLOCK`. Windows uses `FILE_FLAG_OPEN_REPARSE_POINT` and rejects
+`FILE_ATTRIBUTE_REPARSE_POINT` on the opened handle as well as non-regular files.
+Replacing the final component with a link or reparse point after the path preflight
+therefore cannot admit its target as the upload source.
+
+This protects the final component only. Ancestor directories resolve normally,
+including ancestor links or reparse points; the preflight does not pin their identity
+or distinguish an ordinary-file replacement before opening. Once admitted, the
+retained handle prevents later path replacements from redirecting reads. It does not
+exclude writers or provide an immutable snapshot. Existing size and modification-time
+checks can detect some changes while queued or transferring, but edits preserving
+the compared metadata can escape them, and writes can race later checks.
+
+## Native file-drop uploads
+
+The native window event is the only drop source-path entry. The application emits its own
+typed `SessionFileDrag` event with a view identity, bounded count, normalized position and
+optional opaque ticket. The frontend never subscribes to Tauri's path-bearing drag events.
+This describes normal product IPC, not framework-wide isolation of a compromised renderer.
+Native paths and selected handles stay transiently in Rust and never enter status or storage.
+
+One armed context per window freezes the logical session, ready transport, queue, remote
+directory bytes and Files view identity. A Drop replaces any earlier ticket and expires after
+30 seconds. Consuming it takes the native paths once and atomically reserves every required
+queue slot before opening sources through `open_upload_source`. All files and target names
+must validate, and duplicate target bytes reject the batch. The final append rechecks ticket,
+deadline and connection under the same context/queue locks, appends every item contiguously,
+then starts the existing worker. Rejection drops every selected handle and reservation without
+dispatching that batch. Admission is atomic; later remote execution remains per item.
+Source preparation shares the ticket's absolute deadline: even if a local filesystem call
+remains blocked, expiry returns a refusal and releases every reserved slot and completed
+source handle. A later result from that call is discarded without queue admission.
+
+The current single full-window webview must match native bounds at origin zero. Wry's macOS
+points and Windows physical coordinates are normalized against bounds in that same platform
+space; the frontend multiplies by its current viewport and hit-tests only the visible list.
+Resize, scale, viewport, layout, modal and view changes revoke pending intent. Cleanup and
+expiry identify their own context/ticket, and cannot erase a replacement. Leave after Drop
+does not cancel consumption. Admitted items preserve their destination after Files is hidden.
+Real scaled desktop drops on both supported platforms remain required acceptance evidence.
+
+## Session download checkpoints
+
+The Rust session transfer queue owns selected resources and paused download checkpoints.
+Each checkpoint retains its original SFTP session and remote file handle, source attributes,
+same-directory private local partial and read/write handle, native destination baseline,
+absolute confirmed offset and streaming SHA-256 state. Paths, handles and digests never enter
+IPC. A download completes 1 MiB segments with the published `download_to` range-end API and
+four pipelined 32 KiB reads; Pause waits for normal segment completion, flush and local sync.
+It does not cancel and reuse a poisoned SFTP session. Paused items retain an outstanding slot
+but release the execution permit. Each retained channel also consumes the peer's channel
+budget; refusing another channel does not evict existing checkpoints.
+
+Resume allocates a fresh execution, keeps the item identity and moves it to the FIFO tail.
+At dispatch, it checks source size and available non-access-time attributes, local native
+partial identity and exact length, and the selected destination. It hashes both confirmed
+prefixes again before seeking the retained local file and continuing the original remote
+handle from the absolute offset. Prefix verification uses bounded buffers but rereads the
+entire confirmed prefix on each resume. These reads never increment payload progress.
+An open handle and metadata are not an immutable snapshot, and prefix hashes cannot prove
+an unread suffix is unchanged or exclude writes after validation. Sources must remain stable.
+
+An owned download task settles cancellation and cleanup even when the transport actor ends.
+Native file identity and ordinary-file checks gate both partial deletion and publication;
+a path replaced by another file is preserved and cleanup uncertainty is projected. These
+checks followed by unlink or rename are not filesystem compare-and-swap. Disconnect and
+session close discard checkpoints after cleanup settlement; no item is replayed over a new
+transport. Unknown publication remains an explicit acknowledgement-only result.
+
+## Session upload checkpoints
+
+The queue enables upload Pause only after ordinary exclusive `WRITE | CREAT | EXCL` staging
+creation succeeds and a separate read-only open of that owned pathname has matching private,
+zero-length ordinary-file attributes and returns EOF on an empty-file read. An associated
+remote STATUS refusal closes any known read handle and retains ordinary upload without Pause.
+Malformed or uncertain admission ends the attempt and follows owned staging cleanup;
+staging creation is never retried to obtain read capability.
+
+Uploads finish 1 MiB bounded `upload_from` segments with four pipelined 32 KiB writes. Pause
+and Cancel wait for the current segment to finish normally. Each completed segment captures
+the write-handle baseline; Pause additionally waits for supported `fsync` and verifies both
+local and remote confirmed-prefix digests. The Rust checkpoint retains the original SFTP
+session, write/read handles, private staging path/baseline, admitted local source handle and
+metadata, absolute offset, SHA-256 state, target baseline and original replacement consent.
+Paused uploads retain capacity and release execution. Resume keeps the item identity,
+allocates a fresh execution at the FIFO tail, rechecks source/staging/target and both prefixes,
+then seeks the retained source and continues the original write handle at the actual offset.
+Validation reads never advance payload progress. Access-time changes caused by reads are
+ignored; changed source, staging or target refuses continuation or publication.
+
+Cancellation and transport/session expiry settle retained staging cleanup. Failure cleanup
+rechecks the current pathname against the last confirmed write-handle baseline before removal;
+a detected replacement or unverified baseline preserves the path and reports possible staging.
+These checks and removal are separate filesystem operations. A new transport cannot inherit a checkpoint. Publication
+refuses Pause/Cancel, and a lost rename reply stays Unknown without automatic replay.
+SFTP v3 has no stable file identifier or compare-and-swap: matching attributes and prefix
+hashes do not prove inode identity or an immutable snapshot, an unchanged unread suffix,
+or absence of later concurrent writes. Cross-transport and durable continuation remain open.
 
 ## Localization
 

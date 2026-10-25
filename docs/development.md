@@ -42,6 +42,11 @@ The opt-in `live-server-integration` feature checks the production Personal enro
 device authentication, second-device pairing, sync-key verification, native notifications and reviewed inventory APIs against an
 independently running server. It does not read server source or seed its database.
 
+First-device setup requires private offline recovery-file export and explicit confirmation
+before Join. Preparing the identity, exporting the file and confirming its storage send no
+account request. The current client cannot restore an account from a recovery key; after
+enrollment, retain access to at least one enrolled device.
+
 Prepare a fresh disposable server on `https://localhost:<port>` with a trusted test CA.
 Complete public Operator setup and login, then issue an unused Personal invitation. Put a
 JSON descriptor in a private file with exactly `disposable: true`, `origin`,
@@ -53,7 +58,7 @@ In PowerShell, point to that existing private descriptor and run:
 ```powershell
 $env:SCOPLEN_LIVE_PERSONAL_DEPLOYMENT = 'C:/private/disposable-personal.json'
 $env:SCOPLEN_LIVE_PAIRING_MODE = 'png' # omit for the manual link/password path
-cargo test -p scoplen-client-core --lib --features live-server-integration live_server:: -- --test-threads=1
+cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::live_personal_enrollment_and_inventory_roundtrip -- --exact --test-threads=1
 ```
 
 The test rejects a non-loopback origin, bounds descriptor and certificate reads, and adds
@@ -118,6 +123,40 @@ The deployment must expose the production pairing endpoints. Repeating the test 
 fresh disposable deployment and invitation. Run it separately for SQLite and PostgreSQL.
 Remove the private descriptor, test server and its temporary data after verification. This
 does not establish native desktop picker interaction, camera capture, physical passkey or macOS acceptance.
+
+### Personal consumer process restart
+
+The separate Windows/macOS process check needs its own fresh disposable deployment and unused
+invitation, with the descriptor above. Run exactly this test; the enrollment scenario and this
+scenario cannot share a consumed invitation:
+
+```text
+cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::process_restart::live_personal_process_restart -- --exact --test-threads=1
+```
+
+The controller starts two actual consumer processes from the same test executable under its
+inherited native user context. Both use `LocalData::start` and the real platform secret provider
+with identical canonical data-directory bytes. The first creates the random database key and
+Personal identity, enrolls once, explicitly adopts and synchronizes one Host, then leaves an
+offline edit in the durable outbox and exits normally. A second Host stays local throughout.
+
+The controller waits until the original access lifetime is within the production 60-second
+refresh threshold. This normally takes about nine minutes and is bounded by a 15-minute wait
+and an absolute run deadline. It changes neither cached expiry nor server clocks, tokens or
+quotas. Each consumer has its own two-minute deadline. The second starts fresh local-data and
+transport instances; its first network action is an account query that uses the retained refresh
+credential directly. No new enrollment or challenge precedes it. Identity and signed key
+bindings, session generation, access rotation and the non-extending refresh-family deadline
+must match across the process boundary.
+
+The offline Host edit must survive exit without advancing either cursor, then upload, download
+and decrypt through production synchronization, with a confirmed durable ACK. A separate real
+history read verifies both signed versions. The unadopted Host remains unchanged. Phase
+receipts contain identifiers, expiry metadata and digests; credentials and keys never enter
+arguments, environment variables or output. Failed or uncertain operations are not retried.
+After both consumers exit, cleanup addresses only the uniquely owned native slot. Successful
+artifacts are removed; failed private artifacts remain for diagnosis. This is a core consumer
+process check, separate from native desktop-window, picker and physical-platform acceptance.
 
 ## Membership-only Personal key revisions
 
@@ -215,6 +254,103 @@ write. A separate cancellation test checks serialization with the synchronous co
 cargo test -p scoplen-client-core --lib personal_server::sync::tests::notification
 cargo test -p scoplen-client-core --lib personal_server::background::tests
 ```
+
+## Upload source admission regressions
+
+Run the native source-admission and related file-access tests with:
+
+```bash
+cargo test -p scoplen-client-core --lib session_files::tests::
+```
+
+On Windows, these tests create real file symlinks and verify their reparse attributes.
+The replacement regression deterministically substitutes a symlink between the path
+preflight and the production handle-admission step; it does not rely on a timed race.
+Enable Windows Developer Mode or use an account with the Create symbolic links privilege.
+A permission error fails the tests; an unavailable symlink fixture is not passing evidence.
+An ordinary-file test also checks that replacing the path after admission does not
+redirect reads from the retained handle. Unix additionally checks FIFO rejection.
+
+## Remote text preview checks
+
+```text
+cargo test -p scoplen-client-core --lib preview
+pnpm --filter @scoplen/app test -- session-files
+```
+
+The independent SSH/SFTP peer checks complete UTF-8, empty and exact-cap text, bounded short
+reads, progressing reads beyond one step deadline, stalled-request timeout, EOF growth and
+shrinkage, type/size/modification changes, control/encoding refusal,
+malformed EOF-probe packets, cleanup refusal and cancellation followed by a fresh channel.
+Manager checks cover serialized admission, live terminal input/resize, cancellation, the
+60-second absolute deadline and late replies after transport replacement. The public OpenSSH
+Files fixture also checks real UTF-8, empty and exact-cap previews, binary/control/link/folder
+and permission refusals, continued terminal input/resize and absence of local preview files.
+The frontend suite covers literal rendering, localized refusal/retry, tab/transport fencing,
+late cancellation, queue admission and keyboard focus after delayed directory loading.
+Rendered English and Chinese checks cover literal text, empty/error/retry states, long file
+and connection names, narrow-window content scrolling and visible keyboard closing controls.
+
+## Native drop checks
+
+```bash
+cargo test -p scoplen-client-core --lib file_drop
+cargo test -p scoplen-client-core --lib session_transfers
+cargo test -p scoplen-client-app --lib file_drop
+```
+
+Core regressions exercise whole-batch capacity, FIFO order, invalid later sources, duplicate
+names, file-type refusal, expiry/replay and context/transport races while local opening is
+blocked. The absolute-deadline regression returns a refusal and re-reserves every queue slot
+before releasing the blocked opener. The disposable OpenSSH Files fixture exercises admitted
+batches through the public session manager and ordinary per-item transfer behavior. Frontend
+component tests cover path-free event hit testing, stale views, modal refusal and localized
+feedback. Synthetic coordinates and direct manager calls do not establish native drag
+acceptance. Before marking the native-drop roadmap outcome complete, perform real file drops
+on scaled Windows and Retina macOS, including empty directories, resizing, zoom and refusal
+outside the Files list.
+
+## Upload continuation checks
+
+```text
+cargo test -p scoplen-client-core --lib session_files::uploads
+cargo test -p scoplen-client-core --lib session_manager::transfers
+cargo test -p scoplen-client-core --lib session_transfers
+pnpm --filter @scoplen/app test -- session-transfer-queue
+```
+
+The independent SSH/SFTP peer records actual WRITE offsets and retained handles across
+repeated pauses, separately from validation READ requests. Regressions cover first-Pause
+staging verification, metadata-preserving source/staging prefix changes, pathname replacement,
+changed targets, staging-read refusal and uncertain admission, cleanup, cancellation and lost
+publication replies. Queue tests exercise fresh FIFO executions, retained capacity and stale
+messages. The disposable OpenSSH Files example also exercises upload Pause/Resume through
+the public queue with later queued work, terminal input/resize and exact saved bytes.
+These checks do not establish cross-transport or process recovery, immutable source/staging
+files, inode identity, or physical-platform UI acceptance.
+
+## Standalone local TCP tunnel checks
+
+```text
+cargo test -p scoplen-client-core --lib forward_manager::tests
+cargo test -p scoplen-client-core --lib forward
+pnpm --filter @scoplen/app test -- tunnels
+pwsh -NoProfile -File scripts/test-ssh-local-forward.ps1
+```
+
+Core regressions cover frozen configuration and Login identity, concurrent peers and
+half-close, pending channel opens, capacity and deadlines, occupied listeners, target
+refusal, idle and active SSH loss, preparation cancellation, stale replies, traffic
+coalescing, retained snapshots, store release and shutdown admission. The disposable
+OpenSSH check disables session channels on its forwarding listeners and verifies binary
+payloads, EOF trailers, exact counters, Direct and Jump authentication, owned resource
+release and a separate usable terminal. It requires Docker and `ssh-keygen`.
+
+Frontend checks exercise generated commands and events, view changes, fixed identity,
+secret-input cleanup, stale revisions and replies, deletion during a run, keyboard
+operation and English/Chinese states. Synthetic IPC and browser rendering do not establish
+native desktop or complete C7 acceptance. Failed OpenSSH runs retain private diagnostics
+in their owned temporary directory and stop the owned container; successful runs clean up.
 
 ## Generated files
 

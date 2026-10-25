@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use scoplen_ssh::{SftpAttributes, SftpChannelError, SftpError, SftpPacket, SftpSession};
+use scoplen_ssh::{
+    SftpAttributes, SftpChannelError, SftpError, SftpPacket, SftpSession, SftpTransferProgress,
+};
 use serde::Serialize;
 use specta::Type;
 use tokio::fs::File;
@@ -19,6 +21,16 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::connection::{SshConnection, SshConnectionError};
+
+pub(crate) mod downloads;
+mod preview;
+pub(crate) mod uploads;
+pub(crate) use downloads::{
+    DownloadCheckpoint, DownloadExecution, DownloadInput, continue_download, prepare_download,
+};
+pub(crate) use preview::preview_file;
+pub use preview::{RemoteTextPreview, RemoteTextPreviewIssue};
+pub(crate) use uploads::{UploadCheckpoint, UploadExecution, UploadInput, transfer_upload};
 
 const MAX_REMOTE_PATH: usize = 4096;
 const MAX_DIRECTORY_ENTRIES: usize = 1024;
@@ -28,6 +40,7 @@ const MAX_DISPLAY_CHARS: usize = 128;
 const SFTP_PIPELINE: usize = 4;
 const READ_CHUNK: u32 = 32 * 1024;
 const WRITE_CHUNK: u32 = 32 * 1024;
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const EXCLUSIVE_WRITE_OPEN: u32 = 2 | 8 | 32; // SFTP v3 WRITE | CREAT | EXCL.
 const SFTP_STEP_TIMEOUT: Duration = Duration::from_secs(15);
 const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -71,6 +84,96 @@ pub struct RemoteDirectory {
     pub entries: Vec<RemoteFileEntry>,
 }
 
+/// Data transfer is complete only after a separate file publication step succeeds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionFileTransferPhase {
+    /// Contiguous bytes are moving through the temporary local or remote file.
+    Transferring,
+    /// All bytes moved; final verification and save are still pending.
+    Finalizing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FileTransferProgress {
+    pub transferred: u64,
+    pub total: Option<u64>,
+    pub phase: SessionFileTransferPhase,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum TransferControl {
+    Run,
+    Pause,
+    Cancel,
+}
+
+async fn transfer_controlled<T>(
+    control: &mut watch::Receiver<TransferControl>,
+    work: impl Future<Output = Result<T, FileAccessError>>,
+) -> Result<T, FileAccessError> {
+    tokio::pin!(work);
+    loop {
+        if *control.borrow() == TransferControl::Cancel {
+            return Err(FileAccessError::Cancelled);
+        }
+        tokio::select! {
+            biased;
+            result = &mut work => return result,
+            changed = control.changed() => {
+                if changed.is_err() { return Err(FileAccessError::Cancelled); }
+            }
+        }
+    }
+}
+
+struct TransferReporter<'a, F> {
+    notify: &'a mut F,
+    last_emit: Option<Instant>,
+    last_transferred: Option<u64>,
+}
+
+impl<'a, F: FnMut(FileTransferProgress)> TransferReporter<'a, F> {
+    fn new(notify: &'a mut F) -> Self {
+        Self { notify, last_emit: None, last_transferred: None }
+    }
+
+    fn transferring(&mut self, progress: SftpTransferProgress) {
+        let now = Instant::now();
+        let complete = progress.total.is_some_and(|total| progress.transferred == total);
+        let due = self
+            .last_emit
+            .is_none_or(|last| now.saturating_duration_since(last) >= PROGRESS_INTERVAL);
+        if self.last_transferred != Some(progress.transferred) && (due || complete) {
+            (self.notify)(FileTransferProgress {
+                transferred: progress.transferred,
+                total: progress.total,
+                phase: SessionFileTransferPhase::Transferring,
+            });
+            self.last_transferred = Some(progress.transferred);
+            self.last_emit = Some(now);
+        }
+    }
+
+    fn finalizing(&mut self, transferred: u64, total: u64) {
+        (self.notify)(FileTransferProgress {
+            transferred,
+            total: Some(total),
+            phase: SessionFileTransferPhase::Finalizing,
+        });
+    }
+
+    fn checkpoint(&mut self, transferred: u64, total: u64) {
+        (self.notify)(FileTransferProgress {
+            transferred,
+            total: Some(total),
+            phase: SessionFileTransferPhase::Transferring,
+        });
+        self.last_transferred = Some(transferred);
+        self.last_emit = Some(Instant::now());
+    }
+}
+
 /// The result of one native, terminal-owned upload intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +190,38 @@ pub enum SessionUploadStatus {
     Unknown,
     /// Upload failed before publication or received an explicit refusal.
     Failed,
+}
+
+/// The result of one native, terminal-owned download intent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionDownloadStatus {
+    /// The complete file replaced the selected local destination.
+    Saved,
+    /// The person cancelled before the local commit began.
+    Cancelled,
+    /// The selected local destination changed before publication.
+    Conflict,
+    /// The local commit began, but its result was lost.
+    Unknown,
+    /// The transfer or local commit failed with a known result.
+    Failed,
+}
+
+/// A download is saved only after its local rename returns successfully.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDownloadResult {
+    /// Whether the local destination was saved, untouched, or has an unknown final state.
+    pub status: SessionDownloadStatus,
+    /// A bounded operational detail; the interface uses localized status text.
+    pub message: Option<String>,
+}
+
+impl SessionDownloadResult {
+    pub(crate) fn new(status: SessionDownloadStatus, message: Option<String>) -> Self {
+        Self { status, message }
+    }
 }
 
 /// The outcome of one terminal-owned remote file change.
@@ -245,6 +380,21 @@ pub(crate) struct UploadSource {
 }
 
 impl UploadSource {
+    pub(crate) fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub(crate) async fn check_current(&self) -> Result<(), FileAccessError> {
+        let metadata = self.file.metadata().await.map_err(FileAccessError::LocalSourceIo)?;
+        if !metadata.is_file()
+            || metadata.len() != self.size
+            || self.modified.is_some_and(|time| metadata.modified().ok() != Some(time))
+        {
+            return Err(FileAccessError::SourceChanged);
+        }
+        Ok(())
+    }
+
     pub(crate) fn target(&self, directory: &[u8]) -> Result<Vec<u8>, FileAccessError> {
         child_path(directory, &self.name)
     }
@@ -284,6 +434,12 @@ pub enum FileAccessError {
     /// The bytes or size changed during transfer.
     #[error("the remote file changed while it was being downloaded; try again")]
     FileChanged,
+    /// Preview requires a complete file within its fixed byte limit.
+    #[error("this file is too large to preview; download it instead")]
+    PreviewTooLarge,
+    /// Preview accepts only strict UTF-8 without non-text control characters.
+    #[error("this file is not supported UTF-8 text; download it instead")]
+    PreviewNotText,
     /// The remote server returned a non-success SFTP status.
     #[error("the SSH server refused the file operation (status {0})")]
     RemoteStatus(u32),
@@ -471,7 +627,8 @@ fn upload_name(name: &OsStr) -> Result<Vec<u8>, FileAccessError> {
     Ok(bytes)
 }
 
-/// Open the selected ordinary file once; its handle and declared size remain owned by Rust.
+/// Retain one ordinary source handle without following a final Unix link or Windows reparse point.
+/// Ancestors are resolved normally; retaining the handle does not exclude later writes.
 pub(crate) async fn open_upload_source(path: &Path) -> Result<UploadSource, FileAccessError> {
     let name = upload_name(path.file_name().ok_or(FileAccessError::InvalidSource)?)?;
     let initial =
@@ -479,25 +636,47 @@ pub(crate) async fn open_upload_source(path: &Path) -> Result<UploadSource, File
     if !initial.is_file() {
         return Err(FileAccessError::InvalidSource);
     }
-    #[cfg(unix)]
+    open_upload_source_after_preflight(path, name).await
+}
+
+async fn open_upload_source_after_preflight(
+    path: &Path,
+    name: Vec<u8>,
+) -> Result<UploadSource, FileAccessError> {
+    #[cfg(any(unix, windows))]
     let file = {
         let path = path.to_path_buf();
         let opened = tokio::task::spawn_blocking(move || {
-            std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
-                .open(path)
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+                const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+                options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            }
+            options.open(path)
         })
         .await
         .map_err(|_| FileAccessError::InvalidSource)?
         .map_err(FileAccessError::LocalSourceIo)?;
         File::from_std(opened)
     };
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     let file = File::open(path).await.map_err(FileAccessError::LocalSourceIo)?;
     let metadata = file.metadata().await.map_err(FileAccessError::LocalSourceIo)?;
     if !metadata.is_file() {
         return Err(FileAccessError::InvalidSource);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(FileAccessError::InvalidSource);
+        }
     }
     Ok(UploadSource { file, name, size: metadata.len(), modified: metadata.modified().ok() })
 }
@@ -711,7 +890,7 @@ fn confirm_staging_open(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn upload_staged<F>(
+async fn upload_staged<F, P>(
     connection: &SshConnection,
     source: &mut UploadSource,
     directory: &[u8],
@@ -720,10 +899,12 @@ async fn upload_staged<F>(
     cancel: &mut watch::Receiver<bool>,
     state: &UploadState,
     staged_path: &mut Option<Vec<u8>>,
+    progress: &mut P,
     authorize_publish: F,
 ) -> Result<(), FileAccessError>
 where
     F: FnOnce() -> Result<(), FileAccessError>,
+    P: FnMut(FileTransferProgress),
 {
     let mut session = until_cancelled(cancel, async {
         tokio::time::timeout(
@@ -765,6 +946,7 @@ where
     }
     let started = Instant::now();
     let last_progress = AtomicU64::new(0);
+    let mut reporter = TransferReporter::new(progress);
     let transfer = session.upload_from(
         &handle,
         0,
@@ -772,11 +954,12 @@ where
         WRITE_CHUNK,
         SFTP_PIPELINE,
         &mut source.file,
-        |_| {
+        |update| {
             last_progress.store(
                 u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 Ordering::Relaxed,
             );
+            reporter.transferring(update);
         },
     );
     let transferred = until_cancelled(
@@ -787,6 +970,7 @@ where
     if transferred != source.size {
         return Err(FileAccessError::SourceChanged);
     }
+    reporter.finalizing(transferred, source.size);
     let local = source.file.metadata().await.map_err(FileAccessError::LocalSourceIo)?;
     if local.len() != source.size
         || source.modified.is_some_and(|time| local.modified().ok() != Some(time))
@@ -837,7 +1021,7 @@ where
 
 /// Upload one opened local file through private staging and publish only after owner authorization.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn upload_file<F>(
+pub(crate) async fn upload_file<F, P>(
     connection: &SshConnection,
     mut source: UploadSource,
     directory: Vec<u8>,
@@ -845,10 +1029,12 @@ pub(crate) async fn upload_file<F>(
     preflight: UploadPreflight,
     mut cancel: watch::Receiver<bool>,
     state: Arc<UploadState>,
+    mut progress: P,
     authorize_publish: F,
 ) -> SessionUploadResult
 where
     F: FnOnce() -> Result<(), FileAccessError>,
+    P: FnMut(FileTransferProgress),
 {
     let mut staged_path = None;
     let result = upload_staged(
@@ -860,6 +1046,7 @@ where
         &mut cancel,
         &state,
         &mut staged_path,
+        &mut progress,
         authorize_publish,
     )
     .await;
@@ -977,7 +1164,70 @@ pub async fn list_directory(
 struct TemporaryDownload {
     path: PathBuf,
     file: Option<File>,
+    identity: std::fs::File,
     committed: bool,
+}
+
+fn check_partial_identity(path: &Path, identity: &std::fs::File) -> Result<(), FileAccessError> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(FileAccessError::FileChanged);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(FileAccessError::FileChanged);
+        }
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT.
+    }
+    let current = options.open(path)?;
+    if !current.metadata()?.is_file()
+        || !scoplen_client_platform::file_identity::same_file(identity, &current)?
+    {
+        return Err(FileAccessError::FileChanged);
+    }
+    Ok(())
+}
+
+fn remove_owned_partial(path: &Path, identity: &std::fs::File) -> bool {
+    if check_partial_identity(path, identity).is_err() {
+        return false;
+    }
+    std::fs::remove_file(path).is_ok()
+}
+
+/// The synchronized local file and destination, owned until commit or cleanup.
+pub(crate) struct PreparedDownload {
+    temporary: TemporaryDownload,
+    destination: PathBuf,
+}
+
+impl PreparedDownload {
+    pub(crate) fn commit(mut self) -> Result<(), FileAccessError> {
+        self.commit_retained()
+    }
+
+    pub(crate) fn commit_retained(&mut self) -> Result<(), FileAccessError> {
+        check_partial_identity(&self.temporary.path, &self.temporary.identity)?;
+        std::fs::rename(&self.temporary.path, &self.destination)
+            .map_err(FileAccessError::LocalIo)?;
+        self.temporary.committed = true;
+        Ok(())
+    }
+
+    pub(crate) fn discard(mut self) -> bool {
+        self.temporary.committed = true;
+        remove_owned_partial(&self.temporary.path, &self.temporary.identity)
+    }
 }
 
 struct CreatedDownload {
@@ -988,24 +1238,44 @@ struct CreatedDownload {
 impl CreatedDownload {
     fn create(path: PathBuf) -> Result<Self, std::io::Error> {
         let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
+        options.read(true).write(true).create_new(true);
         #[cfg(unix)]
         options.mode(0o600);
         let file = options.open(&path)?;
         Ok(Self { path, file: Some(file) })
     }
 
-    fn into_async(mut self) -> TemporaryDownload {
+    fn into_async(self) -> Result<TemporaryDownload, (std::io::Error, bool)> {
+        self.into_async_with(std::fs::File::try_clone)
+    }
+
+    fn into_async_with(
+        mut self,
+        clone: impl FnOnce(&std::fs::File) -> Result<std::fs::File, std::io::Error>,
+    ) -> Result<TemporaryDownload, (std::io::Error, bool)> {
+        let identity = match clone(self.file.as_ref().expect("created file is open")) {
+            Ok(identity) => identity,
+            Err(error) => {
+                let file = self.file.take().expect("created file is open");
+                let clean = remove_owned_partial(&self.path, &file);
+                return Err((error, !clean));
+            }
+        };
         let file = File::from_std(self.file.take().expect("created file is open"));
-        TemporaryDownload { path: self.path.clone(), file: Some(file), committed: false }
+        Ok(TemporaryDownload {
+            path: self.path.clone(),
+            file: Some(file),
+            identity,
+            committed: false,
+        })
     }
 }
 
 impl Drop for CreatedDownload {
     fn drop(&mut self) {
         if let Some(file) = self.file.take() {
+            remove_owned_partial(&self.path, &file);
             drop(file);
-            let _ = std::fs::remove_file(&self.path);
         }
     }
 }
@@ -1016,24 +1286,25 @@ impl Drop for TemporaryDownload {
             return;
         }
         let Some(file) = self.file.take() else {
-            let _ = std::fs::remove_file(&self.path);
+            remove_owned_partial(&self.path, &self.identity);
             return;
         };
         match file.try_into_std() {
             Ok(file) => {
                 drop(file);
-                let _ = std::fs::remove_file(&self.path);
+                remove_owned_partial(&self.path, &self.identity);
             }
             Err(file) => {
                 if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                     let path = self.path.clone();
+                    let Ok(identity) = self.identity.try_clone() else { return };
                     drop(runtime.spawn(async move {
                         drop(file.into_std().await);
-                        let _ = tokio::fs::remove_file(path).await;
+                        remove_owned_partial(&path, &identity);
                     }));
                 } else {
                     drop(file);
-                    let _ = std::fs::remove_file(&self.path);
+                    remove_owned_partial(&self.path, &self.identity);
                 }
             }
         }
@@ -1051,9 +1322,19 @@ async fn temporary_download_with<F>(
 where
     F: FnOnce(PathBuf) -> Result<CreatedDownload, std::io::Error> + Send + 'static,
 {
-    let parent = destination.parent().ok_or(FileAccessError::InvalidDestination)?;
+    temporary_download_owned_with(destination, create).await.map_err(|(error, _)| error)
+}
+
+async fn temporary_download_owned_with<F>(
+    destination: &Path,
+    create: F,
+) -> Result<TemporaryDownload, (FileAccessError, bool)>
+where
+    F: FnOnce(PathBuf) -> Result<CreatedDownload, std::io::Error> + Send + 'static,
+{
+    let parent = destination.parent().ok_or((FileAccessError::InvalidDestination, false))?;
     if destination.file_name().is_none() {
-        return Err(FileAccessError::InvalidDestination);
+        return Err((FileAccessError::InvalidDestination, false));
     }
     let parent = parent.to_path_buf();
     let path = parent.join(format!(".scoplen-download-{}.part", Uuid::now_v7()));
@@ -1064,20 +1345,27 @@ where
         create(path).map_err(FileAccessError::LocalIo)
     })
     .await
-    .map_err(|_| std::io::Error::other("temporary file creation was interrupted"))??;
-    Ok(created.into_async())
+    .map_err(|_| {
+        (
+            FileAccessError::LocalIo(std::io::Error::other(
+                "temporary file creation was interrupted",
+            )),
+            true,
+        )
+    })?
+    .map_err(|error| (error, false))?;
+    created.into_async().map_err(|(error, residue)| (FileAccessError::LocalIo(error), residue))
 }
 
-/// Download an opened regular file into a private temporary file and commit it through the owner.
-pub async fn download_file<F, Fut>(
+/// Download an opened regular file into a private temporary file for its commit owner.
+pub(crate) async fn download_file<P>(
     connection: &SshConnection,
     remote_path: Vec<u8>,
     destination: &Path,
-    commit: F,
-) -> Result<(), FileAccessError>
+    mut progress: P,
+) -> Result<PreparedDownload, FileAccessError>
 where
-    F: FnOnce(PathBuf, PathBuf) -> Fut,
-    Fut: Future<Output = Result<(), FileAccessError>>,
+    P: FnMut(FileTransferProgress),
 {
     validate_path(&remote_path)?;
     let mut session = tokio::time::timeout(
@@ -1103,6 +1391,7 @@ where
     let mut temporary = temporary_download(destination).await?;
     let started = Instant::now();
     let last_progress = AtomicU64::new(0);
+    let mut reporter = TransferReporter::new(&mut progress);
     let transfer = session.download_to(
         &handle,
         0,
@@ -1110,11 +1399,12 @@ where
         READ_CHUNK,
         SFTP_PIPELINE,
         temporary.file.as_mut().expect("temporary file is open"),
-        |_| {
+        |update| {
             last_progress.store(
                 u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 Ordering::Relaxed,
             );
+            reporter.transferring(update);
         },
     );
     let copied =
@@ -1123,6 +1413,7 @@ where
     if copied != size {
         return Err(FileAccessError::FileChanged);
     }
+    reporter.finalizing(copied, size);
     let request = session.client_mut().fstat(handle.clone())?;
     match response(&mut session, request).await? {
         SftpPacket::Attrs { attrs, .. } if attrs.size == Some(size) => {}
@@ -1132,14 +1423,77 @@ where
     close_handle(&mut session, handle).await?;
     temporary.file.as_mut().expect("temporary file is open").sync_all().await?;
     temporary.file.take();
-    commit(temporary.path.clone(), destination.to_path_buf()).await?;
-    temporary.committed = true;
-    Ok(())
+    Ok(PreparedDownload { temporary, destination: destination.to_path_buf() })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfer_reporter_throttles_chunks_but_keeps_completion_and_finalization() {
+        let mut updates = Vec::new();
+        {
+            let mut notify = |update| updates.push(update);
+            let mut reporter = TransferReporter::new(&mut notify);
+            reporter.transferring(SftpTransferProgress {
+                offset: 0,
+                transferred: 0,
+                total: Some(64),
+            });
+            reporter.last_emit = Some(Instant::now() + Duration::from_secs(60));
+            reporter.transferring(SftpTransferProgress {
+                offset: 32,
+                transferred: 32,
+                total: Some(64),
+            });
+            reporter.transferring(SftpTransferProgress {
+                offset: 64,
+                transferred: 64,
+                total: Some(64),
+            });
+            reporter.finalizing(64, 64);
+        }
+        assert_eq!(
+            updates,
+            [
+                FileTransferProgress {
+                    transferred: 0,
+                    total: Some(64),
+                    phase: SessionFileTransferPhase::Transferring,
+                },
+                FileTransferProgress {
+                    transferred: 64,
+                    total: Some(64),
+                    phase: SessionFileTransferPhase::Transferring,
+                },
+                FileTransferProgress {
+                    transferred: 64,
+                    total: Some(64),
+                    phase: SessionFileTransferPhase::Finalizing,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_transfer_still_has_a_separate_finalizing_phase() {
+        let mut updates = Vec::new();
+        {
+            let mut notify = |update| updates.push(update);
+            let mut reporter = TransferReporter::new(&mut notify);
+            reporter.transferring(SftpTransferProgress {
+                offset: 0,
+                transferred: 0,
+                total: Some(0),
+            });
+            reporter.finalizing(0, 0);
+        }
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].phase, SessionFileTransferPhase::Transferring);
+        assert_eq!(updates[1].phase, SessionFileTransferPhase::Finalizing);
+        assert!(updates.iter().all(|update| update.transferred == 0 && update.total == Some(0)));
+    }
 
     #[test]
     fn rejected_exclusive_open_never_claims_an_existing_staging_name() {
@@ -1257,6 +1611,62 @@ mod tests {
         assert!(matches!(result, Err(FileAccessError::InvalidSource)));
     }
 
+    #[tokio::test]
+    async fn ordinary_upload_source_keeps_its_handle_after_path_replacement() {
+        use tokio::io::AsyncReadExt as _;
+
+        let folder = tempfile::tempdir().unwrap();
+        let selected = folder.path().join("selected.txt");
+        std::fs::write(&selected, b"selected contents").unwrap();
+        let mut source = open_upload_source(&selected).await.unwrap();
+        assert_eq!(source.name, b"selected.txt");
+        assert_eq!(source.size, 17);
+        std::fs::rename(&selected, folder.path().join("original.txt")).unwrap();
+        std::fs::write(&selected, b"replacement contents").unwrap();
+
+        let mut contents = Vec::new();
+        source.file.read_to_end(&mut contents).await.unwrap();
+        assert_eq!(contents, b"selected contents");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_symlink_is_not_a_local_upload_source() {
+        use std::os::windows::fs::MetadataExt as _;
+
+        let folder = tempfile::tempdir().unwrap();
+        let target = folder.path().join("target.txt");
+        let selected = folder.path().join("selected.txt");
+        std::fs::write(&target, b"unselected contents").unwrap();
+        std::os::windows::fs::symlink_file(&target, &selected)
+            .expect("this Windows regression requires permission to create file symlinks");
+        let metadata = std::fs::symlink_metadata(&selected).unwrap();
+        assert!(metadata.file_type().is_symlink());
+        assert_ne!(metadata.file_attributes() & 0x400, 0);
+
+        let result = open_upload_source(&selected).await;
+        assert!(matches!(result, Err(FileAccessError::InvalidSource)));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn upload_source_replaced_with_symlink_after_preflight_is_rejected() {
+        let folder = tempfile::tempdir().unwrap();
+        let selected = folder.path().join("selected.txt");
+        let target = folder.path().join("unselected.txt");
+        std::fs::write(&selected, b"selected contents").unwrap();
+        std::fs::write(&target, b"unselected contents").unwrap();
+        let name = upload_name(selected.file_name().unwrap()).unwrap();
+        let initial = tokio::fs::symlink_metadata(&selected).await.unwrap();
+        assert!(initial.is_file(), "the selected source must pass the path preflight");
+        std::fs::remove_file(&selected).unwrap();
+        std::os::windows::fs::symlink_file(&target, &selected)
+            .expect("this Windows regression requires permission to create file symlinks");
+
+        let result = open_upload_source_after_preflight(&selected, name).await;
+        assert!(matches!(result, Err(FileAccessError::InvalidSource)));
+    }
+
     #[test]
     fn remote_names_keep_bytes_and_bound_display_text() {
         assert_eq!(child_path(b".", b"\xffname").unwrap(), b"./\xffname");
@@ -1324,6 +1734,78 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(std::fs::read(destination).unwrap(), b"keep original");
+    }
+
+    #[tokio::test]
+    async fn replaced_partial_is_preserved_by_drop_and_refused_by_publication() {
+        let folder = tempfile::tempdir().unwrap();
+        let destination = folder.path().join("destination.bin");
+        std::fs::write(&destination, b"original destination").unwrap();
+        let mut temporary = temporary_download(&destination).await.unwrap();
+        let path = temporary.path.clone();
+        let retained = folder.path().join("retained-original-partial");
+        std::fs::rename(&path, &retained).unwrap();
+        std::fs::write(&path, b"replacement belongs to someone else").unwrap();
+        temporary.file.take();
+        assert!(matches!(
+            PreparedDownload { temporary, destination: destination.clone() }.commit(),
+            Err(FileAccessError::FileChanged)
+        ));
+        assert_eq!(std::fs::read(destination).unwrap(), b"original destination");
+        assert_eq!(std::fs::read(path).unwrap(), b"replacement belongs to someone else");
+        assert!(retained.exists());
+    }
+
+    #[test]
+    fn failed_identity_clone_keeps_the_creation_guard_until_owned_cleanup() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("partial.bin");
+        let created = CreatedDownload::create(path.clone()).unwrap();
+        let result =
+            created.into_async_with(|_| Err(std::io::Error::other("injected clone failure")));
+        assert!(matches!(result, Err((_, false))));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn failed_identity_clone_preserves_replacement_and_reports_uncertain_cleanup() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("partial.bin");
+        let retained = folder.path().join("retained-original-partial");
+        let created = CreatedDownload::create(path.clone()).unwrap();
+        std::fs::rename(&path, &retained).unwrap();
+        std::fs::write(&path, b"replacement belongs to someone else").unwrap();
+        let result =
+            created.into_async_with(|_| Err(std::io::Error::other("injected clone failure")));
+        assert!(matches!(result, Err((_, true))));
+        assert_eq!(std::fs::read(path).unwrap(), b"replacement belongs to someone else");
+        assert!(retained.exists());
+    }
+
+    #[tokio::test]
+    async fn prepared_download_owner_preserves_destination_on_failure_and_cleans_staging() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let folder = tempfile::tempdir().unwrap();
+        let destination = folder.path().join("existing.bin");
+        std::fs::write(&destination, b"original").unwrap();
+        let mut temporary = temporary_download(&destination).await.unwrap();
+        let temporary_path = temporary.path.clone();
+        temporary.file.as_mut().unwrap().write_all(b"new").await.unwrap();
+        temporary.file.as_mut().unwrap().sync_all().await.unwrap();
+        temporary.file.take();
+        PreparedDownload { temporary, destination: destination.clone() }.commit().unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"new");
+        assert!(!temporary_path.exists());
+
+        let blocked = folder.path().join("directory");
+        std::fs::create_dir(&blocked).unwrap();
+        let mut temporary = temporary_download(&blocked).await.unwrap();
+        let temporary_path = temporary.path.clone();
+        temporary.file.take();
+        assert!(PreparedDownload { temporary, destination: blocked.clone() }.commit().is_err());
+        assert!(blocked.is_dir());
+        assert!(!temporary_path.exists());
     }
 
     #[tokio::test]

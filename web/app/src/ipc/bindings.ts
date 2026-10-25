@@ -12,8 +12,18 @@ export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	/**  Called by the frontend once its first screen has rendered. */
 	shellReady: () => __TAURI_INVOKE<void>("shell_ready"),
+	/**  Start a saved Local or Dynamic tunnel using the explicitly selected Login. */
+	forwardStart: (forwardId: string, profileId: string) => typedError<ForwardSnapshot, ForwardIssue>(__TAURI_INVOKE("forward_start", { forwardId, profileId })),
+	/**  List the current store's live runs and retained terminal snapshots. */
+	forwardList: () => typedError<ForwardSnapshot[], ForwardIssue>(__TAURI_INVOKE("forward_list")),
+	/**  Read a run without changing its lifetime. */
+	forwardSnapshot: (runId: string) => typedError<ForwardSnapshot, ForwardIssue>(__TAURI_INVOKE("forward_snapshot", { runId })),
+	/**  Answer the current SSH preparation challenge for one independent run. */
+	forwardRespond: (runId: string, promptId: string, intent: SessionPreparationIntent) => typedError<null, ForwardIssue>(__TAURI_INVOKE("forward_respond", { runId, promptId, intent })),
+	/**  Fence new accepts immediately and begin cancelling one independent run. */
+	forwardStop: (runId: string) => typedError<null, ForwardIssue>(__TAURI_INVOKE("forward_stop", { runId })),
 	/**  Reply to the current session-owned, one-use preparation prompt. */
-	sessionRespond: (sessionId: string, promptId: string, intent: SessionPreparationIntent) => typedError<null, string>(__TAURI_INVOKE("session_respond", { sessionId, promptId, intent })),
+	sessionRespond: (sessionId: string, transportId: string, promptId: string, intent: SessionPreparationIntent) => typedError<null, string>(__TAURI_INVOKE("session_respond", { sessionId, transportId, promptId, intent })),
 	/**  Reserve a logical session before starting its cancellable manager task. */
 	sessionReserveTransport: (sessionId: string, pty: boolean) => typedError<null, string>(__TAURI_INVOKE("session_reserve_transport", { sessionId, pty })),
 	/**  Own one logical terminal until tab closure. Ended terminals await manual retry. */
@@ -24,10 +34,30 @@ export const commands = {
 	sessionResize: (sessionId: string, transportId: string, columns: number, rows: number) => typedError<null, string>(__TAURI_INVOKE("session_resize", { sessionId, transportId, columns, rows })),
 	/**  Browse files on the terminal's authenticated SSH connection. */
 	sessionListFiles: (sessionId: string, transportId: string, operationId: string, path: number[]) => typedError<RemoteDirectory, string>(__TAURI_INVOKE("session_list_files", { sessionId, transportId, operationId, path })),
-	/**  Download a regular remote file to a destination chosen in the native picker. */
-	sessionDownloadFile: (sessionId: string, transportId: string, operationId: string, remotePath: number[]) => typedError<boolean, string>(__TAURI_INVOKE("session_download_file", { sessionId, transportId, operationId, remotePath })),
-	/**  Select one regular local file and publish it in the terminal's remote directory. */
-	sessionUploadFile: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], locale: Locale) => typedError<SessionUploadResult, string>(__TAURI_INVOKE("session_upload_file", { sessionId, transportId, operationId, directoryPath, locale })),
+	/**  Preview complete bounded text without saving or executing it. */
+	sessionPreviewFile: (sessionId: string, transportId: string, operationId: string, path: number[]) => typedError<RemoteTextPreview, RemoteTextPreviewIssue>(__TAURI_INVOKE("session_preview_file", { sessionId, transportId, operationId, path })),
+	/**  Read a complete queue snapshot without changing any transfer's lifetime. */
+	sessionTransferQueue: (sessionId: string) => typedError<SessionTransferQueueSnapshot, SessionTransferIssue>(__TAURI_INVOKE("session_transfer_queue", { sessionId })),
+	/**  Select a local source, then leave its transfer owned by the logical session. */
+	sessionEnqueueUpload: (sessionId: string, transportId: string, directoryPath: number[], locale: Locale) => typedError<SessionTransferEnqueueResult, SessionTransferIssue>(__TAURI_INVOKE("session_enqueue_upload", { sessionId, transportId, directoryPath, locale })),
+	/**  Select a native destination without sending its path to the renderer. */
+	sessionEnqueueDownload: (sessionId: string, transportId: string, remotePath: number[], locale: Locale) => typedError<SessionTransferEnqueueResult, SessionTransferIssue>(__TAURI_INVOKE("session_enqueue_download", { sessionId, transportId, remotePath, locale })),
+	/**  Cancel only the queue item and execution the person selected. */
+	sessionCancelTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_cancel_transfer", { sessionId, queueId, itemId, executionId })),
+	/**  Pause a download after its current bounded segment has settled. */
+	sessionPauseTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_pause_transfer", { sessionId, queueId, itemId, executionId })),
+	/**  Queue an explicit continuation of the retained download on its original transport. */
+	sessionResumeTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_resume_transfer", { sessionId, queueId, itemId, executionId })),
+	/**  Clear one unknown-result reminder without retrying or asserting a successful save. */
+	sessionAcknowledgeTransfer: (sessionId: string, queueId: string, itemId: string, executionId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_acknowledge_transfer", { sessionId, queueId, itemId, executionId })),
+	/**  Arm an exact current Files destination for the invoking native window. */
+	sessionArmFileDrop: (sessionId: string, transportId: string, queueId: string, directoryPath: number[], contextId: string) => typedError<null, SessionTransferIssue>(__TAURI_INVOKE("session_arm_file_drop", { sessionId, transportId, queueId, directoryPath, contextId })),
+	/**  Cleanup cannot revoke a newer Files context. */
+	sessionRevokeFileDrop: (contextId: string) => __TAURI_INVOKE<void>("session_revoke_file_drop", { contextId }),
+	/**  Only the opaque native ticket can choose sources and its frozen destination. */
+	sessionConsumeFileDrop: (contextId: string, ticketId: string, locale: Locale) => typedError<FileDropAccepted, SessionTransferIssue>(__TAURI_INVOKE("session_consume_file_drop", { contextId, ticketId, locale })),
+	/**  Refuse a hit outside the current list without exposing the native selection. */
+	sessionCancelFileDrop: (contextId: string, ticketId: string) => __TAURI_INVOKE<void>("session_cancel_file_drop", { contextId, ticketId }),
 	/**  Create one directory inside the current remote Files directory. */
 	sessionCreateRemoteDirectory: (sessionId: string, transportId: string, operationId: string, directoryPath: number[], name: string, locale: Locale) => typedError<SessionFileMutationResult, string>(__TAURI_INVOKE("session_create_remote_directory", { sessionId, transportId, operationId, directoryPath, name, locale })),
 	/**  Rename one ordinary remote entry without offering replacement. */
@@ -85,6 +115,12 @@ export const commands = {
 	inventoryAccessProfiles: () => typedError<AccessProfileSummary[], ObjectEditError>(__TAURI_INVOKE("inventory_access_profiles")),
 	/**  Lists saved tunnels that can be attached to an access profile. */
 	inventoryForwards: () => typedError<ForwardSummary[], ObjectEditError>(__TAURI_INVOKE("inventory_forwards")),
+	/**  Saves a Local TCP or Dynamic SOCKS definition without starting it. */
+	inventoryCreateForward: (forward: ForwardInput) => typedError<ForwardSummary, ObjectEditError>(__TAURI_INVOKE("inventory_create_forward", { forward })),
+	/**  Replaces saved endpoints without changing a live run. */
+	inventoryUpdateForward: (id: string, forward: ForwardInput) => typedError<ForwardSummary, ObjectEditError>(__TAURI_INVOKE("inventory_update_forward", { id, forward })),
+	/**  Removes an unreferenced saved definition, preserving a live run's snapshot. */
+	inventoryDeleteForward: (id: string) => typedError<null, ObjectEditError>(__TAURI_INVOKE("inventory_delete_forward", { id })),
 	/**  Creates an independent access profile. */
 	inventoryCreateAccessProfile: (profile: AccessProfileInput) => typedError<AccessProfileSummary, ObjectEditError>(__TAURI_INVOKE("inventory_create_access_profile", { profile })),
 	/**  Replaces an independent access profile. */
@@ -227,8 +263,10 @@ export const commands = {
 
 /** Events */
 export const events = {
+	forwardChanged: makeEvent<ForwardChanged>("forward-changed"),
 	personalSyncChanged: makeEvent<PersonalSyncChanged>("personal-sync-changed"),
 	sessionChanged: makeEvent<SessionChanged>("session-changed"),
+	sessionFileDrag: makeEvent<SessionFileDrag>("session-file-drag"),
 	storeChanged: makeEvent<StoreChanged>("store-changed"),
 };
 
@@ -344,6 +382,14 @@ export type Areas = {
 	routes: boolean,
 };
 
+/**  One literal server prompt; its text never supplies trusted connection identity. */
+export type AuthenticationPrompt = {
+	/**  Untrusted server text, displayed literally. */
+	text: string,
+	/**  Whether entered characters may be shown. */
+	echo: boolean,
+};
+
 /**  Where a credential resolves its authentication material. */
 export type CredentialBindingInput =
 /**  Material is encrypted in the replicated object. */
@@ -394,6 +440,8 @@ export type CredentialInput = {
  *  calls it `key`).
  */
 export type CredentialKindInput =
+/**  Server challenges without stored authentication material. */
+"keyboardInteractive" |
 /**  A password stored in the encrypted shared object. */
 "password" |
 /**  An OpenSSH private key. */
@@ -427,6 +475,8 @@ export type CredentialLabel = {
 
 /**  Credential kinds understood by the inventory interface. */
 export type CredentialLabelKind =
+/**  Server challenges, answered only for this connection. */
+"keyboardInteractive" |
 /**  A password. */
 "password" |
 /**  A private key. */
@@ -479,7 +529,7 @@ export type Deletion = {
 	token: string,
 };
 
-/**  The editable host metadata owned by the local inventory. */
+/**  The editable host metadata and explicit Login choices owned by the inventory. */
 export type EditHost = {
 	/**  Display name; it must not be empty. */
 	name: string,
@@ -493,6 +543,8 @@ export type EditHost = {
 	tags: { [key in string]: string },
 	/**  Complete replacement for host-group membership. */
 	groups: string[],
+	/**  Changed Login choices only; omitted Logins keep their saved credentials. */
+	loginCredentials: { [key in string]: HostLoginCredential },
 };
 
 /**  Why editing host metadata failed. The host is unchanged for every variant. */
@@ -509,6 +561,10 @@ export type EditHostError =
 { kind: "invalidTag" } |
 /**  A requested group does not exist. */
 { kind: "groupNotFound" } |
+/**  A changed Login no longer belongs to this Host. */
+{ kind: "invalidLogin" } |
+/**  An explicitly selected credential no longer exists. */
+{ kind: "invalidCredential" } |
 /**  The local store or model failed without changing the host. */
 { kind: "failed";
 /**  A diagnostic reference safe to show for retryable failures. */
@@ -521,6 +577,119 @@ export type Failure =
 /**  A diagnostic reference safe to show for retryable failures. */
 reference: string };
 
+/**  Path-free phases emitted by the application, independently of framework drag events. */
+export type FileDragPhase =
+/**  Native pointer movement over the webview. */
+"over" |
+/**  Native drag left the webview; a completed drop is unaffected. */
+"leave" |
+/**  A bounded selection is waiting for destination hit testing. */
+"drop" |
+/**  Native admission refused the selection or its geometry. */
+"refused";
+
+/**  Whole-batch admission result, without native paths or display filenames. */
+export type FileDropAccepted = {
+	/**  Number of items appended together to the existing queue. */
+	accepted: number,
+};
+
+/**  A display-safe snapshot of one Rust-owned run. */
+export type ForwardChanged = {
+	/**  The latest revision of the independent run. */
+	snapshot: ForwardSnapshot,
+};
+
+/**  Immutable saved endpoints selected for one explicit execution. */
+export type ForwardConfiguration =
+/**  A fixed TCP destination reached through the selected Login. */
+{ kind: "local";
+/**  Saved Forward identity. */
+forwardId: string;
+/**  Saved display label. */
+name: string;
+/**  Explicitly selected existing Login. */
+profileId: string;
+/**  Login identity from the immutable preparation plan. */
+login: PreparationContext;
+/**  Exact saved IPv4 or IPv6 listening address. */
+bindAddress: string;
+/**  Exact nonzero saved local port. */
+bindPort: number;
+/**  Exact remote target, resolved by the SSH server. */
+targetHost: string;
+/**  Exact nonzero remote target port. */
+targetPort: number } |
+/**  An unauthenticated SOCKS4/4a/5 CONNECT proxy through the selected Login. */
+{ kind: "dynamic";
+/**  Saved Forward identity. */
+forwardId: string;
+/**  Saved display label. */
+name: string;
+/**  Explicitly selected existing Login. */
+profileId: string;
+/**  Login identity from the immutable preparation plan. */
+login: PreparationContext;
+/**  Exact saved IPv4 or IPv6 listening address. */
+bindAddress: string;
+/**  Exact nonzero saved local port. */
+bindPort: number };
+
+/**  Complete replacement of a saved Local TCP or Dynamic SOCKS definition. */
+export type ForwardInput = {
+	/**  Nonempty display name. */
+	name: string,
+	/**  Local and Dynamic are editable; Remote remains unsupported. */
+	kind: ForwardKindInput,
+	/**  Explicit IPv4 or IPv6 literal; never replaced with a broader listener. */
+	bindAddress: string,
+	/**  Nonzero TCP listening port. */
+	bindPort: number,
+	/**  Required Local destination; ignored and cleared for Dynamic. */
+	targetHost?: string | null,
+	/**  Required nonzero Local destination port; ignored and cleared for Dynamic. */
+	targetPort?: number | null,
+	/**  Optional default Login; starting still selects an explicit Login. */
+	profile: string | null,
+};
+
+/**  Fixed failure categories; native errors and connection secrets are never exposed. */
+export type ForwardIssue =
+/**  Saved fields or identifiers are invalid for this tunnel mode. */
+"invalidConfiguration" |
+/**  The saved tunnel or selected Login no longer exists. */
+"notFound" |
+/**  This definition's kind is not an independently executable tunnel mode. */
+"unsupportedKind" |
+/**  That saved definition already owns a live execution. */
+"alreadyRunning" |
+/**  Live execution capacity is reserved before any network operation. */
+"capacityReached" |
+/**  Local storage, manager state or the asynchronous runtime is unavailable. */
+"unavailable" |
+/**  A run, prompt or store identity has been replaced or completed. */
+"expired" |
+/**  Existing SSH preparation rejected the configuration, trust or authentication. */
+"preparationFailed" |
+/**  The saved local socket cannot be bound or its listener failed. */
+"listenFailed" |
+/**  The SSH event loop or transport ended. */
+"connectionLost" |
+/**  One accepted peer's target channel was refused. */
+"targetRejected" |
+/**  One accepted peer's target channel did not open within its budget. */
+"targetTimedOut" |
+/**  One peer sent an invalid or unsupported SOCKS negotiation. */
+"handshakeRejected" |
+/**  One peer did not finish SOCKS negotiation within its complete budget. */
+"handshakeTimedOut" |
+/**  An excess accepted socket was closed without opening an SSH channel. */
+"peerLimitReached" |
+/**  One peer failed while copying bytes; other peers remain independent. */
+"peerIo" |
+/**  Owned shutdown could not be confirmed within its complete-chain budget. */
+"shutdownFailed";
+
 /**  The direction of a saved tunnel. */
 export type ForwardKindInput =
 /**  Listen locally and connect to the remote target. */
@@ -529,6 +698,45 @@ export type ForwardKindInput =
 "remote" |
 /**  Listen locally as a SOCKS proxy. */
 "dynamic";
+
+/**  State of an independent tunnel, never inferred from an open terminal. */
+export type ForwardPhase =
+/**  Resolving the saved Login and completing trust and authentication. */
+"preparing" |
+/**  The selected local socket is accepting connections. */
+"listening" |
+/**  New peers and prompt replies are fenced while owned resources settle. */
+"stopping" |
+/**  Explicitly stopped and all owned resources released. */
+"stopped" |
+/**  Execution failed and all owned resources released. */
+"failed";
+
+/**  Display-safe execution state. Full-width counters are decimal strings for JavaScript. */
+export type ForwardSnapshot = {
+	/**  Fresh execution identity; an earlier run can never control a later one. */
+	runId: string,
+	/**  Immutable saved forwarding configuration. */
+	configuration: ForwardConfiguration,
+	/**  Current Rust-owned phase. */
+	phase: ForwardPhase,
+	/**  Latest preparation state, including any current one-use prompt. */
+	preparation: PreparationEvent | null,
+	/**  Actual bound socket, present only after successful listener admission. */
+	boundAddress: string | null,
+	/**  Negotiating, opening and copying peers, bounded by `MAX_FORWARD_PEERS`. */
+	activeConnections: number,
+	/**  Bytes successfully written toward the SSH target. */
+	uploadedBytes: string,
+	/**  Bytes successfully written toward the local peer. */
+	downloadedBytes: string,
+	/**  Peers refused by target admission, capacity or I/O failure. */
+	rejectedConnections: string,
+	/**  Latest fixed issue category; no remote payload or native error text. */
+	lastIssue: ForwardIssue | null,
+	/**  Strictly increasing per-run snapshot revision. */
+	revision: string,
+};
 
 /**  A redacted saved tunnel that can be attached to an access profile. */
 export type ForwardSummary = {
@@ -540,6 +748,18 @@ export type ForwardSummary = {
 	kind: ForwardKindInput,
 	/**  The optional default profile configured on the tunnel. */
 	profile: string | null,
+	/**  Saved local listening address, when specified. */
+	bindAddress: string | null,
+	/**  Saved nonzero local port, when specified. */
+	bindPort: number | null,
+	/**  Destination resolved by the SSH server, when specified. */
+	targetHost: string | null,
+	/**  Saved nonzero destination port, when specified. */
+	targetPort: number | null,
+	/**  Number of Logins that attach this tunnel. */
+	profileCount: number,
+	/**  Whether a later write resurrected this definition. */
+	restored: boolean,
 };
 
 /**  Why creating or editing a group failed. No group is changed for failures. */
@@ -603,6 +823,15 @@ export type HostKeyTrustSource = {
 	/**  The confirmation belongs to this installation. */
 	current: boolean,
 };
+
+/**  An explicit replacement for one Login's saved credential choice. */
+export type HostLoginCredential =
+/**  Select an existing credential, or any usable local credential when absent. */
+{ kind: "saved";
+/**  Saved credential identifier, or `None` for any usable local credential. */
+credential: string | null } |
+/**  Create and explicitly reference a secretless interactive descriptor. */
+{ kind: "keyboardInteractive" };
 
 /**  Which hosts to list. */
 export type HostSource =
@@ -727,6 +956,10 @@ export type ObjectEditError =
 { kind: "invalidProxyAuthentication" } |
 /**  A route command is empty or exceeds the model limit. */
 { kind: "invalidCommand" } |
+/**  A saved tunnel endpoint is invalid. */
+{ kind: "invalidForward"; field: string } |
+/**  Only Local TCP and Dynamic SOCKS definitions can be created or edited here. */
+{ kind: "unsupportedForward" } |
 /**  Kind and binding do not satisfy the object model. */
 { kind: "invalidCredentialBinding" } |
 /**  Shared password/private-key credentials require material on creation. */
@@ -1259,6 +1492,18 @@ export type PreparationContext = {
 
 /**  Typed progress and current user intent requested by Rust. */
 export type PreparationEvent =
+/**  One complete ordered challenge round on the retained connection. */
+{ kind: "keyboardInteractive";
+/**  Trusted identity of this hop. */
+context: PreparationContext;
+/**  Fresh one-use response token. */
+promptId: string;
+/**  Untrusted display name supplied by the server. */
+name: string;
+/**  Untrusted instructions supplied by the server. */
+instruction: string;
+/**  Ordered prompts, possibly empty. */
+prompts: AuthenticationPrompt[] } |
 /**  Trust resolved on the retained connection, before credentials are used. */
 { kind: "verified";
 /**  Current hop. */
@@ -1431,6 +1676,37 @@ export type RemoteFileKind =
 /**  An unrecognized type, including symbolic links. */
 "other";
 
+/**  Transient complete text, never included in session status or diagnostics. */
+export type RemoteTextPreview = {
+	/**  Literal UTF-8 text; the interface must not interpret markup or escapes. */
+	text: string,
+	/**  Original byte length, including line endings. */
+	sizeBytes: number,
+};
+
+/**  Localized preview refusals contain no remote contents or server-supplied status text. */
+export type RemoteTextPreviewIssue =
+/**  The entry is not an ordinary remote file. */
+"notRegularFile" |
+/**  The server omitted required ordinary-file metadata. */
+"missingMetadata" |
+/**  The complete file exceeds the preview byte bound. */
+"tooLarge" |
+/**  The reported file or EOF changed during reading. */
+"fileChanged" |
+/**  UTF-8 or supported text-control validation failed. */
+"notText" |
+/**  A bounded request or complete operation timed out. */
+"timeout" |
+/**  The person cancelled this request. */
+"cancelled" |
+/**  This transport or its file-operation admission is unavailable. */
+"unavailable" |
+/**  The SSH server refused a file request. */
+"remoteDenied" |
+/**  The request could not complete safely. */
+"failed";
+
 /**
  *  A device-independent route definition. Managed routes are represented so
  *  that they can be displayed, but local editing rejects them until the
@@ -1588,6 +1864,22 @@ error: string;
 /**  All five automatic attempts have been consumed. */
 exhausted: boolean };
 
+/**  Application-owned drag feedback; framework path-bearing drag events are never subscribed to. */
+export type SessionFileDrag = {
+	/**  Current Files view identity. */
+	contextId: string,
+	/**  Native transition. */
+	phase: FileDragPhase,
+	/**  One-use selection identity, present only on Drop. */
+	ticketId: string | null,
+	/**  Bounded selection count (17 also represents an oversized selection). */
+	count: number,
+	/**  Horizontal fraction of matching native webview bounds. */
+	x: number | null,
+	/**  Vertical fraction of matching native webview bounds. */
+	y: number | null,
+};
+
 /**  A file change never retries an unknown remote result automatically. */
 export type SessionFileMutationResult = {
 	/**  The acknowledged or uncertain outcome. */
@@ -1613,6 +1905,10 @@ export type SessionFileMutationStatus =
 
 /**  A one-time response to the current attempt's preparation prompt. */
 export type SessionPreparationIntent =
+/**  Ordered one-time answers to the exact current server challenge. */
+{ kind: "keyboardInteractive";
+/**  Answers are consumed and never returned to the renderer. */
+answers: string[] } |
 /**  Accept only the exact host key retained by Rust. */
 { kind: "acceptHostKey" } |
 /**  Supply a write-only key passphrase, never returned to the renderer. */
@@ -1620,33 +1916,154 @@ export type SessionPreparationIntent =
 /**  One-time secret input. */
 value: string };
 
-/**  A lost publish acknowledgement must never be presented as a retryable failure. */
-export type SessionUploadResult = {
-	/**  Whether the target was saved, untouched, or has an unknown final state. */
-	status: SessionUploadStatus,
-	/**  A bounded operational detail; the interface uses localized status text. */
-	message: string | null,
-	/**  A private remote staging file might remain after interrupted cleanup. */
+/**  The direction of a terminal-owned transfer. */
+export type SessionTransferDirection =
+/**  Publish one native-selected local file on the remote host. */
+"upload" |
+/**  Save one remote file to a native-selected local destination. */
+"download";
+
+/**  Native selection either queued a Rust-owned item or was cancelled. */
+export type SessionTransferEnqueueResult =
+/**  Selected resources now belong to the queue independently of this request. */
+{ status: "queued";
+/**  Owning queue lifetime. */
+queueId: string;
+/**  Stable transfer identity. */
+itemId: string;
+/**  Exact execution allocated for this transfer. */
+executionId: string } |
+/**  The person closed native selection without choosing a file. */
+{ status: "cancelled" };
+
+/**  Fixed operational categories; native paths and underlying errors stay in Rust. */
+export type SessionTransferIssue =
+/**  An opaque identifier was malformed. */
+"invalidIdentifier" |
+/**  The remote path violated the file-access boundary. */
+"invalidPath" |
+/**  The logical session owner is unavailable. */
+"sessionUnavailable" |
+/**  The authenticated transport selected for this item ended. */
+"transportEnded" |
+/**  All outstanding slots are occupied, including unresolved unknown results. */
+"queueFull" |
+/**  A native selection or confirmation is already open for this queue. */
+"nativeDialogBusy" |
+/**  The native picker or replacement dialog could not finish. */
+"selectionFailed" |
+/**  The selected source or destination is not an ordinary usable local file. */
+"invalidSelection" |
+/**  The selected local or remote source changed before publication. */
+"sourceChanged" |
+/**  The reviewed destination changed before publication. */
+"targetChanged" |
+/**  The peer cannot safely perform the requested operation. */
+"unsupported" |
+/**  The remote server explicitly refused the operation. */
+"remoteRefused" |
+/**  A native source read, temporary file or destination operation failed. */
+"localIo" |
+/**  A file exchange failed without a confirmed publication. */
+"transferFailed" |
+/**  Confirmed-owned temporary material could not be removed. */
+"cleanupIncomplete" |
+/**  A publication acknowledgement was lost or could not be interpreted. */
+"publicationUnknown" |
+/**  Cancellation arrived after the irreversible publication boundary. */
+"publicationStarted" |
+/**  The item or execution no longer matches the caller's snapshot. */
+"staleItem";
+
+/**  One bounded projection. It contains no native path or open file handle. */
+export type SessionTransferItem = {
+	/**  Stable queue item identity. */
+	itemId: string,
+	/**  Exact execution identity, allocated before dispatch. */
+	executionId: string,
+	/**  Authenticated transport selected when this item was added. */
+	transportId: string,
+	/**  A bounded display filename, never the local source or destination path. */
+	name: string,
+	/**  Upload or download. */
+	direction: SessionTransferDirection,
+	/**  Current state or confirmed terminal result. */
+	state: SessionTransferState,
+	/**  Decimal text preserves the complete unsigned 64-bit count. */
+	transferredBytes: string,
+	/**  Expected total as decimal text, when known. */
+	totalBytes: string | null,
+	/**  Whether this exact execution can accept an explicit cancellation. */
+	canCancel: boolean,
+	/**  Whether this execution has admitted the handles required for a checkpoint. */
+	canPause: boolean,
+	/**  Whether explicit continuation can queue this retained checkpoint. */
+	canResume: boolean,
+	/**  Whether acknowledgement can clear an unresolved publication reminder. */
+	canAcknowledge: boolean,
+	/**  A fixed category for localized interface feedback. */
+	issue: SessionTransferIssue | null,
+	/**  Temporary-file cleanup could not be confirmed. */
 	stagingMayRemain: boolean,
 };
 
-/**  The result of one native, terminal-owned upload intent. */
-export type SessionUploadStatus =
-/**  The server acknowledged publication of the complete file. */
+/**  A complete on-demand snapshot of one logical session's transfer queue. */
+export type SessionTransferQueueSnapshot = {
+	/**  Logical terminal owning this queue. */
+	sessionId: string,
+	/**  Queue lifetime identity; a replacement owner has a different identity. */
+	queueId: string,
+	/**  Monotonic decimal revision fences late snapshot replies. */
+	revision: string,
+	/**  Maximum outstanding items, including native-picker reservations. */
+	capacity: number,
+	/**  Outstanding items and native-picker reservations currently using capacity. */
+	outstanding: number,
+	/**  A native selection or replacement confirmation is already open. */
+	pickerBusy: boolean,
+	/**  Browsing and remote mutations must wait for queued file work to settle. */
+	blocksFileOperations: boolean,
+	/**  Outstanding rows, including every unacknowledged unknown result. */
+	items: SessionTransferItem[],
+	/**  Latest confirmed terminal results, oldest first, limited to 32 rows. */
+	recent: SessionTransferItem[],
+};
+
+/**  Current state or confirmed result of one transfer. */
+export type SessionTransferState =
+/**  Waiting behind another transfer. */
+"queued" |
+/**  Waiting for a native replacement decision. */
+"awaitingConfirmation" |
+/**  Preparing or moving file data; publication has not succeeded. */
+"transferring" |
+/**  The current bounded download segment is settling before retaining a checkpoint. */
+"pausing" |
+/**  An owned download checkpoint is waiting for explicit continuation. */
+"paused" |
+/**  The retained local and remote prefixes are being verified before continuation. */
+"validating" |
+/**  Checking and saving the completed byte stream. */
+"finalizing" |
+/**  Cancellation or disconnection cleanup is still settling. */
+"cancelling" |
+/**  Publication was confirmed. */
 "saved" |
-/**  The person cancelled before publication began. */
+/**  Explicit cancellation settled before publication. */
 "cancelled" |
-/**  Safe replacement is unavailable for an existing target. */
-"unsupported" |
-/**  The target changed after preflight; no replacement was attempted. */
+/**  The reviewed source or destination no longer matches. */
 "conflict" |
-/**  Publication began, but the final acknowledgement was lost. */
-"unknown" |
-/**  Upload failed before publication or received an explicit refusal. */
-"failed";
+/**  The operation failed without an unknown publication. */
+"failed" |
+/**  The bound transport ended; this item will not be replayed. */
+"interrupted" |
+/**  Publication may have happened; explicit acknowledgement is required. */
+"unknown";
 
 /**  How a new host authenticates. */
 export type SignIn =
+/**  Answer server challenges at connection time without a saved secret. */
+{ kind: "keyboardInteractive" } |
 /**  Store a password in the encrypted personal object. */
 { kind: "password";
 /**  The password to store in the encrypted local object. */

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-import { createEvent, fireEvent, render, screen } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useRef, useState } from "react";
 import {
   Button,
   ChoiceList,
   ContextMenuProvider,
+  Dialog,
   HostEgg,
   Lockup,
   Mark,
@@ -18,6 +20,66 @@ import {
   useContextMenu,
 } from "../src";
 import { violations } from "./axe";
+
+describe("Dialog", () => {
+  it.each(["ref", "callback"] as const)("returns focus to an explicit %s target after unmount", async (kind) => {
+    function Preview() {
+      const target = useRef<HTMLButtonElement | null>(null);
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <Button ref={target}>Return here</Button>
+          <Button onClick={() => setOpen(true)}>Open preview</Button>
+          {open ? (
+            <Dialog
+              open
+              onOpenChange={setOpen}
+              title="Preview"
+              closeLabel="Close preview"
+              finalFocus={kind === "ref" ? target : () => target.current}
+              footer={<Button onClick={() => setOpen(false)}>Done</Button>}
+            >
+              <p>Read-only text</p>
+            </Dialog>
+          ) : null}
+        </>
+      );
+    }
+    render(<Preview />);
+    await userEvent.click(screen.getByRole("button", { name: "Open preview" }));
+    await screen.findByRole("dialog", { name: "Preview" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Return here" })));
+  });
+
+  it("keeps long file and connection text accessible while closing by keyboard", async () => {
+    const title = `${"n".repeat(251)}.txt`;
+    const description = `user@${"host".repeat(60)}.example`;
+    const onOpenChange = vi.fn();
+    render(
+      <Dialog
+        open
+        onOpenChange={onOpenChange}
+        title={title}
+        description={description}
+        closeLabel="Close preview"
+        footer={<Button>Done</Button>}
+      >
+        <p>Read-only text</p>
+      </Dialog>,
+    );
+    const dialog = await screen.findByRole("dialog", { name: title });
+    expect(screen.getByRole("heading", { name: title }).textContent).toBe(title);
+    expect(document.getElementById(dialog.getAttribute("aria-describedby")!)?.textContent).toBe(description);
+    await userEvent.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Done" }));
+    await userEvent.tab();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close preview" })));
+    await userEvent.keyboard("{Escape}");
+    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false, expect.objectContaining({ reason: "escape-key" }));
+  });
+});
 
 describe("Button", () => {
   it("is a button that does not submit forms unless asked", () => {

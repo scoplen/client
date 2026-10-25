@@ -8,7 +8,13 @@ import { AppearanceProvider } from "@scoplen/ui";
 import { I18nProvider } from "../src/i18n";
 import { TerminalColorsProvider } from "../src/terminal-colors";
 import { SessionTerminal } from "../src/session";
-import type { PreparationEvent, PreparationContext, SessionEvent } from "../src/ipc/bindings";
+import type {
+  PreparationEvent,
+  PreparationContext,
+  SessionEvent,
+  SessionTransferQueueSnapshot,
+  SessionTransferItem,
+} from "../src/ipc/bindings";
 import type { ScoplenTerminalElement } from "@scoplen/terminal";
 
 afterEach(() => clearMocks());
@@ -25,6 +31,7 @@ function deferred<T>() {
 
 function fixture() {
   const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  let transferState: Partial<SessionTransferQueueSnapshot> = {};
   const connections: Array<{
     sessionId: string;
     messages: Channel<SessionEvent | ArrayBuffer>;
@@ -44,9 +51,31 @@ function fixture() {
       connections.push({ ...(payload as unknown as (typeof connections)[number]), finish });
       return finish.promise;
     }
+    if (command === "session_transfer_queue")
+      return (
+        pending.get(command)?.shift()?.promise ?? {
+          sessionId: payload.sessionId,
+          queueId: "queue-1",
+          revision: "1",
+          capacity: 16,
+          outstanding: 0,
+          pickerBusy: false,
+          blocksFileOperations: false,
+          items: [],
+          recent: [],
+          ...transferState,
+        }
+      );
     return pending.get(command)?.shift()?.promise ?? null;
   });
-  return { connections, delay, matching: (command: string) => calls.filter((c) => c.command === command) };
+  return {
+    connections,
+    delay,
+    setQueue: (state: Partial<SessionTransferQueueSnapshot>) => {
+      transferState = state;
+    },
+    matching: (command: string) => calls.filter((c) => c.command === command),
+  };
 }
 
 function sessionView(
@@ -104,6 +133,121 @@ function outputFrame(transportId: string, text: string): ArrayBuffer {
   bytes.set(data, 16);
   return bytes.buffer;
 }
+
+function interactive(
+  promptId = "challenge-1",
+  position = 2,
+): Extract<PreparationEvent, { kind: "keyboardInteractive" }> {
+  return {
+    kind: "keyboardInteractive",
+    context: context(position),
+    promptId,
+    name: "<script>server text</script>",
+    instruction: "Server instructions",
+    prompts: [
+      { text: "Account", echo: true },
+      { text: "Code", echo: false },
+    ],
+  };
+}
+
+it("binds literal mixed-echo responses to the exact attempt and clears them before submission", async () => {
+  const f = fixture();
+  const pending = f.delay("session_respond");
+  render(sessionView());
+  const c = await connect(f);
+  await c.prepare(interactive());
+  const dialog = screen.getByRole("dialog", { name: "Answer this server's request" });
+  expect(within(dialog).getByText("<script>server text</script>")).toBeTruthy();
+  expect(dialog.querySelector("script")).toBeNull();
+  expect(within(dialog).getByText("Host 2 · Login 2")).toBeTruthy();
+  const account = within(dialog).getByLabelText("Account") as HTMLInputElement;
+  const code = within(dialog).getByLabelText("Code") as HTMLInputElement;
+  expect(account.type).toBe("text");
+  expect(code.type).toBe("password");
+  await waitFor(() => expect(document.activeElement).toBe(account));
+  await userEvent.type(account, "visible-answer");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+  expect(account.value).toBe("");
+  expect(code.value).toBe("");
+  expect(f.matching("session_respond").at(-1)?.args).toEqual({
+    sessionId: c.sessionId,
+    transportId: c.transportId,
+    promptId: "challenge-1",
+    intent: { kind: "keyboardInteractive", answers: ["visible-answer", ""] },
+  });
+  await c.prepare({ ...interactive("challenge-2"), prompts: [] });
+  await act(() => pending.resolve(null));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(f.matching("session_respond").at(-1)?.args.intent).toEqual({ kind: "keyboardInteractive", answers: [] });
+});
+
+it("preserves both answers across unrelated renders and repeated transfer queue refreshes", async () => {
+  const f = fixture();
+  const view = render(sessionView());
+  const c = await connect(f);
+  await c.prepare(interactive());
+  const account = screen.getByLabelText("Account") as HTMLInputElement;
+  const code = screen.getByLabelText("Code") as HTMLInputElement;
+  await userEvent.type(account, "visible-answer");
+  await userEvent.type(code, "one-time-answer");
+  const expectAnswers = () => {
+    expect(account.value).toBe("visible-answer");
+    expect(code.value).toBe("one-time-answer");
+  };
+  for (const revision of ["2", "3", "4"]) {
+    view.rerender(sessionView("en", true, undefined, undefined, { label: `Updated ${revision}` }));
+    expectAnswers();
+    const previousPolls = f.matching("session_transfer_queue").length;
+    f.setQueue({ revision });
+    await waitFor(() => expect(f.matching("session_transfer_queue").length).toBeGreaterThan(previousPolls));
+    expectAnswers();
+  }
+  expect(f.matching("session_respond")).toHaveLength(0);
+  view.unmount();
+  expect(account.value).toBe("");
+  expect(code.value).toBe("");
+});
+
+it("clears both echo policies on hide, replacement and cancellation, including Chinese controls", async () => {
+  const f = fixture();
+  const view = render(sessionView("zh-Hans"));
+  const c = await connect(f);
+  await c.prepare(interactive());
+  const hiddenAccount = screen.getByLabelText("Account") as HTMLInputElement;
+  const hiddenCode = screen.getByLabelText("Code") as HTMLInputElement;
+  await userEvent.type(hiddenAccount, "discard-visible");
+  await userEvent.type(hiddenCode, "discard-hidden");
+  view.rerender(sessionView("zh-Hans", false));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(hiddenAccount.value).toBe("");
+  expect(hiddenCode.value).toBe("");
+  view.rerender(sessionView("zh-Hans"));
+  const replacedAccount = screen.getByLabelText("Account") as HTMLInputElement;
+  const replacedCode = screen.getByLabelText("Code") as HTMLInputElement;
+  expect(replacedAccount.value).toBe("");
+  expect(replacedCode.value).toBe("");
+  await userEvent.type(replacedAccount, "replace-visible");
+  await userEvent.type(replacedCode, "replace-hidden");
+  await c.prepare({ ...interactive("new-round"), prompts: [] });
+  expect(replacedAccount.value).toBe("");
+  expect(replacedCode.value).toBe("");
+  expect(screen.getByRole("dialog", { name: "回答服务器的请求" })).toBeTruthy();
+  expect(screen.queryByLabelText("Code")).toBeNull();
+  await c.prepare(interactive("cancel-round"));
+  const cancelledAccount = screen.getByLabelText("Account") as HTMLInputElement;
+  const cancelledCode = screen.getByLabelText("Code") as HTMLInputElement;
+  await userEvent.type(cancelledAccount, "cancel-visible");
+  await userEvent.type(cancelledCode, "cancel-hidden");
+  await userEvent.click(within(screen.getByRole("dialog")).getByText("取消", { exact: true }));
+  expect(cancelledAccount.value).toBe("");
+  expect(cancelledCode.value).toBe("");
+  expect(f.matching("session_stop_reconnecting")).toHaveLength(1);
+  await c.prepare(interactive("late"));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(f.matching("session_respond")).toHaveLength(0);
+});
 
 function context(position = 1): PreparationContext {
   return {
@@ -250,59 +394,50 @@ it("starts Files at home on a replacement transport and ignores old directory re
   expect(screen.queryByRole("button", { name: "Download old.bin" })).toBeNull();
 });
 
-it.each(["unknown", "failed"] as const)(
-  "keeps an old upload's %s result with possible staging visible while a new transport uploads",
-  async (oldStatus) => {
-    const f = fixture();
-    const oldHome = f.delay("session_list_files");
-    const oldUpload = f.delay("session_upload_file");
-    render(sessionView());
-    const connection = await connect(f);
-    await connection.ready();
-    await userEvent.click(screen.getByRole("button", { name: "Open files" }));
-    await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(1));
-    await act(() => oldHome.resolve({ entries: [] }));
-    await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
-    await waitFor(() => expect(f.matching("session_upload_file")).toHaveLength(1));
-    const oldOperation = f.matching("session_upload_file")[0]?.args.operationId;
-    expect(f.matching("session_upload_file")[0]?.args).toMatchObject({
-      transportId: connection.transportId,
-      operationId: oldOperation,
-      directoryPath: [46],
-      locale: "en",
-    });
-
-    await connection.emit({ kind: "retrying", attempt: 1, delaySeconds: 1, error: "Network connection lost" });
-    const replacement = await connection.start(true);
-    await replacement.ready();
-    const newHome = f.delay("session_list_files");
-    await userEvent.click(screen.getByRole("button", { name: "Open files" }));
-    await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(2));
-    await act(() => newHome.resolve({ entries: [] }));
-
-    const newUpload = f.delay("session_upload_file");
-    await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
-    await waitFor(() => expect(f.matching("session_upload_file")).toHaveLength(2));
-    expect(f.matching("session_upload_file")[1]?.args.transportId).toBe(replacement.transportId);
-    expect(f.matching("session_upload_file")[1]?.args.operationId).not.toBe(oldOperation);
-
-    await act(() =>
-      oldUpload.resolve({ status: oldStatus, message: "untrusted server detail", stagingMayRemain: true }),
-    );
-    if (oldStatus === "unknown") expect(screen.getByRole("alert").textContent).toContain("unknown result");
-    expect(screen.getByText("Uploading file…")).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain("A temporary .scoplen-upload-*.part file may remain");
-    expect(screen.queryByText("untrusted server detail")).toBeNull();
-    expect(f.matching("session_upload_file")).toHaveLength(2);
-
-    await act(() => newUpload.resolve({ status: "cancelled", message: null, stagingMayRemain: false }));
-    expect(screen.getByText("No file was uploaded.")).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain("A temporary .scoplen-upload-*.part file may remain");
-    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByText("No file was uploaded.")).toBeTruthy();
-  },
-);
+it("retains a Rust-owned transfer when Files hides and a transport is replaced", async () => {
+  const f = fixture();
+  const oldHome = f.delay("session_list_files");
+  const upload = f.delay("session_enqueue_upload");
+  render(sessionView());
+  const connection = await connect(f);
+  await connection.ready();
+  await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(1));
+  await act(() => oldHome.resolve({ entries: [] }));
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  expect(f.matching("session_enqueue_upload")[0]?.args).toMatchObject({
+    transportId: connection.transportId,
+    directoryPath: [46],
+    locale: "en",
+  });
+  await act(() =>
+    upload.resolve({ status: "queued", queueId: "queue-1", itemId: "item-1", executionId: "execution-1" }),
+  );
+  await userEvent.click(
+    within(screen.getByRole("region", { name: "Files" })).getByRole("button", { name: "Close files" }),
+  );
+  expect(f.matching("session_cancel_transfer")).toHaveLength(0);
+  f.setQueue({ revision: "2", outstanding: 1, items: [unknownTransfer(connection.transportId)] });
+  expect((await screen.findByRole("alert")).textContent).toContain("A transfer result is unknown");
+  await connection.emit({ kind: "retrying", attempt: 1, delaySeconds: 1, error: "Network connection lost" });
+  const replacement = await connection.start(true);
+  await replacement.ready();
+  const home = f.delay("session_list_files");
+  await userEvent.click(screen.getByRole("button", { name: "Review transfers" }));
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(2));
+  await act(() => home.resolve({ entries: [] }));
+  expect(screen.getByText("Save result unknown")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Dismiss unknown-result reminder for backup.bin" }));
+  expect(f.matching("session_acknowledge_transfer")[0]?.args).toMatchObject({
+    sessionId: connection.sessionId,
+    queueId: "queue-1",
+    itemId: "item-1",
+    executionId: "execution-1",
+  });
+  expect(screen.queryByText("Saved")).toBeNull();
+  expect(f.matching("session_enqueue_upload")).toHaveLength(1);
+  expect(f.matching("session_cancel_transfer")).toHaveLength(0);
+});
 
 it("keeps an uncertain remote deletion visible after Files closes without replaying it", async () => {
   const f = fixture();
@@ -333,6 +468,142 @@ it("keeps an uncertain remote deletion visible after Files closes without replay
   await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
   expect(screen.queryByRole("alert")).toBeNull();
 });
+
+it("allows retained unknown download results to be reviewed after the connection ends", async () => {
+  const f = fixture();
+  render(sessionView());
+  const connection = await connect(f);
+  await connection.ready();
+  f.setQueue({ revision: "2", outstanding: 1, items: [unknownTransfer(connection.transportId, "download")] });
+  await screen.findByRole("button", { name: "Review transfers" });
+  await connection.emit({ kind: "closed" });
+  await userEvent.click(screen.getByRole("button", { name: "Review transfers" }));
+  expect(screen.getByText("Save result unknown")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Upload file" }).hasAttribute("disabled")).toBe(true);
+  expect(f.matching("session_list_files")).toHaveLength(0);
+  expect(f.matching("session_enqueue_download")).toHaveLength(0);
+});
+
+it("keeps logical transfer identity when manually reconnecting an ended run", async () => {
+  const f = fixture();
+  render(sessionView());
+  const connection = await connect(f);
+  await connection.ready();
+  f.setQueue({ revision: "2", outstanding: 1, items: [unknownTransfer(connection.transportId)] });
+  await screen.findByRole("button", { name: "Review transfers" });
+  await act(() => connection.finish.resolve(null));
+  const closes = f.matching("session_close_transport").length;
+  await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  const replacement = await connect(f, 1);
+  expect(replacement.sessionId).toBe(connection.sessionId);
+  await replacement.ready();
+  expect(f.matching("session_close_transport")).toHaveLength(closes);
+  expect(screen.getByRole("alert").textContent).toContain("A transfer result is unknown");
+});
+
+it("closes the logical session when a fallback reconnect and unmount share one batch", async () => {
+  const f = fixture();
+  const view = render(sessionView());
+  const connection = await connect(f);
+  await connection.ready();
+  await act(() => connection.finish.resolve(null));
+  const closes = f.matching("session_close_transport").length;
+  const reconnect = screen.getByRole("button", { name: "Reconnect" });
+  act(() => {
+    reconnect.click();
+    view.unmount();
+  });
+  expect(f.matching("session_close_transport")).toHaveLength(closes + 1);
+  expect(f.matching("session_close_transport").at(-1)?.args.sessionId).toBe(connection.sessionId);
+  expect(f.matching("session_reserve_transport")).toHaveLength(1);
+});
+
+it("retains cleanup warnings after a known terminal result leaves the outstanding queue", async () => {
+  const f = fixture();
+  render(sessionView());
+  const connection = await connect(f);
+  await connection.ready();
+  f.setQueue({
+    revision: "2",
+    recent: [
+      { ...unknownTransfer(connection.transportId), state: "failed", canAcknowledge: false, stagingMayRemain: true },
+    ],
+  });
+  expect((await screen.findByRole("alert")).textContent).toContain("Temporary file cleanup could not be confirmed");
+  expect(screen.getByRole("button", { name: "Review transfers" })).toBeTruthy();
+  expect(f.matching("session_enqueue_upload")).toHaveLength(0);
+});
+
+it("reports a native selection refused after Files unmounts during reconnect", async () => {
+  const f = fixture();
+  const home = f.delay("session_list_files");
+  const picker = f.delay("session_enqueue_upload");
+  render(sessionView());
+  const connection = await connect(f);
+  await connection.ready();
+  await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(1));
+  await act(() => home.resolve({ entries: [] }));
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  await connection.emit({ kind: "retrying", attempt: 1, delaySeconds: 1, error: "Network connection lost" });
+  const replacement = await connection.start(true);
+  await replacement.ready();
+  await act(() => picker.reject("transportEnded"));
+  expect(screen.getByRole("alert").textContent).toContain("SSH connection ended");
+  expect(f.matching("session_enqueue_upload")).toHaveLength(1);
+  expect(f.matching("session_cancel_transfer")).toHaveLength(0);
+  expect(screen.getByRole("button", { name: "Review transfers" })).toBeTruthy();
+});
+
+it("fences a delayed picker error after a newer transport has added a transfer", async () => {
+  const f = fixture();
+  const oldHome = f.delay("session_list_files");
+  const oldPicker = f.delay("session_enqueue_upload");
+  render(sessionView());
+  const connection = await connect(f);
+  await connection.ready();
+  await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(1));
+  await act(() => oldHome.resolve({ entries: [] }));
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  await connection.emit({ kind: "retrying", attempt: 1, delaySeconds: 1, error: "Network connection lost" });
+  const replacement = await connection.start(true);
+  await replacement.ready();
+  const home = f.delay("session_list_files");
+  const picker = f.delay("session_enqueue_upload");
+  await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(2));
+  await act(() => home.resolve({ entries: [] }));
+  await userEvent.click(screen.getByRole("button", { name: "Upload file" }));
+  await act(() => picker.resolve({ status: "queued", queueId: "queue-1", itemId: "new", executionId: "new" }));
+  await act(() => oldPicker.reject("transportEnded"));
+  await userEvent.click(
+    within(screen.getByRole("region", { name: "Files" })).getByRole("button", { name: "Close files" }),
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(f.matching("session_enqueue_upload")).toHaveLength(2);
+  expect(f.matching("session_enqueue_upload")[1]?.args.transportId).toBe(replacement.transportId);
+  expect(f.matching("session_cancel_transfer")).toHaveLength(0);
+});
+
+function unknownTransfer(transportId: string, direction: "upload" | "download" = "upload"): SessionTransferItem {
+  return {
+    itemId: "item-1",
+    executionId: "execution-1",
+    transportId,
+    name: "backup.bin",
+    direction,
+    state: "unknown",
+    transferredBytes: "4",
+    totalBytes: "4",
+    canCancel: false,
+    canPause: false,
+    canResume: false,
+    canAcknowledge: true,
+    issue: "publicationUnknown",
+    stagingMayRemain: false,
+  };
+}
 
 describe("saved terminal output", () => {
   beforeEach(() => {
@@ -486,7 +757,7 @@ describe("saved terminal output", () => {
     expect(f.matching("session_close_transport").at(-1)?.args.sessionId).toBe(c.sessionId);
   });
 
-  it("ignores a delayed checkpoint failure after recreating the logical session", async () => {
+  it("ignores a delayed checkpoint failure after replacing an ended run", async () => {
     const tick = checkpointTimer();
     const f = fixture();
     const pending = f.delay("session_save_output");
@@ -500,7 +771,8 @@ describe("saved terminal output", () => {
     await act(() => first.finish.resolve(null));
     await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
     const second = await connect(f, 1);
-    expect(second.sessionId).not.toBe(first.sessionId);
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(second.transportId).not.toBe(first.transportId);
     await second.ready();
     await second.output("new logical session");
     await act(() => pending.reject("staleCheckpoint"));
@@ -712,7 +984,7 @@ it.each(["reservation", "manager"])("recreates a failed %s and retains the termi
   const oldId = f.matching("session_reserve_transport")[0]!.args.sessionId;
   await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
   await waitFor(() => expect(f.matching("session_reserve_transport")).toHaveLength(2));
-  expect(f.matching("session_reserve_transport")[1]?.args.sessionId).not.toBe(oldId);
+  expect(f.matching("session_reserve_transport")[1]?.args.sessionId).toBe(oldId);
   expect(f.matching("session_retry_transport")).toHaveLength(0);
   expect(view.container.querySelector("scoplen-terminal")).toBe(terminal);
   if (!pending) expect(new TextDecoder().decode(terminal.getOutput())).toBe("keep this");
@@ -747,6 +1019,7 @@ it("accepts each hop's exact current prompt without renderer-supplied trust data
     await userEvent.click(screen.getByRole("button", { name: "Trust and connect" }));
     expect(f.matching("session_respond").at(-1)?.args).toEqual({
       sessionId: c.sessionId,
+      transportId: c.transportId,
       promptId: `trust-${position}`,
       intent: { kind: "acceptHostKey" },
     });
@@ -807,6 +1080,7 @@ it.each(["revokedDevice", "unverifiedSource"] as const)(
     await userEvent.click(screen.getByRole("button", { name: "Trust and connect" }));
     expect(f.matching("session_respond").at(-1)?.args).toEqual({
       sessionId: c.sessionId,
+      transportId: c.transportId,
       promptId: "trust-1",
       intent: { kind: "acceptHostKey" },
     });

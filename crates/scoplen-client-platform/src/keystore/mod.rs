@@ -60,6 +60,10 @@ pub trait Keystore: Send + Sync {
     /// Stores `secret`, replacing any previous one.
     fn store(&self, secret: &[u8]) -> Result<(), KeystoreError>;
     /// Removes the stored secret. Removing nothing is not an error.
+    /// Windows checks the exact current-user native slot even when its blob
+    /// is absent or uses DPAPI. A device-not-ready probe permits software cleanup
+    /// only when TBS confirms no TPM and the blob is valid DPAPI or absent.
+    /// Other native errors preserve the blob and are returned.
     fn delete(&self) -> Result<(), KeystoreError>;
 }
 
@@ -111,8 +115,14 @@ mod tests {
     /// Exercises the real platform keystore with a slot unique to this test run.
     #[test]
     fn the_platform_keystore_stores_replaces_and_deletes() {
-        let dir = tempfile::tempdir().unwrap();
-        let keystore = local_key_store(dir.path()).expect("macOS and Windows have a keystore");
+        // Retain failed fixtures with their exact slot binding for inspection.
+        let dir = tempfile::Builder::new()
+            .prefix("scoplen-keystore-")
+            .disable_cleanup(true)
+            .tempdir()
+            .unwrap();
+        let data = dir.path().canonicalize().unwrap();
+        let keystore = local_key_store(&data).expect("macOS and Windows have a keystore");
         assert!(keystore.load().unwrap().is_none(), "a new slot is empty");
 
         keystore.store(&[7u8; 32]).unwrap();
@@ -124,15 +134,22 @@ mod tests {
         keystore.delete().unwrap();
         assert!(keystore.load().unwrap().is_none());
         keystore.delete().unwrap();
+        dir.close().unwrap();
     }
 
     #[test]
     fn slots_for_different_stores_are_separate() {
-        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut directories = tempfile::Builder::new();
+        directories.prefix("scoplen-keystore-").disable_cleanup(true);
+        let (a, b) = (directories.tempdir().unwrap(), directories.tempdir().unwrap());
+        let (a_data, b_data) = (a.path().canonicalize().unwrap(), b.path().canonicalize().unwrap());
         let (first, second) =
-            (local_key_store(a.path()).unwrap(), local_key_store(b.path()).unwrap());
+            (local_key_store(&a_data).unwrap(), local_key_store(&b_data).unwrap());
         first.store(b"first").unwrap();
         assert!(second.load().unwrap().is_none());
         first.delete().unwrap();
+        second.delete().unwrap();
+        a.close().unwrap();
+        b.close().unwrap();
     }
 }

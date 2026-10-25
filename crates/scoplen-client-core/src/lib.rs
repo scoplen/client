@@ -7,6 +7,7 @@
 //! that it is the same on every desktop platform and testable without a window.
 
 pub mod connection;
+pub mod forward_manager;
 pub mod inventory;
 pub mod local_data;
 pub mod local_key;
@@ -17,6 +18,7 @@ pub mod repository;
 pub mod session_files;
 pub mod session_lifecycle;
 pub mod session_manager;
+pub mod session_transfers;
 pub mod store;
 pub mod terminal_output;
 

@@ -21,7 +21,7 @@ export type RouteLabel =
 /** A credential as the interface may show it: never its secret. */
 export interface CredentialLabel {
   id: Id;
-  kind: "password" | "key" | "agent" | "securityKey" | "deviceKey" | "external" | "certificate";
+  kind: "password" | "key" | "agent" | "securityKey" | "deviceKey" | "external" | "certificate" | "keyboardInteractive";
   /** The name the user gave it, if any. */
   name: string | null;
   /** For keys: the SHA-256 fingerprint as OpenSSH prints it. */
@@ -110,7 +110,7 @@ export interface GroupSummary {
 }
 
 export type CredentialKindInput =
-  "password" | "key" | "certificate" | "agent" | "securityKey" | "deviceKey" | "external";
+  "password" | "key" | "certificate" | "agent" | "securityKey" | "deviceKey" | "external" | "keyboardInteractive";
 export type CredentialBindingInput = "shared" | "device" | "none";
 
 /** A redacted independent credential. It never includes secret material. */
@@ -169,6 +169,22 @@ export interface ForwardSummary {
   name: string;
   kind: ForwardKind;
   profile: Id | null;
+  bindAddress: string | null;
+  bindPort: number | null;
+  targetHost: string | null;
+  targetPort: number | null;
+  profileCount: number;
+  restored: boolean;
+}
+
+export interface ForwardInput {
+  name: string;
+  kind: ForwardKind;
+  bindAddress: string;
+  bindPort: number;
+  targetHost: string | null;
+  targetPort: number | null;
+  profile: Id | null;
 }
 
 export interface AccessProfileSummary {
@@ -214,6 +230,8 @@ export type ObjectEditError =
   | { kind: "invalidProxy" }
   | { kind: "invalidProxyAuthentication" }
   | { kind: "invalidCommand" }
+  | { kind: "invalidForward"; field: string }
+  | { kind: "unsupportedForward" }
   | { kind: "invalidCredentialBinding" }
   | { kind: "secretRequired" }
   | { kind: "secretNotAllowed" }
@@ -222,6 +240,8 @@ export type ObjectEditError =
   | { kind: "managedRoute" }
   | { kind: "failed"; reference: string };
 
+export type HostLoginCredential = { kind: "saved"; credential: Id | null } | { kind: "keyboardInteractive" };
+
 export interface EditHost {
   name: string;
   address: string;
@@ -229,6 +249,8 @@ export interface EditHost {
   notes: string | null;
   tags: Record<string, string>;
   groups: Id[];
+  /** Changed Login choices only; absent Logins retain their saved credential. */
+  loginCredentials: Record<Id, HostLoginCredential>;
 }
 
 export type EditHostError =
@@ -238,6 +260,8 @@ export type EditHostError =
   | { kind: "notesTooLong" }
   | { kind: "invalidTag" }
   | { kind: "groupNotFound" }
+  | { kind: "invalidLogin" }
+  | { kind: "invalidCredential" }
   | { kind: "failed"; reference: string };
 
 export interface GroupInput {
@@ -265,6 +289,7 @@ export type HostSource = { kind: "all" } | { kind: "favorites" } | { kind: "rece
 
 /** How a new host signs in. */
 export type SignIn =
+  | { kind: "keyboardInteractive" }
   | { kind: "password"; password: string }
   | { kind: "keyFile"; path: string }
   | { kind: "keyText"; key: string }
@@ -380,6 +405,9 @@ export interface InventoryApi {
   updateGroup(id: Id, group: GroupInput): Promise<Outcome<GroupSummary, GroupError>>;
   accessProfiles(): Promise<Outcome<AccessProfileSummary[], ObjectEditError>>;
   forwards(): Promise<Outcome<ForwardSummary[], ObjectEditError>>;
+  createForward(forward: ForwardInput): Promise<Outcome<ForwardSummary, ObjectEditError>>;
+  updateForward(id: Id, forward: ForwardInput): Promise<Outcome<ForwardSummary, ObjectEditError>>;
+  deleteForward(id: Id): Promise<Outcome<null, ObjectEditError>>;
   createAccessProfile(profile: AccessProfileInput): Promise<Outcome<AccessProfileSummary, ObjectEditError>>;
   updateAccessProfile(id: Id, profile: AccessProfileInput): Promise<Outcome<AccessProfileSummary, ObjectEditError>>;
   deleteAccessProfile(id: Id): Promise<Outcome<null, ObjectEditError>>;

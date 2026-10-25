@@ -20,7 +20,8 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
 ## Open gaps
 
 - The application shell, encrypted local store, inventory, and real SSH terminal path exist,
-  including password/software-key authentication, exact saved-key system-agent
+  including password/software-key authentication, explicit saved Interactive OTP/PAM
+  authentication with transient bounded answers, exact saved-key system-agent
   authentication, saved proxy routes with optional password authentication, and
   explicit Jump routes with independent trust and credentials at each hop, and saved
   ProxyCommand routes with bounded literal arguments and owned helper cleanup.
@@ -35,7 +36,30 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   creates folders, checks for an unused target before renaming regular files or directories, and
   deletes regular files or empty directories after native confirmation. A concurrent remote rename
   target may still be replaced on some servers; uncertain results require manual review.
-  Drag and drop, transfer queues, resume, and the remaining C6 workflows are incomplete.
+  Rust owns a bounded per-session transfer queue across Files visibility and transport
+  replacement, with explicit cancellation, conflict handling and unknown-result acknowledgement.
+  Downloads can pause and explicitly continue on their original live transport after local
+  and remote confirmed-prefix verification; paused checkpoints retain capacity and release
+  execution. Native partial identity gates publication and cleanup. Uploads can pause after
+  separate staging read capability admission, retaining original source and write/read handles;
+  first Pause and every Resume verify both confirmed prefixes and the original target.
+  An associated read refusal preserves ordinary upload. SFTP has no inode identity proof,
+  and neither workflow provides source snapshots, cross-transport or durable continuation.
+  Ordinary UTF-8 files up
+  to 256 KiB have a complete, cancellable read-only preview with literal transient display
+  and fixed localized refusals; its metadata checks do not establish a snapshot or remote
+  path confinement. Native file drops use path-free application events and a single-use
+  30-second Rust ticket bound to the current window, Files view, queue and remote directory.
+  Whole-batch capacity and source checks precede FIFO admission. Scaled Windows and Retina
+  macOS native drop acceptance and the remaining C6 workflows are incomplete.
+  Saved Local TCP and Dynamic SOCKS tunnels run independently of terminal tabs with explicit Login selection,
+  ordinary per-hop trust/authentication, fixed running identity and bounded peers. New
+  definitions default to loopback; the editor explains other-device access for non-loopback
+  binding. Dynamic uses shared SOCKS4/4a/5 CONNECT codecs, preserves remote hostname resolution,
+  bounds negotiation with an absolute deadline and counts application bytes only. Its editor
+  and fixed running view disclose unauthenticated proxy access. Stop, store replacement and
+  application exit release owned forwarding resources. Remote, Unix-socket and ad-hoc forwarding
+  and the complete C7 gate remain incomplete.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.
 - The Windows TPM path of key storage cannot run on hosted CI runners, which have no TPM; only its DPAPI fallback is exercised there.

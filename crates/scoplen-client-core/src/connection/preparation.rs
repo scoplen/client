@@ -5,16 +5,21 @@
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use scoplen_crypto::SecretVec;
-use scoplen_ssh::{HostKey, HostKeyVerificationError, HostKeyVerifier};
+use scoplen_ssh::{
+    ClientError, HostKey, HostKeyVerificationError, HostKeyVerifier,
+    KeyboardInteractiveInfoRequest, KeyboardInteractiveResponse,
+};
 use serde::Serialize;
 use specta::Type;
 use tokio::sync::{oneshot, watch};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use super::trust::TrustPolicy;
+
 use super::{
     ConnectionPlan, ConnectionRoute, HostKeyPresentation, HostKeyReview, HostKeyStatus,
     HostKeyTrustSource, MAX_PRIVATE_KEY_PASSPHRASE, SshConnection, SshConnectionError,
@@ -26,6 +31,19 @@ use crate::repository::{
     TrustRecordChange,
 };
 use crate::store::{LocalWrite, Store};
+
+const AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(300);
+const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// One literal server prompt; its text never supplies trusted connection identity.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthenticationPrompt {
+    /// Untrusted server text, displayed literally.
+    pub text: String,
+    /// Whether entered characters may be shown.
+    pub echo: bool,
+}
 
 /// Safe identity shown on every progress event and prompt.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
@@ -85,6 +103,19 @@ pub enum PreparationPhase {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum PreparationEvent {
+    /// One complete ordered challenge round on the retained connection.
+    KeyboardInteractive {
+        /// Trusted identity of this hop.
+        context: PreparationContext,
+        /// Fresh one-use response token.
+        prompt_id: String,
+        /// Untrusted display name supplied by the server.
+        name: String,
+        /// Untrusted instructions supplied by the server.
+        instruction: String,
+        /// Ordered prompts, possibly empty.
+        prompts: Vec<AuthenticationPrompt>,
+    },
     /// Trust resolved on the retained connection, before credentials are used.
     Verified {
         /// Current hop.
@@ -126,10 +157,25 @@ pub enum PreparationEvent {
 /// One response converted at the IPC boundary. Secret debug output is redacted.
 #[derive(Debug)]
 pub enum PreparationResponse {
+    /// Ordered one-time answers, including an explicit empty response.
+    KeyboardInteractive(KeyboardInteractiveResponse),
     /// Accept the exact key retained by the core.
     AcceptHostKey,
     /// One-time key passphrase.
     Passphrase(SecretVec),
+}
+
+impl PreparationResponse {
+    /// Convert write-only IPC answers directly into redacting, zeroizing storage.
+    pub fn keyboard_interactive(answers: Vec<Vec<u8>>) -> Result<Self, String> {
+        let answers = KeyboardInteractiveResponse::new(answers)
+            .map_err(|_| "authentication answers exceed the supported size".to_owned())?;
+        if 5 + answers.responses().iter().map(|answer| 4 + answer.len()).sum::<usize>() > 256 * 1024
+        {
+            return Err("authentication answers exceed the supported size".into());
+        }
+        Ok(Self::KeyboardInteractive(answers))
+    }
 }
 
 /// A preparation failure whose network cause remains available to session policy.
@@ -157,6 +203,7 @@ impl From<&str> for PreparationError {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum PromptKind {
+    KeyboardInteractive,
     Trust,
     Passphrase,
 }
@@ -165,6 +212,8 @@ struct PendingPrompt {
     id: String,
     kind: PromptKind,
     sender: oneshot::Sender<PreparationResponse>,
+    deadline: Option<Instant>,
+    response_count: Option<usize>,
 }
 
 #[derive(Default)]
@@ -217,6 +266,7 @@ impl PreparationControl {
         }
         let mut state = self.state.lock().map_err(|_| "preparation is unavailable")?;
         let kind = match response {
+            PreparationResponse::KeyboardInteractive(_) => PromptKind::KeyboardInteractive,
             PreparationResponse::AcceptHostKey => PromptKind::Trust,
             PreparationResponse::Passphrase(_) => PromptKind::Passphrase,
         };
@@ -224,6 +274,23 @@ impl PreparationControl {
             || !state.pending.as_ref().is_some_and(|p| p.id == prompt_id && p.kind == kind)
         {
             return Err("this connection prompt has expired".into());
+        }
+        let pending = state.pending.as_ref().expect("checked pending prompt");
+        if pending.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            state.pending.take();
+            return Err("this connection prompt has expired".into());
+        }
+        if let PreparationResponse::KeyboardInteractive(answers) = &response {
+            if pending.response_count != Some(answers.responses().len()) {
+                return Err("answer every prompt in the current authentication request".into());
+            }
+            if answers.responses().len() > 64
+                || answers.responses().iter().any(|answer| answer.len() > 64 * 1024)
+                || 5 + answers.responses().iter().map(|answer| 4 + answer.len()).sum::<usize>()
+                    > 256 * 1024
+            {
+                return Err("authentication answers exceed the supported size".into());
+            }
         }
         let pending = state.pending.take().expect("checked pending prompt");
         pending.sender.send(response).map_err(|_| "this connection prompt has expired".into())
@@ -253,6 +320,17 @@ impl PreparationControl {
         event: impl FnOnce(String) -> PreparationEvent,
         emit: &impl Fn(PreparationEvent) -> Result<(), String>,
     ) -> Result<PreparationResponse, String> {
+        self.prompt_until(kind, event, emit, None, None).await
+    }
+
+    async fn prompt_until(
+        &self,
+        kind: PromptKind,
+        event: impl FnOnce(String) -> PreparationEvent,
+        emit: &impl Fn(PreparationEvent) -> Result<(), String>,
+        deadline: Option<Instant>,
+        response_count: Option<usize>,
+    ) -> Result<PreparationResponse, String> {
         let id = Uuid::now_v7().to_string();
         let (sender, receiver) = oneshot::channel();
         {
@@ -260,11 +338,65 @@ impl PreparationControl {
             if state.cancelled {
                 return Err("connection was cancelled".into());
             }
-            state.pending = Some(PendingPrompt { id: id.clone(), kind, sender });
+            state.pending =
+                Some(PendingPrompt { id: id.clone(), kind, sender, deadline, response_count });
         }
-        emit(event(id))?;
-        self.run(async { receiver.await.map_err(|_| "connection prompt was cancelled".into()) })
-            .await
+        let result = async {
+            emit(event(id.clone()))?;
+            let receive = self.run(async {
+                receiver.await.map_err(|_| "connection prompt was cancelled".into())
+            });
+            if let Some(deadline) = deadline {
+                tokio::time::timeout_at(deadline, receive)
+                    .await
+                    .map_err(|_| "authentication response timed out; connect again".to_owned())?
+            } else {
+                receive.await
+            }
+        }
+        .await;
+        if let Ok(mut state) = self.state.lock()
+            && state.pending.as_ref().is_some_and(|pending| pending.id == id)
+        {
+            state.pending.take();
+        }
+        result
+    }
+
+    async fn challenge(
+        &self,
+        request: KeyboardInteractiveInfoRequest,
+        context: PreparationContext,
+        deadline: Instant,
+        emit: &impl Fn(PreparationEvent) -> Result<(), String>,
+    ) -> Result<KeyboardInteractiveResponse, String> {
+        let count = request.prompts().len();
+        let response = self
+            .prompt_until(
+                PromptKind::KeyboardInteractive,
+                |prompt_id| PreparationEvent::KeyboardInteractive {
+                    context,
+                    prompt_id,
+                    name: String::from_utf8_lossy(request.name()).into_owned(),
+                    instruction: String::from_utf8_lossy(request.instruction()).into_owned(),
+                    prompts: request
+                        .prompts()
+                        .iter()
+                        .map(|prompt| AuthenticationPrompt {
+                            text: String::from_utf8_lossy(prompt.text()).into_owned(),
+                            echo: prompt.echo(),
+                        })
+                        .collect(),
+                },
+                emit,
+                Some(deadline.min(Instant::now() + CHALLENGE_TIMEOUT)),
+                Some(count),
+            )
+            .await?;
+        match response {
+            PreparationResponse::KeyboardInteractive(answers) => Ok(answers),
+            _ => Err("unexpected authentication response".into()),
+        }
     }
 }
 
@@ -296,6 +428,22 @@ struct Step {
     plan: ConnectionPlan,
     context: PreparationContext,
     passphrase: bool,
+}
+
+/// Locally resolved immutable inputs; credentials remain inside Rust preparation.
+pub(crate) struct PreparationPlan(Vec<Step>);
+
+impl PreparationPlan {
+    pub(crate) fn target_context(&self) -> &PreparationContext {
+        &self.0.last().expect("target step exists").context
+    }
+}
+
+pub(crate) fn resolve_preparation_plan(
+    store: &Store,
+    profile_id: Uuid,
+) -> Result<PreparationPlan, PreparationError> {
+    Ok(PreparationPlan(resolve_steps(store, profile_id)?))
 }
 
 struct ConnectionStack(Vec<SshConnection>);
@@ -420,12 +568,21 @@ pub async fn prepare_connection(
     store: &Store,
     profile_id: Uuid,
     control: &PreparationControl,
-    emit: impl Fn(PreparationEvent) -> Result<(), String>,
+    emit: impl Fn(PreparationEvent) -> Result<(), String> + Sync,
 ) -> Result<SshConnection, PreparationError> {
-    let steps = resolve_steps(store, profile_id)?;
+    let plan = resolve_preparation_plan(store, profile_id)?;
+    prepare_resolved_connection(store, plan, control, emit).await
+}
+
+pub(crate) async fn prepare_resolved_connection(
+    store: &Store,
+    plan: PreparationPlan,
+    control: &PreparationControl,
+    emit: impl Fn(PreparationEvent) -> Result<(), String> + Sync,
+) -> Result<SshConnection, PreparationError> {
     let mut connections = ConnectionStack(Vec::new());
     let result = async {
-        for step in steps {
+        for step in plan.0 {
             control.active(|| Ok(()))?;
             emit(PreparationEvent::Progress {
                 context: step.context.clone(),
@@ -485,50 +642,100 @@ pub async fn prepare_connection(
                 source: confirmed.source.ok_or("host-key provenance is unavailable")?,
             })?;
             let connection = connections.0.last_mut().expect("current connection retained");
-            let mut incorrect = false;
-            loop {
-                let passphrase = if step.passphrase {
-                    match control
-                        .prompt(
-                            PromptKind::Passphrase,
-                            |prompt_id| PreparationEvent::Passphrase {
-                                context: step.context.clone(),
-                                prompt_id,
-                                incorrect,
-                            },
-                            &emit,
-                        )
-                        .await?
+            let authentication_deadline = Instant::now() + AUTHENTICATION_TIMEOUT;
+            let authentication = async {
+                let mut incorrect = false;
+                loop {
+                    let passphrase = if step.passphrase {
+                        match control
+                            .prompt_until(
+                                PromptKind::Passphrase,
+                                |prompt_id| PreparationEvent::Passphrase {
+                                    context: step.context.clone(),
+                                    prompt_id,
+                                    incorrect,
+                                },
+                                &emit,
+                                Some(authentication_deadline),
+                                None,
+                            )
+                            .await?
+                        {
+                            PreparationResponse::Passphrase(secret) => Some(secret),
+                            _ => return Err("unexpected connection response".into()),
+                        }
+                    } else {
+                        None
+                    };
+                    control.active(|| Ok(()))?;
+                    emit(PreparationEvent::Progress {
+                        context: step.context.clone(),
+                        phase: PreparationPhase::Authenticating,
+                    })?;
+                    let prompt_error = Arc::new(Mutex::new(None));
+                    let errors = prompt_error.clone();
+                    let emit = &emit;
+                    let context = &step.context;
+                    let authenticated = control
+                        .run(async {
+                            Ok(connection
+                                .authenticate_with_challenges(passphrase, |request| {
+                                    let errors = errors.clone();
+                                    let context = context.clone();
+                                    async move {
+                                        match control
+                                            .challenge(
+                                                request,
+                                                context,
+                                                authentication_deadline,
+                                                emit,
+                                            )
+                                            .await
+                                        {
+                                            Ok(answers) => Ok(answers),
+                                            Err(error) => {
+                                                if let Ok(mut failure) = errors.lock() {
+                                                    *failure = Some(error);
+                                                }
+                                                Err(ClientError::ConnectionClosed)
+                                            }
+                                        }
+                                    }
+                                })
+                                .await)
+                        })
+                        .await?;
+                    if let Some(error) = prompt_error
+                        .lock()
+                        .map_err(|_| "authentication response is unavailable")?
+                        .take()
                     {
-                        PreparationResponse::Passphrase(secret) => Some(secret),
-                        _ => return Err("unexpected connection response".into()),
+                        return Err(PreparationError::Local(error));
                     }
-                } else {
-                    None
-                };
-                control.active(|| Ok(()))?;
-                emit(PreparationEvent::Progress {
-                    context: step.context.clone(),
-                    phase: PreparationPhase::Authenticating,
-                })?;
-                let authenticated = control
-                    .run(async { Ok(connection.authenticate_with_passphrase(passphrase).await) })
-                    .await?;
-                match authenticated {
-                    Err(SshConnectionError::InvalidPrivateKeyPassphrase) if step.passphrase => {
-                        incorrect = true
-                    }
-                    result => {
-                        result?;
-                        break;
+                    match authenticated {
+                        Err(SshConnectionError::InvalidPrivateKeyPassphrase) if step.passphrase => {
+                            incorrect = true
+                        }
+                        result => {
+                            result?;
+                            break;
+                        }
                     }
                 }
-            }
+                Ok::<(), PreparationError>(())
+            };
+            tokio::time::timeout_at(authentication_deadline, authentication).await.map_err(
+                |_| PreparationError::Local("SSH authentication timed out; connect again".into()),
+            )??;
         }
         Ok::<(), PreparationError>(())
     }
     .await;
     if let Err(error) = result {
+        // Expire interrupted prompts without turning a failure into user cancellation.
+        if let Ok(mut state) = control.state.lock() {
+            state.pending.take();
+        }
         while let Some(connection) = connections.0.pop() {
             let _ = connection.close().await;
         }

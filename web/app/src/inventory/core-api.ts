@@ -32,6 +32,7 @@ import {
   type RouteInput as IpcRouteInput,
   type RouteSummary as IpcRouteSummary,
   type ForwardSummary as IpcForwardSummary,
+  type ForwardInput as IpcForwardInput,
   type RecentSessionKind as IpcRecentSessionKind,
   type RecentSessionOutcome as IpcRecentSessionOutcome,
   type SessionError as IpcSessionError,
@@ -63,6 +64,7 @@ import type {
   RouteInput,
   RouteSummary,
   ForwardSummary,
+  ForwardInput,
   RecentSessionKind,
   RecentSessionOutcome,
   SessionError,
@@ -70,7 +72,7 @@ import type {
 
 type Result<T, E> = { status: "ok"; data: T } | { status: "error"; error: E };
 
-const inventoryRecordTypes = new Set(["host", "accessProfile", "credential", "route", "hostGroup"]);
+const inventoryRecordTypes = new Set(["host", "accessProfile", "credential", "route", "hostGroup", "forward"]);
 
 function failure(error: IpcFailure | unknown): Failure {
   if (typeof error === "object" && error !== null && "kind" in error && error.kind === "failed") {
@@ -152,6 +154,18 @@ export function createInventoryApi(): InventoryApi {
       inventoryObjectOutcome(
         (await commands.inventoryForwards()) as Result<IpcForwardSummary[], IpcObjectEditError>,
       ) as Outcome<ForwardSummary[], ObjectEditError>,
+    createForward: async (input: ForwardInput) =>
+      inventoryObjectOutcome(await commands.inventoryCreateForward(input as IpcForwardInput)) as Outcome<
+        ForwardSummary,
+        ObjectEditError
+      >,
+    updateForward: async (id: string, input: ForwardInput) =>
+      inventoryObjectOutcome(await commands.inventoryUpdateForward(id, input as IpcForwardInput)) as Outcome<
+        ForwardSummary,
+        ObjectEditError
+      >,
+    deleteForward: async (id: string) =>
+      inventoryObjectOutcome(await commands.inventoryDeleteForward(id)) as Outcome<null, ObjectEditError>,
     createAccessProfile: async (input: AccessProfileInput) =>
       inventoryObjectOutcome(
         (await commands.inventoryCreateAccessProfile(input as IpcAccessProfileInput)) as Result<

@@ -5,7 +5,7 @@ import { useState, type FocusEvent, type FormEvent } from "react";
 import { useI18n } from "../i18n";
 import { useInventory, type AddHostError, type HostDetails, type SignIn } from "./api";
 
-type Method = "password" | "key" | "agent";
+type Method = "password" | "key" | "agent" | "keyboardInteractive";
 type KeySource = "file" | "paste" | "generate";
 type Problem = { field: "address" | "port" | "username" | "password" | "key" | "form"; message: string };
 
@@ -107,6 +107,8 @@ export function AddHostDialog({
     if (method === "password") {
       if (password === "") return { problem: { field: "password", message: t("add.error.emptyPassword") } };
       signIn = { kind: "password", password };
+    } else if (method === "keyboardInteractive") {
+      signIn = { kind: "keyboardInteractive" };
     } else if (method === "agent") {
       signIn = { kind: "agent" };
     } else if (keySource === "file") {
@@ -234,9 +236,13 @@ export function AddHostDialog({
             { value: "password", label: t("add.signIn.password") },
             { value: "key", label: t("add.signIn.key") },
             { value: "agent", label: t("add.signIn.agent") },
+            { value: "keyboardInteractive", label: t("add.signIn.keyboardInteractive") },
           ]}
         />
 
+        {method === "keyboardInteractive" ? (
+          <p className="m-0 text-sm text-muted-foreground">{t("add.interactive.hint")}</p>
+        ) : null}
         {method === "password" ? (
           <Field
             label={t("add.password")}

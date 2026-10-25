@@ -83,6 +83,23 @@ by default or an injected `terminal.clipboard` implementation. Clipboard
 permission or availability failures emit a `TerminalError` with code
 `clipboard` and return `false`.
 
+With the renderer available, `paste()` uses xterm's active bracketed-paste mode
+and normalizes line endings before sending one bounded input frame. The input
+byte limit includes any bracketed-paste delimiters. Its promise waits for the
+primary sink write and returns `false` if that write fails or its queue is full;
+the existing input error is reported once.
+
+A clipboard read belongs to the renderer lifecycle, input sink assignment, and
+broadcast targets that requested it. Replacing or removing either sink, changing
+broadcast mode, disconnecting, disposing, entering read-only mode, or restoring
+offline output invalidates a pending read. Late text and errors are discarded
+without affecting a newer connection. Assigning the same sinks or broadcast mode
+keeps the request valid. Disconnected, read-only and restoring elements refuse
+paste before accessing the clipboard.
+
+Once paste has dispatched its input frame, a broadcast change only discards the
+pending secondary copy; the paste result still reflects the primary write.
+
 ### IME composition
 
 `TerminalImeCompositionBridge` is a small, DOM-free state machine for hosts
@@ -109,6 +126,12 @@ const enabled = await terminal.setBroadcastInput(true, () => confirm("Send input
 When enabled, the component exposes a visible `Broadcast input on` status
 indicator and emits a broadcast event. A failed secondary write is reported
 without making the primary session input fail.
+
+Queued input retains its broadcast targets. Changing the broadcast sink or mode
+discards its pending secondary copy without interrupting an already started
+primary write. Replacing a target from a broadcast event also prevents that
+frame from reaching the replacement. Reassigning the same sink or mode preserves
+the copy; old secondary write failures do not report into a new target assignment.
 
 ## Tabs and split panes
 

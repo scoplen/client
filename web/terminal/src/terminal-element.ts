@@ -162,9 +162,11 @@ export class ScoplenTerminalElement extends HTMLElementBase {
   private sinkWriter: WritableStreamDefaultWriter<TerminalBytes> | null = null;
   private broadcastSinkWriter: WritableStreamDefaultWriter<TerminalBytes> | null = null;
   private writeTail: Promise<void> = Promise.resolve();
+  private pasteWrite: { promise: Promise<void> } | null = null;
   private pendingWrites = 0;
   private lifecycleGeneration = 0;
   private sinkGeneration = 0;
+  private broadcastGeneration = 0;
   private connected = false;
   private listenersAttached = false;
   private _broadcastInput = false;
@@ -310,8 +312,10 @@ export class ScoplenTerminalElement extends HTMLElementBase {
   }
 
   set broadcastSink(sink: TerminalSink | null) {
+    if (this._broadcastSink === sink) return;
     this.releaseBroadcastSinkWriter();
     this._broadcastSink = sink;
+    this.broadcastGeneration += 1;
   }
 
   get clipboard(): TerminalClipboard | null {
@@ -403,6 +407,7 @@ export class ScoplenTerminalElement extends HTMLElementBase {
 
   /** Stop the source, clear rendered bytes, and optionally close an owned sink. */
   async dispose(options: { closeSink?: boolean } = {}): Promise<void> {
+    this.lifecycleGeneration += 1;
     this.detachSource();
     this.teardownTerminal();
     this.clearOutput();
@@ -447,8 +452,12 @@ export class ScoplenTerminalElement extends HTMLElementBase {
     const generation = this.lifecycleGeneration;
     const sinkGeneration = this.sinkGeneration;
     const sink = this._sink;
+    const broadcastGeneration = this.broadcastGeneration;
+    const broadcastInput = this._broadcastInput;
+    const broadcastSink = this._broadcastSink;
     const isCurrent = () =>
       this.connected && generation === this.lifecycleGeneration && sinkGeneration === this.sinkGeneration;
+    const isBroadcastCurrent = () => broadcastGeneration === this.broadcastGeneration;
     this.pendingWrites += 1;
     const task = this.writeTail.then(async () => {
       if (!isCurrent()) {
@@ -466,15 +475,15 @@ export class ScoplenTerminalElement extends HTMLElementBase {
         }
       }
       if (!isCurrent()) throw new TerminalDisconnectedError();
-      if (this._broadcastInput) {
+      if (broadcastInput && isBroadcastCurrent()) {
         this.dispatchEvent(new CustomEvent<TerminalBytes>("terminal-broadcast-input", { detail: cloneBytes(bytes) }));
         if (!isCurrent()) throw new TerminalDisconnectedError();
-        if (this._broadcastSink) {
+        if (broadcastSink && isBroadcastCurrent()) {
           try {
-            await this.writeSink(this._broadcastSink, bytes, true);
+            await this.writeSink(broadcastSink, bytes, true);
           } catch (error) {
             if (!isCurrent()) throw new TerminalDisconnectedError();
-            this.reportError(error);
+            if (isBroadcastCurrent()) this.reportError(error);
           }
         }
       }
@@ -501,7 +510,10 @@ export class ScoplenTerminalElement extends HTMLElementBase {
         return false;
       }
     }
-    this._broadcastInput = enabled;
+    if (this._broadcastInput !== enabled) {
+      this._broadcastInput = enabled;
+      this.broadcastGeneration += 1;
+    }
     if (this.broadcastIndicator) {
       this.broadcastIndicator.hidden = !enabled;
     }
@@ -553,21 +565,46 @@ export class ScoplenTerminalElement extends HTMLElementBase {
   }
 
   async paste(): Promise<boolean> {
+    const generation = this.lifecycleGeneration;
+    const sinkGeneration = this.sinkGeneration;
+    const broadcastGeneration = this.broadcastGeneration;
+    const terminal = this.terminal;
+    const isInputCurrent = () =>
+      this.connected &&
+      generation === this.lifecycleGeneration &&
+      sinkGeneration === this.sinkGeneration &&
+      terminal === this.terminal &&
+      !this._readOnly &&
+      !this.restoring;
+    const isCurrent = () => isInputCurrent() && broadcastGeneration === this.broadcastGeneration;
+    if (!isCurrent()) return false;
     const clipboard = this._clipboard ?? (typeof navigator !== "undefined" ? navigator.clipboard : undefined);
     if (!clipboard?.readText) {
       this.reportError(new TerminalError("clipboard", "clipboard read is unavailable"));
       return false;
     }
+    let dispatched = false;
     try {
       const text = await clipboard.readText();
-      if (this.terminal) {
-        this.terminal.input(text, true);
+      if (!isCurrent()) return false;
+      if (terminal) {
+        // xterm emits paste input synchronously; retain its bounded sink result for this call.
+        const write = { promise: Promise.resolve() };
+        this.pasteWrite = write;
+        try {
+          terminal.paste(text);
+        } finally {
+          this.pasteWrite = null;
+        }
+        dispatched = true;
+        await write.promise;
       } else {
+        dispatched = true;
         await this.send(toBinary(text));
       }
-      return true;
+      return isInputCurrent();
     } catch (error) {
-      this.reportError(new TerminalError("clipboard", String(error)));
+      if (isCurrent() && !dispatched) this.reportError(new TerminalError("clipboard", String(error)));
       return false;
     }
   }
@@ -607,7 +644,9 @@ export class ScoplenTerminalElement extends HTMLElementBase {
         }),
         terminal.onData((data) => {
           if (this.restoring || this._readOnly) return;
-          void this.send(toBinary(data)).catch(() => undefined);
+          const write = this.send(toBinary(data));
+          if (this.pasteWrite) this.pasteWrite.promise = write;
+          void write.catch(() => undefined);
         }),
         terminal.onBinary((data) => {
           if (this.restoring || this._readOnly) return;

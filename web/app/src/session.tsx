@@ -2,7 +2,6 @@
 import {
   Button,
   Dialog,
-  Field,
   HostEgg,
   IconButton,
   Mark,
@@ -21,20 +20,38 @@ import {
   type SessionEvent,
   type PreparationEvent,
   type PreparationContext,
-  type HostKeyTrustSource,
+  type SessionTransferIssue,
+  type SessionPreparationIntent,
 } from "./ipc/bindings";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
-import { SessionFiles, type FileOperationOutcome } from "./session-files";
+import { SessionFiles, type EnqueueFeedback, type FileOperationOutcome } from "./session-files";
 import { dismissUploadAttention, initialUploadAttention, recordUploadAttention } from "./session-upload-attention";
+import { useSessionTransfers } from "./use-session-transfers";
+import {
+  TrustDialog,
+  PassphraseDialog,
+  InteractiveDialog,
+  TrustSourceDetails,
+  HopIdentity,
+} from "./preparation-dialogs";
 
 export type SessionState =
-  "verifying" | "trusting" | "passphrase" | "connecting" | "reconnecting" | "connected" | "closed" | "failed";
+  | "verifying"
+  | "trusting"
+  | "passphrase"
+  | "keyboardInteractive"
+  | "connecting"
+  | "reconnecting"
+  | "connected"
+  | "closed"
+  | "failed";
 
 /** The face the host's egg makes in each state. */
 const sessionFaces: Record<SessionState, { mood: MarkMood; active: boolean; attention: boolean }> = {
   verifying: { mood: "awake", active: true, attention: false },
   trusting: { mood: "awake", active: true, attention: true },
   passphrase: { mood: "awake", active: true, attention: true },
+  keyboardInteractive: { mood: "awake", active: true, attention: true },
   connecting: { mood: "awake", active: true, attention: false },
   reconnecting: { mood: "awake", active: true, attention: false },
   connected: { mood: "rest", active: true, attention: false },
@@ -86,10 +103,14 @@ export function SessionTerminal({
   const [verified, setVerified] = useState<Array<Extract<PreparationEvent, { kind: "verified" }>>>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [enqueueIssue, setEnqueueIssue] = useState<SessionTransferIssue | null>(null);
+  const latestEnqueue = useRef<string | null>(null);
   const [uploadAttention, setUploadAttention] = useState(initialUploadAttention);
   const filesToggle = useRef<HTMLButtonElement>(null);
   const [context, setContext] = useState<PreparationContext | null>(null);
   const [passphrasePrompt, setPassphrasePrompt] = useState<string | null>(null);
+  const [challenge, setChallenge] = useState<Extract<PreparationEvent, { kind: "keyboardInteractive" }> | null>(null);
+  const [challengeError, setChallengeError] = useState<string | null>(null);
   const currentPrompt = useRef<string | null>(null);
   const [trustError, setTrustError] = useState<string | null>(null);
   const [trustBusy, setTrustBusy] = useState(false);
@@ -97,7 +118,9 @@ export function SessionTerminal({
   const [source, setSource] = useState<TerminalSource | null>(null);
   const [hasOutput, setHasOutput] = useState(!!savedOutput);
   const [transportPending, setTransportPending] = useState(false);
-  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+  const [sessionId] = useState(() => crypto.randomUUID());
+  const [runRevision, setRunRevision] = useState(0);
+  const transfers = useSessionTransfers(sessionId, active && !offline);
   const [transportId, setTransportId] = useState<string | null>(null);
   const currentTransport = useRef<string | null>(null);
   const [automatic, setAutomatic] = useState(false);
@@ -109,7 +132,6 @@ export function SessionTerminal({
   const connectionEnded = useRef(false);
   const localEnd = useRef<{ state: "closed" | "failed"; message: string | null } | null>(null);
   const trusting = useRef(false);
-  const passphraseInput = useRef<HTMLInputElement>(null);
   const reportState = useRef(onStateChange);
   const translate = useRef(t);
   useEffect(() => {
@@ -119,12 +141,13 @@ export function SessionTerminal({
   useEffect(() => {
     reportState.current?.(state);
   }, [state]);
-  useEffect(() => {
-    if (!active && passphraseInput.current) passphraseInput.current.value = "";
-  }, [active]);
 
   const reportFileOutcome = useCallback((outcome: FileOperationOutcome) => {
     setUploadAttention((current) => recordUploadAttention(current, outcome));
+  }, []);
+  const reportEnqueue = useCallback((feedback: EnqueueFeedback) => {
+    if (feedback.phase === "started") latestEnqueue.current = feedback.requestId;
+    if (latestEnqueue.current === feedback.requestId) setEnqueueIssue(feedback.issue);
   }, []);
 
   const connectSession = useCallback(() => {
@@ -143,7 +166,7 @@ export function SessionTerminal({
         const stop = () => {
           if (!active) return;
           active = false;
-          void commands.sessionCloseTransport(sessionId).catch(() => undefined);
+          if (!ended) void commands.sessionCloseTransport(sessionId).catch(() => undefined);
         };
         signal.addEventListener("abort", stop, { once: true });
 
@@ -153,8 +176,9 @@ export function SessionTerminal({
           setTrustError(null);
           setHostPrompt(null);
           setPassphrasePrompt(null);
+          setChallenge(null);
+          setChallengeError(null);
           currentPrompt.current = null;
-          if (passphraseInput.current) passphraseInput.current.value = "";
           setPassphraseError(null);
         };
         const messages = new Channel<SessionEvent | ArrayBuffer>((event) => {
@@ -212,6 +236,7 @@ export function SessionTerminal({
               }
               setHostPrompt(preparation.kind === "trust" ? preparation : null);
               setPassphrasePrompt(preparation.kind === "passphrase" ? preparation.promptId : null);
+              setChallenge(preparation.kind === "keyboardInteractive" ? preparation : null);
               currentPrompt.current = preparation.kind === "progress" ? null : preparation.promptId;
               setPassphraseError(
                 preparation.kind === "passphrase" && preparation.incorrect
@@ -221,9 +246,11 @@ export function SessionTerminal({
               setState(
                 preparation.kind === "trust"
                   ? "trusting"
-                  : preparation.kind === "passphrase"
-                    ? "passphrase"
-                    : "connecting",
+                  : preparation.kind === "keyboardInteractive"
+                    ? "keyboardInteractive"
+                    : preparation.kind === "passphrase"
+                      ? "passphrase"
+                      : "connecting",
               );
               break;
             }
@@ -457,6 +484,13 @@ export function SessionTerminal({
 
   useEffect(() => {
     if (offline) return;
+    return () => {
+      void commands.sessionCloseTransport(sessionId).catch(() => undefined);
+    };
+  }, [offline, profileId, sessionId]);
+
+  useEffect(() => {
+    if (offline) return;
     let active = true;
     const current = ++generation.current;
     mounted.current = true;
@@ -483,9 +517,8 @@ export function SessionTerminal({
     return () => {
       active = false;
       mounted.current = false;
-      void commands.sessionCloseTransport(sessionId).catch(() => undefined);
     };
-  }, [connectSession, profileId, sessionId, offline]);
+  }, [connectSession, profileId, sessionId, offline, runRevision]);
 
   const interruptTransport = (failure: boolean, message: string | null) => {
     const current = generation.current;
@@ -498,7 +531,8 @@ export function SessionTerminal({
     setTrustBusy(false);
     setHostPrompt(null);
     setPassphrasePrompt(null);
-    if (passphraseInput.current) passphraseInput.current.value = "";
+    setChallenge(null);
+    setChallengeError(null);
     setTransportPending(true);
     setAutomatic(false);
     setRetry(null);
@@ -518,20 +552,20 @@ export function SessionTerminal({
   };
   const cancelTrust = () => interruptTransport(false, t("session.trust.cancelled"));
 
-  const respond = async (
-    promptId: string,
-    intent: { kind: "acceptHostKey" } | { kind: "passphrase"; value: string },
-  ) => {
+  const respond = async (promptId: string, intent: SessionPreparationIntent) => {
     if (trusting.current || !mounted.current || currentPrompt.current !== promptId) return;
+    const transport = currentTransport.current;
+    if (!transport) return;
     const current = generation.current;
     trusting.current = true;
     setTrustBusy(true);
     setTrustError(null);
     try {
-      const result = await commands.sessionRespond(sessionId, promptId, intent);
+      const result = await commands.sessionRespond(sessionId, transport, promptId, intent);
       if (!mounted.current || current !== generation.current || currentPrompt.current !== promptId) return;
       if (result.status === "error") {
-        if (intent.kind === "passphrase") setPassphraseError(result.error);
+        if (intent.kind === "keyboardInteractive") setChallengeError(result.error);
+        else if (intent.kind === "passphrase") setPassphraseError(result.error);
         else setTrustError(result.error);
         return;
       }
@@ -540,11 +574,14 @@ export function SessionTerminal({
       currentPrompt.current = null;
       setHostPrompt(null);
       setPassphrasePrompt(null);
+      setChallenge(null);
+      setChallengeError(null);
       setState("connecting");
     } catch (cause) {
       if (!mounted.current || current !== generation.current || currentPrompt.current !== promptId) return;
       const message = cause instanceof Error ? cause.message : String(cause);
-      if (intent.kind === "passphrase") setPassphraseError(message);
+      if (intent.kind === "keyboardInteractive") setChallengeError(message);
+      else if (intent.kind === "passphrase") setPassphraseError(message);
       else setTrustError(message);
     } finally {
       if (mounted.current && current === generation.current && currentPrompt.current === promptId) {
@@ -568,7 +605,7 @@ export function SessionTerminal({
     if (!connecting.current) {
       retrying.current = true;
       setTransportPending(true);
-      setSessionId(crypto.randomUUID());
+      setRunRevision((revision) => revision + 1);
       return;
     }
     retrying.current = true;
@@ -581,6 +618,8 @@ export function SessionTerminal({
     setError(null);
     currentPrompt.current = null;
     setPassphrasePrompt(null);
+    setChallenge(null);
+    setChallengeError(null);
     setContext(null);
     setState("verifying");
     void commands
@@ -604,17 +643,6 @@ export function SessionTerminal({
 
   const cancelPassphrase = () => interruptTransport(false, t("session.passphrase.cancelled"));
 
-  const submitPassphrase = () => {
-    if (trusting.current) return;
-    const value = passphraseInput.current?.value ?? "";
-    if (!value) {
-      setPassphraseError(t("session.passphrase.required"));
-      return;
-    }
-    if (passphraseInput.current) passphraseInput.current.value = "";
-    if (passphrasePrompt) void respond(passphrasePrompt, { kind: "passphrase", value });
-  };
-
   const status =
     state === "verifying"
       ? t("session.verifying")
@@ -626,21 +654,27 @@ export function SessionTerminal({
                 ? "session.trust.reviewTitle"
                 : "session.firstConnection",
           )
-        : state === "passphrase"
-          ? t("session.passphrase.status")
-          : state === "reconnecting"
-            ? retry
-              ? t("session.reconnecting.wait", { attempt: retry.attempt, seconds: retry.delaySeconds })
-              : t("session.reconnecting")
-            : state === "connecting"
-              ? t("session.connecting")
-              : state === "connected"
-                ? t("session.connected")
-                : state === "closed"
-                  ? t("session.closed")
-                  : t("session.failed");
+        : state === "keyboardInteractive"
+          ? t("session.interactive.status")
+          : state === "passphrase"
+            ? t("session.passphrase.status")
+            : state === "reconnecting"
+              ? retry
+                ? t("session.reconnecting.wait", { attempt: retry.attempt, seconds: retry.delaySeconds })
+                : t("session.reconnecting")
+              : state === "connecting"
+                ? t("session.connecting")
+                : state === "connected"
+                  ? t("session.connected")
+                  : state === "closed"
+                    ? t("session.closed")
+                    : t("session.failed");
 
   const face = sessionFaces[state];
+  const unknownTransfer = transfers.snapshot?.items.some((item) => item.state === "unknown") ?? false;
+  const transferCleanup =
+    transfers.snapshot?.items.some((item) => item.stagingMayRemain) ||
+    transfers.snapshot?.recent.some((item) => item.stagingMayRemain);
   return (
     <main className="flex h-full min-h-0 flex-col bg-background text-foreground" aria-labelledby={titleId}>
       <header className="flex shrink-0 flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
@@ -675,7 +709,9 @@ export function SessionTerminal({
               {t("session.reconnect")}
             </Button>
           ) : null}
-          {state === "connected" && transportId && !offline && !closingView ? (
+          {!offline &&
+          !closingView &&
+          (state === "connected" || !!transfers.snapshot?.items.length || !!transfers.snapshot?.recent.length) ? (
             <IconButton
               ref={filesToggle}
               label={t(filesOpen ? "session.files.close" : "session.files.open")}
@@ -727,6 +763,37 @@ export function SessionTerminal({
         <p role="alert" className="mx-4 mt-0 mb-2 text-sm whitespace-pre-wrap text-attention">
           {error}
         </p>
+      ) : null}
+      {!filesOpen && enqueueIssue ? (
+        <div role="alert" className="mx-3 mb-2 flex flex-wrap items-center gap-2 text-xs text-attention">
+          <p className="m-0 min-w-0 flex-1">{t(`session.transfers.issue.${enqueueIssue}`)}</p>
+          <Button variant="ghost" onClick={() => setFilesOpen(true)}>
+            {t("session.transfers.review")}
+          </Button>
+          <Button variant="ghost" onClick={() => setEnqueueIssue(null)}>
+            {t("session.files.upload.dismiss")}
+          </Button>
+        </div>
+      ) : null}
+      {!filesOpen && transfers.snapshot && (transfers.snapshot.outstanding > 0 || transferCleanup) ? (
+        <div
+          role={unknownTransfer || transferCleanup ? "alert" : "status"}
+          className="mx-3 mb-2 flex flex-wrap items-center gap-2 text-xs"
+        >
+          <p className="m-0 min-w-0 flex-1">
+            {t(
+              unknownTransfer
+                ? "session.transfers.attentionUnknown"
+                : transferCleanup
+                  ? "session.transfers.attentionCleanup"
+                  : "session.transfers.pending",
+              { count: transfers.snapshot.outstanding },
+            )}
+          </p>
+          <Button variant="ghost" onClick={() => setFilesOpen(true)}>
+            {t("session.transfers.review")}
+          </Button>
+        </div>
       ) : null}
       {uploadAttention.unknown || uploadAttention.stagingMayRemain ? (
         <div
@@ -800,11 +867,16 @@ export function SessionTerminal({
             ) : null}
           </div>
         </div>
-        {filesOpen && state === "connected" && transportId && !offline && !closingView ? (
+        {filesOpen && !offline && !closingView ? (
           <SessionFiles
-            key={transportId}
+            key={transportId ?? "disconnected"}
             sessionId={sessionId}
-            transportId={transportId}
+            transportId={state === "connected" ? transportId : null}
+            connectionLabel={label}
+            active={active}
+            queue={transfers.snapshot}
+            queueIssue={enqueueIssue ?? transfers.issue}
+            onEnqueueFeedback={reportEnqueue}
             onClose={() => {
               setFilesOpen(false);
               filesToggle.current?.focus();
@@ -813,79 +885,14 @@ export function SessionTerminal({
           />
         ) : null}
       </div>
-      <Dialog
-        open={active && hostKey !== null}
-        onOpenChange={(open) => {
-          if (!open && active) cancelTrust();
-        }}
-        title={
-          hostKey?.changed
-            ? t("session.trust.changedTitle")
-            : hostKey?.review
-              ? t("session.trust.reviewTitle")
-              : t("session.trust.title")
-        }
-        description={
-          hostKey?.changed
-            ? t("session.trust.changedBody")
-            : hostKey?.review === "revokedDevice"
-              ? t("session.trust.revokedBody")
-              : hostKey?.review
-                ? t("session.trust.unverifiedBody")
-                : t("session.trust.firstBody")
-        }
-        closeLabel={t("session.trust.cancel")}
-        mark={
-          hostKey?.changed ? (
-            <Mark
-              size="2.5rem"
-              mood="low"
-              className="text-attention"
-              gesture={{ name: "shake", at: hostKey.fingerprint }}
-            />
-          ) : (
-            <Mark size="2.5rem" mood="awake" look={{ x: 0.3, y: 1 }} />
-          )
-        }
-        footer={
-          <>
-            <Button variant="ghost" onClick={cancelTrust}>
-              {t("session.trust.cancel")}
-            </Button>
-            <Button variant="primary" busy={trustBusy} onClick={() => void trustAndConnect()}>
-              {t("session.trust.connect")}
-            </Button>
-          </>
-        }
-      >
-        {hostKey ? (
-          <div className="space-y-4 text-sm">
-            {context ? <HopIdentity context={context} /> : null}
-            {hostKey.previousSource ? <TrustSourceDetails source={hostKey.previousSource} /> : null}
-            <dl className="grid gap-3">
-              <div>
-                <dt className="text-muted-foreground">{t("session.trust.algorithm")}</dt>
-                <dd className="m-0 mt-1 font-mono select-text">{hostKey.algorithm}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">{t("session.trust.fingerprint")}</dt>
-                <dd className="m-0 mt-1 break-all font-mono select-text">{hostKey.fingerprint}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">{t("session.trust.publicKey")}</dt>
-                <dd className="m-0 mt-1 break-all rounded-md bg-inset p-3 font-mono text-xs leading-5 select-text">
-                  {hostKey.key}
-                </dd>
-              </div>
-            </dl>
-            {trustError ? (
-              <p role="alert" className="m-0 text-sm text-attention">
-                {trustError}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-      </Dialog>
+      <TrustDialog
+        active={active}
+        prompt={hostPrompt}
+        busy={trustBusy}
+        error={trustError}
+        onAccept={trustAndConnect}
+        onCancel={cancelTrust}
+      />
       <Dialog
         open={active && detailsOpen}
         onOpenChange={setDetailsOpen}
@@ -912,95 +919,33 @@ export function SessionTerminal({
           ))}
         </div>
       </Dialog>
-      <Dialog
-        open={active && passphrasePrompt !== null}
-        onOpenChange={(open) => {
-          if (!open && active) cancelPassphrase();
+      {challenge ? (
+        <InteractiveDialog
+          key={challenge.promptId}
+          active={active}
+          challenge={challenge}
+          busy={trustBusy}
+          error={challengeError}
+          onCancel={() => interruptTransport(false, t("session.interactive.cancelled"))}
+          onAnswer={(answers) => void respond(challenge.promptId, { kind: "keyboardInteractive", answers })}
+        />
+      ) : null}
+      <PassphraseDialog
+        active={active}
+        promptId={passphrasePrompt}
+        context={context}
+        busy={trustBusy}
+        error={passphraseError}
+        onCancel={cancelPassphrase}
+        onPassphrase={(value) => {
+          if (!value) {
+            setPassphraseError(t("session.passphrase.required"));
+            return;
+          }
+          if (passphrasePrompt) void respond(passphrasePrompt, { kind: "passphrase", value });
         }}
-        title={t("session.passphrase.title")}
-        description={t("session.passphrase.body")}
-        closeLabel={t("session.passphrase.cancel")}
-        footer={
-          <>
-            <Button variant="ghost" onClick={cancelPassphrase}>
-              {t("session.passphrase.cancel")}
-            </Button>
-            <Button variant="primary" busy={trustBusy} onClick={submitPassphrase}>
-              {t("session.passphrase.connect")}
-            </Button>
-          </>
-        }
-      >
-        {context ? <HopIdentity context={context} /> : null}
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            submitPassphrase();
-          }}
-        >
-          <Field
-            ref={passphraseInput}
-            label={t("session.passphrase.field")}
-            type="password"
-            autoComplete="off"
-            autoFocus
-            error={passphraseError ?? undefined}
-          />
-        </form>
-      </Dialog>
+      />
     </main>
-  );
-}
-
-function TrustSourceDetails({ source }: { source: HostKeyTrustSource }) {
-  const { t, locale } = useI18n();
-  return (
-    <dl className="grid gap-3 text-sm">
-      <div>
-        <dt className="text-muted-foreground">{t("session.details.source")}</dt>
-        <dd className="m-0 mt-1 break-words">
-          {source.current ? t("session.details.currentDevice") : (source.deviceName ?? source.deviceId)}
-        </dd>
-      </div>
-      <div>
-        <dt className="text-muted-foreground">{t("session.details.method")}</dt>
-        <dd className="m-0 mt-1">{t(source.imported ? "session.details.imported" : "session.details.manual")}</dd>
-      </div>
-      <div>
-        <dt className="text-muted-foreground">{t("session.details.acceptedAt")}</dt>
-        <dd className="m-0 mt-1">
-          {source.acceptedAt ? (
-            <time dateTime={new Date(Number(source.acceptedAt)).toISOString()}>
-              {new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(
-                new Date(Number(source.acceptedAt)),
-              )}
-            </time>
-          ) : (
-            t("session.details.timeUnavailable")
-          )}
-        </dd>
-      </div>
-    </dl>
-  );
-}
-
-function HopIdentity({ context }: { context: PreparationContext }) {
-  const { t } = useI18n();
-  const endpoint = context.address.includes(":")
-    ? `[${context.address}]:${context.port}`
-    : `${context.address}:${context.port}`;
-  return (
-    <div className="mb-4 min-w-0 space-y-1 text-sm">
-      <p className="m-0 text-muted-foreground">
-        {context.target ? t("session.route.target") : t("session.route.hop")} · {context.position} / {context.total}
-      </p>
-      <p className="m-0 break-words font-medium">
-        {context.host} · {context.login}
-      </p>
-      <p className="m-0 break-all font-mono select-text">
-        {context.username}@{endpoint}
-      </p>
-    </div>
   );
 }
 
@@ -1030,7 +975,8 @@ function Stage({
     state === "connecting" ||
     state === "reconnecting" ||
     state === "trusting" ||
-    state === "passphrase";
+    state === "passphrase" ||
+    state === "keyboardInteractive";
   return (
     <div className="absolute inset-0 grid place-items-center bg-[color-mix(in_srgb,var(--background)_78%,transparent)] px-6 backdrop-blur-[3px]">
       <div className="scoplen-rise flex w-full min-w-0 max-w-md flex-col items-center text-center">

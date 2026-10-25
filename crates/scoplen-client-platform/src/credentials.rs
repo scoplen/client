@@ -173,17 +173,23 @@ mod tests {
     #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn device_key_round_trip_uses_a_keystore_slot() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("scoplen-device-key-")
+            .disable_cleanup(true)
+            .tempdir()
+            .unwrap();
+        let data = dir.path().canonicalize().unwrap();
         let credential = Uuid::from_u128(9);
-        let identity = create_device_key(dir.path(), credential).unwrap();
+        let identity = create_device_key(&data, credential).unwrap();
         assert!(identity.public_key.starts_with("ecdsa-sha2-nistp256 "));
-        let resolved = resolve_device_key(dir.path(), credential, &identity.handle).unwrap();
+        let resolved = resolve_device_key(&data, credential, &identity.handle).unwrap();
         assert_eq!(resolved.secret.len(), 32);
-        delete_device_key(dir.path(), credential, &identity.handle).unwrap();
+        delete_device_key(&data, credential, &identity.handle).unwrap();
         assert!(matches!(
-            resolve_device_key(dir.path(), credential, &identity.handle),
+            resolve_device_key(&data, credential, &identity.handle),
             Err(CredentialError::InvalidHandle)
         ));
+        dir.close().unwrap();
     }
 
     #[test]
