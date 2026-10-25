@@ -504,22 +504,24 @@ pub struct ForwardSummary {
     pub restored: bool,
 }
 
-/// Complete replacement of a saved local TCP tunnel definition.
+/// Complete replacement of a saved Local TCP or Dynamic SOCKS definition.
 #[derive(Clone, Debug, Deserialize, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ForwardInput {
     /// Nonempty display name.
     pub name: String,
-    /// Only Local is editable in this outcome.
+    /// Local and Dynamic are editable; Remote remains unsupported.
     pub kind: ForwardKindInput,
     /// Explicit IPv4 or IPv6 literal; never replaced with a broader listener.
     pub bind_address: String,
     /// Nonzero TCP listening port.
     pub bind_port: u32,
-    /// Hostname or IP literal resolved remotely.
-    pub target_host: String,
-    /// Nonzero TCP destination port.
-    pub target_port: u32,
+    /// Required Local destination; ignored and cleared for Dynamic.
+    #[serde(default)]
+    pub target_host: Option<String>,
+    /// Required nonzero Local destination port; ignored and cleared for Dynamic.
+    #[serde(default)]
+    pub target_port: Option<u32>,
     /// Optional default Login; starting still selects an explicit Login.
     pub profile: Option<String>,
 }
@@ -624,11 +626,11 @@ pub enum ObjectEditError {
     /// A route command is empty or exceeds the model limit.
     #[error("the route command is invalid")]
     InvalidCommand,
-    /// A local tunnel endpoint is invalid.
+    /// A saved tunnel endpoint is invalid.
     #[error("the tunnel {field} is invalid")]
     InvalidForward { field: String },
-    /// Only local TCP definitions can be created or edited here.
-    #[error("only local TCP tunnel definitions can be edited")]
+    /// Only Local TCP and Dynamic SOCKS definitions can be created or edited here.
+    #[error("only Local TCP and Dynamic SOCKS tunnel definitions can be edited")]
     UnsupportedForward,
     /// Kind and binding do not satisfy the object model.
     #[error("the credential kind and binding are incompatible")]
@@ -1208,7 +1210,7 @@ impl Inventory {
         Ok(result)
     }
 
-    /// Creates a local TCP definition without starting any network operation.
+    /// Creates a Local or Dynamic definition without starting any network operation.
     pub fn create_forward(&self, input: ForwardInput) -> Result<ForwardSummary, ObjectEditError> {
         let change = self.validate_forward_input(input)?;
         let forward =
@@ -1228,7 +1230,7 @@ impl Inventory {
             .get(id)
             .map_err(object_from_record)?
             .ok_or_else(|| object_not_found("tunnel"))?;
-        if existing.kind != ForwardKind::Local {
+        if existing.kind == ForwardKind::Remote {
             return Err(ObjectEditError::UnsupportedForward);
         }
         let change = self.validate_forward_input(input)?;
@@ -1264,7 +1266,7 @@ impl Inventory {
         &self,
         input: ForwardInput,
     ) -> Result<ForwardChange, ObjectEditError> {
-        if input.kind != ForwardKindInput::Local {
+        if input.kind == ForwardKindInput::Remote {
             return Err(ObjectEditError::UnsupportedForward);
         }
         let name = validate_name(input.name)?;
@@ -1277,20 +1279,29 @@ impl Inventory {
             .ok()
             .filter(|port| *port != 0)
             .ok_or_else(|| invalid("bindPort"))?;
-        let target_host = input.target_host.trim().to_owned();
-        if target_host.len() > 1024 {
-            return Err(invalid("targetHost"));
-        }
-        validate_text(&target_host, "targetHost")?;
-        if target_host.is_empty()
-            || target_host.chars().any(|c| c.is_whitespace() || c.is_control())
-        {
-            return Err(invalid("targetHost"));
-        }
-        let target_port = u16::try_from(input.target_port)
-            .ok()
-            .filter(|port| *port != 0)
-            .ok_or_else(|| invalid("targetPort"))?;
+        let (kind, target_host, target_port) = match input.kind {
+            ForwardKindInput::Local => {
+                let target_host = input.target_host.ok_or_else(|| invalid("targetHost"))?;
+                let target_host = target_host.trim().to_owned();
+                if target_host.len() > 1024 {
+                    return Err(invalid("targetHost"));
+                }
+                validate_text(&target_host, "targetHost")?;
+                if target_host.is_empty()
+                    || target_host.chars().any(|c| c.is_whitespace() || c.is_control())
+                {
+                    return Err(invalid("targetHost"));
+                }
+                let target_port = input
+                    .target_port
+                    .and_then(|port| u16::try_from(port).ok())
+                    .filter(|port| *port != 0)
+                    .ok_or_else(|| invalid("targetPort"))?;
+                (ForwardKind::Local, Edit::Set(target_host), Edit::Set(target_port))
+            }
+            ForwardKindInput::Dynamic => (ForwardKind::Dynamic, Edit::Clear, Edit::Clear),
+            ForwardKindInput::Remote => return Err(ObjectEditError::UnsupportedForward),
+        };
         let profile = match input.profile {
             None => None,
             Some(value) => {
@@ -1307,11 +1318,11 @@ impl Inventory {
         };
         Ok(ForwardChange {
             name: Some(name),
-            kind: Some(ForwardKind::Local),
+            kind: Some(kind),
             bind_address: Edit::Set(bind_address),
             bind_port: Edit::Set(bind_port),
-            target_host: Edit::Set(target_host),
-            target_port: Edit::Set(target_port),
+            target_host,
+            target_port,
             profile: Edit::from_option(profile),
         })
     }
@@ -4961,8 +4972,8 @@ mod tests {
             kind: ForwardKindInput::Local,
             bind_address: "127.0.0.1".into(),
             bind_port: 5433,
-            target_host: "prod-db.internal".into(),
-            target_port: 5432,
+            target_host: Some("prod-db.internal".into()),
+            target_port: Some(5432),
             profile,
         }
     }
@@ -4975,7 +4986,7 @@ mod tests {
         assert_eq!(created.target_host.as_deref(), Some("prod-db.internal"));
         let mut replacement = local_forward_input(None);
         replacement.bind_address = "::".into();
-        replacement.target_host = "db.internal".into();
+        replacement.target_host = Some("db.internal".into());
         let changed = inventory.update_forward(created.id.clone(), replacement.clone()).unwrap();
         assert_eq!(changed.bind_address.as_deref(), Some("::"));
         assert_eq!(changed.target_host.as_deref(), Some("db.internal"));
@@ -4986,10 +4997,12 @@ mod tests {
                 ForwardInput { bind_address: "localhost".into(), ..replacement.clone() },
             ),
             ("bindPort", ForwardInput { bind_port: 0, ..replacement.clone() }),
-            ("targetPort", ForwardInput { target_port: 65536, ..replacement.clone() }),
+            ("targetPort", ForwardInput { target_port: Some(65536), ..replacement.clone() }),
+            ("targetPort", ForwardInput { target_port: None, ..replacement.clone() }),
+            ("targetHost", ForwardInput { target_host: None, ..replacement.clone() }),
             (
                 "targetHost",
-                ForwardInput { target_host: "db\ninternal".into(), ..replacement.clone() },
+                ForwardInput { target_host: Some("db\ninternal".into()), ..replacement.clone() },
             ),
         ] {
             assert_eq!(
@@ -5006,6 +5019,54 @@ mod tests {
         assert_eq!(inventory.forwards_objects().unwrap(), vec![changed]);
         inventory.delete_forward(created.id).unwrap();
         assert!(inventory.forwards_objects().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dynamic_forward_crud_clears_targets_and_preserves_explicit_non_loopback_binding() {
+        let inventory = inventory();
+        let local = inventory.create_forward(local_forward_input(None)).unwrap();
+        let input: ForwardInput = serde_json::from_value(serde_json::json!({
+            "name": "SOCKS", "kind": "dynamic", "bindAddress": "::", "bindPort": 1080,
+            "profile": null
+        }))
+        .unwrap();
+        assert_eq!(input.target_host, None);
+        assert_eq!(input.target_port, None);
+        let dynamic = inventory.update_forward(local.id.clone(), input.clone()).unwrap();
+        assert_eq!(dynamic.kind, ForwardKindInput::Dynamic);
+        assert_eq!(dynamic.bind_address.as_deref(), Some("::"));
+        assert_eq!(dynamic.bind_port, Some(1080));
+        assert_eq!(dynamic.target_host, None);
+        assert_eq!(dynamic.target_port, None);
+        let raw = inventory.store.get(parse_id(&local.id).unwrap()).unwrap().unwrap();
+        assert_eq!(raw.field(5).unwrap().value, scoplen_model::cbor::Value::Null);
+        assert_eq!(raw.field(6).unwrap().value, scoplen_model::cbor::Value::Null);
+        let ignored = ForwardInput {
+            target_host: Some("unused\ninvalid target".into()),
+            target_port: Some(u32::MAX),
+            ..input
+        };
+        let created = inventory.create_forward(ignored.clone()).unwrap();
+        assert_eq!(created.target_host, None);
+        assert_eq!(created.target_port, None);
+        let updated = inventory.update_forward(created.id.clone(), ignored).unwrap();
+        assert_eq!(updated, created);
+        assert_eq!(
+            inventory.update_forward(
+                local.id.clone(),
+                ForwardInput {
+                    kind: ForwardKindInput::Local,
+                    target_host: None,
+                    target_port: None,
+                    ..local_forward_input(None)
+                },
+            ),
+            Err(ObjectEditError::InvalidForward { field: "targetHost".into() })
+        );
+        let restored = inventory.update_forward(local.id, local_forward_input(None)).unwrap();
+        assert_eq!(restored.kind, ForwardKindInput::Local);
+        assert_eq!(restored.target_port, Some(5432));
+        inventory.delete_forward(created.id).unwrap();
     }
 
     #[test]
@@ -5067,13 +5128,13 @@ mod tests {
         let boundary = "\u{00e9}".repeat(512);
         let created = inventory
             .create_forward(ForwardInput {
-                target_host: boundary.clone(),
+                target_host: Some(boundary.clone()),
                 ..local_forward_input(None)
             })
             .unwrap();
         assert_eq!(created.target_host.as_deref(), Some(boundary.as_str()));
         let invalid =
-            ForwardInput { target_host: format!("{boundary}x"), ..local_forward_input(None) };
+            ForwardInput { target_host: Some(format!("{boundary}x")), ..local_forward_input(None) };
         assert_eq!(
             inventory.create_forward(invalid.clone()),
             Err(ObjectEditError::InvalidForward { field: "targetHost".into() })

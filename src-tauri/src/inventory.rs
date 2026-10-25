@@ -324,7 +324,7 @@ pub async fn inventory_forwards(
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
 }
 
-/// Saves a local tunnel definition without starting it.
+/// Saves a Local TCP or Dynamic SOCKS definition without starting it.
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_create_forward(

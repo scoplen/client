@@ -13,6 +13,8 @@ use scoplen_crypto::{LocalDatabaseKey, SecretVec};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Notify, mpsc};
 
+mod dynamic;
+
 struct Fixture {
     _directory: tempfile::TempDir,
     store: Arc<Store>,
@@ -117,6 +119,8 @@ async fn stop(manager: &ForwardManager, fixture: &Fixture, id: &str) {
 #[derive(Clone, Copy)]
 enum PeerMode {
     Echo,
+    Trailer,
+    RemoteEofFirst,
     RefuseFirst,
     HoldFirst,
     HoldAll,
@@ -127,6 +131,7 @@ struct ForwardPeer {
     opened: Arc<AtomicUsize>,
     sessions: Arc<AtomicUsize>,
     targets: Arc<Mutex<Vec<(String, u32)>>>,
+    received: Arc<Mutex<Vec<Vec<u8>>>>,
     release: Arc<Notify>,
     control: mpsc::Receiver<russh::server::Handle>,
     workers: Arc<Mutex<Vec<tokio::task::AbortHandle>>>,
@@ -138,6 +143,7 @@ struct Handler {
     opened: Arc<AtomicUsize>,
     sessions: Arc<AtomicUsize>,
     targets: Arc<Mutex<Vec<(String, u32)>>>,
+    received: Arc<Mutex<Vec<Vec<u8>>>>,
     release: Arc<Notify>,
     workers: Arc<Mutex<Vec<tokio::task::AbortHandle>>>,
 }
@@ -187,6 +193,8 @@ impl russh::server::Handler for Handler {
         let held = matches!(self.mode, PeerMode::HoldAll)
             || matches!(self.mode, PeerMode::HoldFirst) && index == 0;
         let release = self.release.clone();
+        let mode = self.mode;
+        let received = self.received.clone();
         let worker = tokio::spawn(async move {
             if held {
                 release.notified().await;
@@ -195,9 +203,20 @@ impl russh::server::Handler for Handler {
             let mut stream = channel.into_stream();
             let mut payload = Vec::new();
             let _ = async {
+                if matches!(mode, PeerMode::RemoteEofFirst) {
+                    stream.write_all(b"remote EOF first").await?;
+                    stream.shutdown().await?;
+                }
                 stream.read_to_end(&mut payload).await?;
-                stream.write_all(&payload).await?;
-                stream.shutdown().await
+                received.lock().unwrap().push(payload.clone());
+                if !matches!(mode, PeerMode::RemoteEofFirst) {
+                    if matches!(mode, PeerMode::Trailer) {
+                        payload.extend_from_slice(b"EOF-only trailer");
+                    }
+                    stream.write_all(&payload).await?;
+                    stream.shutdown().await?;
+                }
+                Ok::<_, std::io::Error>(())
             }
             .await;
         });
@@ -223,6 +242,7 @@ impl ForwardPeer {
         let opened = Arc::new(AtomicUsize::new(0));
         let sessions = Arc::new(AtomicUsize::new(0));
         let targets = Arc::new(Mutex::new(Vec::new()));
+        let received = Arc::new(Mutex::new(Vec::new()));
         let release = Arc::new(Notify::new());
         let workers: Arc<Mutex<Vec<tokio::task::AbortHandle>>> = Arc::default();
         let (control, receiver) = mpsc::channel(16);
@@ -231,6 +251,7 @@ impl ForwardPeer {
             opened: opened.clone(),
             sessions: sessions.clone(),
             targets: targets.clone(),
+            received: received.clone(),
             release: release.clone(),
             workers: workers.clone(),
         };
@@ -240,7 +261,17 @@ impl ForwardPeer {
             control.send(connection.handle()).await.unwrap();
             let _ = connection.await;
         });
-        Self { port, opened, sessions, targets, release, control: receiver, workers, task }
+        Self {
+            port,
+            opened,
+            sessions,
+            targets,
+            received,
+            release,
+            control: receiver,
+            workers,
+            task,
+        }
     }
 
     async fn wait_opened(&self, count: usize) {
@@ -367,14 +398,14 @@ async fn forward_manager_freezes_login_host_route_and_credential_before_first_ow
         )
         .unwrap();
     let listening = phase(&manager, &fixture, &initial.run_id, ForwardPhase::Listening).await;
-    assert_eq!(listening.configuration.login, initial.configuration.login);
-    assert_eq!(listening.configuration.login.profile_id, fixture.profile);
-    assert_eq!(listening.configuration.login.host_id, profile.host.to_string());
-    assert_eq!(listening.configuration.login.login, "trust-fixture");
-    assert_eq!(listening.configuration.login.host, "SSH fixture");
-    assert_eq!(listening.configuration.login.username, "trust-fixture");
-    assert_eq!(listening.configuration.login.address, "127.0.0.1");
-    assert_eq!(listening.configuration.login.port, peer.port);
+    assert_eq!(listening.configuration.login(), initial.configuration.login());
+    assert_eq!(listening.configuration.login().profile_id, fixture.profile);
+    assert_eq!(listening.configuration.login().host_id, profile.host.to_string());
+    assert_eq!(listening.configuration.login().login, "trust-fixture");
+    assert_eq!(listening.configuration.login().host, "SSH fixture");
+    assert_eq!(listening.configuration.login().username, "trust-fixture");
+    assert_eq!(listening.configuration.login().address, "127.0.0.1");
+    assert_eq!(listening.configuration.login().port, peer.port);
     assert_eq!(exchange(fixture.port, b"fixed login").await, b"fixed login");
     assert_eq!(peer.sessions.load(Ordering::SeqCst), 0);
     stop(&manager, &fixture, &initial.run_id).await;
@@ -783,7 +814,7 @@ async fn forward_manager_validates_before_network_and_admits_only_one_run_per_de
         .unwrap();
     assert_eq!(
         manager.start(fixture.store.clone(), &fixture.forward, &fixture.profile, |_| {}).err(),
-        Some(ForwardIssue::NotLocal)
+        Some(ForwardIssue::UnsupportedKind)
     );
     Repository::<Forward>::new(&fixture.store)
         .update(id, ForwardChange { kind: Some(ForwardKind::Local), ..Default::default() })
@@ -814,7 +845,7 @@ async fn forward_manager_limits_live_and_completed_records_without_starting_canc
         let forward = Repository::<Forward>::new(&fixture.store)
             .create(ForwardChange {
                 name: Some(format!("fixture {n}")),
-                kind: Some(ForwardKind::Local),
+                kind: Some(if n % 2 == 0 { ForwardKind::Local } else { ForwardKind::Dynamic }),
                 bind_address: Edit::Set("127.0.0.1".into()),
                 bind_port: Edit::Set(fixture.port),
                 target_host: Edit::Set("target.example".into()),
