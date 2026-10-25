@@ -102,8 +102,12 @@ the component in both desktop and browser consumers.
 
 Windows keystore deletion opens only the slot's exact current-user name in the Platform Crypto
 Provider. Key opening uses `NCRYPT_SILENT_FLAG`; deletion uses the provider's default flags.
-Only `NTE_BAD_KEYSET` from that key-open call confirms absence. Provider-open, other key-open
-and deletion failures are returned without removing the protected blob. The native slot is
+`NTE_BAD_KEYSET` from that key-open call confirms absence. If opening the provider or key
+instead returns `NTE_DEVICE_NOT_READY`, software cleanup additionally requires
+`Tbsi_GetDeviceInfo` to report exactly `TBS_E_TPM_NOT_FOUND` and the protected file to be
+absent or successfully authenticated by DPAPI. A present TPM or any other detection failure
+does not permit cleanup; TPM, unknown, damaged or unreadable files remain untouched. Once a
+native key handle is open, every deletion error is returned without this fallback. The native slot is
 checked even for DPAPI or missing blobs: an earlier TPM wrapping attempt can leave a native key.
 Once native deletion succeeds or absence is confirmed, the adapter removes the blob. A file
 removal failure is returned; deletion can be retried against the now-absent native slot.

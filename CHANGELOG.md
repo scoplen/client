@@ -11,9 +11,11 @@ All notable changes to the Scoplen desktop client are recorded here.
   progress. Desktop-window and platform acceptance remain separate checks.
 
 - Fixed Windows keystore deletion to check the exact current-user native slot before removing
-  its protected file. Only a missing key reported by that slot's open call is treated as absent;
-  provider, key-open and deletion failures are returned with the file retained. Repeated deletion
-  remains safe after confirmed absence.
+  its protected file. An unavailable native probe permits software cleanup only when Windows
+  independently confirms no compatible TPM and the file is valid DPAPI or absent. An opened
+  native key's deletion failure, a present but unavailable TPM, other provider failures and
+  unverified files remain errors with the file retained. Repeated deletion remains safe after
+  confirmed absence.
 
 - Fixed terminal menu paste to honor bracketed-paste mode and normalize line endings.
   Pending clipboard reads cannot enter a replacement connection or offline view. Paste
