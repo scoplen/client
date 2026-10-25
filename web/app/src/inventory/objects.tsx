@@ -992,14 +992,31 @@ function CredentialEditor({
         onChange={(kind) => {
           const nextKind = kind as CredentialKindInput;
           const nextBindings = credentialBindings(nextKind);
+          if (nextKind === "keyboardInteractive") {
+            setSecret("");
+            setDeviceSecret("");
+            setProviderText("");
+          }
           setValue((current) => ({
             ...current,
             kind: nextKind,
             binding: nextBindings.includes(current.binding) ? current.binding : nextBindings[0]!,
+            ...(nextKind === "keyboardInteractive"
+              ? { secret: null, deviceSecret: null, publicKey: null, provider: {}, certificateScope: null }
+              : {}),
           }));
         }}
         options={(
-          ["password", "key", "certificate", "agent", "securityKey", "deviceKey", "external"] as CredentialKindInput[]
+          [
+            "password",
+            "key",
+            "certificate",
+            "agent",
+            "securityKey",
+            "deviceKey",
+            "external",
+            "keyboardInteractive",
+          ] as CredentialKindInput[]
         ).map((kind) => ({ value: kind, label: credentialKindText(t, kind) }))}
       />
       <SelectField
@@ -1011,6 +1028,9 @@ function CredentialEditor({
           label: credentialBindingText(t, binding),
         }))}
       />
+      {value.kind === "keyboardInteractive" ? (
+        <p className="m-0 text-sm text-muted-foreground">{t("add.interactive.hint")}</p>
+      ) : null}
       {secretAllowed ? (
         <TextAreaField
           label={value.binding === "device" ? t("objects.credential.deviceSecret") : t("objects.credential.secret")}
@@ -1250,6 +1270,8 @@ type Translator = ReturnType<typeof useI18n>["t"];
 
 function credentialKindText(t: Translator, kind: CredentialKindInput): string {
   switch (kind) {
+    case "keyboardInteractive":
+      return t("objects.credential.kind.keyboardInteractive");
     case "password":
       return t("objects.credential.kind.password");
     case "key":
@@ -1290,6 +1312,7 @@ function credentialBindings(kind: CredentialKindInput): CredentialBindingInput[]
       return ["device", "none"];
     case "agent":
     case "external":
+    case "keyboardInteractive":
       return ["none"];
   }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { Button, Dialog, Field, HostEgg, IconButton, Tag, TextAreaField } from "@scoplen/ui";
 import { Pencil, Plus, X } from "lucide-react";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import {
   useInventory,
@@ -11,6 +11,7 @@ import {
   type GroupInput,
   type GroupSummary,
   type HostDetails,
+  type HostLoginCredential,
   type Id,
   type LoginSummary,
 } from "./api";
@@ -35,6 +36,12 @@ export function HostDetailsPanel({
   const api = useInventory();
   const details = useLoad(() => api.host(id), id);
   const [editing, setEditing] = useState(false);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+  useEffect(() => {
+    if (wasEditing.current && !editing) editButton.current?.focus();
+    wasEditing.current = editing;
+  }, [editing]);
 
   return (
     <aside
@@ -89,7 +96,7 @@ export function HostDetailsPanel({
 
       {details.state === "ready" && details.data ? (
         <div className="flex items-center gap-1 border-t-(length:--scoplen-border-width) border-border px-4 py-3">
-          <Button variant="ghost" className="gap-1.5" onClick={() => setEditing(true)}>
+          <Button ref={editButton} variant="ghost" className="gap-1.5" onClick={() => setEditing(true)}>
             <Pencil aria-hidden="true" className="size-4" />
             {t("host.edit")}
           </Button>
@@ -134,6 +141,13 @@ function EditHostDialog({
   const [notes, setNotes] = useState(host.notes ?? "");
   const [tags, setTags] = useState(formatTags(host.tags));
   const [selectedGroups, setSelectedGroups] = useState<string[]>(host.groups);
+  const credentials = useLoad(async () => {
+    const result = await api.credentials();
+    if (result.status === "ok") return result;
+    const reference = result.error.kind === "failed" ? result.error.reference : result.error.kind;
+    return { status: "error", error: { kind: "failed", reference } };
+  }, "host-edit-credentials");
+  const [loginCredentials, setLoginCredentials] = useState<Record<Id, HostLoginCredential>>({});
   const [availableGroups, setAvailableGroups] = useState(groups);
   const [groupDialog, setGroupDialog] = useState<{ id?: string } | null>(null);
   const [problem, setProblem] = useState<EditProblem | null>(null);
@@ -160,6 +174,7 @@ function EditHostDialog({
       notes: notes.trim() || null,
       tags: parsed.tags,
       groups: selectedGroups,
+      loginCredentials,
     });
     setBusy(false);
     if (outcome.status === "ok") {
@@ -223,6 +238,66 @@ function EditHostDialog({
             inputMode="numeric"
             className="[&_input]:font-mono"
           />
+          {host.logins.length > 0 && credentials.state !== "ready" ? (
+            <p role={credentials.state === "failed" ? "alert" : "status"} className="m-0 text-sm text-muted-foreground">
+              {t(credentials.state === "failed" ? "host.edit.credentialFailed" : "host.edit.credentialLoading")}
+            </p>
+          ) : null}
+          {host.logins.map((login) => {
+            const choice = loginCredentials[login.id];
+            const selected = choice
+              ? choice.kind === "keyboardInteractive"
+                ? "interactive"
+                : (choice.credential ?? "")
+              : login.credential?.kind === "keyboardInteractive"
+                ? "interactive"
+                : (login.credential?.id ?? "");
+            const saved =
+              credentials.state === "ready"
+                ? credentials.data.filter((credential) => credential.kind !== "keyboardInteractive")
+                : [];
+            return (
+              <div key={login.id} className="flex min-w-0 flex-col gap-1.5 text-sm">
+                <label htmlFor={`host-login-${login.id}`} className="font-medium wrap-anywhere">
+                  {t("host.edit.loginCredential", { name: login.name ?? login.username })}
+                </label>
+                <select
+                  id={`host-login-${login.id}`}
+                  aria-describedby={selected === "interactive" ? `host-login-hint-${login.id}` : undefined}
+                  value={selected}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setLoginCredentials((current) => ({
+                      ...current,
+                      [login.id]:
+                        value === "interactive"
+                          ? { kind: "keyboardInteractive" }
+                          : { kind: "saved", credential: value || null },
+                    }));
+                  }}
+                  className="ui-input h-10 min-w-0 max-w-full px-3 text-sm font-normal"
+                >
+                  <option value="">{t("objects.profile.anyCredential")}</option>
+                  <option value="interactive">{t("objects.credential.kind.keyboardInteractive")}</option>
+                  {login.credential &&
+                  login.credential.kind !== "keyboardInteractive" &&
+                  !saved.some((credential) => credential.id === login.credential!.id) ? (
+                    <option value={login.credential.id}>{credentialText(t, login.credential)}</option>
+                  ) : null}
+                  {saved.map((credential) => (
+                    <option key={credential.id} value={credential.id}>
+                      {credentialText(t, { ...credential, fingerprint: null, comment: null })}
+                    </option>
+                  ))}
+                </select>
+                {selected === "interactive" ? (
+                  <span id={`host-login-hint-${login.id}`} className="text-muted-foreground">
+                    {t("add.interactive.hint")}
+                  </span>
+                ) : null}
+              </div>
+            );
+          })}
           <TextAreaField
             label={t("host.edit.notes")}
             value={notes}
@@ -306,6 +381,9 @@ function errorForEdit(t: ReturnType<typeof useI18n>["t"], error: EditHostError):
       return { field: "tags", message: t("host.edit.error.invalidTag") };
     case "groupNotFound":
       return { field: "groups", message: t("host.edit.error.groupNotFound") };
+    case "invalidLogin":
+    case "invalidCredential":
+      return { field: "form", message: t("host.edit.error.invalidLoginCredential") };
     case "failed":
       return {
         field: "form",

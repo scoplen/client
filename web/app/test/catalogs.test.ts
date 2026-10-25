@@ -2,6 +2,19 @@
 import { createTranslator } from "@scoplen/ui";
 import { catalogs } from "../src/i18n";
 import { en } from "../src/messages/en";
+import type { SessionState } from "../src/session";
+
+const sessionStates = {
+  verifying: true,
+  trusting: true,
+  passphrase: true,
+  keyboardInteractive: true,
+  connecting: true,
+  reconnecting: true,
+  connected: true,
+  closed: true,
+  failed: true,
+} satisfies Record<SessionState, true>;
 
 /** Sample values for every placeholder used in the catalogs. */
 const sample = {
@@ -43,6 +56,10 @@ describe("message catalogs", () => {
   it.each(Object.entries(catalogs))("%s formats every message", (locale, catalog) => {
     const { t } = createTranslator(locale, catalog);
     for (const key of source) expect(t(key as keyof typeof en, sample).length, key).toBeGreaterThan(0);
+  });
+
+  it.each(Object.entries(catalogs))("%s names every terminal tab state", (_, catalog) => {
+    for (const state of Object.keys(sessionStates)) expect(Object.hasOwn(catalog, `frame.state.${state}`)).toBe(true);
   });
 
   it("writes Chinese without English quotation marks", () => {

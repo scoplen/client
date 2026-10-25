@@ -567,6 +567,7 @@ impl SessionManager {
     pub fn respond(
         &self,
         session_id: &str,
+        transport_id: &str,
         prompt_id: &str,
         response: PreparationResponse,
     ) -> Result<(), String> {
@@ -574,6 +575,7 @@ impl SessionManager {
         let control = &sessions
             .get(session_id)
             .and_then(|entry| entry.active.as_ref())
+            .filter(|active| active.id.to_string() == transport_id)
             .ok_or("this connection prompt has expired")?
             .control;
         control.respond(prompt_id, response)
@@ -1400,7 +1402,7 @@ impl SessionManager {
         command: Option<&str>,
         pty: bool,
         store: Arc<Store>,
-        emit: impl Fn(SessionEvent) -> Result<(), String>,
+        emit: impl Fn(SessionEvent) -> Result<(), String> + Sync,
         output: impl Fn(Uuid, Vec<u8>) -> Result<(), String>,
         history_changed: impl Fn(&str, HistoryChange) + Clone + Send + Sync + 'static,
     ) -> Result<(), String> {
@@ -1528,7 +1530,7 @@ impl SessionManager {
         session_id: &str,
         mut next: Intent,
         intents: &mut watch::Receiver<Intent>,
-        emit: &impl Fn(SessionEvent) -> Result<(), String>,
+        emit: &(impl Fn(SessionEvent) -> Result<(), String> + Sync),
     ) -> Result<Intent, String> {
         while matches!(next, Intent::Stop | Intent::Fail) {
             self.phase(session_id, Phase::Ended)?;
@@ -1571,7 +1573,7 @@ impl SessionManager {
         commands: &mut mpsc::Receiver<TransportCommand>,
         files: &mut mpsc::Receiver<FileCommand>,
         ready_for: &mut Option<Duration>,
-        emit: &impl Fn(SessionEvent) -> Result<(), String>,
+        emit: &(impl Fn(SessionEvent) -> Result<(), String> + Sync),
         output: &impl Fn(Uuid, Vec<u8>) -> Result<(), String>,
         history_changed: impl Fn(&str, HistoryChange) + Clone + Send + Sync + 'static,
     ) -> Result<(), AttemptError> {

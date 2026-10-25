@@ -18,6 +18,31 @@ function show(api: InventoryApi, section: ObjectSection = "logins") {
 }
 
 describe("independent inventory objects", () => {
+  it("clears hidden credential fields when changing to secretless Interactive", async () => {
+    const api = sampleInventory(sampleHosts());
+    const create = vi.spyOn(api, "createCredential");
+    show(api, "keys");
+    await screen.findByText("laptop");
+    await userEvent.click(screen.getByRole("button", { name: "Add key" }));
+    const dialog = await screen.findByRole("dialog", { name: "New key" });
+    await userEvent.type(within(dialog).getByLabelText("Secret material"), "discard-secret");
+    await userEvent.type(within(dialog).getByLabelText("Public key"), "discard-public-key");
+    await userEvent.selectOptions(within(dialog).getByLabelText("Kind"), "keyboardInteractive");
+    expect(within(dialog).queryByLabelText("Secret material")).toBeNull();
+    expect(within(dialog).queryByLabelText("Public key")).toBeNull();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "keyboardInteractive",
+        binding: "none",
+        secret: null,
+        deviceSecret: null,
+        publicKey: null,
+        provider: {},
+        certificateScope: null,
+      }),
+    );
+  });
   it("lists access profiles and keeps the screen accessible", async () => {
     const { container } = show(sampleInventory(sampleHosts()));
     expect((await screen.findAllByText("deploy@prod-api-01")).length).toBeGreaterThan(0);

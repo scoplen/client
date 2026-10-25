@@ -579,9 +579,18 @@ export function sampleInventory(
       const credential: CredentialLabel =
         input.signIn.kind === "password"
           ? { id: `c-${Date.now()}`, kind: "password", name: null, fingerprint: null, comment: null, publicKey: null }
-          : input.signIn.kind === "agent"
-            ? agent
-            : { ...deployKey, id: `c-${Date.now()}`, name: null, comment: `${input.username}@scoplen` };
+          : input.signIn.kind === "keyboardInteractive"
+            ? {
+                id: `c-${Date.now()}`,
+                kind: "keyboardInteractive",
+                name: null,
+                fingerprint: null,
+                comment: null,
+                publicKey: null,
+              }
+            : input.signIn.kind === "agent"
+              ? agent
+              : { ...deployKey, id: `c-${Date.now()}`, name: null, comment: `${input.username}@scoplen` };
       const created = host({
         id: `h-${Date.now()}`,
         name: input.name ?? input.address,
@@ -622,12 +631,56 @@ export function sampleInventory(
       if (requestedGroups.some((groupId) => !availableGroups.some((group) => group.id === groupId))) {
         return wait({ status: "error" as const, error: { kind: "groupNotFound" as const } });
       }
+      for (const [loginId, choice] of Object.entries(input.loginCredentials)) {
+        if (!current.logins.some((login) => login.id === loginId)) {
+          return wait({ status: "error" as const, error: { kind: "invalidLogin" as const } });
+        }
+        if (
+          choice.kind === "saved" &&
+          choice.credential &&
+          !objectCredentials.some((credential) => credential.id === choice.credential)
+        ) {
+          return wait({ status: "error" as const, error: { kind: "invalidCredential" as const } });
+        }
+      }
+      const logins = current.logins.map((login) => {
+        const choice = input.loginCredentials[login.id];
+        if (!choice) return login;
+        let credential =
+          choice.kind === "saved"
+            ? credentialLabelForSummary(objectCredentials.find((item) => item.id === choice.credential))
+            : login.credential?.kind === "keyboardInteractive"
+              ? login.credential
+              : null;
+        if (choice.kind === "keyboardInteractive" && !credential) {
+          const descriptor: CredentialSummary = {
+            id: `c-interactive-${login.id}-${Date.now()}`,
+            name: null,
+            kind: "keyboardInteractive",
+            binding: "none",
+            hasSecret: false,
+            publicKey: null,
+            provider: {},
+            certificateScope: null,
+            profileCount: 0,
+            routeCount: 0,
+            restored: false,
+          };
+          objectCredentials = [...objectCredentials, descriptor];
+          credential = credentialLabelForSummary(descriptor);
+        }
+        profiles = profiles.map((profile) =>
+          profile.id === login.id ? { ...profile, credential, credentialId: credential?.id ?? null } : profile,
+        );
+        return { ...login, credential };
+      });
       const updated = {
         ...current,
         ...input,
         notes: input.notes?.trim() || null,
         groups: requestedGroups,
         tags: { ...input.tags },
+        logins,
       };
       hosts = hosts.map((host) => (host.id === id ? updated : host));
       changed();

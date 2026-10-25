@@ -357,6 +357,21 @@ describe("deleting a host", () => {
 });
 
 describe("adding a host", () => {
+  it("saves an explicit Interactive login without requiring a password or key", async () => {
+    const api = sampleInventory(sampleHosts());
+    const add = vi.spyOn(api, "addHost");
+    show(api);
+    await screen.findByText("7 hosts");
+    await userEvent.click(screen.getByRole("button", { name: "Add host" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add host" });
+    await userEvent.type(within(dialog).getByLabelText("Address"), "interactive.example");
+    await userEvent.type(within(dialog).getByLabelText("Username"), "ops");
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Interactive" }));
+    expect(within(dialog).queryByLabelText("Password", { selector: "input[type=password]" })).toBeNull();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add host" }));
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({ signIn: { kind: "keyboardInteractive" } }));
+    expect(await screen.findByText(/Interactive \(OTP\/PAM\)/)).toBeTruthy();
+  });
   async function open() {
     show(sampleInventory(sampleHosts()));
     await screen.findByText("7 hosts");
@@ -426,6 +441,33 @@ describe("editing a host", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Edit host" }));
     return screen.findByRole("dialog", { name: "Edit host" });
   }
+
+  it("saves an explicit Interactive choice and can select a saved credential again", async () => {
+    const dialog = await open();
+    const select = within(dialog).getByLabelText("Sign in as admin");
+    await userEvent.selectOptions(select, "interactive");
+    expect(within(dialog).queryByLabelText("Password")).toBeNull();
+    expect(await violations(dialog)).toEqual([]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit host" })).toBeNull());
+    expect(await screen.findByText(/Interactive.*Direct/)).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Edit host" }));
+    const reopened = await screen.findByRole("dialog", { name: "Edit host" });
+    expect((within(reopened).getByLabelText("Sign in as admin") as HTMLSelectElement).value).toBe("interactive");
+    await within(reopened).findByRole("option", { name: "Password" });
+    await userEvent.selectOptions(within(reopened).getByLabelText("Sign in as admin"), "c-nas");
+    await userEvent.click(within(reopened).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit host" })).toBeNull());
+    expect(await screen.findByText(/Password.*Direct/)).toBeTruthy();
+  });
+
+  it("restores focus to Edit host after cancelling credential changes", async () => {
+    const dialog = await open();
+    await userEvent.selectOptions(within(dialog).getByLabelText("Sign in as admin"), "interactive");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit host" })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit host" }));
+  });
 
   it("updates metadata, tags, and group membership", async () => {
     const dialog = await open();

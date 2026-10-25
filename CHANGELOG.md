@@ -10,6 +10,13 @@ All notable changes to the Scoplen desktop client are recorded here.
   Broadcast target or mode changes invalidate pending paste reads and secondary copies,
   preventing old input and errors from reaching newly selected targets.
 
+- Added saved Interactive (OTP/PAM) Logins for targets and Direct Jump hops without
+  stored answers. Accepted password/key/agent factors may continue into Interactive;
+  ordinary rejection never falls back. Per-hop authentication and per-request reply
+  deadlines, ordered echo-aware inputs, and attempt-bound one-use replies fence stale
+  answers across cancellation and reconnect. Credential kind 8 is a breaking pre-Stable
+  registry extension and requires updated clients.
+
 - Added upload pause and explicit continuation on the same live SSH transport. Private staging
   keeps exclusive write creation and admits a separate read handle before enabling Pause;
   an associated read refusal preserves ordinary upload. Pausing settles a bounded segment

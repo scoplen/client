@@ -57,10 +57,11 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         store,
         |event| {
             match event {
-                SessionEvent::Preparation { event, .. } => {
+                SessionEvent::Preparation { transport_id, event } => {
                     if let PreparationEvent::Trust { prompt_id, .. } = *event {
                         manager.respond(
                             "fixture-terminal",
+                            &transport_id,
                             &prompt_id,
                             PreparationResponse::AcceptHostKey,
                         )?;

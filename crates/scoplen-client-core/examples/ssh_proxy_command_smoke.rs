@@ -182,7 +182,8 @@ async fn run_case(
                     progress.fetch_add(1, Ordering::SeqCst);
                 }
                 PreparationEvent::Verified { .. } => {}
-                PreparationEvent::Passphrase { .. } => {
+                PreparationEvent::Passphrase { .. }
+                | PreparationEvent::KeyboardInteractive { .. } => {
                     return Err("unexpected key passphrase".into());
                 }
             }

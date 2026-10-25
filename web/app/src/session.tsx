@@ -23,6 +23,7 @@ import {
   type PreparationContext,
   type HostKeyTrustSource,
   type SessionTransferIssue,
+  type SessionPreparationIntent,
 } from "./ipc/bindings";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
 import { SessionFiles, type EnqueueFeedback, type FileOperationOutcome } from "./session-files";
@@ -30,13 +31,22 @@ import { dismissUploadAttention, initialUploadAttention, recordUploadAttention }
 import { useSessionTransfers } from "./use-session-transfers";
 
 export type SessionState =
-  "verifying" | "trusting" | "passphrase" | "connecting" | "reconnecting" | "connected" | "closed" | "failed";
+  | "verifying"
+  | "trusting"
+  | "passphrase"
+  | "keyboardInteractive"
+  | "connecting"
+  | "reconnecting"
+  | "connected"
+  | "closed"
+  | "failed";
 
 /** The face the host's egg makes in each state. */
 const sessionFaces: Record<SessionState, { mood: MarkMood; active: boolean; attention: boolean }> = {
   verifying: { mood: "awake", active: true, attention: false },
   trusting: { mood: "awake", active: true, attention: true },
   passphrase: { mood: "awake", active: true, attention: true },
+  keyboardInteractive: { mood: "awake", active: true, attention: true },
   connecting: { mood: "awake", active: true, attention: false },
   reconnecting: { mood: "awake", active: true, attention: false },
   connected: { mood: "rest", active: true, attention: false },
@@ -94,6 +104,8 @@ export function SessionTerminal({
   const filesToggle = useRef<HTMLButtonElement>(null);
   const [context, setContext] = useState<PreparationContext | null>(null);
   const [passphrasePrompt, setPassphrasePrompt] = useState<string | null>(null);
+  const [challenge, setChallenge] = useState<Extract<PreparationEvent, { kind: "keyboardInteractive" }> | null>(null);
+  const [challengeError, setChallengeError] = useState<string | null>(null);
   const currentPrompt = useRef<string | null>(null);
   const [trustError, setTrustError] = useState<string | null>(null);
   const [trustBusy, setTrustBusy] = useState(false);
@@ -163,6 +175,8 @@ export function SessionTerminal({
           setTrustError(null);
           setHostPrompt(null);
           setPassphrasePrompt(null);
+          setChallenge(null);
+          setChallengeError(null);
           currentPrompt.current = null;
           if (passphraseInput.current) passphraseInput.current.value = "";
           setPassphraseError(null);
@@ -222,6 +236,7 @@ export function SessionTerminal({
               }
               setHostPrompt(preparation.kind === "trust" ? preparation : null);
               setPassphrasePrompt(preparation.kind === "passphrase" ? preparation.promptId : null);
+              setChallenge(preparation.kind === "keyboardInteractive" ? preparation : null);
               currentPrompt.current = preparation.kind === "progress" ? null : preparation.promptId;
               setPassphraseError(
                 preparation.kind === "passphrase" && preparation.incorrect
@@ -231,9 +246,11 @@ export function SessionTerminal({
               setState(
                 preparation.kind === "trust"
                   ? "trusting"
-                  : preparation.kind === "passphrase"
-                    ? "passphrase"
-                    : "connecting",
+                  : preparation.kind === "keyboardInteractive"
+                    ? "keyboardInteractive"
+                    : preparation.kind === "passphrase"
+                      ? "passphrase"
+                      : "connecting",
               );
               break;
             }
@@ -514,6 +531,8 @@ export function SessionTerminal({
     setTrustBusy(false);
     setHostPrompt(null);
     setPassphrasePrompt(null);
+    setChallenge(null);
+    setChallengeError(null);
     if (passphraseInput.current) passphraseInput.current.value = "";
     setTransportPending(true);
     setAutomatic(false);
@@ -534,20 +553,20 @@ export function SessionTerminal({
   };
   const cancelTrust = () => interruptTransport(false, t("session.trust.cancelled"));
 
-  const respond = async (
-    promptId: string,
-    intent: { kind: "acceptHostKey" } | { kind: "passphrase"; value: string },
-  ) => {
+  const respond = async (promptId: string, intent: SessionPreparationIntent) => {
     if (trusting.current || !mounted.current || currentPrompt.current !== promptId) return;
+    const transport = currentTransport.current;
+    if (!transport) return;
     const current = generation.current;
     trusting.current = true;
     setTrustBusy(true);
     setTrustError(null);
     try {
-      const result = await commands.sessionRespond(sessionId, promptId, intent);
+      const result = await commands.sessionRespond(sessionId, transport, promptId, intent);
       if (!mounted.current || current !== generation.current || currentPrompt.current !== promptId) return;
       if (result.status === "error") {
-        if (intent.kind === "passphrase") setPassphraseError(result.error);
+        if (intent.kind === "keyboardInteractive") setChallengeError(result.error);
+        else if (intent.kind === "passphrase") setPassphraseError(result.error);
         else setTrustError(result.error);
         return;
       }
@@ -556,11 +575,14 @@ export function SessionTerminal({
       currentPrompt.current = null;
       setHostPrompt(null);
       setPassphrasePrompt(null);
+      setChallenge(null);
+      setChallengeError(null);
       setState("connecting");
     } catch (cause) {
       if (!mounted.current || current !== generation.current || currentPrompt.current !== promptId) return;
       const message = cause instanceof Error ? cause.message : String(cause);
-      if (intent.kind === "passphrase") setPassphraseError(message);
+      if (intent.kind === "keyboardInteractive") setChallengeError(message);
+      else if (intent.kind === "passphrase") setPassphraseError(message);
       else setTrustError(message);
     } finally {
       if (mounted.current && current === generation.current && currentPrompt.current === promptId) {
@@ -597,6 +619,8 @@ export function SessionTerminal({
     setError(null);
     currentPrompt.current = null;
     setPassphrasePrompt(null);
+    setChallenge(null);
+    setChallengeError(null);
     setContext(null);
     setState("verifying");
     void commands
@@ -642,19 +666,21 @@ export function SessionTerminal({
                 ? "session.trust.reviewTitle"
                 : "session.firstConnection",
           )
-        : state === "passphrase"
-          ? t("session.passphrase.status")
-          : state === "reconnecting"
-            ? retry
-              ? t("session.reconnecting.wait", { attempt: retry.attempt, seconds: retry.delaySeconds })
-              : t("session.reconnecting")
-            : state === "connecting"
-              ? t("session.connecting")
-              : state === "connected"
-                ? t("session.connected")
-                : state === "closed"
-                  ? t("session.closed")
-                  : t("session.failed");
+        : state === "keyboardInteractive"
+          ? t("session.interactive.status")
+          : state === "passphrase"
+            ? t("session.passphrase.status")
+            : state === "reconnecting"
+              ? retry
+                ? t("session.reconnecting.wait", { attempt: retry.attempt, seconds: retry.delaySeconds })
+                : t("session.reconnecting")
+              : state === "connecting"
+                ? t("session.connecting")
+                : state === "connected"
+                  ? t("session.connected")
+                  : state === "closed"
+                    ? t("session.closed")
+                    : t("session.failed");
 
   const face = sessionFaces[state];
   const unknownTransfer = transfers.snapshot?.items.some((item) => item.state === "unknown") ?? false;
@@ -970,6 +996,17 @@ export function SessionTerminal({
           ))}
         </div>
       </Dialog>
+      {challenge ? (
+        <InteractiveDialog
+          key={challenge.promptId}
+          active={active}
+          challenge={challenge}
+          busy={trustBusy}
+          error={challengeError}
+          onCancel={() => interruptTransport(false, t("session.interactive.cancelled"))}
+          onAnswer={(answers) => void respond(challenge.promptId, { kind: "keyboardInteractive", answers })}
+        />
+      ) : null}
       <Dialog
         open={active && passphrasePrompt !== null}
         onOpenChange={(open) => {
@@ -1007,6 +1044,112 @@ export function SessionTerminal({
         </form>
       </Dialog>
     </main>
+  );
+}
+
+function InteractiveDialog({
+  active,
+  challenge,
+  busy,
+  error,
+  onAnswer,
+  onCancel,
+}: {
+  active: boolean;
+  challenge: Extract<PreparationEvent, { kind: "keyboardInteractive" }>;
+  busy: boolean;
+  error: string | null;
+  onAnswer: (answers: string[]) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useI18n();
+  const form = useId();
+  const inputs = useRef<Array<HTMLInputElement | null>>([]);
+  const inputRefs = useMemo(
+    () =>
+      challenge.prompts.map((_, index) => (input: HTMLInputElement | null) => {
+        if (!input && inputs.current[index]) inputs.current[index]!.value = "";
+        inputs.current[index] = input;
+      }),
+    [challenge.prompts],
+  );
+  const cancel = () => {
+    inputs.current.forEach((field) => {
+      if (field) field.value = "";
+    });
+    onCancel();
+  };
+  useEffect(() => {
+    const fields = inputs.current;
+    if (!active)
+      fields.forEach((field) => {
+        if (field) field.value = "";
+      });
+    return () =>
+      fields.forEach((field) => {
+        if (field) field.value = "";
+      });
+  }, [active]);
+  return (
+    <Dialog
+      open={active}
+      onOpenChange={(open) => {
+        if (!open && active) cancel();
+      }}
+      title={t("session.interactive.title")}
+      description={t("session.interactive.body")}
+      closeLabel={t("session.interactive.cancel")}
+      footer={
+        <>
+          <Button variant="ghost" onClick={cancel}>
+            {t("session.interactive.cancel")}
+          </Button>
+          <Button variant="primary" type="submit" form={form} busy={busy}>
+            {t("session.interactive.continue")}
+          </Button>
+        </>
+      }
+    >
+      <HopIdentity context={challenge.context} />
+      <div className="mb-4 min-w-0 space-y-2 whitespace-pre-wrap text-sm wrap-anywhere">
+        {challenge.name ? <p className="m-0">{challenge.name}</p> : null}
+        {challenge.instruction ? <p className="m-0">{challenge.instruction}</p> : null}
+      </div>
+      <form
+        id={form}
+        className="flex min-w-0 flex-col gap-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (busy || !active) return;
+          const answers = challenge.prompts.map((_, index) => inputs.current[index]?.value ?? "");
+          inputs.current.forEach((field) => {
+            if (field) field.value = "";
+          });
+          onAnswer(answers);
+        }}
+      >
+        {challenge.prompts.map((prompt, index) => (
+          <Field
+            key={index}
+            ref={inputRefs[index]}
+            label={prompt.text || t("session.interactive.response", { count: index + 1 })}
+            type={prompt.echo ? "text" : "password"}
+            autoComplete="off"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            autoFocus={index === 0}
+            maxLength={65536}
+            className="min-w-0 [&_label]:whitespace-pre-wrap [&_label]:wrap-anywhere"
+          />
+        ))}
+        {error ? (
+          <p role="alert" className="m-0 text-sm text-attention">
+            {error}
+          </p>
+        ) : null}
+      </form>
+    </Dialog>
   );
 }
 
@@ -1088,7 +1231,8 @@ function Stage({
     state === "connecting" ||
     state === "reconnecting" ||
     state === "trusting" ||
-    state === "passphrase";
+    state === "passphrase" ||
+    state === "keyboardInteractive";
   return (
     <div className="absolute inset-0 grid place-items-center bg-[color-mix(in_srgb,var(--background)_78%,transparent)] px-6 backdrop-blur-[3px]">
       <div className="scoplen-rise flex w-full min-w-0 max-w-md flex-col items-center text-center">

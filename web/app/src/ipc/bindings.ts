@@ -13,7 +13,7 @@ export const commands = {
 	/**  Called by the frontend once its first screen has rendered. */
 	shellReady: () => __TAURI_INVOKE<void>("shell_ready"),
 	/**  Reply to the current session-owned, one-use preparation prompt. */
-	sessionRespond: (sessionId: string, promptId: string, intent: SessionPreparationIntent) => typedError<null, string>(__TAURI_INVOKE("session_respond", { sessionId, promptId, intent })),
+	sessionRespond: (sessionId: string, transportId: string, promptId: string, intent: SessionPreparationIntent) => typedError<null, string>(__TAURI_INVOKE("session_respond", { sessionId, transportId, promptId, intent })),
 	/**  Reserve a logical session before starting its cancellable manager task. */
 	sessionReserveTransport: (sessionId: string, pty: boolean) => typedError<null, string>(__TAURI_INVOKE("session_reserve_transport", { sessionId, pty })),
 	/**  Own one logical terminal until tab closure. Ended terminals await manual retry. */
@@ -365,6 +365,14 @@ export type Areas = {
 	routes: boolean,
 };
 
+/**  One literal server prompt; its text never supplies trusted connection identity. */
+export type AuthenticationPrompt = {
+	/**  Untrusted server text, displayed literally. */
+	text: string,
+	/**  Whether entered characters may be shown. */
+	echo: boolean,
+};
+
 /**  Where a credential resolves its authentication material. */
 export type CredentialBindingInput =
 /**  Material is encrypted in the replicated object. */
@@ -415,6 +423,8 @@ export type CredentialInput = {
  *  calls it `key`).
  */
 export type CredentialKindInput =
+/**  Server challenges without stored authentication material. */
+"keyboardInteractive" |
 /**  A password stored in the encrypted shared object. */
 "password" |
 /**  An OpenSSH private key. */
@@ -448,6 +458,8 @@ export type CredentialLabel = {
 
 /**  Credential kinds understood by the inventory interface. */
 export type CredentialLabelKind =
+/**  Server challenges, answered only for this connection. */
+"keyboardInteractive" |
 /**  A password. */
 "password" |
 /**  A private key. */
@@ -500,7 +512,7 @@ export type Deletion = {
 	token: string,
 };
 
-/**  The editable host metadata owned by the local inventory. */
+/**  The editable host metadata and explicit Login choices owned by the inventory. */
 export type EditHost = {
 	/**  Display name; it must not be empty. */
 	name: string,
@@ -514,6 +526,8 @@ export type EditHost = {
 	tags: { [key in string]: string },
 	/**  Complete replacement for host-group membership. */
 	groups: string[],
+	/**  Changed Login choices only; omitted Logins keep their saved credentials. */
+	loginCredentials: { [key in string]: HostLoginCredential },
 };
 
 /**  Why editing host metadata failed. The host is unchanged for every variant. */
@@ -530,6 +544,10 @@ export type EditHostError =
 { kind: "invalidTag" } |
 /**  A requested group does not exist. */
 { kind: "groupNotFound" } |
+/**  A changed Login no longer belongs to this Host. */
+{ kind: "invalidLogin" } |
+/**  An explicitly selected credential no longer exists. */
+{ kind: "invalidCredential" } |
 /**  The local store or model failed without changing the host. */
 { kind: "failed";
 /**  A diagnostic reference safe to show for retryable failures. */
@@ -641,6 +659,15 @@ export type HostKeyTrustSource = {
 	/**  The confirmation belongs to this installation. */
 	current: boolean,
 };
+
+/**  An explicit replacement for one Login's saved credential choice. */
+export type HostLoginCredential =
+/**  Select an existing credential, or any usable local credential when absent. */
+{ kind: "saved";
+/**  Saved credential identifier, or `None` for any usable local credential. */
+credential: string | null } |
+/**  Create and explicitly reference a secretless interactive descriptor. */
+{ kind: "keyboardInteractive" };
 
 /**  Which hosts to list. */
 export type HostSource =
@@ -1297,6 +1324,18 @@ export type PreparationContext = {
 
 /**  Typed progress and current user intent requested by Rust. */
 export type PreparationEvent =
+/**  One complete ordered challenge round on the retained connection. */
+{ kind: "keyboardInteractive";
+/**  Trusted identity of this hop. */
+context: PreparationContext;
+/**  Fresh one-use response token. */
+promptId: string;
+/**  Untrusted display name supplied by the server. */
+name: string;
+/**  Untrusted instructions supplied by the server. */
+instruction: string;
+/**  Ordered prompts, possibly empty. */
+prompts: AuthenticationPrompt[] } |
 /**  Trust resolved on the retained connection, before credentials are used. */
 { kind: "verified";
 /**  Current hop. */
@@ -1698,6 +1737,10 @@ export type SessionFileMutationStatus =
 
 /**  A one-time response to the current attempt's preparation prompt. */
 export type SessionPreparationIntent =
+/**  Ordered one-time answers to the exact current server challenge. */
+{ kind: "keyboardInteractive";
+/**  Answers are consumed and never returned to the renderer. */
+answers: string[] } |
 /**  Accept only the exact host key retained by Rust. */
 { kind: "acceptHostKey" } |
 /**  Supply a write-only key passphrase, never returned to the renderer. */
@@ -1851,6 +1894,8 @@ export type SessionTransferState =
 
 /**  How a new host authenticates. */
 export type SignIn =
+/**  Answer server challenges at connection time without a saved secret. */
+{ kind: "keyboardInteractive" } |
 /**  Store a password in the encrypted personal object. */
 { kind: "password";
 /**  The password to store in the encrypted local object. */

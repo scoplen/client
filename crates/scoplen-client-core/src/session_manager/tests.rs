@@ -1067,6 +1067,134 @@ fn checkpoint_ownership_rejects_cross_store_attempt_sequence_and_forgotten_histo
 }
 
 #[tokio::test]
+async fn interactive_answers_reject_wrong_and_previous_transports_without_consuming_the_current_prompt()
+ {
+    use crate::connection::preparation::{PreparationEvent, PreparationResponse};
+    use crate::connection::test_peer::{Authentication, Peer};
+    let peer = Peer::with_authentication(Authentication::Interactive).await;
+    let (_dir, store) = store();
+    let inventory = Inventory::new(store.clone());
+    let host = inventory
+        .add_host(NewHost {
+            name: Some("interactive peer".into()),
+            address: "127.0.0.1".into(),
+            port: Some(peer.port),
+            username: "trust-fixture".into(),
+            sign_in: SignIn::KeyboardInteractive,
+        })
+        .unwrap();
+    let manager = SessionManager::default();
+    manager.reserve("terminal", true).unwrap();
+    let transports = Mutex::new(Vec::new());
+    let old_prompt = Mutex::new(None);
+    let rounds = AtomicUsize::new(0);
+    let ready = AtomicUsize::new(0);
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        manager.run(
+            "terminal",
+            &host.logins[0].id,
+            None,
+            true,
+            store,
+            |event| {
+                match event {
+                    SessionEvent::Starting { transport_id, .. } => {
+                        transports.lock().unwrap().push(transport_id)
+                    }
+                    SessionEvent::Preparation { transport_id, event } => match *event {
+                        PreparationEvent::Trust { prompt_id, .. } => {
+                            manager.respond(
+                                "terminal",
+                                &transport_id,
+                                &prompt_id,
+                                PreparationResponse::AcceptHostKey,
+                            )?;
+                        }
+                        PreparationEvent::KeyboardInteractive { prompt_id, .. } => {
+                            let response = || {
+                                PreparationResponse::keyboard_interactive(vec![
+                                    b"visible".to_vec(),
+                                    vec![],
+                                ])
+                                .unwrap()
+                            };
+                            assert!(
+                                manager
+                                    .respond(
+                                        "terminal",
+                                        &Uuid::now_v7().to_string(),
+                                        &prompt_id,
+                                        response()
+                                    )
+                                    .is_err()
+                            );
+                            assert!(
+                                manager
+                                    .respond("unknown", &transport_id, &prompt_id, response())
+                                    .is_err()
+                            );
+                            let first = transports.lock().unwrap()[0].clone();
+                            if first == transport_id {
+                                *old_prompt.lock().unwrap() = Some(prompt_id);
+                                manager.stop("terminal")?;
+                            } else {
+                                let old = old_prompt.lock().unwrap().clone().unwrap();
+                                assert!(
+                                    manager.respond("terminal", &first, &old, response()).is_err()
+                                );
+                                assert!(
+                                    manager
+                                        .respond("terminal", &first, &prompt_id, response())
+                                        .is_err()
+                                );
+                                assert!(
+                                    manager
+                                        .respond("terminal", &transport_id, &old, response())
+                                        .is_err()
+                                );
+                                let answer = match rounds.fetch_add(1, Ordering::SeqCst) {
+                                    0 => vec![b"visible".to_vec(), vec![]],
+                                    1 => vec![],
+                                    2 => vec![b"123456".to_vec()],
+                                    _ => panic!("unexpected authentication round"),
+                                };
+                                manager.respond(
+                                    "terminal",
+                                    &transport_id,
+                                    &prompt_id,
+                                    PreparationResponse::keyboard_interactive(answer).unwrap(),
+                                )?;
+                            }
+                        }
+                        _ => {}
+                    },
+                    SessionEvent::Closed => manager.retry("terminal")?,
+                    SessionEvent::Ready { .. } => {
+                        ready.fetch_add(1, Ordering::SeqCst);
+                        manager.close("terminal")?;
+                    }
+                    SessionEvent::Failed { error, .. } => {
+                        panic!("interactive session failed: {error}")
+                    }
+                    _ => {}
+                }
+                Ok(())
+            },
+            |_, _| Ok(()),
+            |_, _| {},
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(transports.lock().unwrap().len(), 2);
+    assert_eq!(rounds.load(Ordering::SeqCst), 3);
+    assert_eq!(ready.load(Ordering::SeqCst), 1);
+    assert!(manager.sessions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn real_ssh_output_checkpoint_survives_encrypted_reopen_and_offline_read() {
     use crate::connection::preparation::{PreparationEvent, PreparationResponse};
     let peer = crate::connection::test_peer::Peer::start().await;
@@ -1103,6 +1231,7 @@ async fn real_ssh_output_checkpoint_survives_encrypted_reopen_and_offline_read()
                             assert_eq!(peer.authentications.load(Ordering::SeqCst), 0);
                             manager.respond(
                                 "terminal",
+                                transport.lock().unwrap().as_ref().unwrap(),
                                 &prompt_id,
                                 PreparationResponse::AcceptHostKey,
                             )?;

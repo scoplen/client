@@ -54,6 +54,11 @@ pub fn session_reserve_transport(
 #[derive(Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SessionPreparationIntent {
+    /// Ordered one-time answers to the exact current server challenge.
+    KeyboardInteractive {
+        /// Answers are consumed and never returned to the renderer.
+        answers: Vec<String>,
+    },
     /// Accept only the exact host key retained by Rust.
     AcceptHostKey,
     /// Supply a write-only key passphrase, never returned to the renderer.
@@ -69,16 +74,22 @@ pub enum SessionPreparationIntent {
 pub fn session_respond(
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
+    transport_id: String,
     prompt_id: String,
     intent: SessionPreparationIntent,
 ) -> Result<(), String> {
     let response = match intent {
+        SessionPreparationIntent::KeyboardInteractive { answers } => {
+            PreparationResponse::keyboard_interactive(
+                answers.into_iter().map(String::into_bytes).collect(),
+            )?
+        }
         SessionPreparationIntent::AcceptHostKey => PreparationResponse::AcceptHostKey,
         SessionPreparationIntent::Passphrase { value } => {
             PreparationResponse::Passphrase(SecretVec::new(value.into_bytes()))
         }
     };
-    manager.respond(&session_id, &prompt_id, response)
+    manager.respond(&session_id, &transport_id, &prompt_id, response)
 }
 
 /// Own one logical terminal until tab closure. Ended terminals await manual retry.

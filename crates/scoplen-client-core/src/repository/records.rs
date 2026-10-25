@@ -216,6 +216,7 @@ pub enum CredentialKind {
     SecurityKey = 5,
     DeviceBoundKey = 6,
     ExternalProvider = 7,
+    KeyboardInteractive = 8,
 }
 
 /// Where a credential's secret lives (`04` §4.4 field 3).
@@ -232,9 +233,18 @@ pub enum CredentialBinding {
 impl CredentialKind {
     fn from_wire(n: u64) -> Option<Self> {
         use CredentialKind::*;
-        [Password, PrivateKey, Certificate, Agent, SecurityKey, DeviceBoundKey, ExternalProvider]
-            .into_iter()
-            .find(|k| *k as u64 == n)
+        [
+            Password,
+            PrivateKey,
+            Certificate,
+            Agent,
+            SecurityKey,
+            DeviceBoundKey,
+            ExternalProvider,
+            KeyboardInteractive,
+        ]
+        .into_iter()
+        .find(|k| *k as u64 == n)
     }
 }
 

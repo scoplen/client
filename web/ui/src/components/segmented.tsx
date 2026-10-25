@@ -24,7 +24,9 @@ export function Segmented<T extends string>({ legend, options, value, onChange }
   return (
     <fieldset className="m-0 flex flex-col gap-1.5 border-0 p-0">
       <legend className="mb-1.5 p-0 text-sm font-medium text-foreground">{legend}</legend>
-      <div className="inline-flex w-full rounded-md border-(length:--scoplen-border-width) border-border-strong bg-inset p-0.5">
+      <div
+        className={`${options.length > 3 ? "grid grid-cols-2 sm:flex" : "inline-flex"} w-full rounded-md border-(length:--scoplen-border-width) border-border-strong bg-inset p-0.5`}
+      >
         {options.map((option) => (
           <label
             key={option.value}

@@ -20,7 +20,8 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
 ## Open gaps
 
 - The application shell, encrypted local store, inventory, and real SSH terminal path exist,
-  including password/software-key authentication, exact saved-key system-agent
+  including password/software-key authentication, explicit saved Interactive OTP/PAM
+  authentication with transient bounded answers, exact saved-key system-agent
   authentication, saved proxy routes with optional password authentication, and
   explicit Jump routes with independent trust and credentials at each hop, and saved
   ProxyCommand routes with bounded literal arguments and owned helper cleanup.
