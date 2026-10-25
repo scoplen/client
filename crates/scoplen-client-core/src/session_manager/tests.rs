@@ -1195,6 +1195,85 @@ async fn interactive_answers_reject_wrong_and_previous_transports_without_consum
 }
 
 #[tokio::test]
+async fn rejected_saved_password_fails_and_preserves_manual_retry_without_automatic_reconnect() {
+    use crate::connection::preparation::{PreparationEvent, PreparationResponse};
+    let peer = crate::connection::test_peer::Peer::start().await;
+    let (_dir, store) = store();
+    let inventory = Inventory::new(store.clone());
+    let host = inventory
+        .add_host(NewHost {
+            name: Some("rejected-password peer".into()),
+            address: "127.0.0.1".into(),
+            port: Some(peer.port),
+            username: "trust-fixture".into(),
+            sign_in: SignIn::Password { password: "wrong-disposable-password".into() },
+        })
+        .unwrap();
+    let manager = SessionManager::default();
+    manager.reserve("terminal", true).unwrap();
+    let transports = Mutex::new(Vec::new());
+    let failures = AtomicUsize::new(0);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        manager.run(
+            "terminal",
+            &host.logins[0].id,
+            None,
+            true,
+            store.clone(),
+            |event| {
+                match event {
+                    SessionEvent::Starting { transport_id, automatic } => {
+                        assert!(!automatic);
+                        transports.lock().unwrap().push(transport_id);
+                    }
+                    SessionEvent::Preparation { transport_id, event } => {
+                        if let PreparationEvent::Trust { prompt_id, .. } = *event {
+                            manager.respond(
+                                "terminal",
+                                &transport_id,
+                                &prompt_id,
+                                PreparationResponse::AcceptHostKey,
+                            )?;
+                        }
+                    }
+                    SessionEvent::Failed { exhausted, .. } => {
+                        assert!(!exhausted);
+                        if failures.fetch_add(1, Ordering::SeqCst) == 0 {
+                            manager.retry("terminal")?;
+                        } else {
+                            manager.close("terminal")?;
+                        }
+                    }
+                    _ => {
+                        panic!("rejected authentication must fail without closing or reconnecting")
+                    }
+                }
+                Ok(())
+            },
+            |_, _| panic!("rejected authentication must not open a shell"),
+            |_, _| {},
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(failures.load(Ordering::SeqCst), 2);
+    assert_eq!(peer.authentications.load(Ordering::SeqCst), 2);
+    assert_eq!(peer.challenges.load(Ordering::SeqCst), 0);
+    assert_eq!(peer.session_channels.load(Ordering::SeqCst), 0);
+    let transports = transports.lock().unwrap();
+    assert_eq!(transports.len(), 2);
+    assert_ne!(transports[0], transports[1]);
+    assert!(manager.sessions.lock().unwrap().is_empty());
+    let recent = inventory.recent_sessions().unwrap();
+    assert_eq!(recent.len(), 2);
+    assert!(recent.iter().all(|entry| {
+        entry.ended_at.is_some() && entry.outcome == Some(RecentSessionOutcome::Failed)
+    }));
+}
+
+#[tokio::test]
 async fn real_ssh_output_checkpoint_survives_encrypted_reopen_and_offline_read() {
     use crate::connection::preparation::{PreparationEvent, PreparationResponse};
     let peer = crate::connection::test_peer::Peer::start().await;
