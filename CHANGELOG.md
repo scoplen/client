@@ -4,6 +4,15 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added native desktop Create account with real preparation, native recovery export and explicit
+  confirmation, Submit/Confirm/Retry, real password Sign in and explicit new-Device admission,
+  retained pending recovery and independent profile installation.
+  The header selects Local and ready Accounts. Profile changes close SSH, Files transfers and
+  tunnels, drain outstanding native requests, remount views and fence old commands/events by the
+  captured generation. Existing retained-account databases keep their identity and access.
+  Existing catalog Accounts open their saved profile without replacing its Device or data.
+  Same-catalog re-entry after Device revocation, Team contexts and macOS/native acceptance remain incomplete.
+
 - Added Rust-owned independent Account profile installation and selection. The encrypted Local
   catalog reserves one immutable directory per canonical origin/Account id, with separate local
   key protection and the original registration Device. Exact historical confirmation must be

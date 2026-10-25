@@ -61,6 +61,8 @@ impl From<ObjectType> for RecordType {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
 pub struct StoreChanged {
+    /// Source profile opening; another profile must ignore this event.
+    pub profile_generation: String,
     /// The type of the changed objects.
     pub record_type: RecordType,
     /// Their identifiers, as lowercase hyphenated UUIDs.
@@ -68,9 +70,11 @@ pub struct StoreChanged {
 }
 
 /// Safe background status; no object content, key material or server diagnostics.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Type, tauri_specta::Event)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonalSyncChanged {
+    /// Source profile opening.
+    pub profile_generation: String,
     /// The native owner's current state.
     pub status: scoplen_client_core::personal_server::PersonalBackgroundStatus,
 }
@@ -92,6 +96,8 @@ pub enum SessionChangeKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionChanged {
+    /// Source profile opening.
+    pub profile_generation: String,
     /// The session identifier.
     pub session_id: String,
     /// The lifecycle transition.
@@ -101,6 +107,7 @@ pub struct SessionChanged {
 impl From<&Change> for StoreChanged {
     fn from(change: &Change) -> Self {
         StoreChanged {
+            profile_generation: String::new(),
             record_type: change.object_type.into(),
             ids: change.ids.iter().map(|id| id.to_string()).collect(),
         }
@@ -117,7 +124,11 @@ mod tests {
         let event = StoreChanged::from(&Change { object_type: ObjectType::HOST, ids: vec![id] });
         assert_eq!(
             event,
-            StoreChanged { record_type: RecordType::Host, ids: vec![id.to_string()] }
+            StoreChanged {
+                profile_generation: String::new(),
+                record_type: RecordType::Host,
+                ids: vec![id.to_string()]
+            }
         );
         assert_eq!(RecordType::from(ObjectType::from_wire(77).unwrap()), RecordType::Unknown);
         let json = serde_json::to_value(&event).unwrap();
@@ -126,8 +137,11 @@ mod tests {
 
     #[test]
     fn session_changes_are_typed_and_redacted() {
-        let event =
-            SessionChanged { session_id: "session-1".into(), change: SessionChangeKind::Closed };
+        let event = SessionChanged {
+            profile_generation: "7".into(),
+            session_id: "session-1".into(),
+            change: SessionChangeKind::Closed,
+        };
         let json = serde_json::to_value(event).unwrap();
         assert_eq!(json["sessionId"], "session-1");
         assert_eq!(json["change"], "closed");

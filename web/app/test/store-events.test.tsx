@@ -31,7 +31,7 @@ describe("useStoreChanges", () => {
     mockIPC(() => undefined, { shouldMockEvents: true });
     const heard: StoreChanged[] = [];
     const view = render(<Listener onChange={(change) => heard.push(change)} />);
-    const host: StoreChanged = { recordType: "host", ids: ["0190-a"] };
+    const host: StoreChanged = { profileGeneration: "1", recordType: "host", ids: ["0190-a"] };
     await waitFor(async () => {
       await emit("store-changed", host);
       expect(heard.length).toBeGreaterThan(0);

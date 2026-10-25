@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+import { useProfileCommands } from "./account-profiles";
 import { Button, Dialog, Field, IconButton } from "@scoplen/ui";
 import { Download, Eye, File, Folder, FolderPlus, Pencil, RefreshCw, Trash2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
 import {
-  commands,
   type RemoteFileEntry,
   type SessionFileMutationResult,
   type SessionTransferIssue,
@@ -58,6 +58,7 @@ export function SessionFiles({
   onFileOutcome: (outcome: FileOperationOutcome) => void;
   onEnqueueFeedback: (feedback: EnqueueFeedback) => void;
 }) {
+  const commands = useProfileCommands();
   const { t, locale } = useI18n();
   const formId = useId();
   const [locations, setLocations] = useState<Location[]>([{ name: "", path: [46] }]);
@@ -145,7 +146,7 @@ export function SessionFiles({
     pendingCancellation.current = commands
       .sessionCancelFileOperation(sessionId, transportId, id)
       .catch(() => undefined);
-  }, [sessionId, transportId]);
+  }, [sessionId, transportId, commands]);
 
   useEffect(() => {
     mounted.current = true;
@@ -195,7 +196,7 @@ export function SessionFiles({
       current = false;
       if (operation.current === id) cancelCurrent();
     };
-  }, [cancelCurrent, sessionId, transportId, currentPath, reload, queueBlocked, previewOpen, previewOwner]);
+  }, [cancelCurrent, sessionId, transportId, currentPath, reload, queueBlocked, previewOpen, previewOwner, commands]);
 
   const enqueue = (entry?: RemoteFileEntry) => {
     if (selectionDisabled || selectionPending.current || !transportId || (entry && entry.kind !== "file")) return;

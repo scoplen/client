@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
+import { useProfileCommands } from "./account-profiles";
 import { Button, Dialog } from "@scoplen/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
-import { commands, type RemoteFileEntry, type RemoteTextPreview, type RemoteTextPreviewIssue } from "./ipc/bindings";
+import { type RemoteFileEntry, type RemoteTextPreview, type RemoteTextPreviewIssue } from "./ipc/bindings";
 
 type PreviewState =
   | { kind: "loading" }
@@ -23,6 +24,7 @@ export function SessionFilePreview({
   entry: RemoteFileEntry;
   onClose: () => void;
 }) {
+  const commands = useProfileCommands();
   const { t } = useI18n();
   const [open, setOpen] = useState(true);
   const [attempt, setAttempt] = useState(0);
@@ -39,7 +41,7 @@ export function SessionFilePreview({
         .sessionCancelFileOperation(sessionId, transportId, id)
         .catch(() => undefined);
     return pendingCancellation.current;
-  }, [sessionId, transportId]);
+  }, [sessionId, transportId, commands]);
 
   useEffect(() => {
     let current = true;
@@ -65,7 +67,7 @@ export function SessionFilePreview({
       current = false;
       void cancel();
     };
-  }, [sessionId, transportId, entry.path, attempt, cancel]);
+  }, [sessionId, transportId, entry.path, attempt, cancel, commands]);
 
   const close = () => {
     if (closing.current) return;

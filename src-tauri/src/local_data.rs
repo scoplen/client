@@ -31,27 +31,9 @@ impl LocalDataState {
         LocalDataState(data.map(Arc::new))
     }
 
-    /// Forwards committed changes, if the local data could be prepared.
-    pub fn on_change(
-        &self,
-        listener: impl Fn(&scoplen_client_core::store::Change) + Send + Sync + 'static,
-    ) {
-        if let Ok(data) = &self.0 {
-            data.on_change(listener);
-        }
-    }
-
     /// The open store, if the local data is open.
     pub fn store(&self) -> Option<Arc<scoplen_client_core::store::Store>> {
         self.0.as_ref().ok().and_then(|data| data.store())
-    }
-
-    /// Prevent local-store replacement during one bounded persistence operation.
-    pub fn with_store<T>(
-        &self,
-        operation: impl FnOnce(&Arc<scoplen_client_core::store::Store>) -> T,
-    ) -> Option<T> {
-        self.0.as_ref().ok().and_then(|data| data.with_store(operation))
     }
 
     pub(crate) fn get(&self) -> Result<Arc<LocalData>, LocalDataError> {
@@ -112,20 +94,24 @@ pub async fn create_local_passphrase(
 #[tauri::command]
 #[specta::specta]
 pub async fn set_local_passphrase(
-    state: tauri::State<'_, LocalDataState>,
+    context: crate::profile_context::ProfileRequest,
     passphrase: String,
 ) -> Result<Status, LocalDataError> {
     let passphrase = Zeroizing::new(passphrase);
-    blocking(&state, move |data| data.set_passphrase(&passphrase)).await
+    tauri::async_runtime::spawn_blocking(move || context.get()?.set_passphrase(&passphrase))
+        .await
+        .map_err(|e| LocalDataError::Failed { reference: e.to_string() })?
 }
 
 /// Removes the local passphrase, leaving the key in the keystore.
 #[tauri::command]
 #[specta::specta]
 pub async fn remove_local_passphrase(
-    state: tauri::State<'_, LocalDataState>,
+    context: crate::profile_context::ProfileRequest,
 ) -> Result<Status, LocalDataError> {
-    blocking(&state, |data| data.remove_passphrase()).await
+    tauri::async_runtime::spawn_blocking(move || context.get()?.remove_passphrase())
+        .await
+        .map_err(|e| LocalDataError::Failed { reference: e.to_string() })?
 }
 
 /// Keeps unreadable local data aside and starts with empty local data.

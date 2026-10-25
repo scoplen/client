@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+import { useProfileCommands } from "./account-profiles";
 import { useEffect, useRef, useState } from "react";
-import { commands, type SessionTransferIssue, type SessionTransferQueueSnapshot } from "./ipc/bindings";
+import { type SessionTransferIssue, type SessionTransferQueueSnapshot } from "./ipc/bindings";
 
 const POLL_INTERVAL = 250;
 const MAX_U64 = 18_446_744_073_709_551_615n;
@@ -19,6 +20,7 @@ type QueueState = {
 
 /** Observing Files never owns, cancels, or restarts a Rust transfer. */
 export function useSessionTransfers(sessionId: string, visible: boolean) {
+  const commands = useProfileCommands();
   const [state, setState] = useState<QueueState>({ sessionId, snapshot: null, issue: null });
   const inFlight = useRef(false);
   const accepted = useRef<{ sessionId: string; queueId: string; revision: bigint } | null>(null);
@@ -80,7 +82,7 @@ export function useSessionTransfers(sessionId: string, visible: boolean) {
       current = false;
       clearTimeout(timer);
     };
-  }, [sessionId, visible]);
+  }, [sessionId, visible, commands]);
 
   return state.sessionId === sessionId ? state : { sessionId, snapshot: null, issue: null };
 }

@@ -15,6 +15,7 @@ use scoplen_client_core::session_transfers::{
 #[tauri::command]
 #[specta::specta]
 pub fn session_transfer_queue(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
 ) -> Result<SessionTransferQueueSnapshot, SessionTransferIssue> {
@@ -25,6 +26,7 @@ pub fn session_transfer_queue(
 #[tauri::command]
 #[specta::specta]
 pub async fn session_enqueue_upload(
+    _context: crate::profile_context::ProfileRequest,
     app: tauri::AppHandle,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
@@ -52,6 +54,7 @@ pub async fn session_enqueue_upload(
 #[tauri::command]
 #[specta::specta]
 pub async fn session_enqueue_download(
+    _context: crate::profile_context::ProfileRequest,
     app: tauri::AppHandle,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
@@ -80,6 +83,7 @@ pub async fn session_enqueue_download(
 #[tauri::command]
 #[specta::specta]
 pub fn session_cancel_transfer(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     queue_id: String,
@@ -93,6 +97,7 @@ pub fn session_cancel_transfer(
 #[tauri::command]
 #[specta::specta]
 pub fn session_pause_transfer(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     queue_id: String,
@@ -106,6 +111,7 @@ pub fn session_pause_transfer(
 #[tauri::command]
 #[specta::specta]
 pub fn session_resume_transfer(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     queue_id: String,
@@ -119,6 +125,7 @@ pub fn session_resume_transfer(
 #[tauri::command]
 #[specta::specta]
 pub fn session_acknowledge_transfer(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     queue_id: String,

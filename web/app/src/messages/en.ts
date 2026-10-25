@@ -103,8 +103,6 @@ export const en = {
   "settings.section.data": "Local data",
   "settings.section.personal": "Personal account",
   "settings.personal.title": "Personal account",
-  "settings.personal.signInUnavailable":
-    "Account registration and password sign-in are not available in this version. Local SSH access remains available. Existing confirmed profiles can still authenticate and sync.",
   "settings.personal.error.retiredEntry":
     "This unfinished setup uses a retired invitation or pairing protocol. Its data is unchanged. Open a confirmed profile or restore a verified local backup. This version cannot resume the old setup.",
   "settings.personal.error.admissionUnverified":
@@ -1060,6 +1058,120 @@ export const en = {
   "tunnels.issue.peerLimitReached": "This tunnel reached its limit of 32 connections. Extra connections were closed.",
   "tunnels.issue.peerIo": "One connection ended before copying completed. Other tunnel connections can continue.",
   "tunnels.issue.shutdownFailed": "Tunnel shutdown could not be confirmed. Check the listener before starting again.",
+  "accounts.loading": "Opening profile…",
+  "accounts.unavailable": "This profile could not be opened",
+  "accounts.reload": "Try again",
+  "accounts.local": "Local",
+  "accounts.selector": "Open profile",
+  "accounts.retained": "Retained account profile",
+  "accounts.retainedBody":
+    "This retained account remains available with its existing local data. New account profiles require an account-free Local store; this version does not move or relabel retained data.",
+  "accounts.switchTitle": "Switch profile?",
+  "accounts.switchBody":
+    "Switching closes every SSH session, stops its transfers and tunnels, and clears the current views. Saved data stays in its original profile. Finish any native file dialog before switching.",
+  "accounts.keep": "Cancel",
+  "accounts.switch": "Switch profile",
+  "accounts.switching": "Switching…",
+  "accounts.passphrase": "Profile local passphrase (if required)",
+  "accounts.passphraseHint":
+    "Used only to unlock this profile on this device. This is separate from your account password.",
+  "accounts.installPassphraseHint":
+    "Required on systems without a key store. This protects the account profile on this device and is separate from your account password.",
+  "accounts.localProtection":
+    "Switch to Local to change its local passphrase. Each account profile has separate key protection.",
+  "accounts.createTitle": "Create an account",
+  "accounts.createBody":
+    "Prepare an independent account on your Personal server, save its recovery key, and review before submitting. Local hosts and credentials stay in Local.",
+  "accounts.create": "Create account",
+  "accounts.origin": "Personal server URL",
+  "accounts.username": "Username",
+  "accounts.usernameHint": "Use 3–64 characters. The server decides whether this name is available.",
+  "accounts.deviceName": "Name for this device",
+  "accounts.password": "Account password",
+  "accounts.passwordHint":
+    "Use at least 15 characters. The password leaves this field only for native account preparation.",
+  "accounts.prepare": "Prepare account",
+  "accounts.preparing": "Preparing…",
+  "accounts.saveRecovery": "Save recovery key…",
+  "accounts.confirmRecovery": "I saved the recovery key safely",
+  "accounts.submit": "Submit registration",
+  "accounts.confirmResult": "Confirm original result",
+  "accounts.retry": "Retry registration",
+  "accounts.retryAt": "Retry available after {time}.",
+  "accounts.discard": "Discard preparation",
+  "accounts.install": "Install account profile",
+  "accounts.installing": "Installing…",
+  "accounts.working": "Account operation in progress…",
+  "accounts.stop": "Stop",
+  "accounts.phase.recoveryRequired":
+    "Save the recovery key using the native file dialog, keep it safe, then confirm. Registration has not been submitted.",
+  "accounts.phase.ready": "Recovery key confirmed. Submit when you are ready to create this account.",
+  "accounts.phase.outcomeUnknown":
+    "The original request may have committed. Confirm its result before taking another action. Closing this view preserves the pending operation.",
+  "accounts.phase.retryAvailable":
+    "The original operation was confirmed as not committed. Retrying requires your explicit action.",
+  "accounts.phase.committed":
+    "Registration is confirmed. Install its independent profile to authenticate this device and open the account.",
+  "accounts.error.invalidInput": "Check the server URL, username, device name, and password.",
+  "accounts.error.busy": "Another account operation is running. Wait for it to finish.",
+  "accounts.error.profileChanged": "The open profile changed. Reopen this view before continuing.",
+  "accounts.error.profileChanging": "The profile is switching. Wait for it to finish.",
+  "accounts.error.finishNativeDialog":
+    "Close the native file dialog, then switch again. The original profile is still selected.",
+  "accounts.error.retainedProfile":
+    "This retained account cannot become an account-free Local profile. Its data was kept.",
+  "accounts.error.existingProfile":
+    "This store already belongs to an account. Switch to Local before creating another.",
+  "accounts.error.notPrepared": "No pending preparation was found. Reload the account view.",
+  "accounts.error.recoveryRequired": "Save and confirm the recovery key before submitting.",
+  "accounts.error.recoverySave": "The recovery key could not be saved. Choose a new file in a writable location.",
+  "accounts.error.outcomeUnknown": "Confirm the original result before retrying. The pending operation is retained.",
+  "accounts.error.cancelled": "The operation stopped. Any pending or confirmed account state was retained.",
+  "accounts.error.network":
+    "The server could not be reached. Check the connection, then review the retained operation.",
+  "accounts.error.unsupportedService": "This server does not support this account registration protocol.",
+  "accounts.error.policyDenied": "The server currently does not allow account registration.",
+  "accounts.error.registrationDenied": "The server refused this registration. Review the username and server policy.",
+  "accounts.error.quotaExceeded": "The server account quota was reached. Contact the server operator.",
+  "accounts.error.retryDeferred": "The server asked you to wait. Review the retry time before trying again.",
+  "accounts.error.explicitRetryRequired":
+    "Confirm the original result, then use the explicit Retry action if available.",
+  "accounts.error.verification": "The server response could not be verified. The original account state was retained.",
+  "accounts.error.serviceUnavailable":
+    "The server is temporarily unavailable. Review the pending operation before retrying.",
+  "accounts.error.storage": "The local account state could not be read or saved. Retry without deleting its data.",
+  "accounts.error.profileUnavailable": "The profile could not be opened. Its existing data and keys were kept.",
+  "accounts.error.tunnelShutdown": "Tunnel cleanup could not be confirmed. The original profile is still selected.",
+  "accounts.error.profileUnlock": "The profile could not be unlocked. Check its local passphrase.",
+  "accounts.error.installation":
+    "Installation did not finish. The confirmed registration and its keys are retained; retry installation.",
+  "accounts.error.passphraseRequired": "Enter a local passphrase to protect this profile on this system.",
+  "accounts.entryTitle": "Account access",
+  "accounts.entryBody":
+    "Create an independent account or sign in to an existing account on your Personal server. Local hosts and credentials stay in Local.",
+  "accounts.signIn": "Sign in",
+  "accounts.signInTitle": "Sign in on this device",
+  "accounts.signInBody":
+    "Use your existing account password to prepare a new independent Device. Review its admission before submitting; no recovery key export is required.",
+  "accounts.signIn.submit": "Admit this device",
+  "accounts.signIn.retry": "Retry device admission",
+  "accounts.signIn.discard": "Cancel and sign in again",
+  "accounts.signIn.phase.ready": "Your password and account keys were verified. Admit this device when you are ready.",
+  "accounts.signIn.phase.outcomeUnknown":
+    "Device admission may have committed. Confirm the exact original result; keep this operation even if its sign-in window expires.",
+  "accounts.signIn.phase.retryAvailable":
+    "The latest device admission was confirmed unchanged. Retry this original operation explicitly.",
+  "accounts.signIn.phase.signInRequired":
+    "This known unchanged or never-sent admission needs fresh sign-in. Cancel it safely, then enter your password again.",
+  "accounts.signIn.phase.committed":
+    "Device admission is confirmed. Install its independent profile to verify current Device authority and open the account.",
+  "accounts.error.signInExisting":
+    "This account or a pending setup already exists here. Open its saved profile in the selector, or continue its original setup. Existing Devices and data are not replaced.",
+  "accounts.error.signInAgain":
+    "This sign-in is known unchanged or expired. Resolve any unknown result first, then cancel the safe preparation and sign in again.",
+  "accounts.error.signInDenied": "Sign-in could not be verified. Check the server URL, username and account password.",
+  "accounts.error.signInPolicy": "The server does not permit this sign-in. Contact its operator.",
+  "accounts.error.deviceQuota": "This account cannot admit another device. Contact the server operator.",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };

@@ -7,11 +7,82 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
-export const commands = {
+export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core").invoke) { return {
 	/**  Returns the application version, platform, and interface language. */
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	/**  Called by the frontend once its first screen has rendered. */
 	shellReady: () => __TAURI_INVOKE<void>("shell_ready"),
+	/**  Open the catalog locally and subscribe to its captured-profile events. */
+	accountProfilesSnapshot: () => typedError<ProfileSnapshot, string>(__TAURI_INVOKE("account_profiles_snapshot")),
+	/**  Read and reverify pending registration locally without network activity. */
+	registrationStatus: () => typedError<{
+	/**  Safe explicit next action. */
+	phase: RegistrationStep,
+	/**  Stable original operation identity. */
+	operationId: string,
+	/**  Canonical Personal deployment. */
+	origin: string,
+	/**  Canonical username. */
+	username: string,
+	/**  Native recovery export completed. */
+	recoverySaved: boolean,
+	/**  The person explicitly confirmed safe storage. */
+	recoveryConfirmed: boolean,
+	/**  Trusted retry deadline as decimal Unix milliseconds. */
+	retryNotBeforeMs: string | null,
+} | null, string>(__TAURI_INVOKE("registration_status")),
+	/**  Derive real password material and save an independent pending registration in Rust. */
+	prepareAccountRegistration: (ticket: string, origin: string, username: string, deviceName: string, password: string) => typedError<RegistrationView, string>(__TAURI_INVOKE("prepare_account_registration", { ticket, origin, username, deviceName, password })),
+	/**  Export the recovery key to a new native file without returning its key or path. */
+	saveRegistrationRecovery: (operationId: string, ticket: string) => typedError<{
+	/**  Safe explicit next action. */
+	phase: RegistrationStep,
+	/**  Stable original operation identity. */
+	operationId: string,
+	/**  Canonical Personal deployment. */
+	origin: string,
+	/**  Canonical username. */
+	username: string,
+	/**  Native recovery export completed. */
+	recoverySaved: boolean,
+	/**  The person explicitly confirmed safe storage. */
+	recoveryConfirmed: boolean,
+	/**  Trusted retry deadline as decimal Unix milliseconds. */
+	retryNotBeforeMs: string | null,
+} | null, string>(__TAURI_INVOKE("save_registration_recovery", { operationId, ticket })),
+	/**  Record explicit safe-storage confirmation for the original recovery key. */
+	confirmRegistrationRecovery: (operationId: string) => typedError<RegistrationView, string>(__TAURI_INVOKE("confirm_registration_recovery", { operationId })),
+	/**  Submit, exactly confirm, or explicitly retry the captured original registration. */
+	exchangeAccountRegistration: (ticket: string, operationId: string, intent: RegistrationIntent) => typedError<RegistrationView, string>(__TAURI_INVOKE("exchange_account_registration", { ticket, operationId, intent })),
+	/**  Stops only the captured exchange; it never discards a possibly committed registration. */
+	stopAccountOperation: (ticket: string) => __TAURI_INVOKE<void>("stop_account_operation", { ticket }),
+	/**  Discard only a safe, never-dispatched registration preparation. */
+	discardRegistrationPreparation: (operationId: string) => typedError<null, string>(__TAURI_INVOKE("discard_registration_preparation", { operationId })),
+	/**  Close running native work, then explicitly open Local or a ready Account. */
+	selectAccountProfile: (generation: string, profileId: string | null, localPassphrase: string | null) => typedError<ProfileSnapshot, string>(__TAURI_INVOKE("select_account_profile", { generation, profileId, localPassphrase })),
+	/**  Install a confirmed registration only after fresh current Device verification. */
+	installRegisteredProfile: (generation: string, ticket: string, operationId: string, localPassphrase: string | null) => typedError<ProfileSnapshot, string>(__TAURI_INVOKE("install_registered_profile", { generation, ticket, operationId, localPassphrase })),
+	/**  Read retained sign-in metadata without requesting fresh password options or network access. */
+	passwordSignInStatus: () => typedError<{
+	/**  Explicit next action. */
+	phase: PasswordSignInStep,
+	/**  Stable original admission operation. */
+	operationId: string,
+	/**  Canonical deployment origin. */
+	origin: string,
+	/**  Canonical existing username. */
+	username: string,
+	/**  Trusted retry deadline as decimal Unix milliseconds. */
+	retryNotBeforeMs: string | null,
+} | null, string>(__TAURI_INVOKE("password_sign_in_status")),
+	/**  Verify the password through real HTTPS and durably prepare an independent Device admission. */
+	beginPasswordSignIn: (ticket: string, origin: string, username: string, deviceName: string, password: string) => typedError<PasswordSignInView, string>(__TAURI_INVOKE("begin_password_sign_in", { ticket, origin, username, deviceName, password })),
+	/**  Submit, exactly confirm, or explicitly retry only the retained original Device admission. */
+	exchangePasswordSignIn: (ticket: string, operationId: string, intent: RegistrationIntent) => typedError<PasswordSignInView, string>(__TAURI_INVOKE("exchange_password_sign_in", { ticket, operationId, intent })),
+	/**  Discard only a never-sent or durably proven unchanged admission; unknown work remains retained. */
+	discardPasswordSignIn: (operationId: string) => typedError<null, string>(__TAURI_INVOKE("discard_password_sign_in", { operationId })),
+	/**  Install exact confirmed admission only after fresh normal Device authentication and complete K-4. */
+	installPasswordSignInProfile: (generation: string, ticket: string, operationId: string, localPassphrase: string | null) => typedError<ProfileSnapshot, string>(__TAURI_INVOKE("install_password_sign_in_profile", { generation, ticket, operationId, localPassphrase })),
 	/**  Start a saved tunnel using the explicitly selected Login. */
 	forwardStart: (forwardId: string, profileId: string) => typedError<ForwardSnapshot, ForwardIssue>(__TAURI_INVOKE("forward_start", { forwardId, profileId })),
 	/**  List the current store's live runs and retained terminal snapshots. */
@@ -216,12 +287,15 @@ export const commands = {
 	queryPersonalInventoryHistory: (objectId: string) => typedError<PersonalInventoryHistory, PersonalInventoryError>(__TAURI_INVOKE("query_personal_inventory_history", { objectId })),
 	/**  Restore one reviewed version as a fresh local copy; no server write is sent. */
 	restorePersonalInventoryHistory: (reviewToken: string, sequence: string) => typedError<null, PersonalInventoryError>(__TAURI_INVOKE("restore_personal_inventory_history", { reviewToken, sequence })),
-};
+}; }
+
+export const commands = makeCommands(__TAURI_INVOKE);
 
 /** Events */
 export const events = {
 	forwardChanged: makeEvent<ForwardChanged>("forward-changed"),
 	personalSyncChanged: makeEvent<PersonalSyncChanged>("personal-sync-changed"),
+	profileChanged: makeEvent<ProfileChanged>("profile-changed"),
 	sessionChanged: makeEvent<SessionChanged>("session-changed"),
 	sessionFileDrag: makeEvent<SessionFileDrag>("session-file-drag"),
 	storeChanged: makeEvent<StoreChanged>("store-changed"),
@@ -286,6 +360,18 @@ export type AccessProfileSummary = {
 	orphaned: boolean,
 	/**  Whether a later write resurrected this profile. */
 	restored: boolean,
+};
+
+/**  Safe selection metadata, without Device keys or local paths. */
+export type AccountProfileSummary = {
+	/**  Device-local catalog identity. */
+	id: string,
+	/**  Canonical Personal deployment. */
+	origin: string,
+	/**  Account identity within the deployment. */
+	accountId: string,
+	/**  Current Device authentication and verified bootstrap were installed. */
+	ready: boolean,
 };
 
 /**  Why adding a host failed. Nothing is saved for any variant. */
@@ -553,6 +639,8 @@ export type FileDropAccepted = {
 
 /**  A display-safe snapshot of one Rust-owned run. */
 export type ForwardChanged = {
+	/**  Source profile opening. */
+	profileGeneration: string,
 	/**  The latest revision of the independent run. */
 	snapshot: ForwardSnapshot,
 };
@@ -1049,6 +1137,33 @@ export type OpenSshUnsupportedDirective = {
 	directive: string,
 };
 
+/**  Explicit next action for one original Device admission. */
+export type PasswordSignInStep =
+/**  Password verified; explicit admission Submit remains. */
+"ready" |
+/**  Only exact original receipt confirmation is safe. */
+"outcomeUnknown" |
+/**  Trusted unchanged result permits explicit Retry. */
+"retryAvailable" |
+/**  Known unchanged or never-sent work needs fresh password options. */
+"signInRequired" |
+/**  Historical admission confirmed; current Device installation remains. */
+"committed";
+
+/**  Safe pending metadata without password, capability, proof or keys. */
+export type PasswordSignInView = {
+	/**  Explicit next action. */
+	phase: PasswordSignInStep,
+	/**  Stable original admission operation. */
+	operationId: string,
+	/**  Canonical deployment origin. */
+	origin: string,
+	/**  Canonical existing username. */
+	username: string,
+	/**  Trusted retry deadline as decimal Unix milliseconds. */
+	retryNotBeforeMs: string | null,
+};
+
 /**  Public signed claims only; no certificate or key material crosses IPC. */
 export type PersonalAccountDevice = {
 	/**  Stable signed identity. */
@@ -1308,6 +1423,8 @@ export type PersonalServerStatus = {
 
 /**  Safe background status; no object content, key material or server diagnostics. */
 export type PersonalSyncChanged = {
+	/**  Source profile opening. */
+	profileGeneration: string,
 	/**  The native owner's current state. */
 	status: PersonalBackgroundStatus,
 };
@@ -1438,6 +1555,24 @@ export type PreparationPhase =
 /**  Authentication after host trust. */
 "authenticating";
 
+/**  Published only after a replacement namespace becomes current. */
+export type ProfileChanged = {
+	/**  Fresh selection state. */
+	snapshot: ProfileSnapshot,
+};
+
+/**  Active namespace and available independent Account stores. */
+export type ProfileSnapshot = {
+	/**  Fresh opening identity; reopening the same Account changes it. */
+	generation: string,
+	/**  Selected catalog identity, or None for Local or a retained root. */
+	selected: string | null,
+	/**  Public catalog entries. */
+	accounts: AccountProfileSummary[],
+	/**  An existing account-bearing root retains its original identity and data. */
+	retainedProfile: boolean,
+};
+
 /**  How the local database key is protected. */
 export type Protection =
 /**  The platform keystore alone. */
@@ -1526,6 +1661,46 @@ export type RecordType =
 "gatewayNetwork" |
 /**  A type a newer version of Scoplen defines. */
 "unknown";
+
+/**  Explicit mutation or exact-result recovery intent shared by account entry flows. */
+export type RegistrationIntent =
+/**  First handoff of the original signed business request. */
+"submit" |
+/**  Recover the exact original receipt without mutation. */
+"confirm" |
+/**  Explicitly retry only after a trusted unchanged result. */
+"retry";
+
+/**  Explicit next action for one retained registration. */
+export type RegistrationStep =
+/**  Recovery export and safe-storage confirmation are still required. */
+"recoveryRequired" |
+/**  Explicit Submit may create the account. */
+"ready" |
+/**  Only exact historical confirmation is safe. */
+"outcomeUnknown" |
+/**  Trusted unchanged result permits explicit Retry. */
+"retryAvailable" |
+/**  Historical commit is confirmed; current Device installation remains separate. */
+"committed";
+
+/**  Path-free public state; key material remains in the native encrypted store. */
+export type RegistrationView = {
+	/**  Safe explicit next action. */
+	phase: RegistrationStep,
+	/**  Stable original operation identity. */
+	operationId: string,
+	/**  Canonical Personal deployment. */
+	origin: string,
+	/**  Canonical username. */
+	username: string,
+	/**  Native recovery export completed. */
+	recoverySaved: boolean,
+	/**  The person explicitly confirmed safe storage. */
+	recoveryConfirmed: boolean,
+	/**  Trusted retry deadline as decimal Unix milliseconds. */
+	retryNotBeforeMs: string | null,
+};
 
 /**  One bounded listing from the current authenticated SSH connection. */
 export type RemoteDirectory = {
@@ -1680,6 +1855,8 @@ export type SessionChangeKind =
  *  object and therefore has its own event instead of `StoreChanged`.
  */
 export type SessionChanged = {
+	/**  Source profile opening. */
+	profileGeneration: string,
 	/**  The session identifier. */
 	sessionId: string,
 	/**  The lifecycle transition. */
@@ -1981,6 +2158,8 @@ reason: UnreadableReason };
  *  Sent after the change is committed.
  */
 export type StoreChanged = {
+	/**  Source profile opening; another profile must ignore this event. */
+	profileGeneration: string,
 	/**  The type of the changed objects. */
 	recordType: RecordType,
 	/**  Their identifiers, as lowercase hyphenated UUIDs. */

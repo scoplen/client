@@ -42,8 +42,8 @@ The opt-in `live-server-integration` feature checks retained admitted-device aut
 refresh, sync keys, reviewed inventory, native notifications, history, SSH trust propagation and
 three-device convergence against an independently running disposable server. It does not read
 server source or seed the server database. It no longer invokes retired invitation or pairing
-endpoints. Its fixture setup does not yet provision profiles through the Rust D-128 registration
-and independent installation APIs; password sign-in remains incomplete.
+endpoints. This older fixture setup still requires preconfirmed profiles; it does not provision
+them through the newer D-128 registration/password sign-in and independent installation APIs.
 
 Provide a loopback `https://localhost:<port>` deployment and three independently admitted,
 already confirmed disposable SQLCipher profiles for the same Account, with distinct device ids
@@ -159,7 +159,7 @@ Revalidation failures retain original bytes, including stale profile/auth genera
 roots, revoked certificates, revision rollback, unsupported rotation and failed publication.
 Fixtures construct public K-2 artifacts and signed K-4 updates without retired DTOs or proofs.
 Retained fresh-challenge, JWKS, invalid-response, refresh, account, sync, history and notification
-regressions remain applicable. This closure does not implement the future password sign-in UI.
+regressions remain applicable alongside the separate password sign-in entry flow.
 
 ## Password registration preparation and HTTPS
 
@@ -197,11 +197,27 @@ Cancellation/future drop/timeout and root replacement retain unusable candidates
 generation and replacement guards and independent no-keystore local passphrases are exercised.
 The suite also asserts that the installation future can run on a native Send executor.
 
-Full desktop registration/profile selection, password login, next-Device admission and macOS/native
-acceptance remain separate outcomes. These Rust tests substitute isolated in-memory keystore
+The desktop uses generated commands for registration preparation, native recovery export and
+confirmation, real password sign-in and Device admission, explicit exchanges, installation and
+Local/Account selection. `AccountProfilesBoundary` binds all
+context-sensitive commands to the captured generation, and a successful profile change remounts
+the Shell. Native request admission drains before replacement; native file dialogs have a bounded
+15-second drain failure that preserves the selected profile. Stop targets one operation ticket
+and preserves its durable pending state. Existing retained-account roots remain accessible.
+`web/app/test/account-registration.test.tsx` checks the actual frontend command surface, recovery
+gates, unknown-result recovery, explicit Retry, cancellation, independent local passphrase input,
+and obsolete invoker/event rejection using Tauri IPC mocks. Sign-in coverage checks transient
+password clearing, no recovery-export step, explicit admission, unknown-only confirmation, safe
+SignInRequired restart and existing-profile refusal. These are interface tests, not native
+picker or real-server acceptance. Regenerate bindings with `pnpm bindings` and Chinese font assets
+with `pnpm fonts` after command or message changes. On Windows installations where the `python3`
+app alias is unavailable, run the same supported script with `python scripts/build-cjk-font.py`.
+
+Same-catalog replacement/re-entry after Device revocation, Team contexts and macOS/native acceptance
+remain incomplete.
+These Rust tests substitute isolated in-memory keystore
 slots for native key providers; they do not establish native keystore, picker or platform UI
-acceptance. No bindings regeneration is required because this Rust-only surface adds no Tauri
-command or frontend type.
+acceptance.
 
 ## Native Personal notification fault tests
 

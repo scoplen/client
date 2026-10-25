@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { useI18n } from "./i18n";
 import type { Platform } from "./ipc/bindings";
 import type { SessionState } from "./session";
+import { ProfileSwitcher } from "./account-profiles";
 
 export interface FrameTab {
   id: string;
@@ -140,6 +141,7 @@ export function Frame({
           })}
         </div>
         <div data-tauri-drag-region className="h-full min-w-6 flex-1" />
+        <ProfileSwitcher />
         <IconButton label={t("frame.settings")} pressed={settingsActive} onClick={onSettings}>
           <Settings aria-hidden="true" className="size-4" />
         </IconButton>
