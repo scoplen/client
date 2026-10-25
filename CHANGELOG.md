@@ -10,6 +10,11 @@ All notable changes to the Scoplen desktop client are recorded here.
   bounds, and synchronizes a durable offline Host edit with signed history and acknowledged
   progress. Desktop-window and platform acceptance remain separate checks.
 
+- Fixed Windows keystore deletion to check the exact current-user native slot before removing
+  its protected file. Only a missing key reported by that slot's open call is treated as absent;
+  provider, key-open and deletion failures are returned with the file retained. Repeated deletion
+  remains safe after confirmed absence.
+
 - Fixed terminal menu paste to honor bracketed-paste mode and normalize line endings.
   Pending clipboard reads cannot enter a replacement connection or offline view. Paste
   now waits for its bounded primary input write and reports failures without duplicate errors.

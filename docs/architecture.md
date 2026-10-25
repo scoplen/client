@@ -100,6 +100,16 @@ the component in both desktop and browser consumers.
 
 `local_key` decides how the database key is protected: by the platform keystore (`scoplen-client-platform::keystore`), by the keystore plus a passphrase envelope (`scoplen_crypto::LocalDatabaseKeyEnvelope`), or by the passphrase alone on a system without a keystore. Setting or changing the passphrase rewraps the same key, so the store is never re-encrypted. `local_data` is the state machine the interface drives: open, needs passphrase, needs a new passphrase, or unreadable. An unreadable store is renamed and kept, never deleted.
 
+Windows keystore deletion opens only the slot's exact current-user name in the Platform Crypto
+Provider. Key opening uses `NCRYPT_SILENT_FLAG`; deletion uses the provider's default flags.
+Only `NTE_BAD_KEYSET` from that key-open call confirms absence. Provider-open, other key-open
+and deletion failures are returned without removing the protected blob. The native slot is
+checked even for DPAPI or missing blobs: an earlier TPM wrapping attempt can leave a native key.
+Once native deletion succeeds or absence is confirmed, the adapter removes the blob. A file
+removal failure is returned; deletion can be retried against the now-absent native slot.
+The native deletion and file removal are separate operations. TPM-backed deletion still
+requires acceptance on a real TPM-equipped device.
+
 `repository` gives typed access to every object type of `04-object-model.md` §4. A record is a read view of a stored object; a change names only the fields it sets, with `Edit::Clear` writing `null` to clear an optional field (D-57) and map changes naming the entries to set or remove. Because a change touches only its own fields, fields this build does not know survive every write. Credential secrets are never part of a record: `credential_secret` reads one when a connection needs it, and a change containing a secret is redacted when formatted. Gateway networks are authored by the organization's server and are read-only on a device.
 
 The C3 independent-object facade builds on those typed records rather than
