@@ -500,6 +500,29 @@ The Hosts source navigation remains available as a horizontally scrolling row
 when the window is narrower than the desktop sidebar breakpoint, including at
 the desktop window's minimum width.
 
+## Independent local TCP tunnels
+
+`forward_manager::ForwardManager` owns standalone Local Forward runs separately from
+`SessionManager`. Start validates a saved definition and fixes its endpoints and complete
+saved connection plan synchronously, including a display-safe target Login context. The
+common preparation executor retains per-hop trust and authentication. It opens no session,
+shell or PTY. Editing inventory after Start cannot change that run's connection or identity.
+
+Each run owns one numeric-IP listener, at most 32 accepted or opening peers, and the target
+SSH connection with its Jump parents. Peers open independent `direct-tcpip` channels with a
+15-second deadline, then copy both directions concurrently with half-close and 32 KiB buffers.
+Traffic snapshots are coalesced at 250 milliseconds and expose decimal-text counters and
+revisions. Sixteen runs may be live, with at most 32 completed snapshots retained. A retained
+snapshot holds only a weak store identity; completion releases its observer and strong store
+ownership. A failed connection never triggers reconnect.
+
+The generated `forward_start`, `forward_list`, `forward_snapshot`, `forward_respond` and
+`forward_stop` commands bind actions to the exact open store and run. Prompt replies also
+require the current one-use preparation token. Stop fences new peers and replies, then
+settles the listener, peers and complete SSH chain. Store replacement drains all owners;
+application exit first permanently fences Starts and waits under one 35-second cleanup
+budget. Remote, dynamic, Unix-socket and automatic profile forwards remain separate work.
+
 ## Session upload sources
 
 The native picker supplies an upload path; Rust performs an ordinary-file preflight,

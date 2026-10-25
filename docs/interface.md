@@ -97,6 +97,25 @@ and other remote edits remain separate work.
 
 `web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 92 px for the window controls, which sit centered in it, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.
 
+## Independent local tunnels
+
+Hosts → Tunnels lists saved local TCP definitions and their independent runs. Saving only
+writes inventory. Start selects an existing Login and uses the terminal's shared trust,
+passphrase and Interactive dialogs without opening a terminal tab. The editor defaults to
+loopback and explains access from other devices when another bind address is entered.
+
+`useForwards` subscribes before listing native owners. Decimal revisions reject stale
+snapshots without losing integer precision; refresh and unmount fence pending action replies.
+The Shell keeps observing across view changes. A background challenge shows Needs attention
+and an explicit Continue setup action. Leaving the view clears transient inputs and keeps the
+native owner running; cancelling its preparation dialog sends Stop for that exact run.
+
+Runs display the fixed Host, Login and endpoints captured by Rust, with current connection
+count, uploaded/downloaded bytes and refusal count. Editing or deleting inventory never
+relabels a running connection or removes its Stop action. Stopped and failed runs remain
+visible; another attempt requires Start. The renderer receives no socket, key or credential
+handle and sends no network traffic.
+
 ## Remote text preview
 
 Each ordinary file has an explicit Preview action beside Download. A transient dialog names

@@ -52,6 +52,11 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   30-second Rust ticket bound to the current window, Files view, queue and remote directory.
   Whole-batch capacity and source checks precede FIFO admission. Scaled Windows and Retina
   macOS native drop acceptance and the remaining C6 workflows are incomplete.
+  Saved local TCP tunnels run independently of terminal tabs with explicit Login selection,
+  ordinary per-hop trust/authentication, fixed running identity and bounded peers. New
+  definitions default to loopback; the editor explains other-device access for non-loopback
+  binding. Stop, store replacement and application exit release owned forwarding resources.
+  Other forwarding kinds and the complete C7 gate remain incomplete.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.
 - The Windows TPM path of key storage cannot run on hosted CI runners, which have no TPM; only its DPAPI fallback is exercised there.

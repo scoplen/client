@@ -7,6 +7,7 @@
 pub mod commands;
 pub mod events;
 pub mod file_drop;
+pub mod forwards;
 pub mod frames;
 pub mod inventory;
 pub mod local_data;
@@ -21,6 +22,12 @@ mod window_state;
 use tauri::Manager as _;
 use tauri_specta::{Builder, Event as _, collect_commands, collect_events};
 
+#[derive(Default)]
+struct ForwardShutdown {
+    requested: std::sync::atomic::AtomicBool,
+    completed: std::sync::atomic::AtomicBool,
+}
+
 /// Path of the generated frontend bindings, relative to this crate.
 pub const BINDINGS_PATH: &str = "../web/app/src/ipc/bindings.ts";
 
@@ -31,6 +38,11 @@ pub fn ipc() -> Builder<tauri::Wry> {
         .commands(collect_commands![
             commands::app_info,
             commands::shell_ready,
+            forwards::forward_start,
+            forwards::forward_list,
+            forwards::forward_snapshot,
+            forwards::forward_respond,
+            forwards::forward_stop,
             ssh::session_respond,
             ssh::session_reserve_transport,
             ssh::session_connect,
@@ -75,6 +87,9 @@ pub fn ipc() -> Builder<tauri::Wry> {
             inventory::inventory_update_group,
             inventory::inventory_access_profiles,
             inventory::inventory_forwards,
+            inventory::inventory_create_forward,
+            inventory::inventory_update_forward,
+            inventory::inventory_delete_forward,
             inventory::inventory_create_access_profile,
             inventory::inventory_update_access_profile,
             inventory::inventory_delete_access_profile,
@@ -134,6 +149,7 @@ pub fn ipc() -> Builder<tauri::Wry> {
             events::StoreChanged,
             events::SessionChanged,
             events::PersonalSyncChanged,
+            forwards::ForwardChanged,
             file_drop::SessionFileDrag
         ])
 }
@@ -180,6 +196,8 @@ pub fn run() {
             }
             app.manage(local);
             app.manage(ssh::SessionManager::default());
+            app.manage(forwards::ForwardManager::default());
+            app.manage(ForwardShutdown::default());
             app.manage(inventory::InventoryState::default());
             app.manage(scoplen_client_core::personal_server::PersonalServer::default());
             let background = std::sync::Arc::new(scoplen_client_core::personal_server::PersonalSyncRuntime::default());
@@ -230,6 +248,27 @@ pub fn run() {
             }
             if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
                 app.state::<std::sync::Arc<scoplen_client_core::personal_server::PersonalSyncRuntime>>().shutdown();
+            }
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                use std::sync::atomic::Ordering;
+
+                let shutdown = app.state::<ForwardShutdown>();
+                if !shutdown.completed.load(Ordering::Acquire) {
+                    api.prevent_exit();
+                    if !shutdown.requested.swap(true, Ordering::AcqRel) {
+                        if app.state::<forwards::ForwardManager>().shutdown().is_err() {
+                            eprintln!("Scoplen could not confirm tunnel admission shutdown.");
+                        }
+                        let handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if handle.state::<forwards::ForwardManager>().stop_all().await.is_err() {
+                                eprintln!("Scoplen could not confirm tunnel cleanup before exit.");
+                            }
+                            handle.state::<ForwardShutdown>().completed.store(true, Ordering::Release);
+                            handle.exit(code.unwrap_or(0));
+                        });
+                    }
+                }
             }
         });
 }

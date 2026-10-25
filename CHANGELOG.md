@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added saved local TCP tunnels with explicit Login selection and independent
+  Start/Stop, host-key and authentication preparation, fixed running configuration,
+  bounded concurrent peers, half-close and traffic snapshots. Tunnels keep running
+  across view changes and release their listener and SSH route on Stop, application
+  exit or local-store replacement. Failed runs require a new Start. Other forwarding
+  kinds and automatic startup remain incomplete.
+
 - Added an opt-in Personal process-restart integration check using two real consumer processes,
   the platform secret provider and one owned encrypted data directory. It waits for the genuine
   access lifetime, refreshes directly after restart, verifies retained identity and refresh-family

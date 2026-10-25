@@ -135,6 +135,14 @@ pub async fn start_with_empty_local_data(
     app: tauri::AppHandle,
     state: tauri::State<'_, LocalDataState>,
 ) -> Result<Status, LocalDataError> {
+    if !matches!(state.get()?.status(), Status::Unreadable { .. }) {
+        return Err(LocalDataError::InvalidState);
+    }
+    app.state::<crate::forwards::ForwardManager>().stop_all().await.map_err(|_| {
+        LocalDataError::Failed {
+            reference: "Existing tunnels could not be stopped before replacing local data".into(),
+        }
+    })?;
     let runtime = app.state::<Arc<scoplen_client_core::personal_server::PersonalSyncRuntime>>();
     runtime.set_store(None);
     let result = blocking(&state, |data| data.start_fresh()).await;

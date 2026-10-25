@@ -12,6 +12,16 @@ export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	/**  Called by the frontend once its first screen has rendered. */
 	shellReady: () => __TAURI_INVOKE<void>("shell_ready"),
+	/**  Start a saved Local tunnel using the explicitly selected Login. */
+	forwardStart: (forwardId: string, profileId: string) => typedError<ForwardSnapshot, ForwardIssue>(__TAURI_INVOKE("forward_start", { forwardId, profileId })),
+	/**  List the current store's live runs and retained terminal snapshots. */
+	forwardList: () => typedError<ForwardSnapshot[], ForwardIssue>(__TAURI_INVOKE("forward_list")),
+	/**  Read a run without changing its lifetime. */
+	forwardSnapshot: (runId: string) => typedError<ForwardSnapshot, ForwardIssue>(__TAURI_INVOKE("forward_snapshot", { runId })),
+	/**  Answer the current SSH preparation challenge for one independent run. */
+	forwardRespond: (runId: string, promptId: string, intent: SessionPreparationIntent) => typedError<null, ForwardIssue>(__TAURI_INVOKE("forward_respond", { runId, promptId, intent })),
+	/**  Fence new accepts immediately and begin cancelling one independent run. */
+	forwardStop: (runId: string) => typedError<null, ForwardIssue>(__TAURI_INVOKE("forward_stop", { runId })),
 	/**  Reply to the current session-owned, one-use preparation prompt. */
 	sessionRespond: (sessionId: string, transportId: string, promptId: string, intent: SessionPreparationIntent) => typedError<null, string>(__TAURI_INVOKE("session_respond", { sessionId, transportId, promptId, intent })),
 	/**  Reserve a logical session before starting its cancellable manager task. */
@@ -105,6 +115,12 @@ export const commands = {
 	inventoryAccessProfiles: () => typedError<AccessProfileSummary[], ObjectEditError>(__TAURI_INVOKE("inventory_access_profiles")),
 	/**  Lists saved tunnels that can be attached to an access profile. */
 	inventoryForwards: () => typedError<ForwardSummary[], ObjectEditError>(__TAURI_INVOKE("inventory_forwards")),
+	/**  Saves a local tunnel definition without starting it. */
+	inventoryCreateForward: (forward: ForwardInput) => typedError<ForwardSummary, ObjectEditError>(__TAURI_INVOKE("inventory_create_forward", { forward })),
+	/**  Replaces saved endpoints without changing a live run. */
+	inventoryUpdateForward: (id: string, forward: ForwardInput) => typedError<ForwardSummary, ObjectEditError>(__TAURI_INVOKE("inventory_update_forward", { id, forward })),
+	/**  Removes an unreferenced saved definition, preserving a live run's snapshot. */
+	inventoryDeleteForward: (id: string) => typedError<null, ObjectEditError>(__TAURI_INVOKE("inventory_delete_forward", { id })),
 	/**  Creates an independent access profile. */
 	inventoryCreateAccessProfile: (profile: AccessProfileInput) => typedError<AccessProfileSummary, ObjectEditError>(__TAURI_INVOKE("inventory_create_access_profile", { profile })),
 	/**  Replaces an independent access profile. */
@@ -247,6 +263,7 @@ export const commands = {
 
 /** Events */
 export const events = {
+	forwardChanged: makeEvent<ForwardChanged>("forward-changed"),
 	personalSyncChanged: makeEvent<PersonalSyncChanged>("personal-sync-changed"),
 	sessionChanged: makeEvent<SessionChanged>("session-changed"),
 	sessionFileDrag: makeEvent<SessionFileDrag>("session-file-drag"),
@@ -577,6 +594,63 @@ export type FileDropAccepted = {
 	accepted: number,
 };
 
+/**  A display-safe snapshot of one Rust-owned run. */
+export type ForwardChanged = {
+	/**  The latest revision of the independent run. */
+	snapshot: ForwardSnapshot,
+};
+
+/**  Complete replacement of a saved local TCP tunnel definition. */
+export type ForwardInput = {
+	/**  Nonempty display name. */
+	name: string,
+	/**  Only Local is editable in this outcome. */
+	kind: ForwardKindInput,
+	/**  Explicit IPv4 or IPv6 literal; never replaced with a broader listener. */
+	bindAddress: string,
+	/**  Nonzero TCP listening port. */
+	bindPort: number,
+	/**  Hostname or IP literal resolved remotely. */
+	targetHost: string,
+	/**  Nonzero TCP destination port. */
+	targetPort: number,
+	/**  Optional default Login; starting still selects an explicit Login. */
+	profile: string | null,
+};
+
+/**  Fixed failure categories; native errors and connection secrets are never exposed. */
+export type ForwardIssue =
+/**  Saved fields or identifiers are invalid for this local TCP outcome. */
+"invalidConfiguration" |
+/**  The saved tunnel or selected Login no longer exists. */
+"notFound" |
+/**  Remote and dynamic definitions cannot execute as local TCP forwards. */
+"notLocal" |
+/**  That saved definition already owns a live execution. */
+"alreadyRunning" |
+/**  Live execution capacity is reserved before any network operation. */
+"capacityReached" |
+/**  Local storage, manager state or the asynchronous runtime is unavailable. */
+"unavailable" |
+/**  A run, prompt or store identity has been replaced or completed. */
+"expired" |
+/**  Existing SSH preparation rejected the configuration, trust or authentication. */
+"preparationFailed" |
+/**  The saved local socket cannot be bound or its listener failed. */
+"listenFailed" |
+/**  The SSH event loop or transport ended. */
+"connectionLost" |
+/**  One accepted peer's target channel was refused. */
+"targetRejected" |
+/**  One accepted peer's target channel did not open within its budget. */
+"targetTimedOut" |
+/**  An excess accepted socket was closed without opening an SSH channel. */
+"peerLimitReached" |
+/**  One peer failed while copying bytes; other peers remain independent. */
+"peerIo" |
+/**  Owned shutdown could not be confirmed within its complete-chain budget. */
+"shutdownFailed";
+
 /**  The direction of a saved tunnel. */
 export type ForwardKindInput =
 /**  Listen locally and connect to the remote target. */
@@ -585,6 +659,45 @@ export type ForwardKindInput =
 "remote" |
 /**  Listen locally as a SOCKS proxy. */
 "dynamic";
+
+/**  State of an independent tunnel, never inferred from an open terminal. */
+export type ForwardPhase =
+/**  Resolving the saved Login and completing trust and authentication. */
+"preparing" |
+/**  The selected local socket is accepting connections. */
+"listening" |
+/**  New peers and prompt replies are fenced while owned resources settle. */
+"stopping" |
+/**  Explicitly stopped and all owned resources released. */
+"stopped" |
+/**  Execution failed and all owned resources released. */
+"failed";
+
+/**  Display-safe execution state. Full-width counters are decimal strings for JavaScript. */
+export type ForwardSnapshot = {
+	/**  Fresh execution identity; an earlier run can never control a later one. */
+	runId: string,
+	/**  Immutable saved forwarding configuration. */
+	configuration: LocalForwardConfiguration,
+	/**  Current Rust-owned phase. */
+	phase: ForwardPhase,
+	/**  Latest preparation state, including any current one-use prompt. */
+	preparation: PreparationEvent | null,
+	/**  Actual bound socket, present only after successful listener admission. */
+	boundAddress: string | null,
+	/**  Accepted and opening peers, bounded by `MAX_FORWARD_PEERS`. */
+	activeConnections: number,
+	/**  Bytes successfully written toward the SSH target. */
+	uploadedBytes: string,
+	/**  Bytes successfully written toward the local peer. */
+	downloadedBytes: string,
+	/**  Peers refused by target admission, capacity or I/O failure. */
+	rejectedConnections: string,
+	/**  Latest fixed issue category; no remote payload or native error text. */
+	lastIssue: ForwardIssue | null,
+	/**  Strictly increasing per-run snapshot revision. */
+	revision: string,
+};
 
 /**  A redacted saved tunnel that can be attached to an access profile. */
 export type ForwardSummary = {
@@ -596,6 +709,18 @@ export type ForwardSummary = {
 	kind: ForwardKindInput,
 	/**  The optional default profile configured on the tunnel. */
 	profile: string | null,
+	/**  Saved local listening address, when specified. */
+	bindAddress: string | null,
+	/**  Saved nonzero local port, when specified. */
+	bindPort: number | null,
+	/**  Destination resolved by the SSH server, when specified. */
+	targetHost: string | null,
+	/**  Saved nonzero destination port, when specified. */
+	targetPort: number | null,
+	/**  Number of Logins that attach this tunnel. */
+	profileCount: number,
+	/**  Whether a later write resurrected this definition. */
+	restored: boolean,
 };
 
 /**  Why creating or editing a group failed. No group is changed for failures. */
@@ -726,6 +851,26 @@ export type LocalDataError =
 /**  A diagnostic reference for support, free of secrets. */
 reference: string };
 
+/**  Immutable saved endpoints selected for one explicit execution. */
+export type LocalForwardConfiguration = {
+	/**  Saved Forward identity, never a renderer-selected destination override. */
+	forwardId: string,
+	/**  Saved display label. */
+	name: string,
+	/**  Explicitly selected existing Login. */
+	profileId: string,
+	/**  Target Login and Host identity from the same immutable preparation plan. */
+	login: PreparationContext,
+	/**  Exact saved IPv4 or IPv6 listening address. */
+	bindAddress: string,
+	/**  Exact nonzero saved local port. */
+	bindPort: number,
+	/**  Exact remote target, resolved by the authenticated SSH server. */
+	targetHost: string,
+	/**  Exact nonzero remote target port. */
+	targetPort: number,
+};
+
 /**
  *  A language the interface is written in (`11-client-architecture.md` §4).
  *
@@ -792,6 +937,10 @@ export type ObjectEditError =
 { kind: "invalidProxyAuthentication" } |
 /**  A route command is empty or exceeds the model limit. */
 { kind: "invalidCommand" } |
+/**  A local tunnel endpoint is invalid. */
+{ kind: "invalidForward"; field: string } |
+/**  Only local TCP definitions can be created or edited here. */
+{ kind: "unsupportedForward" } |
 /**  Kind and binding do not satisfy the object model. */
 { kind: "invalidCredentialBinding" } |
 /**  Shared password/private-key credentials require material on creation. */

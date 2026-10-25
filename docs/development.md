@@ -329,6 +329,29 @@ the public queue with later queued work, terminal input/resize and exact saved b
 These checks do not establish cross-transport or process recovery, immutable source/staging
 files, inode identity, or physical-platform UI acceptance.
 
+## Standalone local TCP tunnel checks
+
+```text
+cargo test -p scoplen-client-core --lib forward_manager::tests
+cargo test -p scoplen-client-core --lib forward
+pnpm --filter @scoplen/app test -- tunnels
+pwsh -NoProfile -File scripts/test-ssh-local-forward.ps1
+```
+
+Core regressions cover frozen configuration and Login identity, concurrent peers and
+half-close, pending channel opens, capacity and deadlines, occupied listeners, target
+refusal, idle and active SSH loss, preparation cancellation, stale replies, traffic
+coalescing, retained snapshots, store release and shutdown admission. The disposable
+OpenSSH check disables session channels on its forwarding listeners and verifies binary
+payloads, EOF trailers, exact counters, Direct and Jump authentication, owned resource
+release and a separate usable terminal. It requires Docker and `ssh-keygen`.
+
+Frontend checks exercise generated commands and events, view changes, fixed identity,
+secret-input cleanup, stale revisions and replies, deletion during a run, keyboard
+operation and English/Chinese states. Synthetic IPC and browser rendering do not establish
+native desktop or complete C7 acceptance. Failed OpenSSH runs retain private diagnostics
+in their owned temporary directory and stop the owned container; successful runs clean up.
+
 ## Generated files
 
 | File | Regenerate with | When |

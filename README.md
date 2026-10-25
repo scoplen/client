@@ -91,6 +91,22 @@ Interactive SSH sessions become ready after authentication and shell setup,
 even when the server sends no initial output. Terminal input and PTY resizing
 are available without waiting for a welcome message or prompt.
 
+Tunnels manages saved local TCP forwards independently of terminal tabs. Add a
+definition with a numeric local IPv4 or IPv6 address, nonzero local and destination
+ports, and a destination hostname or address. New definitions use `127.0.0.1`;
+choosing another listening address may let other devices use the tunnel. Choose
+Start and an existing Login, then complete its ordinary host-key, key-passphrase
+or Interactive review. The tunnel opens no terminal or shell. The SSH server
+resolves the destination hostname.
+
+Running tunnels show their fixed configuration, connection count and traffic.
+Leaving Tunnels keeps them running; editing or deleting a saved definition does
+not change an existing run. Stop closes its listener, peers and SSH route. At most
+16 tunnels and 32 peers per tunnel run at once. A failed run requires an explicit
+new Start; tunnels do not reconnect or start automatically. Application exit or
+local-store replacement stops every run. Remote, dynamic, Unix-socket and ad-hoc
+forwarding remain incomplete.
+
 A connected terminal's Files button opens an SFTP browser on that terminal's
 authenticated SSH connection. It starts in the server's initial SFTP directory,
 opens subdirectories, and downloads regular files to a location selected in the
@@ -391,6 +407,13 @@ and late replies, another terminal while one challenge waits, and Interactive
 Jump plus target authentication. Every successful connection must execute the
 exact expected command with exit status zero. The fixture cleans up its own
 containers and temporary keys.
+
+`scripts/test-ssh-local-forward.ps1` checks saved standalone TCP tunnels against
+disposable OpenSSH listeners with session channels disabled. It exercises password,
+encrypted-key, Interactive and Jump preparation, concurrent binary streams, half-close,
+exact traffic counts, refusal, cancellation and SSH loss while another terminal stays
+usable. It requires PowerShell 7, Docker and `ssh-keygen`. Successful runs remove their
+owned resources; failed runs retain private diagnostics and stop their owned container.
 
 With PowerShell 7, Docker, and `ssh-keygen` available, `scripts/test-ssh-private-key.ps1`
 starts disposable OpenSSH servers and verifies Ed25519, P-256/P-384/P-521, and RSA key
