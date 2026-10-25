@@ -38,6 +38,36 @@ The first launch rebuilds the Rust dependencies. A fresh checkout does not need 
 
 ## Disposable Personal server integration
 
+### Password registration and independent-device sign-in
+
+Use a fresh empty disposable HTTPS deployment with Account registration enabled. The client
+creates its own Account and independent Device identities through public APIs; no preconfirmed
+profiles, invitation, existing device, SMTP or identity database seed is used.
+
+The private descriptor has exactly `disposable: true`, `origin` (`https://localhost:<port>`) and
+`ca_certificate` (an absolute PEM path). Set `SCOPLEN_LIVE_ACCOUNT_DEPLOYMENT` to its absolute
+file path. The descriptor is bounded to 8 KiB and the CA to 64 KiB. Test CA trust is confined
+to this client; use a separate fresh descriptor/deployment for each database backend.
+
+```powershell
+$env:SCOPLEN_LIVE_ACCOUNT_DEPLOYMENT = '<absolute descriptor path>'
+cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::live_password_registration_and_independent_device_sync -- --exact --test-threads=1
+```
+
+The scenario exports and confirms a generated recovery key before registration, authenticates
+and installs the first Device, then rejects a wrong password on an independent Local directory.
+After the documented first-denial cooldown, correct password sign-in admits a fresh Device to
+the same Account/vault. Both devices rotate native refresh credentials, verify signed membership,
+exchange reviewed encrypted Host data and a second-device edit, and durably acknowledge progress.
+Local-only Hosts stay outside both Account stores; retained keys and synchronized data verify
+after Account reopen. Local store protection uses test passphrases, not native keystore acceptance.
+Passwords and account names are generated per run and are not printed. Successful owned client
+fixtures are removed; failures retain the original encrypted stores and pending state.
+This core integration check does not establish native desktop interaction, native picker or
+macOS feature acceptance.
+
+### Preconfirmed-profile integration
+
 The opt-in `live-server-integration` feature checks retained admitted-device authentication,
 refresh, sync keys, reviewed inventory, native notifications, history, SSH trust propagation and
 three-device convergence against an independently running disposable server. It does not read

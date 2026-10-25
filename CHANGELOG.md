@@ -4,6 +4,9 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added an opt-in public HTTPS integration check for password registration, independent-device
+  sign-in, native refresh and bidirectional encrypted Host synchronization using fresh deployments.
+
 - Added native desktop Create account with real preparation, native recovery export and explicit
   confirmation, Submit/Confirm/Retry, real password Sign in and explicit new-Device admission,
   retained pending recovery and independent profile installation.
@@ -19,8 +22,7 @@ All notable changes to the Scoplen desktop client are recorded here.
   followed by fresh Device authentication and complete verified K-4 before admission, tokens and
   bootstrap commit together. Failed or interrupted publication retains the original keys and
   reservation for reauthenticated retry. Local and other Accounts remain separate, and fresh
-  generations fence old leases and background owners. Native registration/profile UI, password
-  sign-in, next-Device admission and Team switching remain incomplete.
+  generations fence old leases and background owners. Team switching remains incomplete.
 
 - Added a Rust-owned D-128 registration HTTPS driver with explicit Submit, Confirm and Retry
   actions, verified TLS 1.3/H2, bounded shared codecs/problems and typed cancellation/failures.
