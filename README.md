@@ -250,8 +250,11 @@ An unfinished old setup is preserved and cannot resume its retired entry protoco
 Rust has a separate registration preparation API with the real fixed D-127 password derivation,
 locally verified key wrappers, a mandatory saved recovery key and explicit confirmation.
 Its independent SQLCipher pending record keeps the original Device keys and signed business
-bytes through restart and uncertain request handoff. It performs no HTTP, exposes no desktop
-commands, and installs no Account, tokens or sync authority. Device keys in this boundary are
+bytes through restart and uncertain request handoff. A separate Rust HTTPS driver runs fresh
+D-128 challenge/register/exact-confirm exchanges over verified TLS 1.3/H2 without redirects.
+Trusted unchanged Submit results permit only an explicit retry; unknown outcomes remain
+receipt-only, including after a missing receipt. It exposes no desktop commands and installs no
+isolated Account profile, tokens or sync authority. Device keys in this boundary are
 software keys protected by SQLCipher, not hardware-held non-exportable keys. Full registration,
 password sign-in, isolated Account-profile installation and switching remain incomplete.
 

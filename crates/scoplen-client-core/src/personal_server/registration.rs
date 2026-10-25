@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Rust-only password registration preparation. No HTTP, tokens, or admitted profile installation.
+//! Rust-owned registration preparation and HTTPS. No tokens or admitted profile installation.
 
 use std::{fs::OpenOptions, io::Write as _, path::Path, sync::Arc};
 
@@ -27,9 +27,15 @@ use crate::{
     store::{Store, personal::RegistrationRecord},
 };
 
+mod http;
+pub use http::{RegistrationAction, RegistrationCancellation};
+
 // Process-wide, fail-fast admission also covers separate PersonalServer instances. A caller
 // runs these synchronous preparation methods on its blocking worker, never on the renderer.
 static PASSWORD_DERIVATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+static TEST_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Safe local preparation state; even Committed is historical evidence, not current authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +46,8 @@ pub enum RegistrationPhase {
     Ready,
     /// The original request may have committed; only exact fresh-proof confirmation is allowed.
     OutcomeUnknown,
+    /// A trusted response proves the latest Submit unchanged; another Submit needs explicit Retry.
+    RetryAvailable,
     /// Every historical confirmation field matches the original bytes; no Device is installed.
     Committed,
 }
@@ -65,6 +73,10 @@ pub struct RegistrationStatus {
     pub recovery_saved: bool,
     /// The user explicitly confirmed keeping the saved key safely.
     pub recovery_confirmed: bool,
+    /// Count of durably recorded Submit handoffs; it never decreases or resets.
+    pub dispatch_generation: u64,
+    /// Earliest time for an explicit retry after a trusted rate response, in Unix milliseconds.
+    pub retry_not_before_ms: Option<u64>,
 }
 
 /// Input-free preparation failures; never include passwords, filesystem paths, or crypto details.
@@ -113,6 +125,51 @@ pub enum RegistrationError {
         "The response did not match this registration. Its original keys and result were retained."
     )]
     InvalidResponse,
+    /// A new Submit requires the separate explicit retry action after a trusted unchanged result.
+    #[error("Review this unchanged result, then explicitly retry the original registration.")]
+    ExplicitRetryRequired,
+    /// The current attempt has no trusted unchanged result and cannot authorize another Submit.
+    #[error("This registration cannot be submitted again. Confirm its original result instead.")]
+    RetryUnavailable,
+    /// The retry delay remains in effect through restart.
+    #[error("The server asked this registration to wait. Try again after its retry time.")]
+    RetryDeferred,
+    /// Cancellation stops this exchange while preserving its original pending identity.
+    #[error("The registration exchange was cancelled. Its original keys and result were retained.")]
+    Cancelled,
+    /// A request or response did not finish within the bounded network deadline.
+    #[error("The registration exchange timed out. Keep its original keys and check its result.")]
+    Timeout,
+    /// A verified HTTPS exchange did not complete; this never proves a handed-off Submit unchanged.
+    #[error("The HTTPS exchange did not complete. Check the server certificate and connection.")]
+    Network,
+    /// The selected service does not expose the D-128 native routes.
+    #[error("This server does not support native account registration. Contact its operator.")]
+    UnsupportedService,
+    /// The exact trusted problem reports a request/media failure without business changes.
+    #[error("The server rejected this registration request. Its original keys were retained.")]
+    RequestRejected,
+    /// New registrations are disabled or the trusted origin is denied.
+    #[error("The server does not permit this registration. Contact its operator.")]
+    PolicyDenied,
+    /// Fresh request possession was denied, without claiming whether an earlier Submit committed.
+    #[error("The server could not verify this account request. Its original result was retained.")]
+    AuthenticationDenied,
+    /// The trusted first Submit reports a username or identifier conflict without partial creation.
+    #[error("The server denied this registration. Its original keys and request were retained.")]
+    RegistrationDenied,
+    /// The deployment cannot admit another registration under its configured capacity.
+    #[error("The server cannot accept another registration. Contact its operator.")]
+    QuotaExceeded,
+    /// A trusted common rate response supplies the bounded delay, without arbitrary server text.
+    #[error("The server asked this registration to wait {retry_after_seconds} seconds.")]
+    RateLimited {
+        /// The shared contract's exact 1..=300 second delay.
+        retry_after_seconds: u16,
+    },
+    /// The trusted response confirms no new business commit; a retry is always explicit.
+    #[error("The server could not complete this request. Keep its original keys and try later.")]
+    ServiceUnavailable,
 }
 
 impl PersonalServer {
@@ -273,40 +330,7 @@ impl PersonalServer {
         let _operation = self.operation.try_lock().map_err(|_| RegistrationError::Busy)?;
         current(local, store, || {
             let record = record(store, requested.operation_id)?;
-            let expected = challenge(&record)?;
-            if &expected != requested || response.expires_at_ms <= now_ms()? {
-                return Err(RegistrationError::InvalidResponse);
-            }
-            let payload = verify(&record)?;
-            let secrets = Secrets::parse(&record.private_material).map_err(identity)?;
-            let signing = P256SigningKey::from_bytes(secrets.signing()).map_err(identity)?;
-            let digest = signature_input(&record)?.request_digest(&record.account_signature);
-            let proof = AccountRequestProof::new(
-                requested.kind,
-                requested.intent,
-                &payload.origin,
-                response.attempt_id.as_bytes(),
-                response.nonce.as_bytes(),
-                requested.operation_id,
-                requested.device_id,
-                &digest,
-            )
-            .map_err(identity)?
-            .sign(&signing)
-            .map_err(identity)?;
-            let request = AccountRegistrationRequest {
-                intent: requested.intent,
-                payload: record.payload.clone(),
-                account_signature: record.account_signature,
-                attempt_id: response.attempt_id,
-                nonce: response.nonce,
-                device_proof: proof,
-            };
-            request.verify_proof(&payload.origin).map_err(identity)?;
-            if requested.intent == AccountRequestIntent::Submit {
-                changed(store.update_registration(&record, true, true, 1, None))?;
-            }
-            Ok(request)
+            request_for(store, &record, requested, response, false)
         })
     }
 
@@ -326,24 +350,8 @@ impl PersonalServer {
     ) -> Result<RegistrationStatus, RegistrationError> {
         let _operation = self.operation.try_lock().map_err(|_| RegistrationError::Busy)?;
         current(local, store, || {
-            let mut record = record(store, operation_id)?;
-            if record.phase == 0 {
-                return Err(RegistrationError::InvalidResponse);
-            }
-            let confirmation = AccountCommittedConfirmation::from_json(response)
-                .map_err(|_| RegistrationError::InvalidResponse)?;
-            confirmation
-                .validate_for_request(
-                    AccountRequestKind::Register,
-                    record.payload.as_bytes(),
-                    &record.account_signature,
-                )
-                .map_err(|_| RegistrationError::InvalidResponse)?;
-            let encoded = SecretVec::new(confirmation.to_json().map_err(identity)?);
-            changed(store.update_registration(&record, true, true, 2, Some(encoded.as_bytes())))?;
-            record.phase = 2;
-            record.confirmation = Some(encoded);
-            status(&record)
+            let record = record(store, operation_id)?;
+            confirm_record(store, record, response)
         })
     }
 
@@ -369,6 +377,30 @@ impl PersonalServer {
     }
 }
 
+fn confirm_record(
+    store: &Store,
+    mut record: RegistrationRecord,
+    response: &[u8],
+) -> Result<RegistrationStatus, RegistrationError> {
+    if record.phase == 0 {
+        return Err(RegistrationError::InvalidResponse);
+    }
+    let confirmation = AccountCommittedConfirmation::from_json(response)
+        .map_err(|_| RegistrationError::InvalidResponse)?;
+    confirmation
+        .validate_for_request(
+            AccountRequestKind::Register,
+            record.payload.as_bytes(),
+            &record.account_signature,
+        )
+        .map_err(|_| RegistrationError::InvalidResponse)?;
+    let encoded = SecretVec::new(confirmation.to_json().map_err(identity)?);
+    changed(store.update_registration(&record, true, true, 2, Some(encoded.as_bytes())))?;
+    record.phase = 2;
+    record.confirmation = Some(encoded);
+    status(&record)
+}
+
 fn current<T>(
     local: &LocalData,
     store: &Arc<Store>,
@@ -392,6 +424,9 @@ fn status(record: &RegistrationRecord) -> Result<RegistrationStatus, Registratio
         phase: match record.phase {
             0 if record.recovery_confirmed => RegistrationPhase::Ready,
             0 => RegistrationPhase::RecoveryRequired,
+            1 if record.dispatch_generation == record.unchanged_generation => {
+                RegistrationPhase::RetryAvailable
+            }
             1 => RegistrationPhase::OutcomeUnknown,
             2 => RegistrationPhase::Committed,
             _ => return Err(RegistrationError::Identity),
@@ -404,6 +439,9 @@ fn status(record: &RegistrationRecord) -> Result<RegistrationStatus, Registratio
         device_id: payload.device_id,
         recovery_saved: record.recovery_saved,
         recovery_confirmed: record.recovery_confirmed,
+        dispatch_generation: record.dispatch_generation as u64,
+        retry_not_before_ms: (record.retry_not_before_ms > 0)
+            .then_some(record.retry_not_before_ms as u64),
     })
 }
 
@@ -424,6 +462,53 @@ fn challenge(
         operation_id: p.operation_id,
         device_id: p.device_id,
     })
+}
+
+fn request_for(
+    store: &Store,
+    record: &RegistrationRecord,
+    requested: &AccountRequestChallengeRequest,
+    response: AccountRequestChallengeResponse,
+    retry: bool,
+) -> Result<AccountRegistrationRequest, RegistrationError> {
+    let mut expected = challenge(record)?;
+    if retry {
+        http::retry_allowed(record)?;
+        expected.intent = AccountRequestIntent::Submit;
+    }
+    if &expected != requested || response.expires_at_ms <= now_ms()? {
+        return Err(RegistrationError::InvalidResponse);
+    }
+    let payload = verify(record)?;
+    let secrets = Secrets::parse(&record.private_material).map_err(identity)?;
+    let signing = P256SigningKey::from_bytes(secrets.signing()).map_err(identity)?;
+    let digest = signature_input(record)?.request_digest(&record.account_signature);
+    let proof = AccountRequestProof::new(
+        requested.kind,
+        requested.intent,
+        &payload.origin,
+        response.attempt_id.as_bytes(),
+        response.nonce.as_bytes(),
+        requested.operation_id,
+        requested.device_id,
+        &digest,
+    )
+    .map_err(identity)?
+    .sign(&signing)
+    .map_err(identity)?;
+    let request = AccountRegistrationRequest {
+        intent: requested.intent,
+        payload: record.payload.clone(),
+        account_signature: record.account_signature,
+        attempt_id: response.attempt_id,
+        nonce: response.nonce,
+        device_proof: proof,
+    };
+    request.verify_proof(&payload.origin).map_err(identity)?;
+    if requested.intent == AccountRequestIntent::Submit {
+        changed(store.update_registration(record, true, true, 1, None))?;
+    }
+    Ok(request)
 }
 
 fn prepare(
@@ -549,6 +634,9 @@ fn prepare(
         recovery_confirmed: false,
         phase: 0,
         confirmation: None,
+        dispatch_generation: 0,
+        unchanged_generation: 0,
+        retry_not_before_ms: 0,
     };
     verify(&record)?;
     Ok(record)
@@ -562,6 +650,11 @@ fn verify(record: &RegistrationRecord) -> Result<AccountRegistrationPayload, Reg
         || !(0..=2).contains(&record.phase)
         || record.phase != 0 && !record.recovery_confirmed
         || (record.phase == 2) != record.confirmation.is_some()
+        || record.dispatch_generation < 0
+        || record.unchanged_generation < 0
+        || record.unchanged_generation > record.dispatch_generation
+        || record.retry_not_before_ms < 0
+        || (record.phase == 0) != (record.dispatch_generation == 0)
     {
         return Err(RegistrationError::Identity);
     }

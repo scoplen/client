@@ -122,6 +122,7 @@ pub struct LocalData {
     keys: LocalKeys,
     state: Mutex<State>,
     listener: Mutex<Option<ChangeListener>>,
+    context: tokio::sync::watch::Sender<()>,
 }
 
 impl LocalData {
@@ -141,6 +142,7 @@ impl LocalData {
             keys,
             state: Mutex::new(State::Locked(Status::NeedsNewPassphrase)),
             listener: Mutex::new(None),
+            context: tokio::sync::watch::channel(()).0,
         };
         data.restart()?;
         Ok(data)
@@ -190,6 +192,10 @@ impl LocalData {
         self.with_store(|current| Arc::ptr_eq(current, expected).then(operation)).flatten()
     }
 
+    pub(crate) fn context_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.context.subscribe()
+    }
+
     /// Opens the store with the local passphrase.
     pub fn unlock(&self, passphrase: &str) -> Result<Status, LocalDataError> {
         let mut state = self.state();
@@ -198,6 +204,7 @@ impl LocalData {
         }
         let (key, protection) = self.keys.unlock(passphrase)?;
         *state = self.open(key, protection)?;
+        self.context.send_replace(());
         Ok(status_of(&state))
     }
 
@@ -210,6 +217,7 @@ impl LocalData {
         }
         let key = self.keys.create_with_passphrase(passphrase)?;
         *state = self.open(key, Protection::PassphraseOnly)?;
+        self.context.send_replace(());
         Ok(status_of(&state))
     }
 
@@ -257,7 +265,13 @@ impl LocalData {
             Err(other) => return Err(other.into()),
         };
         *self.state() = next;
+        self.context.send_replace(());
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reopen_for_test(&self) -> Result<(), LocalDataError> {
+        self.restart()
     }
 
     fn open(&self, key: LocalDatabaseKey, protection: Protection) -> Result<State, LocalDataError> {

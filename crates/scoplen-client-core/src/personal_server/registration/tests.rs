@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Public Rust preparation surface with real D-127 work and independently opened artifacts.
 
-use std::sync::{Mutex, MutexGuard};
+use tokio::sync::MutexGuard;
 
 use scoplen_crypto::SecretBytes;
 
 use super::*;
 use crate::testing::MemoryKeystore;
 
-static SERIAL: Mutex<()> = Mutex::new(());
 const PASSWORD: &[u8] = b"a real account password";
 
 struct Fixture {
@@ -23,7 +22,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let serial = TEST_SERIAL.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let keys = MemoryKeystore::default();
         let local = LocalData::start(dir.path(), Some(Box::new(keys.clone()))).unwrap();

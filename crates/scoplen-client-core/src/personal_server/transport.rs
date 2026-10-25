@@ -9,6 +9,9 @@ use scoplen_crypto::{DpopProof, SecretVec, validate_server_origin};
 
 use super::PersonalServerError;
 
+mod registration;
+pub(super) use registration::RegistrationResponse;
+
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(super) struct Transport {
