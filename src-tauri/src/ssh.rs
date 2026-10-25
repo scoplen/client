@@ -68,6 +68,21 @@ pub enum SessionPreparationIntent {
     },
 }
 
+impl SessionPreparationIntent {
+    /// Consume write-only answers immediately into the common redacting response.
+    pub(crate) fn into_response(self) -> Result<PreparationResponse, String> {
+        match self {
+            Self::KeyboardInteractive { answers } => PreparationResponse::keyboard_interactive(
+                answers.into_iter().map(String::into_bytes).collect(),
+            ),
+            Self::AcceptHostKey => Ok(PreparationResponse::AcceptHostKey),
+            Self::Passphrase { value } => {
+                Ok(PreparationResponse::Passphrase(SecretVec::new(value.into_bytes())))
+            }
+        }
+    }
+}
+
 /// Reply to the current session-owned, one-use preparation prompt.
 #[tauri::command]
 #[specta::specta]
@@ -78,17 +93,7 @@ pub fn session_respond(
     prompt_id: String,
     intent: SessionPreparationIntent,
 ) -> Result<(), String> {
-    let response = match intent {
-        SessionPreparationIntent::KeyboardInteractive { answers } => {
-            PreparationResponse::keyboard_interactive(
-                answers.into_iter().map(String::into_bytes).collect(),
-            )?
-        }
-        SessionPreparationIntent::AcceptHostKey => PreparationResponse::AcceptHostKey,
-        SessionPreparationIntent::Passphrase { value } => {
-            PreparationResponse::Passphrase(SecretVec::new(value.into_bytes()))
-        }
-    };
+    let response = intent.into_response()?;
     manager.respond(&session_id, &transport_id, &prompt_id, response)
 }
 

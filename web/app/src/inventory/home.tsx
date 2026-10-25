@@ -14,7 +14,7 @@ import {
   useContextMenu,
 } from "@scoplen/ui";
 import { Copy, Plug, Plus, RotateCcw, Star, Trash2 } from "lucide-react";
-import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useContext, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import { AddHostDialog } from "./add-host";
 import {
@@ -33,6 +33,10 @@ import { InventoryObjects } from "./objects";
 import { routeText } from "./labels";
 import type { ObjectSection } from "./objects";
 import { useLoad, type Loaded } from "./use-load";
+import { TunnelsHome } from "./tunnels";
+import { ForwardsContext } from "../use-forwards";
+
+type ManageSection = ObjectSection | "tunnels";
 
 type Toast = { message: string; undo?: string } | null;
 
@@ -56,7 +60,7 @@ export function HostsHome({
   const [source, setSource] = useState<HostSource>({ kind: "all" });
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Id | null>(null);
-  const [objects, setObjects] = useState<ObjectSection | null>(null);
+  const [objects, setObjects] = useState<ManageSection | null>(null);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<HostSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -226,7 +230,11 @@ export function HostsHome({
 
       {objects ? (
         <div className="min-w-0 flex-1">
-          <InventoryObjects key={objects} section={objects} embedded onBack={() => setObjects(null)} />
+          {objects === "tunnels" ? (
+            <TunnelsHome />
+          ) : (
+            <InventoryObjects key={objects} section={objects} embedded onBack={() => setObjects(null)} />
+          )}
         </div>
       ) : (
         <>
@@ -689,10 +697,14 @@ function Sidebar({
   groups: GroupSummary[];
   keys: boolean;
   routes: boolean;
-  objects: ObjectSection | null;
-  onOpenObjects?: (section: ObjectSection) => void;
+  objects: ManageSection | null;
+  onOpenObjects?: (section: ManageSection) => void;
 }) {
   const { t } = useI18n();
+  const forwards = useContext(ForwardsContext);
+  const attention =
+    forwards?.snapshots.filter((run) => run.phase === "preparing" && run.preparation && "promptId" in run.preparation)
+      .length ?? 0;
   const is = (other: HostSource) =>
     objects === null &&
     other.kind === source.kind &&
@@ -758,6 +770,16 @@ function Sidebar({
             <li className="shrink-0">
               <ObjectItem current={objects === "logins"} onClick={() => onOpenObjects("logins")}>
                 {t("frame.logins")}
+              </ObjectItem>
+            </li>
+            <li className="shrink-0">
+              <ObjectItem current={objects === "tunnels"} onClick={() => onOpenObjects("tunnels")}>
+                {t("tunnels.title")}
+                {attention ? (
+                  <span className="ml-2 text-xs text-attention">
+                    {t("tunnels.attentionCount", { count: attention })}
+                  </span>
+                ) : null}
               </ObjectItem>
             </li>
             {keys ? (
