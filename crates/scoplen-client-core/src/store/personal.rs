@@ -10,10 +10,8 @@ use super::{Store, StoreError, uuid_from};
 mod account;
 mod admission;
 mod auth;
-mod pairing;
 pub(crate) use account::PersonalAccountRecord;
 pub(crate) use auth::{PersonalRefreshClaim, PersonalTokens};
-pub(crate) use pairing::PairingRecord;
 
 #[derive(Debug)]
 pub(crate) struct PersonalRecord {
@@ -22,17 +20,13 @@ pub(crate) struct PersonalRecord {
     pub personal_vault_id: Uuid,
     pub device_name: String,
     pub private_material: SecretVec,
-    pub enrollment_request: Option<SecretVec>,
-    pub paired_handoff: Option<SecretVec>,
     pub recovery_saved: bool,
     pub recovery_confirmed: bool,
-    pub enrollment_attempted: bool,
     pub access_expires_at: Option<u64>,
     pub refresh_expires_at: Option<u64>,
     pub auth_generation: i64,
     pub auth_scope: Option<String>,
     pub refresh_available: bool,
-    pub session_established: bool,
     pub refresh_retry_at: Option<u64>,
     pub admitted: bool,
 }
@@ -163,45 +157,19 @@ impl Store {
         Ok(true)
     }
 
+    /// Active metadata and bounded private material; archived entry payloads stay in SQLite.
     pub(crate) fn personal_record(&self) -> Result<Option<PersonalRecord>, StoreError> {
-        self.read_personal_record(false)
-    }
-
-    /// Current-device revalidation never loads or decodes archived entry payloads.
-    pub(crate) fn personal_revalidation_record(
-        &self,
-    ) -> Result<Option<PersonalRecord>, StoreError> {
-        self.read_personal_record(true)
-    }
-
-    fn read_personal_record(
-        &self,
-        revalidation: bool,
-    ) -> Result<Option<PersonalRecord>, StoreError> {
         let conn = self.conn();
-        let oversized: bool = conn.query_row(
-            "SELECT EXISTS (SELECT 1 FROM personal_server WHERE singleton=1
-                AND NOT EXISTS (SELECT 1 FROM personal_admission)
-                AND (length(enrollment_request)>1048576 OR length(paired_handoff)>4456408))",
-            [],
-            |row| row.get(0),
-        )?;
-        if oversized && !revalidation {
-            return Err(StoreError::AccountContext);
-        }
         let row = conn
             .query_row(
                 "SELECT origin, account_id, personal_vault_id, device_name,
-                    CASE WHEN length(private_material)<=225 THEN private_material ELSE X'' END,
-                    CASE WHEN ?1=0 AND length(enrollment_request)<=1048576 THEN enrollment_request END,
-                    recovery_saved, recovery_confirmed,
-                    enrollment_attempted, access_expires_at, refresh_expires_at,
-                    auth_generation, auth_scope,
-                    refresh_claimed = 0 AND length(refresh_token) BETWEEN 1 AND 2048,
-                    session_established, refresh_retry_at,
-                    CASE WHEN ?1=0 AND length(paired_handoff)<=4456408 THEN paired_handoff END
+                CASE WHEN length(private_material)<=225 THEN private_material ELSE X'' END,
+                recovery_saved, recovery_confirmed, access_expires_at, refresh_expires_at,
+                auth_generation, auth_scope,
+                refresh_claimed = 0 AND length(refresh_token) BETWEEN 1 AND 2048,
+                refresh_retry_at
              FROM personal_server WHERE singleton = 1",
-                [revalidation],
+                [],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -209,18 +177,14 @@ impl Store {
                         row.get::<_, Vec<u8>>(2)?,
                         row.get::<_, String>(3)?,
                         SecretVec::new(row.get(4)?),
-                        row.get::<_, Option<Vec<u8>>>(5)?.map(SecretVec::new),
+                        row.get::<_, bool>(5)?,
                         row.get::<_, bool>(6)?,
-                        row.get::<_, bool>(7)?,
-                        row.get::<_, bool>(8)?,
-                        row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
-                        row.get::<_, Option<i64>>(10)?.map(|value| value as u64),
-                        row.get::<_, i64>(11)?,
-                        row.get::<_, Option<String>>(12)?,
-                        row.get::<_, Option<bool>>(13)?.unwrap_or(false),
-                        row.get::<_, bool>(14)?,
-                        row.get::<_, Option<i64>>(15)?.map(|value| value as u64),
-                        row.get::<_, Option<Vec<u8>>>(16)?.map(SecretVec::new),
+                        row.get::<_, Option<i64>>(7)?.map(|value| value as u64),
+                        row.get::<_, Option<i64>>(8)?.map(|value| value as u64),
+                        row.get::<_, i64>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<bool>>(11)?.unwrap_or(false),
+                        row.get::<_, Option<i64>>(12)?.map(|value| value as u64),
                     ))
                 },
             )
@@ -233,18 +197,14 @@ impl Store {
                 vault,
                 device_name,
                 private_material,
-                enrollment_request,
                 recovery_saved,
                 recovery_confirmed,
-                enrollment_attempted,
                 access_expires_at,
                 refresh_expires_at,
                 auth_generation,
                 auth_scope,
                 refresh_available,
-                session_established,
                 refresh_retry_at,
-                paired_handoff,
             )| {
                 let mut identity = PersonalRecord {
                     origin,
@@ -252,17 +212,13 @@ impl Store {
                     personal_vault_id: uuid_from(&vault)?,
                     device_name,
                     private_material,
-                    enrollment_request,
-                    paired_handoff,
                     recovery_saved,
                     recovery_confirmed,
-                    enrollment_attempted,
                     access_expires_at,
                     refresh_expires_at,
                     auth_generation,
                     auth_scope,
                     refresh_available,
-                    session_established,
                     refresh_retry_at,
                     admitted: false,
                 };
@@ -273,6 +229,14 @@ impl Store {
         .transpose()
     }
 
+    pub(crate) fn has_archived_personal_entry(&self) -> Result<bool, StoreError> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM personal_pairing WHERE singleton=1)",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
     #[cfg(test)]
     pub(crate) fn insert_personal_record(&self, record: &PersonalRecord) -> Result<(), StoreError> {
         let mut conn = self.conn();
@@ -280,10 +244,14 @@ impl Store {
         let transaction = conn.transaction()?;
         transaction.execute(
             "INSERT INTO personal_server (singleton, origin, account_id, personal_vault_id,
-                device_name, private_material, enrollment_request) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
-            params![record.origin, record.account_id.as_bytes().as_slice(),
-                record.personal_vault_id.as_bytes().as_slice(), record.device_name,
-                record.private_material.as_bytes(), record.enrollment_request.as_ref().map(SecretVec::as_bytes)],
+                device_name, private_material) VALUES (1, ?1, ?2, ?3, ?4, ?5)",
+            params![
+                record.origin,
+                record.account_id.as_bytes().as_slice(),
+                record.personal_vault_id.as_bytes().as_slice(),
+                record.device_name,
+                record.private_material.as_bytes()
+            ],
         )?;
         let (signing, kem) = record.device_secrets()?;
         transaction.execute("INSERT INTO device_key_pair (singleton, signing, kem, created_at) VALUES (1, ?1, ?2, ?3)",

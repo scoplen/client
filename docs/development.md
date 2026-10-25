@@ -47,7 +47,8 @@ endpoints. D-128 registration/password sign-in is not implemented by this client
 Provide a loopback `https://localhost:<port>` deployment and three independently admitted,
 already confirmed disposable SQLCipher profiles for the same Account, with distinct device ids
 and empty inventory. Close every source profile before running the checks. The profiles must
-have genuine historical success evidence; attempt flags and incomplete handoffs are rejected.
+already contain valid neutral admission anchors; archived entry data, session markers and
+cached bootstrap responses cannot substitute for them.
 Provisioning these fixtures is external to this client, and a missing fixture is not passing live
 verification. Use a fresh deployment/profile set for each scenario and database backend.
 
@@ -110,9 +111,9 @@ server, native desktop interaction, macOS, hardware signing or D-128 admission a
 
 Confirmed devices accept later K-4 account-key revisions without replacing
 their trusted account roots or private keys. Account signing/KEM ciphertexts and the recovery
-blob must match their compact admission digests. An identity converted from historical invitation
-enrollment retains its exact epoch-1 wrapping digest; one converted from a historical handoff
-requires the unchanged opened epoch/key set.
+blob must match their compact admission digests. Saved neutral anchors retain the opened
+epoch/key set and, when present, the exact Personal wrapping digest. These persisted anchors
+remain readable independently of archived entry formats.
 The device ARK wrap can be randomized again only at a higher revision and must open to the
 same retained ARK. Pending rotation, a different epoch or different keys still stops sync.
 
@@ -137,22 +138,25 @@ DPoP proofs and SQLCipher stores, including competing bootstrap operations:
 cargo test -p scoplen-client-core --lib personal_server::sync::tests::membership
 ```
 
-## Retired entry conversion regressions
+## Retained admission and retired entry regressions
 
-Invitation, replacement and pairing network code and desktop commands are removed. The only
-historical decoder is the bounded offline converter. Run its positive and failure-path checks:
+Invitation, replacement and pairing network code, desktop commands and archived codecs are
+removed. Run the neutral-anchor, explicit revalidation and archived-data boundary checks:
 
 ```text
 cargo test -p scoplen-client-core --lib personal_server::tests::admission
-cargo test -p scoplen-client-core --lib personal_server::sync::tests::a_complete_verified_historical_bootstrap
+cargo test -p scoplen-client-core --lib personal_server::sync::tests::a_saved_bootstrap_without_neutral_anchors
+cargo test -p scoplen-client-core --lib personal_server::sync::tests::revalidation
 cargo test -p scoplen-client-core --lib store::personal::tests
 pnpm --filter @scoplen/app test -- personal-settings
 ```
 
-Coverage includes confirmed expired sessions, matched completed new-device handoffs, independent
-complete-bootstrap evidence, preservation of pending/attempted profiles, malformed/foreign proof
-rejection, bounded reads, failed transaction rollback, restart idempotence and immutable origin,
-Account, vault, device and key ownership. Converted runtime ignores archived ceremony decoding.
+Coverage includes offline reopening with saved anchors, metadata-only status without writes,
+opaque and oversized archived payload preservation, rejection of session or cached-bootstrap
+admission, immutable origin/Account/vault/device/key ownership, and fenced atomic revalidation.
+Revalidation failures retain original bytes, including stale profile/auth generations, substituted
+roots, revoked certificates, revision rollback, unsupported rotation and failed publication.
+Fixtures construct public K-2 artifacts and signed K-4 updates without retired DTOs or proofs.
 Retained fresh-challenge, JWKS, invalid-response, refresh, account, sync, history and notification
 regressions remain applicable. This closure does not implement the future password sign-in UI.
 

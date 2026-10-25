@@ -2,7 +2,7 @@
 //! Retained admitted-device authentication and Personal synchronization.
 //!
 //! This module keeps identity, request material, and credentials inside Rust and
-//! SQLCipher. Historical confirmed identities convert locally; explicit retained-device
+//! SQLCipher. Neutral admission anchors verify locally; explicit retained-device
 //! revalidation uses only current authentication and K-4, never retired entry operations.
 
 mod account;
@@ -25,8 +25,6 @@ pub use sync::{
 
 use std::sync::Arc;
 
-#[cfg(test)]
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use scoplen_api::auth::{
     AuthChallengeRequest, AuthChallengeResponse, AuthDeviceRequest, AuthJwks, AuthTokenResponse,
 };
@@ -198,13 +196,13 @@ fn record(store: &Store) -> Result<PersonalRecord, PersonalServerError> {
     let identity =
         store.personal_record().map_err(storage)?.ok_or(PersonalServerError::NotConfigured)?;
     retained::RetainedAccount::load(store, &identity)?;
-    store.personal_record().map_err(storage)?.ok_or(PersonalServerError::NotConfigured)
+    Ok(identity)
 }
 
 fn status(store: &Store) -> Result<PersonalServerStatus, PersonalServerError> {
-    let Some(record) = store.personal_revalidation_record().map_err(storage)? else {
+    let Some(record) = store.personal_record().map_err(storage)? else {
         return Ok(PersonalServerStatus {
-            phase: if store.pairing_record().map_err(storage)?.is_some() {
+            phase: if store.has_archived_personal_entry().map_err(storage)? {
                 PersonalServerPhase::RetiredEntry
             } else {
                 PersonalServerPhase::NotConfigured
@@ -219,16 +217,7 @@ fn status(store: &Store) -> Result<PersonalServerStatus, PersonalServerError> {
         });
     };
     let current = now().unwrap_or(u64::MAX);
-    let admission = if record.admitted {
-        retained::RetainedAccount::load(store, &record)
-    } else {
-        store.personal_record().map_err(storage).and_then(|record| {
-            retained::RetainedAccount::load(
-                store,
-                &record.ok_or(PersonalServerError::NotConfigured)?,
-            )
-        })
-    };
+    let admission = retained::RetainedAccount::load(store, &record);
     let admitted = match admission {
         Ok(_) => true,
         Err(PersonalServerError::RetiredEntry | PersonalServerError::AdmissionUnverified)
@@ -266,33 +255,6 @@ fn now() -> Result<u64, PersonalServerError> {
     scoplen_model::system_time_millis()
         .map(|time| time / 1_000)
         .map_err(|_| PersonalServerError::Identity)
-}
-
-#[cfg(test)]
-struct Invitation {
-    origin: String,
-    token: SecretVec,
-}
-
-#[cfg(test)]
-impl Invitation {
-    fn parse(input: &str) -> Result<Self, PersonalServerError> {
-        let (origin, encoded) =
-            input.split_once("/invite#token=").ok_or(PersonalServerError::Identity)?;
-        scoplen_crypto::validate_server_origin(origin)
-            .map_err(|_| PersonalServerError::Identity)?;
-        if encoded.len() != 43 {
-            return Err(PersonalServerError::Identity);
-        }
-        let bytes = Zeroizing::new(
-            URL_SAFE_NO_PAD.decode(encoded).map_err(|_| PersonalServerError::Identity)?,
-        );
-        let canonical = Zeroizing::new(URL_SAFE_NO_PAD.encode(&*bytes));
-        if bytes.len() != 32 || canonical.as_str() != encoded {
-            return Err(PersonalServerError::Identity);
-        }
-        Ok(Self { origin: origin.to_owned(), token: SecretVec::new(bytes.to_vec()) })
-    }
 }
 
 enum AuthenticationOutcome {

@@ -15,17 +15,13 @@ fn fixture() -> (tempfile::TempDir, Store, PersonalRecord, SecretVec, PersonalSy
         personal_vault_id: scoplen_model::new_uuid_v7().unwrap(),
         device_name: "Desktop".into(),
         private_material: SecretVec::new(vec![1; 225]),
-        enrollment_request: Some(SecretVec::new(vec![2; 16])),
-        paired_handoff: None,
         recovery_saved: false,
         recovery_confirmed: false,
-        enrollment_attempted: false,
         access_expires_at: None,
         refresh_expires_at: None,
         auth_generation: 0,
         auth_scope: None,
         refresh_available: false,
-        session_established: false,
         refresh_retry_at: None,
         admitted: false,
     };
@@ -34,7 +30,7 @@ fn fixture() -> (tempfile::TempDir, Store, PersonalRecord, SecretVec, PersonalSy
     let access = SecretVec::new(b"access".to_vec());
     store.save_personal_tokens(access.as_bytes(), b"refresh", 1_000, 2_000).unwrap();
     let current = store.personal_record().unwrap().unwrap();
-    store.save_personal_admission(&current, b"store-fixture", None, None).unwrap();
+    store.insert_personal_admission(&current, b"store-fixture").unwrap();
     let snapshot = PersonalSyncRecord {
         generation: 0,
         session: SecretVec::new(vec![3]),

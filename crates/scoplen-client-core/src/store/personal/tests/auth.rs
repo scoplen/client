@@ -48,7 +48,14 @@ fn a_legacy_session_keeps_its_identity_and_bootstrap_without_inventing_a_scope_c
     assert_eq!(identity.account_id, account);
     assert_eq!(identity.personal_vault_id, vault);
     assert_eq!(identity.private_material.as_bytes(), &[1]);
-    assert!(identity.session_established);
+    assert!(
+        store
+            .conn()
+            .query_row("SELECT session_established FROM personal_server", [], |row| {
+                row.get::<_, bool>(0)
+            })
+            .unwrap()
+    );
     assert!(identity.auth_scope.is_none());
     assert!(store.claim_personal_refresh(&identity, 100).unwrap().is_none());
     assert_eq!(store.personal_sync_record().unwrap().unwrap().session.as_bytes(), &[1]);

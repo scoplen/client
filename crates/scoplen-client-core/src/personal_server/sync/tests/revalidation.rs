@@ -63,7 +63,7 @@ async fn explicit_revalidation_keeps_credentials_transient_then_installs_all_sta
     let local = profile(&dir);
     let store = local.store().unwrap();
     let manager = raw(&peer, &local, &dir).await;
-    let before = store.personal_revalidation_record().unwrap().unwrap();
+    let before = store.personal_record().unwrap().unwrap();
     assert_eq!(manager.status(&store).unwrap().phase, PersonalServerPhase::RevalidationRequired);
     assert!(peer.state.lock().unwrap().paths.is_empty());
     let reached = Arc::new(tokio::sync::Notify::new());
@@ -86,7 +86,10 @@ async fn explicit_revalidation_keeps_credentials_transient_then_installs_all_sta
     assert!(store.personal_access_token(now().unwrap()).unwrap().is_some());
     let after = store.personal_record().unwrap().unwrap();
     assert_eq!(after.private_material.as_bytes(), before.private_material.as_bytes());
-    assert_eq!(after.enrollment_request.unwrap().as_bytes(), [255]);
+    let archive: Vec<u8> = database(&dir)
+        .query_row("SELECT enrollment_request FROM personal_server", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(archive, [255]);
     assert!(after.auth_generation > before.auth_generation);
     {
         let state = peer.state.lock().unwrap();
@@ -133,7 +136,7 @@ async fn invalid_authentication_claims_never_fetch_bootstrap_or_install_credenti
         let local = profile(&dir);
         let store = local.store().unwrap();
         let manager = raw(&peer, &local, &dir).await;
-        let before = store.personal_revalidation_record().unwrap().unwrap();
+        let before = store.personal_record().unwrap().unwrap();
         refresh::install_revalidation(&peer, &store, mode);
         assert_eq!(
             manager.revalidate_retained_device(&local, local.store().unwrap()).await.unwrap_err(),
@@ -153,7 +156,7 @@ async fn substituted_keys_certificates_revocation_vaults_and_epochs_never_gain_a
         let local = profile(&dir);
         let store = local.store().unwrap();
         let manager = raw(&peer, &local, &dir).await;
-        let mut before = store.personal_revalidation_record().unwrap().unwrap();
+        let mut before = store.personal_record().unwrap().unwrap();
         let observed = store.personal_changes();
         let generation = *observed.borrow();
         let mut bundle = SyncAccountKeyBundle::from_cbor(
@@ -249,7 +252,7 @@ async fn retained_non_recovery_device_accepts_newer_membership_with_all_old_evid
     let local = profile(&dir);
     let store = local.store().unwrap();
     let manager = raw(&peer, &local, &dir).await;
-    let original = store.personal_revalidation_record().unwrap().unwrap();
+    let original = store.personal_record().unwrap().unwrap();
     let mut material = Zeroizing::new(original.private_material.as_bytes()[..193].to_vec());
     material[0] = 2;
     let conn = database(&dir);
@@ -291,7 +294,7 @@ async fn retained_non_recovery_device_accepts_newer_membership_with_all_old_evid
         .query_row("SELECT length(enrollment_request) FROM personal_server", [], |r| r.get(0))
         .unwrap();
     assert_eq!(preserved, 1_048_577);
-    let retained = store.personal_revalidation_record().unwrap().unwrap();
+    let retained = store.personal_record().unwrap().unwrap();
     assert_eq!(retained.private_material.as_bytes(), &*material);
     assert_eq!(
         SyncAccountKeyBundle::from_cbor(
@@ -319,7 +322,7 @@ async fn missing_profile_and_bounded_transport_failures_do_not_install_or_send_e
     assert!(peer.state.lock().unwrap().paths.is_empty());
     let store = local.store().unwrap();
     let manager = raw(&peer, &local, &dir).await;
-    let before = store.personal_revalidation_record().unwrap().unwrap();
+    let before = store.personal_record().unwrap().unwrap();
     let reopened = profile(&dir);
     assert_eq!(
         manager.revalidate_retained_device(&reopened, store.clone()).await.unwrap_err(),
@@ -358,7 +361,7 @@ async fn revalidation_preserves_known_certificates_revocations_revisions_and_epo
         let local = profile(&dir);
         let store = local.store().unwrap();
         let manager = raw(&peer, &local, &dir).await;
-        let identity = store.personal_revalidation_record().unwrap().unwrap();
+        let identity = store.personal_record().unwrap().unwrap();
         let conn = database(&dir);
         let original = peer.state.lock().unwrap().replies["/sync/v1/keys"].clone();
         let mut bundle = SyncAccountKeyBundle::from_cbor(&original.body).unwrap();
@@ -455,7 +458,7 @@ async fn late_auth_generation_and_transaction_failure_preserve_original_profile(
         let local = profile(&dir);
         let store = local.store().unwrap();
         let manager = raw(&peer, &local, &dir).await;
-        let before = store.personal_revalidation_record().unwrap().unwrap();
+        let before = store.personal_record().unwrap().unwrap();
         let conn = database(&dir);
         if fault == 0 {
             let reached = Arc::new(tokio::sync::Notify::new());
@@ -495,7 +498,7 @@ async fn new_revocation_evidence_during_bootstrap_cannot_be_erased_by_the_instal
     let local = profile(&dir);
     let store = local.store().unwrap();
     let manager = raw(&peer, &local, &dir).await;
-    let identity = store.personal_revalidation_record().unwrap().unwrap();
+    let identity = store.personal_record().unwrap().unwrap();
     let signing = Ed25519SigningKey::from_bytes(
         Secrets::parse(&identity.private_material).unwrap().account_signing(),
     )

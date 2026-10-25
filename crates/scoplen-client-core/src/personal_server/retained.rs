@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Neutral local admission anchors. Historical ceremony formats are read only during conversion.
+//! Neutral local admission anchors, independent of archived entry formats.
 
 use std::collections::BTreeMap;
 
@@ -18,8 +18,6 @@ use crate::store::{
     Store,
     personal::{PersonalRecord, PersonalSyncRecord},
 };
-
-mod legacy;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -135,10 +133,10 @@ impl RetainedAccount {
     }
 
     pub fn load(store: &Store, identity: &PersonalRecord) -> Result<Self, PersonalServerError> {
-        let encoded = match store.personal_admission(identity).map_err(storage)? {
-            Some(encoded) => encoded,
-            None => legacy::convert(store, identity)?,
-        };
+        let encoded = store
+            .personal_admission(identity)
+            .map_err(storage)?
+            .ok_or(PersonalServerError::RetiredEntry)?;
         if encoded.len() > 524_288 {
             return Err(PersonalServerError::AdmissionUnverified);
         }

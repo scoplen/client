@@ -68,7 +68,7 @@ impl PersonalServer {
     ) -> Result<PersonalServerStatus, PersonalServerError> {
         let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
         let identity = local
-            .with_current_store(&store, || store.personal_revalidation_record())
+            .with_current_store(&store, || store.personal_record())
             .ok_or(PersonalServerError::Busy)?
             .map_err(storage)?
             .ok_or(PersonalServerError::NotConfigured)?;
