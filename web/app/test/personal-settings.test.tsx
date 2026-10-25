@@ -45,6 +45,7 @@ function fixture(initial = empty) {
       calls.push(command);
       if (handlers.has(command)) return handlers.get(command)!();
       if (command === "personal_server_status") return status;
+      if (command === "registration_status" || command === "password_sign_in_status") return null;
       if (command === "authenticate_personal_server") {
         status = { ...status, phase: "authenticated" };
         return status;
@@ -79,20 +80,19 @@ function view(locale: "en" | "zh-Hans" = "en") {
 }
 
 it.each(["en", "zh-Hans"] as const)(
-  "explains unavailable password admission without fake or retired controls (%s)",
+  "offers real account registration and sign-in without retired controls (%s)",
   async (locale) => {
     const f = fixture();
     const { container } = render(view(locale));
     expect(
       await screen.findByText(
-        locale === "en"
-          ? /Account registration and password sign-in are not available/
-          : /此版本尚不支持账号注册和密码登录/,
+        locale === "en" ? /Create an independent account or sign in/ : /在个人服务器上创建独立账号/,
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();
-    expect(screen.queryByRole("button")).toBeNull();
-    expect(f.calls).toEqual(["personal_server_status"]);
+    expect(await screen.findByRole("button", { name: locale === "en" ? "Create account" : "创建账号" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: locale === "en" ? "Sign in" : "登录" })).toBeTruthy();
+    expect(f.calls).toEqual(["personal_server_status", "registration_status", "password_sign_in_status"]);
     expect(await violations(container)).toEqual([]);
   },
 );
@@ -164,8 +164,13 @@ it.each<PersonalServerError>(["admissionUnverified", "storage"])(
     const retry = screen.getByRole("button", { name: "Reload account status" });
     f.handlers.delete("personal_server_status");
     await userEvent.click(retry);
-    expect(await screen.findByText(/Account registration and password sign-in are not available/)).toBeTruthy();
-    expect(f.calls).toEqual(["personal_server_status", "personal_server_status"]);
+    expect(await screen.findByRole("button", { name: "Create account" })).toBeTruthy();
+    expect(f.calls).toEqual([
+      "personal_server_status",
+      "personal_server_status",
+      "registration_status",
+      "password_sign_in_status",
+    ]);
   },
 );
 
@@ -292,7 +297,8 @@ it("reaches Personal account with keyboard tab navigation and one tab stop", asy
   const personal = screen.getByRole("tab", { name: "Personal account" });
   expect(document.activeElement).toBe(personal);
   expect(personal.getAttribute("aria-selected")).toBe("true");
-  expect(await screen.findByText(/Account registration and password sign-in are not available/)).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Create account" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
   expect(screen.getAllByRole("tab").filter((tab) => tab.tabIndex === 0)).toEqual([personal]);
   expect(await violations(container)).toEqual([]);
   await userEvent.keyboard("{ArrowRight}");

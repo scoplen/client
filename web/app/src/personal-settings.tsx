@@ -2,11 +2,14 @@
 import { Button } from "@scoplen/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
-import { commands, type PersonalServerError, type PersonalServerStatus } from "./ipc/bindings";
+import { type PersonalServerError, type PersonalServerStatus } from "./ipc/bindings";
+import { useProfileCommands } from "./account-profiles";
+import { AccountRegistration } from "./account-registration";
 import { PersonalSyncSettings } from "./personal-sync-settings";
 import { PersonalAccountSettings } from "./personal-account-settings";
 
 export function PersonalSettings() {
+  const commands = useProfileCommands();
   const { t } = useI18n();
   const [status, setStatus] = useState<PersonalServerStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -25,7 +28,7 @@ export function PersonalSettings() {
     } catch {
       if (mounted.current && request === statusRequest.current) setFailed("storage");
     }
-  }, []);
+  }, [commands]);
 
   useEffect(() => {
     let active = true;
@@ -44,7 +47,7 @@ export function PersonalSettings() {
       active = false;
       mounted.current = false;
     };
-  }, []);
+  }, [commands]);
 
   const authenticate = async () => {
     if (pending.current) return;
@@ -112,7 +115,7 @@ export function PersonalSettings() {
         </p>
       ) : null}
       {status?.phase === "not_configured" ? (
-        <p className="mt-2 text-sm text-muted-foreground">{t("settings.personal.signInUnavailable")}</p>
+        <AccountRegistration />
       ) : status?.phase === "retired_entry" ? (
         <p role="status" className="mt-2 text-sm text-muted-foreground">
           {t("settings.personal.error.retiredEntry")}

@@ -11,6 +11,7 @@ import { createInventoryApi } from "./inventory/core-api";
 import { SessionTerminal, type SessionState } from "./session";
 import { SettingsView, type SettingsSection } from "./settings";
 import { ForwardsContext, useForwards } from "./use-forwards";
+import { useProfile, useProfileCommands } from "./account-profiles";
 
 type View = "hosts" | "settings";
 
@@ -27,12 +28,14 @@ export function Shell({
   onStatus: (status: Status) => void;
 }) {
   const { t } = useI18n();
+  const commands = useProfileCommands();
+  const profileGeneration = useProfile()?.snapshot.generation;
   const [view, setView] = useState<View>("hosts");
   const [sessions, setSessions] = useState<OpenSession[]>([]);
   const [activeTab, setActiveTab] = useState("hosts");
   const [states, setStates] = useState<Record<string, SessionState>>({});
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
-  const inventory = useMemo(() => createInventoryApi(), []);
+  const inventory = useMemo(() => createInventoryApi(commands, profileGeneration), [commands, profileGeneration]);
   const forwards = useForwards();
   const closeControllers = useRef(new Map<string, (discard?: boolean) => Promise<boolean>>());
   const closingTabs = useRef(false);

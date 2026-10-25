@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Thin adapters for the Rust-owned Personal inventory review and sync workflow.
 
-use crate::local_data::LocalDataState;
+use crate::profile_context::ProfileRequest as LocalDataState;
 use scoplen_client_core::{
     personal_inventory::{
         PersonalInventoryError, PersonalInventoryHistory, PersonalInventoryPreview,
@@ -21,7 +21,7 @@ fn store(local: &LocalDataState) -> Result<Arc<Store>, PersonalInventoryError> {
 #[tauri::command]
 #[specta::specta]
 pub async fn query_personal_inventory_history(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     personal: tauri::State<'_, PersonalServer>,
     settings: tauri::State<'_, Arc<PersonalInventorySettings>>,
     object_id: String,
@@ -34,7 +34,7 @@ pub async fn query_personal_inventory_history(
 #[specta::specta]
 pub async fn restore_personal_inventory_history(
     app: tauri::AppHandle,
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     settings: tauri::State<'_, Arc<PersonalInventorySettings>>,
     review_token: String,
     sequence: String,
@@ -52,7 +52,7 @@ pub async fn restore_personal_inventory_history(
 #[tauri::command]
 #[specta::specta]
 pub async fn personal_inventory_status(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     settings: tauri::State<'_, Arc<PersonalInventorySettings>>,
 ) -> Result<PersonalInventoryStatus, PersonalInventoryError> {
     let store = store(&local)?;
@@ -66,7 +66,7 @@ pub async fn personal_inventory_status(
 #[tauri::command]
 #[specta::specta]
 pub async fn preview_personal_inventory(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     settings: tauri::State<'_, Arc<PersonalInventorySettings>>,
     ids: Vec<String>,
 ) -> Result<PersonalInventoryPreview, PersonalInventoryError> {
@@ -81,7 +81,7 @@ pub async fn preview_personal_inventory(
 #[tauri::command]
 #[specta::specta]
 pub async fn synchronize_personal_inventory(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     personal: tauri::State<'_, PersonalServer>,
     settings: tauri::State<'_, Arc<PersonalInventorySettings>>,
     review_token: Option<String>,
@@ -94,7 +94,7 @@ pub async fn synchronize_personal_inventory(
 #[specta::specta]
 pub async fn restore_personal_inventory(
     app: tauri::AppHandle,
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     settings: tauri::State<'_, Arc<PersonalInventorySettings>>,
     ids: Vec<String>,
 ) -> Result<u32, PersonalInventoryError> {
@@ -112,7 +112,7 @@ pub async fn restore_personal_inventory(
 #[specta::specta]
 pub async fn restore_personal_inventory_recovery(
     app: tauri::AppHandle,
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     settings: tauri::State<'_, Arc<PersonalInventorySettings>>,
     ids: Vec<String>,
 ) -> Result<u32, PersonalInventoryError> {

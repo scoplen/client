@@ -14,12 +14,13 @@ use serde::Serialize;
 use specta::Type;
 use tauri::Manager as _;
 
-use crate::local_data::LocalDataState;
+use crate::profile_context::ProfileRequest as LocalDataState;
 
 /// Read the native background owner's state without activating network activity.
 #[tauri::command]
 #[specta::specta]
 pub fn personal_sync_background_status(
+    _context: crate::profile_context::ProfileRequest,
     runtime: tauri::State<'_, Arc<scoplen_client_core::personal_server::PersonalSyncRuntime>>,
 ) -> scoplen_client_core::personal_server::PersonalBackgroundStatus {
     runtime.status()
@@ -34,7 +35,7 @@ fn store(local: &LocalDataState) -> Result<Arc<Store>, PersonalServerError> {
 #[specta::specta]
 pub async fn personal_account_snapshot(
     app: tauri::AppHandle,
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
 ) -> Result<Option<PersonalAccountSnapshot>, PersonalServerError> {
     let store = store(&local)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -48,7 +49,7 @@ pub async fn personal_account_snapshot(
 #[tauri::command]
 #[specta::specta]
 pub async fn query_personal_account(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     personal: tauri::State<'_, PersonalServer>,
 ) -> Result<PersonalAccountSnapshot, PersonalServerError> {
     personal.query_account(store(&local)?).await
@@ -105,7 +106,7 @@ impl From<PersonalSyncError> for PersonalSyncCommandError {
 #[tauri::command]
 #[specta::specta]
 pub async fn personal_sync_key_status(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     personal: tauri::State<'_, PersonalServer>,
 ) -> Result<PersonalSyncKeyStatus, PersonalSyncCommandError> {
     let store = store(&local).map_err(PersonalSyncCommandError::Personal)?;
@@ -120,7 +121,7 @@ pub async fn personal_sync_key_status(
 #[tauri::command]
 #[specta::specta]
 pub async fn connect_personal_sync(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     personal: tauri::State<'_, PersonalServer>,
 ) -> Result<PersonalSyncKeyStatus, PersonalSyncCommandError> {
     let store = store(&local).map_err(PersonalSyncCommandError::Personal)?;
@@ -133,7 +134,7 @@ pub async fn connect_personal_sync(
 #[specta::specta]
 pub async fn personal_server_status(
     app: tauri::AppHandle,
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
 ) -> Result<PersonalServerStatus, PersonalServerError> {
     let store = store(&local)?;
     tauri::async_runtime::spawn_blocking(move || app.state::<PersonalServer>().status(&store))
@@ -145,7 +146,7 @@ pub async fn personal_server_status(
 #[tauri::command]
 #[specta::specta]
 pub async fn authenticate_personal_server(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     personal: tauri::State<'_, PersonalServer>,
 ) -> Result<PersonalServerStatus, PersonalServerError> {
     personal.authenticate(store(&local)?).await
@@ -155,7 +156,7 @@ pub async fn authenticate_personal_server(
 #[tauri::command]
 #[specta::specta]
 pub async fn revalidate_retained_device(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     personal: tauri::State<'_, PersonalServer>,
 ) -> Result<PersonalServerStatus, PersonalServerError> {
     let local = local.get().map_err(|_| PersonalServerError::Storage)?;

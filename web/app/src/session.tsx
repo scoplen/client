@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { useProfileCommands } from "./account-profiles";
 import {
   Button,
   Dialog,
@@ -16,7 +17,6 @@ import { Terminal, type TerminalSink, type TerminalSource } from "@scoplen/termi
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useI18n } from "./i18n";
 import {
-  commands,
   type SessionEvent,
   type PreparationEvent,
   type PreparationContext,
@@ -82,6 +82,7 @@ export function SessionTerminal({
   /** Opens the terminal color settings. */
   onOpenColors?: () => void;
 }) {
+  const commands = useProfileCommands();
   const { t } = useI18n();
   const titleId = useId();
   const [state, setState] = useState<SessionState>(savedOutput ? "closed" : "verifying");
@@ -340,7 +341,7 @@ export function SessionTerminal({
         return { unsubscribe: stop };
       },
     });
-  }, [profileId, sessionId]);
+  }, [profileId, sessionId, commands]);
 
   const inputSink = useMemo<TerminalSink>(
     () => ({
@@ -350,7 +351,7 @@ export function SessionTerminal({
         if (result.status === "error") throw new Error(result.error);
       },
     }),
-    [sessionId, transportId],
+    [sessionId, transportId, commands],
   );
   const { colors } = useTerminalColors();
   const terminal = useRef<ScoplenTerminalElement>(null);
@@ -362,7 +363,7 @@ export function SessionTerminal({
   const sendSize = useCallback(() => {
     if (!size.current || !transportId) return;
     void commands.sessionResize(sessionId, transportId, size.current.columns, size.current.rows).catch(() => undefined);
-  }, [sessionId, transportId]);
+  }, [sessionId, transportId, commands]);
   useEffect(() => {
     if (state === "connected") sendSize();
   }, [state, sendSize]);
@@ -373,7 +374,7 @@ export function SessionTerminal({
 
   const closeTransport = useCallback(() => {
     void commands.sessionCloseTransport(sessionId).catch(() => undefined);
-  }, [sessionId]);
+  }, [sessionId, commands]);
 
   const checkpoint = useCallback(
     (force = false) => {
@@ -405,7 +406,7 @@ export function SessionTerminal({
       checkpointTail.current = operation;
       return operation;
     },
-    [sessionId],
+    [sessionId, commands],
   );
 
   const prepareClose = useCallback(
@@ -446,7 +447,7 @@ export function SessionTerminal({
         setClosingView(false);
       }
     },
-    [offline, sessionId, checkpoint],
+    [offline, sessionId, checkpoint, commands],
   );
   useEffect(() => registerClose?.(prepareClose), [registerClose, prepareClose]);
 
@@ -487,7 +488,7 @@ export function SessionTerminal({
     return () => {
       void commands.sessionCloseTransport(sessionId).catch(() => undefined);
     };
-  }, [offline, profileId, sessionId]);
+  }, [offline, profileId, sessionId, commands]);
 
   useEffect(() => {
     if (offline) return;

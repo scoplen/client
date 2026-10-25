@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
+import { useProfileCommands } from "./account-profiles";
 import { Button, Confirm, Dialog } from "@scoplen/ui";
 import { useEffect, useId, useRef, useState } from "react";
 import { catalogs, useI18n } from "./i18n";
 import {
-  commands,
   type PersonalInventoryError,
   type PersonalInventoryHistory,
   type PersonalInventoryObject,
@@ -22,6 +22,7 @@ export function PersonalHistorySettings({
   onBusyChange: (busy: boolean) => void;
   onRestored: () => Promise<void>;
 }) {
+  const commands = useProfileCommands();
   const { t } = useI18n();
   const id = useId();
   const [objectId, setObjectId] = useState("");

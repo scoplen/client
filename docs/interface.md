@@ -4,8 +4,8 @@ The interface (`web/app`, `web/ui`) and the core (`crates/`, `src-tauri`) are bu
 
 The screens never read the store or decide business rules. Private keys, account material and
 tokens remain in Rust. Dedicated transient inputs accept SSH passphrases, keyboard-interactive
-answers, and the D-114 pairing
-password; the new-device pairing screen may display that password and its secret QR once. These exceptions never
+answers, the account password, and independent profile local passphrases. Recovery export stays
+in the native Save dialog and never returns a key or path to the renderer. Transient inputs never
 enter ordinary state snapshots or clipboard automation. Anything the screens must not decide —
 validation beyond "is this field empty", what a deletion removes, which areas the user has
 reached — is the core's.
@@ -150,11 +150,30 @@ no-follow opening. Matching metadata and EOF do not establish an immutable snaps
 ## Personal account
 
 Settings → Personal account reads saved public status without network access or database
-mutation. Registration, password sign-in, invitation enrollment, invitation replacement and
-device pairing are unavailable in this build. A new installation explains that sign-in is
-unavailable; an orphaned archived entry explains that its protocol has retired. Existing
+mutation. From Local, Create account accepts a server URL, username, device name and transient
+password, then asks Rust to prepare the real registration. Recovery export uses a native Save
+dialog and must be explicitly confirmed before Submit. Unknown results expose exact Confirm;
+only trusted unchanged results expose explicit Retry. Committed registration exposes Install
+account profile, with an independent local passphrase when the system needs one. Stop and view
+closure retain durable pending work, and startup never submits it automatically. Sign in calls
+real password options/login and verifies account keys in Rust, then exposes explicit Admit this
+device. It has no recovery-export step. Unknown admission permits only exact Confirm; a known
+unchanged expired capability exposes safe cancellation followed by fresh password entry. Confirmed
+admission exposes the same independent installer. Existing catalog identities direct the person
+to their saved profile, with no replacement or Device reuse. Invitation enrollment, invitation
+replacement and device pairing remain unavailable. An orphaned archived entry explains that its protocol has retired. Existing
 local SSH data remains available. The frontend receives no recovery key, private key,
 access token or refresh token, and performs no cryptography or network requests.
+
+The header selects Local or a ready Account after explicit confirmation that sessions, transfers
+and tunnels will close. Native commands capture the view's immutable generation from a request
+header before dispatch. The native owner closes running work, denies admission during replacement
+and waits up to 15 seconds for outstanding requests after tunnel shutdown. An unfinished native
+dialog leaves the original profile selected with a clear error. A successful change remounts the
+Shell and filters store, session, forward and background events by source generation. An obsolete
+invoker rejects both dispatch and late replies. Local inventory and credentials are never copied
+by account creation or selection. Existing account-bearing root stores retain their original
+access and identity, with an explicit retained-profile label.
 
 A retained profile shows its saved server, Account id and device name. Saved neutral admission
 anchors are verified locally against the original private roots. Historical session flags,

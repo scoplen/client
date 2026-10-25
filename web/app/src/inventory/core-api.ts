@@ -5,7 +5,7 @@
 // the interface only receives the redacted DTOs defined by inventory/api.ts.
 
 import {
-  commands,
+  commands as applicationCommands,
   events,
   type AddHostError as IpcAddHostError,
   type AccessProfileInput as IpcAccessProfileInput,
@@ -96,7 +96,7 @@ function inventoryObjectOutcome<T>(result: Result<T, IpcObjectEditError>): Outco
 }
 
 /** Creates the desktop adapter used by the real Hosts screen. */
-export function createInventoryApi(): InventoryApi {
+export function createInventoryApi(commands = applicationCommands, profileGeneration?: string): InventoryApi {
   return {
     areas: async () => inventoryOutcome((await commands.inventoryAreas()) as Result<IpcAreas, IpcFailure>),
     groups: async () => inventoryOutcome((await commands.inventoryGroups()) as Result<IpcGroupSummary[], IpcFailure>),
@@ -269,14 +269,22 @@ export function createInventoryApi(): InventoryApi {
       };
       void events.storeChanged
         .listen((event) => {
-          if (inventoryRecordTypes.has(event.payload.recordType)) listener();
+          if (
+            !stopped &&
+            (profileGeneration === undefined || event.payload.profileGeneration === profileGeneration) &&
+            inventoryRecordTypes.has(event.payload.recordType)
+          )
+            listener();
         })
         .then((unlistenFn) => {
           if (stopped) dispose(unlistenFn);
           else unlisteners.push(unlistenFn);
         });
       void events.sessionChanged
-        .listen(() => listener())
+        .listen((event) => {
+          if (!stopped && (profileGeneration === undefined || event.payload.profileGeneration === profileGeneration))
+            listener();
+        })
         .then((unlistenFn) => {
           if (stopped) dispose(unlistenFn);
           else unlisteners.push(unlistenFn);

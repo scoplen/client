@@ -45,9 +45,11 @@ impl From<FileDrag> for SessionFileDrag {
 }
 
 /// Arm an exact current Files destination for the invoking native window.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 #[specta::specta]
 pub fn session_arm_file_drop(
+    _context: crate::profile_context::ProfileRequest,
     window: tauri::WebviewWindow,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
@@ -73,6 +75,7 @@ pub fn session_arm_file_drop(
 #[tauri::command]
 #[specta::specta]
 pub fn session_revoke_file_drop(
+    _context: crate::profile_context::ProfileRequest,
     window: tauri::WebviewWindow,
     manager: tauri::State<'_, SessionManager>,
     context_id: String,
@@ -84,6 +87,7 @@ pub fn session_revoke_file_drop(
 #[tauri::command]
 #[specta::specta]
 pub async fn session_consume_file_drop(
+    _context: crate::profile_context::ProfileRequest,
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     manager: tauri::State<'_, SessionManager>,
@@ -106,6 +110,7 @@ pub async fn session_consume_file_drop(
 #[tauri::command]
 #[specta::specta]
 pub fn session_cancel_file_drop(
+    _context: crate::profile_context::ProfileRequest,
     window: tauri::WebviewWindow,
     manager: tauri::State<'_, SessionManager>,
     context_id: String,

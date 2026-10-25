@@ -8,6 +8,7 @@ import { LanguageProvider, useLanguageState } from "./language";
 import { Menus } from "./menus";
 import { Shell } from "./shell";
 import { TerminalColorsProvider } from "./terminal-colors";
+import { AccountProfilesBoundary } from "./account-profiles";
 
 type Startup =
   { state: "loading" } | { state: "ready"; info: AppInfo; status: Status } | { state: "failed"; reference: string };
@@ -99,7 +100,11 @@ function StartupLoading() {
 function Gate({ info, status, onStatus }: { info: AppInfo; status: Status; onStatus: (status: Status) => void }) {
   switch (status.state) {
     case "open":
-      return <Shell info={info} status={status} onStatus={onStatus} />;
+      return (
+        <AccountProfilesBoundary>
+          <Shell info={info} status={status} onStatus={onStatus} />
+        </AccountProfilesBoundary>
+      );
     case "needsPassphrase":
       return <UnlockScreen onStatus={onStatus} />;
     case "needsNewPassphrase":

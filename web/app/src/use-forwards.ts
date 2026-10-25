@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+import { useProfile, useProfileCommands } from "./account-profiles";
 import { createContext, useCallback, useEffect, useRef, useState } from "react";
-import {
-  commands,
-  events,
-  type ForwardIssue,
-  type ForwardSnapshot,
-  type SessionPreparationIntent,
-} from "./ipc/bindings";
+import { events, type ForwardIssue, type ForwardSnapshot, type SessionPreparationIntent } from "./ipc/bindings";
 
 export interface ForwardController {
   snapshots: ForwardSnapshot[];
@@ -35,6 +30,8 @@ function merge(current: ForwardSnapshot[], next: ForwardSnapshot): ForwardSnapsh
 
 /** Observes native owners for the Shell lifetime; detaching never sends Stop. */
 export function useForwards(): ForwardController {
+  const commands = useProfileCommands();
+  const profileGeneration = useProfile()?.snapshot.generation;
   const [snapshots, setSnapshots] = useState<ForwardSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [issue, setIssue] = useState<ForwardIssue | null>(null);
@@ -66,7 +63,11 @@ export function useForwards(): ForwardController {
     void (async () => {
       try {
         const stop = await events.forwardChanged.listen((event) => {
-          if (active && generation.current === epoch) {
+          if (
+            active &&
+            generation.current === epoch &&
+            (profileGeneration === undefined || event.payload.profileGeneration === profileGeneration)
+          ) {
             received.add(event.payload.snapshot.runId);
             receive(event.payload.snapshot);
           }
@@ -101,7 +102,7 @@ export function useForwards(): ForwardController {
       ready.current = false;
       unlisten?.();
     };
-  }, [receive, reload]);
+  }, [receive, reload, commands, profileGeneration]);
 
   return {
     snapshots,

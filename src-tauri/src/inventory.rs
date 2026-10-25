@@ -5,7 +5,7 @@
 //! adapters.
 
 use crate::events::{SessionChangeKind, SessionChanged};
-use crate::local_data::LocalDataState;
+use crate::profile_context::ProfileRequest as LocalDataState;
 use scoplen_client_core::inventory::{
     AccessProfileInput, AccessProfileSummary, AddHostError, Areas, CredentialInput,
     CredentialSummary, Deletion, DeletionStore, EditHost, EditHostError, Failure, ForwardInput,
@@ -20,7 +20,7 @@ use tauri_specta::Event as _;
 #[tauri::command]
 #[specta::specta]
 pub async fn session_saved_output(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     session_id: String,
 ) -> Result<
@@ -29,7 +29,7 @@ pub async fn session_saved_output(
 > {
     local
         .with_store(|store| {
-            Inventory::with_deletions(store.clone(), state.deletions.clone())
+            Inventory::with_deletions(store.clone(), state.deletions(local.generation()))
                 .saved_terminal_output(session_id)
         })
         .unwrap_or(Err(scoplen_client_core::terminal_output::SavedOutputError::Unavailable))
@@ -38,14 +38,24 @@ pub async fn session_saved_output(
 /// Process-local undo state shared by inventory command calls.
 #[derive(Clone, Default)]
 pub struct InventoryState {
-    deletions: DeletionStore,
+    deletions: std::sync::Arc<std::sync::Mutex<(String, DeletionStore)>>,
+}
+
+impl InventoryState {
+    fn deletions(&self, generation: String) -> DeletionStore {
+        let mut state = self.deletions.lock().unwrap_or_else(|error| error.into_inner());
+        if state.0 != generation {
+            *state = (generation, DeletionStore::default());
+        }
+        state.1.clone()
+    }
 }
 
 fn facade(local: &LocalDataState, state: &InventoryState) -> Result<Inventory, Failure> {
     let store = local
         .store()
         .ok_or_else(|| Failure::Failed { reference: "local data is locked".into() })?;
-    Ok(Inventory::with_deletions(store, state.deletions.clone()))
+    Ok(Inventory::with_deletions(store, state.deletions(local.generation())))
 }
 
 async fn blocking<T>(
@@ -85,7 +95,7 @@ where
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_areas(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
 ) -> Result<Areas, Failure> {
     let inventory = facade(&local, &state)?;
@@ -96,7 +106,7 @@ pub async fn inventory_areas(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_groups(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
 ) -> Result<Vec<GroupSummary>, Failure> {
     let inventory = facade(&local, &state)?;
@@ -107,7 +117,7 @@ pub async fn inventory_groups(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_hosts(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     source: HostSource,
     query: String,
@@ -120,7 +130,7 @@ pub async fn inventory_hosts(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_recent_sessions(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
 ) -> Result<Vec<RecentSession>, Failure> {
     let inventory = facade(&local, &state)?;
@@ -132,15 +142,19 @@ pub async fn inventory_recent_sessions(
 #[specta::specta]
 pub async fn session_open(
     app: tauri::AppHandle,
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     profile_id: String,
     kind: RecentSessionKind,
 ) -> Result<RecentSession, SessionError> {
     let inventory = facade_session(&local, &state)?;
     let opened = blocking_session(move || inventory.open_session(profile_id, kind)).await?;
-    let _ = SessionChanged { session_id: opened.id.clone(), change: SessionChangeKind::Opened }
-        .emit(&app);
+    let _ = SessionChanged {
+        profile_generation: local.generation(),
+        session_id: opened.id.clone(),
+        change: SessionChangeKind::Opened,
+    }
+    .emit(&app);
     Ok(opened)
 }
 
@@ -149,7 +163,7 @@ pub async fn session_open(
 #[specta::specta]
 pub async fn session_close(
     app: tauri::AppHandle,
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     session_id: String,
     outcome: RecentSessionOutcome,
@@ -157,8 +171,12 @@ pub async fn session_close(
     let inventory = facade_session(&local, &state)?;
     let event_session_id = session_id.clone();
     blocking_session(move || inventory.close_session(session_id, outcome)).await?;
-    let _ = SessionChanged { session_id: event_session_id, change: SessionChangeKind::Closed }
-        .emit(&app);
+    let _ = SessionChanged {
+        profile_generation: local.generation(),
+        session_id: event_session_id,
+        change: SessionChangeKind::Closed,
+    }
+    .emit(&app);
     Ok(())
 }
 
@@ -166,7 +184,7 @@ pub async fn session_close(
 #[tauri::command]
 #[specta::specta]
 pub async fn session_reconnect(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     session_id: String,
 ) -> Result<ReconnectTarget, SessionError> {
@@ -179,7 +197,7 @@ pub async fn session_reconnect(
 #[specta::specta]
 pub async fn session_forget(
     app: tauri::AppHandle,
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     session_id: String,
 ) -> Result<(), SessionError> {
@@ -189,7 +207,12 @@ pub async fn session_forget(
         move || inventory.forget_session(session_id)
     })
     .await?;
-    let _ = SessionChanged { session_id, change: SessionChangeKind::Forgotten }.emit(&app);
+    let _ = SessionChanged {
+        profile_generation: local.generation(),
+        session_id,
+        change: SessionChangeKind::Forgotten,
+    }
+    .emit(&app);
     Ok(())
 }
 
@@ -200,14 +223,14 @@ fn facade_session(
     let store = local
         .store()
         .ok_or_else(|| SessionError::Failed { reference: "local data is locked".into() })?;
-    Ok(Inventory::with_deletions(store, state.deletions.clone()))
+    Ok(Inventory::with_deletions(store, state.deletions(local.generation())))
 }
 
 /// Reads one host and its logins.
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_host(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
 ) -> Result<Option<HostDetails>, Failure> {
@@ -219,14 +242,14 @@ pub async fn inventory_host(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_add_host(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     host: NewHost,
 ) -> Result<HostDetails, AddHostError> {
     let store = local
         .store()
         .ok_or_else(|| AddHostError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     blocking_add(move || inventory.add_host(host)).await
 }
 
@@ -234,7 +257,7 @@ pub async fn inventory_add_host(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_set_favorite(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
     favorite: bool,
@@ -247,7 +270,7 @@ pub async fn inventory_set_favorite(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_update_host(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
     host: EditHost,
@@ -255,7 +278,7 @@ pub async fn inventory_update_host(
     let store = local
         .store()
         .ok_or_else(|| EditHostError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.update_host(id, host))
         .await
         .map_err(|error| EditHostError::Failed { reference: error.to_string() })?
@@ -265,7 +288,7 @@ pub async fn inventory_update_host(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_create_group(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     group: GroupInput,
 ) -> Result<GroupSummary, GroupError> {
@@ -280,7 +303,7 @@ pub async fn inventory_create_group(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_update_group(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
     group: GroupInput,
@@ -296,13 +319,13 @@ pub async fn inventory_update_group(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_access_profiles(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
 ) -> Result<Vec<AccessProfileSummary>, ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.access_profiles())
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -312,13 +335,13 @@ pub async fn inventory_access_profiles(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_forwards(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
 ) -> Result<Vec<ForwardSummary>, ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.forwards_objects())
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -328,14 +351,14 @@ pub async fn inventory_forwards(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_create_forward(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     forward: ForwardInput,
 ) -> Result<ForwardSummary, ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.create_forward(forward))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -345,7 +368,7 @@ pub async fn inventory_create_forward(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_update_forward(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
     forward: ForwardInput,
@@ -353,7 +376,7 @@ pub async fn inventory_update_forward(
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.update_forward(id, forward))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -363,14 +386,14 @@ pub async fn inventory_update_forward(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_delete_forward(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
 ) -> Result<(), ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.delete_forward(id))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -380,14 +403,14 @@ pub async fn inventory_delete_forward(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_create_access_profile(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     profile: AccessProfileInput,
 ) -> Result<AccessProfileSummary, ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.create_access_profile(profile))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -397,7 +420,7 @@ pub async fn inventory_create_access_profile(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_update_access_profile(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
     profile: AccessProfileInput,
@@ -405,7 +428,7 @@ pub async fn inventory_update_access_profile(
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.update_access_profile(id, profile))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -415,14 +438,14 @@ pub async fn inventory_update_access_profile(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_delete_access_profile(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
 ) -> Result<(), ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.delete_access_profile(id))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -432,14 +455,14 @@ pub async fn inventory_delete_access_profile(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_restore_orphaned_host(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
 ) -> Result<(), ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.restore_orphaned_host(id))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -449,14 +472,14 @@ pub async fn inventory_restore_orphaned_host(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_restore_orphaned_object(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
 ) -> Result<(), ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.restore_orphaned_object(id))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -466,13 +489,13 @@ pub async fn inventory_restore_orphaned_object(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_credentials(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
 ) -> Result<Vec<CredentialSummary>, ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.credentials_objects())
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -482,14 +505,14 @@ pub async fn inventory_credentials(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_create_credential(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     credential: CredentialInput,
 ) -> Result<CredentialSummary, ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.create_credential(credential))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -499,7 +522,7 @@ pub async fn inventory_create_credential(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_update_credential(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
     credential: CredentialInput,
@@ -507,7 +530,7 @@ pub async fn inventory_update_credential(
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.update_credential(id, credential))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -517,14 +540,14 @@ pub async fn inventory_update_credential(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_delete_credential(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
 ) -> Result<(), ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.delete_credential(id))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -534,13 +557,13 @@ pub async fn inventory_delete_credential(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_routes(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
 ) -> Result<Vec<RouteSummary>, ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.routes_objects())
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -550,14 +573,14 @@ pub async fn inventory_routes(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_create_route(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     route: RouteInput,
 ) -> Result<RouteSummary, ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.create_route(route))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -567,7 +590,7 @@ pub async fn inventory_create_route(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_update_route(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
     route: RouteInput,
@@ -575,7 +598,7 @@ pub async fn inventory_update_route(
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.update_route(id, route))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -585,14 +608,14 @@ pub async fn inventory_update_route(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_delete_route(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
 ) -> Result<(), ObjectEditError> {
     let store = local
         .store()
         .ok_or_else(|| ObjectEditError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.delete_route(id))
         .await
         .map_err(|error| ObjectEditError::Failed { reference: error.to_string() })?
@@ -602,7 +625,7 @@ pub async fn inventory_delete_route(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_delete_host(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     id: String,
 ) -> Result<Deletion, Failure> {
@@ -614,7 +637,7 @@ pub async fn inventory_delete_host(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_undo_delete(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     token: String,
 ) -> Result<(), Failure> {
@@ -627,14 +650,14 @@ pub async fn inventory_undo_delete(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_preview_open_ssh_config(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     path: String,
 ) -> Result<OpenSshImportPreview, OpenSshImportError> {
     let store = local
         .store()
         .ok_or_else(|| OpenSshImportError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.preview_open_ssh_config(path))
         .await
         .map_err(|error| OpenSshImportError::Failed { reference: error.to_string() })?
@@ -644,14 +667,14 @@ pub async fn inventory_preview_open_ssh_config(
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_import_open_ssh_config(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     preview: OpenSshImportPreview,
 ) -> Result<OpenSshImportResult, OpenSshImportError> {
     let store = local
         .store()
         .ok_or_else(|| OpenSshImportError::Failed { reference: "local data is locked".into() })?;
-    let inventory = Inventory::with_deletions(store, state.deletions.clone());
+    let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
     tauri::async_runtime::spawn_blocking(move || inventory.import_open_ssh_config(preview))
         .await
         .map_err(|error| OpenSshImportError::Failed { reference: error.to_string() })?
@@ -661,7 +684,10 @@ pub async fn inventory_import_open_ssh_config(
 /// onboarding flow. Cancellation returns `null`.
 #[tauri::command]
 #[specta::specta]
-pub async fn choose_open_ssh_config(app: tauri::AppHandle) -> Result<Option<String>, Failure> {
+pub async fn choose_open_ssh_config(
+    _context: crate::profile_context::ProfileRequest,
+    app: tauri::AppHandle,
+) -> Result<Option<String>, Failure> {
     let path = tauri::async_runtime::spawn_blocking(move || {
         use tauri_plugin_dialog::DialogExt as _;
         app.dialog()
@@ -678,7 +704,10 @@ pub async fn choose_open_ssh_config(app: tauri::AppHandle) -> Result<Option<Stri
 /// Opens the native private-key file picker; `null` means cancellation.
 #[tauri::command]
 #[specta::specta]
-pub async fn choose_key_file(app: tauri::AppHandle) -> Result<Option<String>, Failure> {
+pub async fn choose_key_file(
+    _context: crate::profile_context::ProfileRequest,
+    app: tauri::AppHandle,
+) -> Result<Option<String>, Failure> {
     let path = tauri::async_runtime::spawn_blocking(move || {
         use tauri_plugin_dialog::DialogExt as _;
         app.dialog()

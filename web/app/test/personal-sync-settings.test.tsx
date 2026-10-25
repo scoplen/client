@@ -95,7 +95,13 @@ it("registers the listener before reading state and keeps a newer event over a d
   expect(read).not.toHaveBeenCalled();
   await act(async () => register(stop));
   await waitFor(() => expect(read).toHaveBeenCalledOnce());
-  act(() => notify({ event: "personal-sync-changed", id: 1, payload: { status: "authenticationRequired" } }));
+  act(() =>
+    notify({
+      event: "personal-sync-changed",
+      id: 1,
+      payload: { status: "authenticationRequired", profileGeneration: "" },
+    }),
+  );
   await act(async () => snapshot("polling"));
   expect((await screen.findByRole("alert")).textContent).toContain("Authenticate this device");
   rendered.unmount();

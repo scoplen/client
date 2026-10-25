@@ -39,6 +39,18 @@ fn ready_file_manager()
 }
 
 #[tokio::test]
+async fn profile_switch_closes_live_and_reserved_sessions_without_reusing_their_transports() {
+    let (manager, transport, _commands, _files) = ready_file_manager();
+    manager.reserve("pending", true).unwrap();
+    manager.close_all().unwrap();
+    assert!(manager.input("terminal", &transport.to_string(), b"late".to_vec()).is_err());
+    assert!(manager.sessions.lock().unwrap().is_empty());
+    manager.close_all().unwrap();
+    manager.reserve("terminal", true).unwrap();
+    assert!(manager.input("terminal", &transport.to_string(), b"foreign".to_vec()).is_err());
+}
+
+#[tokio::test]
 async fn preview_serializes_file_access_without_blocking_terminal_commands() {
     let (manager, transport, mut commands, mut files) = ready_file_manager();
     let operation = Uuid::now_v7();

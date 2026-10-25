@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+import { useProfileCommands } from "./account-profiles";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { commands, events, type SessionFileDrag, type SessionTransferIssue } from "./ipc/bindings";
+import { events, type SessionFileDrag, type SessionTransferIssue } from "./ipc/bindings";
 
 type DropFeedback = {
   owner: string;
@@ -104,6 +105,7 @@ export function useSessionFileDrop({
   locale: "en" | "zh-Hans";
   onEnqueueFeedback: (feedback: EnqueueFeedback) => void;
 }) {
+  const commands = useProfileCommands();
   const [revision, setRevision] = useState(0);
   const [feedback, setFeedback] = useState<DropFeedback | null>(null);
   const path = directoryPath.join(",");
@@ -268,7 +270,7 @@ export function useSessionFileDrop({
       window.visualViewport?.removeEventListener("scroll", invalidate);
       void revoke();
     };
-  }, [sessionId, transportId, queueId, path, owner, enabled, busy, list, revision]);
+  }, [sessionId, transportId, queueId, path, owner, enabled, busy, list, revision, commands]);
 
   return enabled && feedback?.owner === owner ? feedback : null;
 }

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+import { useProfileCommands } from "./account-profiles";
 import { Button, Confirm, Dialog } from "@scoplen/ui";
 import { useEffect, useRef, useState } from "react";
 import { catalogs, useI18n } from "./i18n";
 import { PersonalHistorySettings } from "./personal-history-settings";
 import {
-  commands,
   type PersonalInventoryError,
   type PersonalInventoryObject,
   type PersonalInventoryPreview,
@@ -29,6 +29,7 @@ export function PersonalInventorySettings({
   disabled: boolean;
   onBusyChange: (busy: boolean) => void;
 }) {
+  const commands = useProfileCommands();
   const { t } = useI18n();
   const [status, setStatus] = useState<PersonalInventoryStatus | null>(null);
   const [failed, setFailed] = useState<PersonalInventoryError | null>(null);
@@ -68,7 +69,7 @@ export function PersonalInventorySettings({
       active = false;
       mounted.current = false;
     };
-  }, []);
+  }, [commands]);
 
   const run = async <T,>(operation: () => Promise<Outcome<T>>, success: (data: T) => void) => {
     if (pending.current || disabled) return;

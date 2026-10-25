@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
+import { useProfileCommands } from "./account-profiles";
 import { Button } from "@scoplen/ui";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
-import { commands, type PersonalAccountSnapshot, type PersonalServerError } from "./ipc/bindings";
+import { type PersonalAccountSnapshot, type PersonalServerError } from "./ipc/bindings";
 
 export function PersonalAccountSettings({
   authenticated,
@@ -13,6 +14,7 @@ export function PersonalAccountSettings({
   disabled: boolean;
   onBusyChange: (busy: boolean) => void;
 }) {
+  const commands = useProfileCommands();
   const { t, locale } = useI18n();
   const [snapshot, setSnapshot] = useState<PersonalAccountSnapshot | null>(null);
   const [failed, setFailed] = useState<PersonalServerError | null>(null);
@@ -39,7 +41,7 @@ export function PersonalAccountSettings({
     return () => {
       active = false;
     };
-  }, []);
+  }, [commands]);
 
   const query = async () => {
     if (pending.current || disabled || !authenticated || loading) return;

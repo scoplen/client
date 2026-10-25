@@ -3,6 +3,7 @@ import { Button, Field, Mark, type MarkMood } from "@scoplen/ui";
 import { useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
 import { commands, type LocalDataError, type Status, type UnreadableReason } from "./ipc/bindings";
+import { useProfile, useProfileCommands } from "./account-profiles";
 
 type Outcome = { status: "ok"; data: Status } | { status: "error"; error: LocalDataError };
 
@@ -256,6 +257,8 @@ export function PassphraseSettings({
   status: Status & { state: "open" };
   onStatus: (status: Status) => void;
 }) {
+  const commands = useProfileCommands();
+  const profile = useProfile();
   const { t } = useI18n();
   const errorText = useErrorText();
   const [editing, setEditing] = useState(false);
@@ -265,6 +268,14 @@ export function PassphraseSettings({
     onStatus(next);
   });
   const hasPassphrase = status.protection !== "keystore";
+
+  if (profile?.snapshot.selected)
+    return (
+      <section className="mt-10">
+        <h2 className="ui-display text-lg">{t("settings.passphrase.title")}</h2>
+        <p className="mt-2 text-sm text-muted-foreground">{t("accounts.localProtection")}</p>
+      </section>
+    );
 
   return (
     <section aria-labelledby="passphrase-title" className="mt-10">

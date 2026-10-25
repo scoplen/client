@@ -2,7 +2,7 @@
 
 //! Independent tunnel intents. Losing an event observer never closes a run.
 
-use crate::{local_data::LocalDataState, ssh::SessionPreparationIntent};
+use crate::{profile_context::ProfileRequest as LocalDataState, ssh::SessionPreparationIntent};
 use scoplen_client_core::forward_manager::{ForwardIssue, ForwardSnapshot};
 use serde::Serialize;
 use specta::Type;
@@ -14,6 +14,8 @@ pub use scoplen_client_core::forward_manager::ForwardManager;
 #[derive(Clone, Debug, Serialize, Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
 pub struct ForwardChanged {
+    /// Source profile opening.
+    pub profile_generation: String,
     /// The latest revision of the independent run.
     pub snapshot: ForwardSnapshot,
 }
@@ -23,15 +25,17 @@ pub struct ForwardChanged {
 #[specta::specta]
 pub async fn forward_start(
     app: tauri::AppHandle,
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     manager: tauri::State<'_, ForwardManager>,
     forward_id: String,
     profile_id: String,
 ) -> Result<ForwardSnapshot, ForwardIssue> {
+    let profile_generation = local.generation();
     local
         .with_store(|store| {
             manager.start(store.clone(), &forward_id, &profile_id, move |snapshot| {
-                let _ = ForwardChanged { snapshot }.emit(&app);
+                let _ = ForwardChanged { profile_generation: profile_generation.clone(), snapshot }
+                    .emit(&app);
             })
         })
         .unwrap_or(Err(ForwardIssue::Unavailable))
@@ -41,7 +45,7 @@ pub async fn forward_start(
 #[tauri::command]
 #[specta::specta]
 pub async fn forward_list(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     manager: tauri::State<'_, ForwardManager>,
 ) -> Result<Vec<ForwardSnapshot>, ForwardIssue> {
     local.with_store(|store| manager.list(store)).unwrap_or(Err(ForwardIssue::Unavailable))
@@ -51,7 +55,7 @@ pub async fn forward_list(
 #[tauri::command]
 #[specta::specta]
 pub async fn forward_snapshot(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     manager: tauri::State<'_, ForwardManager>,
     run_id: String,
 ) -> Result<ForwardSnapshot, ForwardIssue> {
@@ -64,7 +68,7 @@ pub async fn forward_snapshot(
 #[tauri::command]
 #[specta::specta]
 pub async fn forward_respond(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     manager: tauri::State<'_, ForwardManager>,
     run_id: String,
     prompt_id: String,
@@ -80,7 +84,7 @@ pub async fn forward_respond(
 #[tauri::command]
 #[specta::specta]
 pub async fn forward_stop(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     manager: tauri::State<'_, ForwardManager>,
     run_id: String,
 ) -> Result<(), ForwardIssue> {

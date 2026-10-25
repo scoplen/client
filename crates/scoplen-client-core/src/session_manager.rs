@@ -485,6 +485,31 @@ impl SessionManager {
         self.intent(session_id, Intent::Close)
     }
 
+    /// Cancel every logical session before replacing its owning profile.
+    pub fn close_all(&self) -> Result<(), String> {
+        let ids: Vec<_> = self
+            .sessions
+            .lock()
+            .map_err(|_| "session manager is unavailable")?
+            .keys()
+            .cloned()
+            .collect();
+        for id in ids {
+            let mut sessions =
+                self.sessions.lock().map_err(|_| "session manager is unavailable")?;
+            let Some(entry) = sessions.get_mut(&id) else {
+                continue;
+            };
+            if *entry.intent.borrow() == Intent::Close {
+                continue;
+            }
+            drop(sessions);
+            // An owner may finish between the snapshot and cancellation.
+            let _ = self.close(&id);
+        }
+        Ok(())
+    }
+
     /// Save only a rendered checkpoint belonging to the exact current local owner.
     pub fn save_output(
         &self,

@@ -4,7 +4,7 @@
 
 use crate::events::{SessionChangeKind, SessionChanged};
 use crate::frames::SessionMessage;
-use crate::local_data::LocalDataState;
+use crate::profile_context::ProfileRequest as LocalDataState;
 use scoplen_client_core::connection::preparation::PreparationResponse;
 use scoplen_client_core::locale::Locale;
 use scoplen_client_core::session_files::{
@@ -25,7 +25,7 @@ use scoplen_client_core::terminal_output::{SavedOutputError, TerminalSnapshot};
 #[tauri::command]
 #[specta::specta]
 pub async fn session_save_output(
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     transport_id: String,
@@ -43,6 +43,7 @@ pub async fn session_save_output(
 #[tauri::command]
 #[specta::specta]
 pub fn session_reserve_transport(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     pty: bool,
@@ -87,6 +88,7 @@ impl SessionPreparationIntent {
 #[tauri::command]
 #[specta::specta]
 pub fn session_respond(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     transport_id: String,
@@ -103,7 +105,7 @@ pub fn session_respond(
 #[allow(clippy::too_many_arguments)]
 pub async fn session_connect(
     app: tauri::AppHandle,
-    local: tauri::State<'_, LocalDataState>,
+    local: LocalDataState,
     manager: tauri::State<'_, SessionManager>,
     profile_id: String,
     command: Option<String>,
@@ -118,6 +120,7 @@ pub async fn session_connect(
             return Err("local data is locked".into());
         }
     };
+    let profile_generation = local.generation();
     manager
         .run(
             &session_id,
@@ -140,7 +143,12 @@ pub async fn session_connect(
                     HistoryChange::Opened => SessionChangeKind::Opened,
                     HistoryChange::Closed => SessionChangeKind::Closed,
                 };
-                let _ = SessionChanged { session_id: id.to_owned(), change }.emit(&app);
+                let _ = SessionChanged {
+                    profile_generation: profile_generation.clone(),
+                    session_id: id.to_owned(),
+                    change,
+                }
+                .emit(&app);
             },
         )
         .await
@@ -150,6 +158,7 @@ pub async fn session_connect(
 #[tauri::command]
 #[specta::specta]
 pub fn session_input(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     transport_id: String,
@@ -162,6 +171,7 @@ pub fn session_input(
 #[tauri::command]
 #[specta::specta]
 pub fn session_resize(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     transport_id: String,
@@ -175,6 +185,7 @@ pub fn session_resize(
 #[tauri::command]
 #[specta::specta]
 pub async fn session_list_files(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     transport_id: String,
@@ -188,6 +199,7 @@ pub async fn session_list_files(
 #[tauri::command]
 #[specta::specta]
 pub async fn session_preview_file(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     transport_id: String,
@@ -198,9 +210,11 @@ pub async fn session_preview_file(
 }
 
 /// Create one directory inside the current remote Files directory.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 #[specta::specta]
 pub async fn session_create_remote_directory(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     transport_id: String,
@@ -220,6 +234,7 @@ pub async fn session_create_remote_directory(
 #[tauri::command]
 #[specta::specta]
 pub async fn session_rename_remote_entry(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     transport_id: String,
@@ -247,6 +262,7 @@ pub async fn session_rename_remote_entry(
 #[tauri::command]
 #[specta::specta]
 pub async fn session_delete_remote_entry(
+    _context: crate::profile_context::ProfileRequest,
     app: tauri::AppHandle,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
@@ -311,6 +327,7 @@ pub async fn session_delete_remote_entry(
 #[tauri::command]
 #[specta::specta]
 pub fn session_cancel_file_operation(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
     transport_id: String,
@@ -343,6 +360,7 @@ pub(crate) fn suggested_download_name(remote_path: &[u8]) -> String {
 #[tauri::command]
 #[specta::specta]
 pub fn session_retry_transport(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
 ) -> Result<(), String> {
@@ -353,6 +371,7 @@ pub fn session_retry_transport(
 #[tauri::command]
 #[specta::specta]
 pub fn session_stop_reconnecting(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
 ) -> Result<(), String> {
@@ -363,6 +382,7 @@ pub fn session_stop_reconnecting(
 #[tauri::command]
 #[specta::specta]
 pub fn session_fail_transport(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
 ) -> Result<(), String> {
@@ -373,6 +393,7 @@ pub fn session_fail_transport(
 #[tauri::command]
 #[specta::specta]
 pub fn session_close_transport(
+    _context: crate::profile_context::ProfileRequest,
     manager: tauri::State<'_, SessionManager>,
     session_id: String,
 ) -> Result<(), String> {

@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+import { useProfileCommands } from "./account-profiles";
 import { Button } from "@scoplen/ui";
 import { Download, Upload } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import { useI18n } from "./i18n";
-import {
-  commands,
-  type SessionTransferIssue,
-  type SessionTransferItem,
-  type SessionTransferQueueSnapshot,
-} from "./ipc/bindings";
+import { type SessionTransferIssue, type SessionTransferItem, type SessionTransferQueueSnapshot } from "./ipc/bindings";
 
 function byteCount(value: string): bigint | null {
   if (!/^(0|[1-9]\d{0,19})$/.test(value)) return null;
@@ -57,6 +53,7 @@ export function SessionTransferQueue({
   issue: SessionTransferIssue | null;
   admittingDrop?: boolean;
 }) {
+  const commands = useProfileCommands();
   const { t, locale } = useI18n();
   const headingId = useId();
   const unknownId = useId();

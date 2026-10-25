@@ -17,6 +17,8 @@ type Handler = (cmd: string, args: Record<string, unknown>) => unknown;
 
 /** Mocks the core: `status` answers `local_data_status`; `handle` answers the rest. */
 function defaultInventory(cmd: string): unknown {
+  if (cmd === "account_profiles_snapshot")
+    return { generation: "1", selected: null, accounts: [], retainedProfile: false };
   if (cmd === "inventory_areas") return { favorites: false, recent: false, groups: false, keys: false, routes: false };
   if (cmd === "inventory_groups" || cmd === "inventory_hosts") return [];
   if (cmd === "inventory_host") return null;

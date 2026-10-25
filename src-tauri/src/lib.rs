@@ -4,6 +4,7 @@
 //! IPC surface between the frontend and `scoplen-client-core`
 //! (`scoplen-docs/11-client-architecture.md` §1, §4).
 
+pub mod account_registration;
 pub mod commands;
 pub mod events;
 pub mod file_drop;
@@ -11,15 +12,17 @@ pub mod forwards;
 pub mod frames;
 pub mod inventory;
 pub mod local_data;
+pub mod password_sign_in;
 pub mod personal_inventory;
 pub mod personal_server;
+pub mod profile_context;
 pub mod session_transfers;
 mod smoke;
 pub mod ssh;
 mod window_state;
 
 use tauri::Manager as _;
-use tauri_specta::{Builder, Event as _, collect_commands, collect_events};
+use tauri_specta::{Builder, collect_commands, collect_events};
 
 #[derive(Default)]
 struct ForwardShutdown {
@@ -37,6 +40,21 @@ pub fn ipc() -> Builder<tauri::Wry> {
         .commands(collect_commands![
             commands::app_info,
             commands::shell_ready,
+            account_registration::account_profiles_snapshot,
+            account_registration::registration_status,
+            account_registration::prepare_account_registration,
+            account_registration::save_registration_recovery,
+            account_registration::confirm_registration_recovery,
+            account_registration::exchange_account_registration,
+            account_registration::stop_account_operation,
+            account_registration::discard_registration_preparation,
+            account_registration::select_account_profile,
+            account_registration::install_registered_profile,
+            password_sign_in::password_sign_in_status,
+            password_sign_in::begin_password_sign_in,
+            password_sign_in::exchange_password_sign_in,
+            password_sign_in::discard_password_sign_in,
+            password_sign_in::install_password_sign_in_profile,
             forwards::forward_start,
             forwards::forward_list,
             forwards::forward_snapshot,
@@ -132,6 +150,7 @@ pub fn ipc() -> Builder<tauri::Wry> {
         ])
         .events(collect_events![
             events::StoreChanged,
+            profile_context::ProfileChanged,
             events::SessionChanged,
             events::PersonalSyncChanged,
             forwards::ForwardChanged,
@@ -147,10 +166,13 @@ pub fn write_bindings(path: &std::path::Path) -> Result<(), specta_typescript::E
     // Specta emits spaces before the newline for some documented union members.
     // Normalize them here so the generated artifact remains diff-clean and the
     // committed file is byte-for-byte identical to `pnpm bindings` output.
-    let generated = std::fs::read_to_string(path)?;
+    let original = std::fs::read_to_string(path)?;
+    let generated = original
+        .replace("export const commands = {", "export function makeCommands(__TAURI_INVOKE: typeof import(\"@tauri-apps/api/core\").invoke) { return {")
+        .replace("};\n\n/** Events */", "}; }\n\nexport const commands = makeCommands(__TAURI_INVOKE);\n\n/** Events */");
     let normalized = generated.lines().map(str::trim_end).collect::<Vec<_>>().join("\n");
     let normalized = if generated.ends_with('\n') { format!("{normalized}\n") } else { normalized };
-    if normalized != generated {
+    if normalized != original {
         std::fs::write(path, normalized)?;
     }
     Ok(())
@@ -168,12 +190,6 @@ pub fn run() {
             ipc.mount_events(app);
             app.state::<smoke::SmokeTest>().arm(app.handle().clone());
             let local = local_data::LocalDataState::start(app.handle());
-            local.on_change({
-                let handle = app.handle().clone();
-                move |change| {
-                    let _ = events::StoreChanged::from(change).emit(&handle);
-                }
-            });
             if let (Some(store), Some(window)) =
                 (local.store(), window_state::main_window(app.handle()))
             {
@@ -192,15 +208,8 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 owner.run(&handle.state::<scoplen_client_core::personal_server::PersonalServer>()).await;
             });
-            let mut status = background.subscribe();
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                while status.changed().await.is_ok() {
-                    let current = *status.borrow_and_update();
-                    let _ = events::PersonalSyncChanged { status: current }.emit(&handle);
-                }
-            });
             app.manage(background);
+            app.manage(std::sync::Arc::new(profile_context::NativeProfiles::default()));
             app.manage(std::sync::Arc::new(
                 scoplen_client_core::personal_inventory::PersonalInventorySettings::default(),
             ));
@@ -210,6 +219,7 @@ pub fn run() {
             file_drop::on_window_event(window, event);
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 let app = window.app_handle();
+                app.state::<std::sync::Arc<profile_context::NativeProfiles>>().cancel_operation(None);
                 if let (Some(store), Some(main)) = (
                     app.state::<local_data::LocalDataState>().store(),
                     window_state::main_window(app),

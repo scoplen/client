@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
+import { useProfile, useProfileCommands } from "./account-profiles";
 import { Button } from "@scoplen/ui";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
 import {
-  commands,
   events,
   type PersonalBackgroundStatus,
   type PersonalSyncCommandError,
@@ -20,6 +20,7 @@ export function PersonalSyncSettings({
   disabled: boolean;
   onBusyChange: (busy: boolean) => void;
 }) {
+  const commands = useProfileCommands();
   const { t } = useI18n();
   const [status, setStatus] = useState<PersonalSyncKeyStatus | null>(null);
   const [failed, setFailed] = useState<PersonalSyncCommandError | null>(null);
@@ -46,7 +47,7 @@ export function PersonalSyncSettings({
     return () => {
       active = false;
     };
-  }, []);
+  }, [commands]);
 
   const connect = async () => {
     if (pending.current || disabled || !authenticated || loading) return;
@@ -111,6 +112,8 @@ export function PersonalSyncSettings({
 }
 
 function BackgroundStatus() {
+  const commands = useProfileCommands();
+  const generation = useProfile()?.snapshot.generation;
   const { t } = useI18n();
   const [status, setStatus] = useState<PersonalBackgroundStatus>("inactive");
   useEffect(() => {
@@ -119,7 +122,7 @@ function BackgroundStatus() {
     let stop: (() => void) | undefined;
     void events.personalSyncChanged
       .listen((event) => {
-        if (active) {
+        if (active && (generation === undefined || event.payload.profileGeneration === generation)) {
           changed = true;
           setStatus(event.payload.status);
         }
@@ -138,7 +141,7 @@ function BackgroundStatus() {
       active = false;
       stop?.();
     };
-  }, []);
+  }, [commands, generation]);
   const attention =
     status === "authenticationRequired" ||
     status === "rotationRequired" ||

@@ -243,8 +243,13 @@ and remote-process resumption remain separate capabilities.
 
 Settings -> Personal account keeps access for an existing confirmed profile. It can authenticate
 that device with its saved signing key, query account/device metadata, and explicitly verify
-sync keys. Registration and password sign-in are not available in this build; local SSH remains
-available. Invitation enrollment, invitation replacement, and device pairing have been retired.
+sync keys. From Local, Create account prepares a new independent Account, exports its recovery key
+through a native Save dialog, requires explicit safe-storage confirmation, and offers Submit,
+exact-result Confirm, and explicit Retry according to the durable operation state. Sign in verifies
+an existing account password and prepares a new independent Device; Admit this device explicitly
+submits that original admission before profile installation. It never creates a replacement Account,
+reuses another Device, or overwrites an existing local Account profile. Invitation enrollment,
+invitation replacement, and device pairing have been retired.
 An unfinished old setup is preserved and cannot resume its retired entry protocol.
 
 Rust has a separate registration preparation API with the real fixed D-127 password derivation,
@@ -260,8 +265,17 @@ Account by canonical origin and Account id, with independent local key protectio
 selection/reopen gives each namespace a fresh generation and Store; Local inventory stays local.
 Failed installation keeps the original keys and directory reservation for explicit retry.
 Device keys are software keys protected by SQLCipher, not hardware-held non-exportable keys.
-These APIs expose no desktop commands. The registration/profile-selection UI, password sign-in,
-next-Device admission and Team context switching remain incomplete.
+The desktop exposes these APIs through generated native IPC. After confirmation, Install account
+profile verifies current Device authority and K-4 before opening the Account. The header selects
+Local or any ready Account. Switching closes SSH sessions, transfers and tunnels; a bounded drain
+asks the person to finish a native file dialog when necessary. Each view and invocation retains
+its original profile generation, and delayed events cannot refresh another Account. Closing the
+account view or Stop retains pending/unknown work; restart resumes local status without submitting
+automatically. Existing retained-account databases remain accessible under their original identity.
+Sign-in also resumes unknown admission with exact Confirm only. Known unchanged or never-sent
+expired admission can be safely cancelled before fresh password entry. An existing catalog Account
+directs the person to its saved profile; re-entry after that Device is revoked remains incomplete.
+Team context switching and native provider/picker acceptance on macOS remain incomplete.
 
 Profiles with saved neutral admission anchors continue to verify offline against their original
 private roots. Profiles without those anchors require explicit current-device revalidation;
@@ -269,8 +283,7 @@ historical session flags, cached bootstrap responses and archived entry payloads
 admission. The client no longer reads or decodes archived invitation or pairing payloads, and
 preserves the original database bytes. The admitted profile binds its canonical origin, Account,
 Personal vault, device, and keys immutably to this encrypted store. Existing local SSH data stays local.
-This is the retirement/storage prerequisite for D-128; password admission and full multi-profile
-or Team context switching remain incomplete.
+Team context switching remains incomplete.
 
 When a historical profile retains its original device keys, ARK and both private Account roots,
 Revalidate this device explicitly proves its current server authority through ordinary device
