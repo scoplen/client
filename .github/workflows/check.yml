@@ -98,6 +98,9 @@ jobs:
       - name: Standalone local TCP forwarding without session channels, preparation, and cleanup
         shell: pwsh
         run: ./scripts/test-ssh-local-forward.ps1
+      - name: Standalone Dynamic SOCKS forwarding, remote resolution, application counters, and cleanup
+        shell: pwsh
+        run: ./scripts/test-ssh-dynamic-forward.ps1
 
   windows-agent-interop:
     name: Windows native agent login
