@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added device-local saved terminal-tab Workspaces with Rust-validated deterministic
+  layouts, current-profile inventory checks and explicit Open/Delete. Open appends
+  fresh ordinary SSH sessions while preserving existing tabs. Unsupported definitions
+  and missing dependencies remain visible; saved-output tabs cannot be saved as live
+  connection intent. Full layouts and native restart acceptance remain incomplete.
+
 - Correct terminal character widths with Unicode 15 data, preserving ordinary
   combining cells across input chunks, cursor reports, wrapping and restored output.
   The generated tables add no runtime dependency; grapheme-cluster width changes

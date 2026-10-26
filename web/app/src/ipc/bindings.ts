@@ -111,6 +111,14 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	snippetsDelete: (id: string) => typedError<null, SnippetIssue>(__TAURI_INVOKE("snippets_delete", { id })),
 	/**  Produce a bounded exact preview; this command performs no SSH input. */
 	snippetsPrepare: (id: string, values: { [key in string]: string }) => typedError<PreparedSnippet, SnippetIssue>(__TAURI_INVOKE("snippets_prepare", { id, values })),
+	/**  List complete saved definitions and fixed unavailable reasons. */
+	workspacesList: () => typedError<WorkspaceView[], WorkspaceIssue>(__TAURI_INVOKE("workspaces_list")),
+	/**  Save the complete current terminal-tab intent as a new local object. */
+	workspacesCreate: (input: WorkspaceInput) => typedError<WorkspaceView, WorkspaceIssue>(__TAURI_INVOKE("workspaces_create", { input })),
+	/**  Validate every saved slot and return fresh tab identities without connecting. */
+	workspacesOpen: (id: string) => typedError<OpenedWorkspace, WorkspaceIssue>(__TAURI_INVOKE("workspaces_open", { id })),
+	/**  Tombstone a selected definition, including unsupported retained definitions. */
+	workspacesDelete: (id: string) => typedError<null, WorkspaceIssue>(__TAURI_INVOKE("workspaces_delete", { id })),
 	/**  Resize the exact ready transport's pseudo-terminal. */
 	sessionResize: (sessionId: string, transportId: string, columns: number, rows: number) => typedError<null, string>(__TAURI_INVOKE("session_resize", { sessionId, transportId, columns, rows })),
 	/**  Browse files on the terminal's authenticated SSH connection. */
@@ -1166,6 +1174,14 @@ export type OpenSshUnsupportedDirective = {
 	line: number,
 	/**  The directive name as written. */
 	directive: string,
+};
+
+/**  A complete tab set that the shell appends only after successful validation. */
+export type OpenedWorkspace = {
+	/**  Saved order with fresh runtime identities. */
+	tabs: WorkspaceTerminal[],
+	/**  Selected fresh tab identifier, or Hosts when absent. */
+	activeSessionId: string | null,
 };
 
 /**  Explicit next action for one original Device admission. */
@@ -2422,6 +2438,74 @@ export type UnreadableReason =
 "wrongKey" |
 /**  It was written by a newer version of Scoplen. */
 "newerVersion";
+
+/**  The ordered tab intent; no output, connection state or commands are accepted. */
+export type WorkspaceInput = {
+	/**  Display name for a newly created object. */
+	name: string,
+	/**  Complete current tab order, excluding Hosts. */
+	tabs: WorkspaceTabInput[],
+	/**  Selected tab index, or Hosts when absent. */
+	active: number | null,
+};
+
+/**  Content-free failures suitable for localized interface messages. */
+export type WorkspaceIssue =
+/**  The selected local profile is no longer available. */
+{ kind: "unavailable" } |
+/**  The supplied object identifier is invalid. */
+{ kind: "invalidId" } |
+/**  The live Workspace no longer exists. */
+{ kind: "notFound" } |
+/**  The supplied name is blank or exceeds the existing text bound. */
+{ kind: "invalidName" } |
+/**  At least one ordinary terminal is required. */
+{ kind: "emptyTabs" } |
+/**  Saving the complete tab set would convert offline output into SSH intent. */
+{ kind: "savedOutputUnsupported" } |
+/**  The selected index is outside the supplied tab order. */
+{ kind: "invalidActive" } |
+/**  This build cannot interpret the complete retained definition. */
+{ kind: "unsupportedLayout" } |
+/**  A current Login or one of its dependencies is missing or unreadable. */
+{ kind: "missingDependency" } |
+/**  A reference belongs to another account or an unsupported vault. */
+{ kind: "foreignDependency" } |
+/**  The existing layout/object model limit was exceeded. */
+{ kind: "definitionTooLarge" } |
+/**  The store could not complete the operation. */
+{ kind: "storage" };
+
+/**  One visible tab supplied by the shell, including outputs that cannot be saved. */
+export type WorkspaceTabInput =
+/**  An ordinary terminal retains only its Login reference. */
+{ kind: "terminal";
+/**  Canonical Login object identifier. */
+profileId: string } |
+/**  Offline output must not silently become a new SSH connection. */
+{ kind: "savedOutput" };
+
+/**  A fresh runtime tab, resolved without reserving or connecting a session. */
+export type WorkspaceTerminal = {
+	/**  Fresh Rust-generated runtime identifier for this Open. */
+	sessionId: string,
+	/**  Existing Login used by the ordinary SSH session path. */
+	profileId: string,
+	/**  Current Host and Login display text. */
+	label: string,
+};
+
+/**  One saved definition, including retained unsupported and orphaned objects. */
+export type WorkspaceView = {
+	/**  Canonical Workspace identifier. */
+	id: string,
+	/**  Retained display name. */
+	name: string,
+	/**  Number of saved terminal slots, when readable. */
+	tabCount: number,
+	/**  A fixed reason Open is unavailable; Delete remains explicit. */
+	issue: WorkspaceIssue | null,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-import { HostEgg, IconButton, Mark, useContextMenu, type MarkMood } from "@scoplen/ui";
-import { Settings, X } from "lucide-react";
+import { Button, HostEgg, IconButton, Mark, useContextMenu, type MarkMood } from "@scoplen/ui";
+import { PanelsTopLeft, Settings, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useI18n } from "./i18n";
 import type { Platform } from "./ipc/bindings";
@@ -45,6 +45,7 @@ export function Frame({
   settingsActive,
   onCloseTabs,
   onDuplicate,
+  onWorkspaces,
   children,
 }: {
   platform: Platform;
@@ -57,6 +58,8 @@ export function Frame({
   onCloseTabs?: (ids: string[]) => void;
   /** Opens another session to the same login as this tab. */
   onDuplicate?: (id: string) => void;
+  /** Manage saved tabs without changing the currently selected terminal. */
+  onWorkspaces?: () => void;
   children: ReactNode;
 }) {
   const { t } = useI18n();
@@ -142,6 +145,12 @@ export function Frame({
         </div>
         <div data-tauri-drag-region className="h-full min-w-6 flex-1" />
         <ProfileSwitcher />
+        {onWorkspaces ? (
+          <Button variant="ghost" className="shrink-0 gap-1.5 px-2" onClick={onWorkspaces}>
+            <PanelsTopLeft aria-hidden="true" className="size-4" />
+            {t("workspaces.title")}
+          </Button>
+        ) : null}
         <IconButton label={t("frame.settings")} pressed={settingsActive} onClick={onSettings}>
           <Settings aria-hidden="true" className="size-4" />
         </IconButton>

@@ -12,10 +12,11 @@ import { SessionTerminal, type SessionState } from "./session";
 import { SettingsView, type SettingsSection } from "./settings";
 import { ForwardsContext, useForwards } from "./use-forwards";
 import { useProfile, useProfileCommands } from "./account-profiles";
+import { WorkspacesDialog } from "./workspaces";
 
 type View = "hosts" | "settings";
 
-type OpenSession = { id: string; profileId: string; label: string; snapshot?: TerminalSnapshot };
+type OpenSession = { id: string; profileId: string; label: string; snapshot?: TerminalSnapshot; sessionId?: string };
 
 /** The application once its local data is open. */
 export function Shell({
@@ -41,6 +42,7 @@ export function Shell({
   const closingTabs = useRef(false);
   const allowWindowClose = useRef(false);
   const [windowError, setWindowError] = useState(false);
+  const [workspacesOpen, setWorkspacesOpen] = useState(false);
 
   const openSession = (profileId: string, label: string) => {
     const id = `session-${Date.now()}-${sessions.length}`;
@@ -163,6 +165,7 @@ export function Shell({
         setView(view === "settings" ? "hosts" : "settings");
       }}
       settingsActive={view === "settings"}
+      onWorkspaces={() => setWorkspacesOpen(true)}
       onCloseTabs={(ids) => {
         void closeSessions(ids);
       }}
@@ -171,6 +174,28 @@ export function Shell({
         if (session) openSession(session.profileId, session.label);
       }}
     >
+      {workspacesOpen ? (
+        <WorkspacesDialog
+          tabs={sessions.map((session) =>
+            session.snapshot ? { kind: "savedOutput" } : { kind: "terminal", profileId: session.profileId },
+          )}
+          active={activeTab === "hosts" ? null : sessions.findIndex((session) => session.id === activeTab)}
+          onClose={() => setWorkspacesOpen(false)}
+          onOpen={(workspace) => {
+            setSessions((current) => [
+              ...current,
+              ...workspace.tabs.map((tab) => ({
+                id: tab.sessionId,
+                sessionId: tab.sessionId,
+                profileId: tab.profileId,
+                label: tab.label,
+              })),
+            ]);
+            setActiveTab(workspace.activeSessionId ?? "hosts");
+            setView("hosts");
+          }}
+        />
+      ) : null}
       {windowError ? (
         <p role="alert" className="m-0 px-4 py-2 text-sm text-attention">
           {t("session.output.windowCloseFailed")}
@@ -195,6 +220,7 @@ export function Shell({
             label={session.label}
             active={view !== "settings" && session.id === activeTab}
             savedOutput={session.snapshot}
+            sessionId={session.sessionId}
             onClose={(discard) => closeSession(session.id, discard)}
             registerClose={(close) => {
               closeControllers.current.set(session.id, close);

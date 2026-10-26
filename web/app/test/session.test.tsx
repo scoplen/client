@@ -157,6 +157,25 @@ function interactive(
   };
 }
 
+it("uses an explicit Workspace runtime identity with the ordinary interactive shell and preparation path", async () => {
+  const f = fixture();
+  const identity = "0199a653-8392-7355-8b91-70ab85182e3a";
+  render(sessionView("en", true, undefined, undefined, { sessionId: identity }));
+  const c = await connect(f);
+  expect(c.sessionId).toBe(identity);
+  expect(f.matching("session_reserve_transport")[0]?.args.sessionId).toBe(identity);
+  expect(f.matching("session_connect")[0]?.args).toMatchObject({
+    sessionId: identity,
+    profileId: "profile-1",
+    command: null,
+    pty: true,
+  });
+  await c.prepare(interactive());
+  expect(screen.getByRole("dialog", { name: "Answer this server's request" })).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(f.matching("session_respond").at(-1)?.args.sessionId).toBe(identity);
+});
+
 it("binds literal mixed-echo responses to the exact attempt and clears them before submission", async () => {
   const f = fixture();
   const pending = f.delay("session_respond");
