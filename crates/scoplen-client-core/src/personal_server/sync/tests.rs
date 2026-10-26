@@ -198,7 +198,7 @@ impl Peer {
             jti: scoplen_model::new_uuid_v7().unwrap(),
             cnf_jkt: dpop_jwk_thumbprint(&key).unwrap(),
             org: vec![],
-            scope: "account:read keys:read keys:write sync:read sync:write".into(),
+            scope: scoplen_api::auth::INITIAL_DEVICE_ACCESS_SCOPE.into(),
             iat: now().unwrap(),
             exp: now().unwrap() + 600,
         };
