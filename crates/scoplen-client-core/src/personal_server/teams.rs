@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Account-scoped team discovery and explicit, durable creation through D-130.
+//! Account-scoped team discovery, durable creation and conditional name updates.
 
 use std::{fmt, sync::Arc};
 
@@ -10,6 +10,7 @@ use scoplen_api::{
         MAX_ORGANIZATION_PAGE_BYTES, MAX_ORGANIZATION_PROBLEM_BYTES,
         MAX_ORGANIZATION_RESOURCE_BYTES, ORGANIZATION_CREATION_RECEIPT_SECONDS,
         OrganizationCreateRequest, OrganizationListQuery, OrganizationPage, OrganizationResource,
+        OrganizationUpdateRequest, parse_organization_if_match,
     },
 };
 use scoplen_crypto::{
@@ -53,6 +54,16 @@ pub struct TeamPageView {
     pub teams: Vec<TeamSummary>,
     /// A verified ascending continuation, or None at the end.
     pub next_cursor: Option<String>,
+}
+
+/// One verified current Resource captured for an explicit name edit.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamSettingsView {
+    /// Current caller-specific team metadata; roles grant no frontend authority.
+    pub team: TeamSummary,
+    /// Exact strong Resource precondition; Save must not replace it silently.
+    pub etag: String,
 }
 
 /// Local state of the one retained team-creation operation.
@@ -130,6 +141,18 @@ pub enum TeamFailure {
     /// Confirmed rollback permits an explicit retry of the same operation.
     #[error("The team service is unavailable. Retry the original operation later.")]
     ServiceUnavailable,
+    /// The captured edit is stale and requires an explicit Resource refresh.
+    #[error("The team changed. Refresh its settings and review the name before saving again.")]
+    SettingsConflict,
+    /// A dispatched update cannot be confirmed; never automatically replay it.
+    #[error("The name may have changed. Refresh team settings before making another edit.")]
+    SettingsUnknown,
+    /// This session's fixed scope ceiling does not permit Organization updates.
+    #[error("Authenticate this device to obtain permission to update team settings.")]
+    UpdateScopeRequired,
+    /// Missing and unavailable membership share one non-disclosing outcome.
+    #[error("This team is no longer available to this Account. Refresh your teams.")]
+    TeamNotFound,
 }
 
 /// Safe flattened IPC errors, without arbitrary server text or diagnostics.
@@ -355,6 +378,15 @@ impl PersonalServer {
         store: Arc<Store>,
         organization_id: &str,
     ) -> Result<TeamSummary, TeamError> {
+        Ok(self.team_settings(store, organization_id).await?.team)
+    }
+
+    /// Capture the current Resource's exact identity and ETag without trusting cached metadata.
+    pub async fn team_settings(
+        &self,
+        store: Arc<Store>,
+        organization_id: &str,
+    ) -> Result<TeamSettingsView, TeamError> {
         let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
         let id = parse_id(organization_id)?;
         let path = format!("/api/v1/orgs/{id}");
@@ -380,7 +412,70 @@ impl PersonalServer {
         if resource.id != id {
             return Err(TeamFailure::InvalidTeamResponse.into());
         }
-        Ok(summary(resource))
+        Ok(settings_view(resource))
+    }
+
+    /// Perform one explicitly confirmed name update with its captured strong precondition.
+    pub async fn update_team_name(
+        &self,
+        store: Arc<Store>,
+        organization_id: &str,
+        etag: &str,
+        name: String,
+    ) -> Result<TeamSettingsView, TeamError> {
+        let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
+        let id = parse_id(organization_id)?;
+        parse_organization_if_match(Some(etag)).map_err(invalid)?;
+        let request = OrganizationUpdateRequest::new(name).map_err(|_| TeamFailure::InvalidName)?;
+        let body = request.to_json().map_err(|_| TeamFailure::InvalidName)?;
+        let path = format!("/api/v1/orgs/{id}");
+        let session = self.team_session(&store, DeviceAccessOperation::OrganizationUpdate).await?;
+        let proof = session.proof("PATCH", &path)?;
+        let response = self
+            .transport
+            .as_ref()
+            .map_err(|error| *error)?
+            .team_update(&session.identity.origin, &path, &body, etag, session.token()?, &proof)
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(PersonalServerError::ConnectionBeforeRequest) => {
+                return Err(PersonalServerError::ConnectionBeforeRequest.into());
+            }
+            Err(_) => return Err(TeamFailure::SettingsUnknown.into()),
+        };
+        session.current(&store).map_err(|_| TeamFailure::SettingsUnknown)?;
+        if response.status == 200 {
+            let resource = resource(&response, session.identity.account_id)
+                .map_err(|_| TeamFailure::SettingsUnknown)?;
+            if resource.id != id || resource.name != request.name {
+                return Err(TeamFailure::SettingsUnknown.into());
+            }
+            return Ok(settings_view(resource));
+        }
+        let problem = problem(&response).map_err(|_| TeamFailure::SettingsUnknown)?;
+        let failure =
+            match (problem.status, problem.code.as_str(), problem.changed, problem.retryable) {
+                (412, "organization.precondition_failed", false, false)
+                | (428, "organization.precondition_required", false, false) => {
+                    TeamFailure::SettingsConflict.into()
+                }
+                (404, "organization.not_found", false, false) => TeamFailure::TeamNotFound.into(),
+                (401, "auth.authentication_required", false, false) => {
+                    store
+                        .invalidate_personal_session(&session.identity, &session.access)
+                        .map_err(storage)?;
+                    PersonalServerError::AuthenticationRequired.into()
+                }
+                (403, "policy.denied", false, false) => {
+                    PersonalServerError::PermissionDenied.into()
+                }
+                (503, "organization.storage_unavailable", false, true) => {
+                    TeamFailure::ServiceUnavailable.into()
+                }
+                _ => TeamFailure::SettingsUnknown.into(),
+            };
+        Err(failure)
     }
 
     async fn team_session(
@@ -415,6 +510,9 @@ impl PersonalServer {
             return Err(PersonalServerError::AuthenticationRequired.into());
         }
         if !operation.required_scope().is_present_in(&claims.scope) {
+            if operation == DeviceAccessOperation::OrganizationUpdate {
+                return Err(TeamFailure::UpdateScopeRequired.into());
+            }
             return Err(PersonalServerError::PermissionDenied.into());
         }
         let session = TeamSession { identity, access, signing, expires_at: verified.expires_at() };
@@ -530,6 +628,10 @@ fn summary(resource: OrganizationResource) -> TeamSummary {
     }
 }
 
+fn settings_view(resource: OrganizationResource) -> TeamSettingsView {
+    TeamSettingsView { etag: resource.etag.clone(), team: summary(resource) }
+}
+
 fn problem(response: &Response) -> Result<ProblemDetails, TeamError> {
     if !response.problem_json {
         return Err(TeamFailure::InvalidTeamResponse.into());
@@ -568,6 +670,11 @@ fn read_error(
     response: &Response,
 ) -> Result<TeamError, TeamError> {
     let problem = problem(response)?;
+    if (problem.status, problem.code.as_str(), problem.changed, problem.retryable)
+        == (404, "organization.not_found", false, false)
+    {
+        return Ok(TeamFailure::TeamNotFound.into());
+    }
     let error = response_error(&problem).ok_or(TeamFailure::InvalidTeamResponse)?;
     if problem.status == 401 {
         store.invalidate_personal_session(&session.identity, &session.access).map_err(storage)?;

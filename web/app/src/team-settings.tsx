@@ -3,7 +3,7 @@ import { Button, Field } from "@scoplen/ui";
 import { useEffect, useRef, useState } from "react";
 import { useProfileCommands } from "./account-profiles";
 import { useI18n } from "./i18n";
-import type { TeamCreationView, TeamPageView, TeamSummary } from "./ipc/bindings";
+import type { TeamCreationView, TeamPageView, TeamSettingsView, TeamSummary } from "./ipc/bindings";
 
 export function TeamSettings({
   authenticated,
@@ -23,6 +23,16 @@ export function TeamSettings({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [reviewedExpired, setReviewedExpired] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [edit, setEdit] = useState<TeamSettingsView | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editFailure, setEditFailure] = useState<string | null>(null);
+  const [reviewRequired, setReviewRequired] = useState(false);
+  const [nameSaved, setNameSaved] = useState(false);
+  const editRevision = useRef(0);
+  const editField = useRef<HTMLInputElement>(null);
+  const editOpener = useRef<HTMLButtonElement | null>(null);
+  const returnEditFocus = useRef(false);
   const mounted = useRef(false);
   const inFlight = useRef(false);
 
@@ -48,6 +58,16 @@ export function TeamSettings({
       mounted.current = false;
     };
   }, [commands]);
+
+  useEffect(() => {
+    if (edit) editField.current?.focus();
+  }, [edit]);
+  useEffect(() => {
+    if (!busy && editingId === null && returnEditFocus.current) {
+      returnEditFocus.current = false;
+      editOpener.current?.focus();
+    }
+  }, [busy, editingId]);
 
   const run = async (operation: () => Promise<void>) => {
     if (inFlight.current || disabled || loading) return;
@@ -133,6 +153,75 @@ export function TeamSettings({
     });
   };
 
+  const closeEdit = () => {
+    returnEditFocus.current = true;
+    editRevision.current++;
+    setEditingId(null);
+    setEdit(null);
+    setEditName("");
+    setEditFailure(null);
+    setReviewRequired(false);
+  };
+  const readEdit = (id: string) => {
+    if (!authenticated) return;
+    const revision = ++editRevision.current;
+    setEditingId(id);
+    setEdit(null);
+    setEditFailure(null);
+    setNameSaved(false);
+    void run(async () => {
+      const result = await commands.teamSettings(id).catch(() => ({ status: "error" as const, error: "storage" }));
+      if (!mounted.current || revision !== editRevision.current) return;
+      if (result.status === "error") setEditFailure(result.error);
+      else {
+        setEdit(result.data);
+        setEditName(result.data.team.name);
+        setReviewRequired(false);
+      }
+    });
+  };
+  const saveName = () => {
+    if (!authenticated || !edit || reviewRequired || !editName) return;
+    const revision = editRevision.current;
+    const captured = edit;
+    void run(async () => {
+      const result = await commands
+        .updateTeamName(captured.team.id, captured.etag, editName)
+        .catch(() => ({ status: "error" as const, error: "settingsUnknown" }));
+      if (!mounted.current || revision !== editRevision.current) return;
+      if (result.status === "error") {
+        setEditFailure(result.error);
+        if (["settingsConflict", "settingsUnknown", "teamNotFound"].includes(result.error)) setReviewRequired(true);
+      } else {
+        setPage((previous) =>
+          previous
+            ? {
+                ...previous,
+                teams: previous.teams.map((team) => (team.id === captured.team.id ? result.data.team : team)),
+              }
+            : previous,
+        );
+        closeEdit();
+        setNameSaved(true);
+      }
+    });
+  };
+  const editErrorKey =
+    editFailure === "invalidName"
+      ? "teams.error.name"
+      : editFailure === "permissionDenied"
+        ? "teams.settings.permission"
+        : editFailure === "settingsConflict"
+          ? "teams.settings.conflict"
+          : editFailure === "updateScopeRequired"
+            ? "teams.settings.scope"
+            : editFailure === "settingsUnknown"
+              ? "teams.settings.unknown"
+              : editFailure === "teamNotFound"
+                ? "teams.settings.notFound"
+                : editFailure === "authenticationRequired" || editFailure === "authentication"
+                  ? "teams.error.authentication"
+                  : "teams.settings.failed";
   const errorKey =
     failed === "invalidName"
       ? "teams.error.name"
@@ -189,6 +278,11 @@ export function TeamSettings({
         </p>
       ) : null}
       {!authenticated ? <p className="mt-3 text-sm text-muted-foreground">{t("teams.error.authentication")}</p> : null}
+      {nameSaved ? (
+        <p role="status" className="mt-3 text-sm">
+          {t("teams.settings.saved")}
+        </p>
+      ) : null}
       <Button className="mt-4" variant="secondary" disabled={locked || !authenticated} onClick={() => query(null)}>
         {t("teams.refresh")}
       </Button>
@@ -198,6 +292,17 @@ export function TeamSettings({
             {page.teams.map((team) => (
               <li key={team.id} className="py-3">
                 {summary(team)}
+                <Button
+                  className="mt-3"
+                  variant="secondary"
+                  disabled={locked || !authenticated}
+                  onClick={(event) => {
+                    editOpener.current = event.currentTarget;
+                    readEdit(team.id);
+                  }}
+                >
+                  {t("teams.settings.edit", { name: team.name })}
+                </Button>
               </li>
             ))}
           </ul>
@@ -213,6 +318,58 @@ export function TeamSettings({
         <Button variant="secondary" disabled={locked || !authenticated} onClick={() => query(page.nextCursor)}>
           {t("teams.more")}
         </Button>
+      ) : null}
+      {editingId ? (
+        <form
+          className="mt-6 flex max-w-sm flex-col gap-3"
+          aria-label={t("teams.settings.title")}
+          onSubmit={(event) => {
+            event.preventDefault();
+            saveName();
+          }}
+        >
+          <h4 className="text-sm font-medium">{t("teams.settings.title")}</h4>
+          <p className="break-all font-mono text-xs text-muted-foreground select-text">{editingId}</p>
+          {edit ? (
+            <Field
+              ref={editField}
+              label={t("teams.settings.name")}
+              hint={t("teams.settings.hint")}
+              value={editName}
+              onChange={(event) => setEditName(event.target.value)}
+              maxLength={128}
+              required
+              disabled={locked || !authenticated || reviewRequired || editFailure === "updateScopeRequired"}
+              error={editFailure === "invalidName" ? t("teams.error.name") : undefined}
+            />
+          ) : null}
+          {editFailure ? (
+            <p role="alert" className="text-sm text-attention">
+              {t(editErrorKey)}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="submit"
+              disabled={
+                locked ||
+                !authenticated ||
+                !edit ||
+                !editName ||
+                reviewRequired ||
+                editFailure === "updateScopeRequired"
+              }
+            >
+              {t("teams.settings.save")}
+            </Button>
+            <Button variant="secondary" disabled={locked || !authenticated} onClick={() => readEdit(editingId)}>
+              {t("teams.settings.refresh")}
+            </Button>
+            <Button variant="ghost" onClick={closeEdit}>
+              {t("teams.settings.close")}
+            </Button>
+          </div>
+        </form>
       ) : null}
       {creation ? (
         <div className="mt-6">

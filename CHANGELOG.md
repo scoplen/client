@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added explicit Team name editing with a Rust-verified current Resource and captured ETag.
+  Save sends one conditional update and replaces only that team's verified metadata. Stale
+  and uncertain edits require explicit refresh and review; Account changes and Close suppress
+  late results. Missing write scope leaves discovery and Personal use available. Existing
+  creation recovery remains independent; rendered/native acceptance remains separate work.
+
 - Updated every shared library and the Windows Pageant patch to published `proto@4576b7a`,
   including the conditional Team name contract and `orgs:write` scope. Fresh Device
   authentication obtains the new scope; refresh cannot expand an existing session's ceiling.

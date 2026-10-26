@@ -153,6 +153,8 @@ pub fn ipc() -> Builder<tauri::Wry> {
             personal_server::connect_personal_sync,
             personal_server::personal_sync_background_status,
             teams::teams_page,
+            teams::team_settings,
+            teams::update_team_name,
             teams::pending_team_creation,
             teams::prepare_team_creation,
             teams::submit_team_creation,

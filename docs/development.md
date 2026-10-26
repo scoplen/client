@@ -66,13 +66,16 @@ directions cannot read the other Account's vault keys and return the same not-fo
 an absent vault. Reviewed Host uploads remain confined to their Account, and all three Devices
 continue normal synchronization after the denied reads. This covers Personal discovery, key
 reads and ordinary inventory separation. Both Devices create teams, discover the same current
-memberships and read an individual team. Nonempty membership snapshots survive real refresh and
+memberships and read an individual team. One Device saves a name with its captured ETag;
+the other Device's stale edit is refused, an unchanged-name save preserves the Resource,
+and explicit discovery agrees after reopening. Nonempty membership snapshots survive real refresh and
 the existing Personal key/Host synchronization checks. The unrelated Account discovers only its
-own team; symmetric foreign-team reads match the static absent-team response. One successful
+own team; symmetric foreign-team reads match the static absent-team response, and foreign
+name updates return the fixed unavailable-team failure. One successful
 creation response is deliberately withheld from the local reducer, retaining its original unknown
 operation. After Account close/reopen, explicit replay confirms that same team without a duplicate
 and preserves its original request bytes and retry deadline. Team inventory, invitations, asset
-policy, foreign writes and the complete isolation matrix remain separate checks.
+policy, foreign asset writes and the complete isolation matrix remain separate checks.
 Local store protection uses test passphrases, not native keystore acceptance.
 Passwords and account names are generated per run and are not printed. Successful owned client
 fixtures are removed; failures retain the original encrypted stores and pending state.
@@ -211,11 +214,11 @@ Account, Device, proof-key, issuer, signature and scope checks; membership alone
 Organization operation. These tests exercise public shared token codecs and real TLS peers,
 not production Team invitation or authorization support.
 
-## Team creation and discovery
+## Team creation, discovery and name settings
 
-The Rust core exposes one explicit current-membership page and one retained team creation per
-Account store. Tests extend the existing independent TLS 1.3/H2 peer using public shared codecs,
-real signed access tokens and fresh DPoP proofs:
+The Rust core exposes explicit current-membership reads, one retained team creation per
+Account store and conditional name updates. Tests extend the existing independent TLS 1.3/H2
+peer using public shared codecs, real signed access tokens and fresh DPoP proofs:
 
 ```text
 cargo test -p scoplen-client-core --lib personal_server::sync::tests::teams:: -- --test-threads=1
@@ -224,15 +227,25 @@ cargo test -p scoplen-client-core --lib personal_server::sync::tests::teams:: --
 Coverage checks complete Account-bound pages and individual Resources, fresh scope admission,
 exact durable request retention before dispatch, unchanged Personal keys, explicit same-request
 retry after store reopen, rollback, malformed replies, unknown commits, metadata failure, original
-deadline expiry and failed local dispatch/confirmation. Only verified first-attempt unchanged
+deadline expiry and failed local dispatch/confirmation. Name-setting cases capture exact ETags,
+send one PATCH without hidden refresh or replay, reject malformed or mismatched success,
+require explicit refresh after conflict or uncertainty, and preserve Personal data and creation
+recovery. Missing write scope leaves discovery and Personal bootstrap available.
+Only verified first-attempt unchanged
 results can return to prepared; a later denial cannot erase an earlier unknown outcome. The
 separate opt-in public HTTPS scenario above exercises these consumers against a disposable
 deployment. Neither peer tests nor core HTTPS checks establish native UI or macOS acceptance.
 
-The five native commands are `teams_page`, `pending_team_creation`, `prepare_team_creation`,
-`submit_team_creation` and `discard_team_creation`. Regenerate bindings after changing them.
+The native commands are `teams_page`, `team_settings`, `update_team_name`,
+`pending_team_creation`, `prepare_team_creation`, `submit_team_creation` and
+`discard_team_creation`. Regenerate bindings after changing them.
 They retain the existing profile-generation boundary. Roles and confirmed historical creation
 metadata never authorize shared assets, and discovery does not start a Team inventory context.
+Frontend tests cover explicit refresh/review, keyboard focus, localized failures and closing
+the editor. `team-settings-profile.test.tsx` uses the actual Account generation boundary and
+generated commands to reject late reads and saves after profile replacement. The existing
+public HTTPS scenario covers two-Device conditional updates, stale edits, no-op updates,
+reopen and foreign-Account denial against each database backend.
 
 ## Password registration preparation and HTTPS
 

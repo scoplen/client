@@ -7,6 +7,7 @@ use scoplen_api::{
     ErrorCode, ProblemDetails,
     organization::{
         OrganizationCreateRequest, OrganizationMembership, OrganizationPage, OrganizationResource,
+        OrganizationUpdateRequest, parse_organization_if_match,
     },
 };
 
@@ -33,6 +34,9 @@ pub(super) struct TeamPeer {
     requests: Vec<(uuid::Uuid, Vec<u8>)>,
     modes: VecDeque<Mode>,
     read_reply: Option<Reply>,
+    update_reply: Option<Reply>,
+    update_modes: VecDeque<Mode>,
+    updates: Vec<(uuid::Uuid, String, Vec<u8>)>,
 }
 
 impl TeamPeer {
@@ -110,6 +114,68 @@ impl TeamPeer {
             }
             return Ok(reply);
         }
+        if request.method() == http::Method::PATCH {
+            let id = path
+                .strip_prefix("/api/v1/orgs/")
+                .and_then(|text| uuid::Uuid::parse_str(text).ok())
+                .ok_or("invalid update path")?;
+            if request.uri().query().is_some()
+                || request.headers().contains_key("idempotency-key")
+                || request.headers().get("content-type").and_then(|value| value.to_str().ok())
+                    != Some("application/json")
+                || request.headers().get_all("if-match").iter().count() != 1
+            {
+                return Err("invalid team update headers".into());
+            }
+            let etag = parse_organization_if_match(
+                request.headers().get("if-match").and_then(|value| value.to_str().ok()),
+            )
+            .map_err(|_| "invalid update precondition")?;
+            let parsed =
+                OrganizationUpdateRequest::from_json(body).map_err(|_| "invalid update body")?;
+            self.updates.push((id, etag.to_owned(), body.to_vec()));
+            if let Some(reply) = &self.update_reply {
+                return Ok(reply.clone());
+            }
+            let Some(resource) = self.resources.get_mut(&id) else {
+                return Ok(problem("organization.not_found", false, false, 404));
+            };
+            if resource.etag != etag {
+                return Ok(problem("organization.precondition_failed", false, false, 412));
+            }
+            let mode = self.update_modes.pop_front().unwrap_or_default();
+            match mode {
+                Mode::Denied => return Ok(problem("policy.denied", false, false, 403)),
+                Mode::Rollback => {
+                    return Ok(problem("organization.storage_unavailable", false, true, 503));
+                }
+                Mode::UnknownBeforeCommit => {
+                    return Ok(problem("organization.commit_outcome_unknown", true, false, 503));
+                }
+                Mode::InvalidProblem => {
+                    return Ok(Reply {
+                        status: 503,
+                        content_type: "application/problem+json",
+                        ..json(br#"{"changed":false,"changed":true}"#.to_vec())
+                    });
+                }
+                _ => {}
+            }
+            if resource.name != parsed.name {
+                resource.name = parsed.name;
+                resource.updated_at = "2026-10-26T00:00:01Z".into();
+                resource.etag = "\"updated\"".into();
+            }
+            if matches!(mode, Mode::UnknownAfterCommit) {
+                return Ok(problem("organization.commit_outcome_unknown", true, false, 503));
+            }
+            let mut reply = resource_reply(resource);
+            reply.stall = matches!(mode, Mode::LostAfterCommit);
+            if matches!(mode, Mode::BadMetadata) {
+                reply.headers.retain(|(name, _)| *name != "x-request-id");
+            }
+            return Ok(reply);
+        }
         if request.method() != http::Method::GET
             || !body.is_empty()
             || request.headers().contains_key("idempotency-key")
@@ -160,6 +226,9 @@ fn install(peer: &Peer, store: &Arc<Store>, modes: Vec<Mode>) {
         requests: Vec::new(),
         modes: modes.into(),
         read_reply: None,
+        update_reply: None,
+        update_modes: VecDeque::new(),
+        updates: Vec::new(),
     });
 }
 
@@ -466,5 +535,233 @@ async fn failed_dispatch_never_sends_and_failed_confirmation_retains_original_un
         TeamCreationPhase::Confirmed
     );
     assert_eq!(peer.state.lock().unwrap().teams.as_ref().unwrap().resources.len(), 1);
+    peer.assert_healthy();
+}
+
+#[tokio::test]
+async fn name_settings_capture_exact_etag_update_once_and_preserve_personal_data_and_creation() {
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    install(&peer, &store, vec![]);
+    let before = record(&store).unwrap();
+    let keys = manager.bootstrap_sync(store.clone()).await.unwrap();
+    let prepared = manager.prepare_team_creation(&store, "Operations".into()).unwrap();
+    let confirmed =
+        manager.submit_team_creation(store.clone(), &prepared.operation_id).await.unwrap();
+    let original = confirmed.organization.unwrap();
+    let captured = manager.team_settings(store.clone(), &original.id).await.unwrap();
+    assert_eq!(captured.team, original);
+    assert_eq!(captured.etag, "\"one\"");
+    let updated = manager
+        .update_team_name(store.clone(), &original.id, &captured.etag, "Platform".into())
+        .await
+        .unwrap();
+    assert_eq!(updated.team.id, original.id);
+    assert_eq!(updated.team.name, "Platform");
+    assert_eq!(updated.etag, "\"updated\"");
+    assert_eq!(manager.team_settings(store.clone(), &original.id).await.unwrap(), updated);
+    assert_eq!(
+        manager.teams_page(store.clone(), None).await.unwrap().teams.as_slice(),
+        std::slice::from_ref(&updated.team)
+    );
+    {
+        let state = peer.state.lock().unwrap();
+        let updates = &state.teams.as_ref().unwrap().updates;
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].0.to_string(), original.id);
+        assert_eq!(updates[0].1, captured.etag);
+        assert_eq!(OrganizationUpdateRequest::from_json(&updates[0].2).unwrap().name, "Platform");
+    }
+    let retained = manager.pending_team_creation(&store).unwrap().unwrap();
+    assert_eq!(retained.operation_id, prepared.operation_id);
+    assert_eq!(retained.organization, Some(original));
+    let after = record(&store).unwrap();
+    assert_eq!(after.account_id, before.account_id);
+    assert_eq!(after.personal_vault_id, before.personal_vault_id);
+    assert_eq!(after.private_material.as_bytes(), before.private_material.as_bytes());
+    assert_eq!(
+        manager.bootstrap_sync(store.clone()).await.unwrap().personal_vault_key().as_bytes(),
+        keys.personal_vault_key().as_bytes()
+    );
+    peer.assert_healthy();
+}
+
+#[tokio::test]
+async fn invalid_name_and_precondition_or_missing_write_scope_never_dispatch_and_reads_stay_available()
+ {
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    install(&peer, &store, vec![]);
+    let account = record(&store).unwrap().account_id;
+    let own = resource(account, "Operations");
+    let id = own.id.to_string();
+    peer.state.lock().unwrap().teams.as_mut().unwrap().resources.insert(own.id, own);
+    for name in ["", " Team ", "line\nbreak", &"界".repeat(43)] {
+        assert_eq!(
+            manager.update_team_name(store.clone(), &id, "\"one\"", name.into()).await,
+            Err(TeamFailure::InvalidName.into())
+        );
+    }
+    for etag in ["", "*", "W/\"one\"", "\"one\", \"two\""] {
+        assert!(
+            manager.update_team_name(store.clone(), &id, etag, "Platform".into()).await.is_err()
+        );
+    }
+    let scope = scoplen_api::auth::INITIAL_DEVICE_ACCESS_SCOPE.replace(" orgs:write", "");
+    peer.install_token(&store, |claims| claims.scope = scope.clone(), None);
+    let mut identity = record(&store).unwrap();
+    identity.auth_scope = Some(scope);
+    store.set_personal_session_metadata_for_test(&identity).unwrap();
+    assert_eq!(
+        manager.update_team_name(store.clone(), &id, "\"one\"", "Platform".into()).await,
+        Err(TeamFailure::UpdateScopeRequired.into())
+    );
+    assert_eq!(manager.team_settings(store.clone(), &id).await.unwrap().team.name, "Operations");
+    assert_eq!(manager.teams_page(store.clone(), None).await.unwrap().teams.len(), 1);
+    manager.bootstrap_sync(store.clone()).await.unwrap();
+    assert!(peer.state.lock().unwrap().teams.as_ref().unwrap().updates.is_empty());
+    peer.assert_healthy();
+}
+
+#[tokio::test]
+async fn name_update_conflict_and_unknown_never_replay_or_substitute_a_new_etag() {
+    for mode in [
+        Mode::LostAfterCommit,
+        Mode::UnknownBeforeCommit,
+        Mode::UnknownAfterCommit,
+        Mode::BadMetadata,
+        Mode::InvalidProblem,
+    ] {
+        let peer = Peer::new().await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = local(&dir);
+        let manager = peer.prepare(&store).await;
+        install(&peer, &store, vec![]);
+        let own = resource(record(&store).unwrap().account_id, "Operations");
+        let id = own.id.to_string();
+        {
+            let mut state = peer.state.lock().unwrap();
+            let teams = state.teams.as_mut().unwrap();
+            teams.resources.insert(own.id, own);
+            teams.update_modes.push_back(mode);
+        }
+        let captured = manager.team_settings(store.clone(), &id).await.unwrap();
+        assert_eq!(
+            manager.update_team_name(store.clone(), &id, &captured.etag, "Platform".into()).await,
+            Err(TeamFailure::SettingsUnknown.into())
+        );
+        assert_eq!(peer.state.lock().unwrap().teams.as_ref().unwrap().updates.len(), 1);
+        manager.team_settings(store.clone(), &id).await.unwrap();
+        assert_eq!(peer.state.lock().unwrap().teams.as_ref().unwrap().updates.len(), 1);
+        peer.assert_healthy();
+    }
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    install(&peer, &store, vec![]);
+    let mut own = resource(record(&store).unwrap().account_id, "Changed elsewhere");
+    own.etag = "\"elsewhere\"".into();
+    let id = own.id.to_string();
+    peer.state.lock().unwrap().teams.as_mut().unwrap().resources.insert(own.id, own);
+    assert_eq!(
+        manager.update_team_name(store.clone(), &id, "\"one\"", "Platform".into()).await,
+        Err(TeamFailure::SettingsConflict.into())
+    );
+    assert_eq!(peer.state.lock().unwrap().teams.as_ref().unwrap().updates.len(), 1);
+    let current = manager.team_settings(store.clone(), &id).await.unwrap();
+    let saved = manager
+        .update_team_name(store.clone(), &id, &current.etag, "Platform".into())
+        .await
+        .unwrap();
+    assert_eq!(saved.team.name, "Platform");
+    assert_eq!(peer.state.lock().unwrap().teams.as_ref().unwrap().updates.len(), 2);
+    peer.assert_healthy();
+}
+
+#[tokio::test]
+async fn name_update_confirmed_refusals_preserve_the_name_and_missing_team_is_fixed() {
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    install(&peer, &store, vec![]);
+    let own = resource(record(&store).unwrap().account_id, "Operations");
+    let id = own.id.to_string();
+    peer.state.lock().unwrap().teams.as_mut().unwrap().resources.insert(own.id, own);
+    for (mode, expected) in [
+        (Mode::Denied, TeamError::Personal(PersonalServerError::PermissionDenied)),
+        (Mode::Rollback, TeamFailure::ServiceUnavailable.into()),
+    ] {
+        peer.state.lock().unwrap().teams.as_mut().unwrap().update_modes.push_back(mode);
+        assert_eq!(
+            manager.update_team_name(store.clone(), &id, "\"one\"", "Platform".into()).await,
+            Err(expected)
+        );
+        assert_eq!(
+            manager.team_settings(store.clone(), &id).await.unwrap().team.name,
+            "Operations"
+        );
+    }
+    let missing = scoplen_model::new_uuid_v7().unwrap().to_string();
+    assert_eq!(
+        manager.team_settings(store.clone(), &missing).await,
+        Err(TeamFailure::TeamNotFound.into())
+    );
+    assert_eq!(
+        manager.update_team_name(store.clone(), &missing, "\"one\"", "Platform".into()).await,
+        Err(TeamFailure::TeamNotFound.into())
+    );
+    assert_eq!(peer.state.lock().unwrap().teams.as_ref().unwrap().updates.len(), 3);
+    peer.assert_healthy();
+}
+
+#[tokio::test]
+async fn name_update_requires_exact_complete_response_and_current_account_binding() {
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    install(&peer, &store, vec![]);
+    let own = resource(record(&store).unwrap().account_id, "Operations");
+    let id = own.id.to_string();
+    peer.state.lock().unwrap().teams.as_mut().unwrap().resources.insert(own.id, own.clone());
+    for mismatch in 0..10 {
+        let mut updated = own.clone();
+        updated.name = "Platform".into();
+        if mismatch == 0 {
+            updated.id = scoplen_model::new_uuid_v7().unwrap();
+        }
+        if mismatch == 1 {
+            updated.membership.account_id = scoplen_model::new_uuid_v7().unwrap();
+        }
+        if mismatch == 2 {
+            updated.name = "Another name".into();
+        }
+        let mut reply = resource_reply(&updated);
+        match mismatch {
+            3 => reply.headers.retain(|(name, _)| *name != "x-request-id"),
+            4 => reply.headers.retain(|(name, _)| *name != "cache-control"),
+            5 => reply.headers.push(("pragma", "no-cache".into())),
+            6 => {
+                reply.headers.retain(|(name, _)| *name != "etag");
+                reply.headers.push(("etag", "\"different\"".into()));
+            }
+            7 => reply.body = vec![b' '; 4097],
+            8 => reply.status = 201,
+            9 => reply.headers.push(("set-cookie", "fixture=refused".into())),
+            _ => {}
+        }
+        peer.state.lock().unwrap().teams.as_mut().unwrap().update_reply = Some(reply);
+        assert_eq!(
+            manager.update_team_name(store.clone(), &id, "\"one\"", "Platform".into()).await,
+            Err(TeamFailure::SettingsUnknown.into())
+        );
+    }
+    assert_eq!(peer.state.lock().unwrap().teams.as_ref().unwrap().updates.len(), 10);
     peer.assert_healthy();
 }
