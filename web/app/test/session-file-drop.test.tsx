@@ -15,6 +15,7 @@ const native = vi.hoisted(() => ({
   list: vi.fn(),
   upload: vi.fn(),
   cancel: vi.fn(),
+  editorSnapshot: vi.fn(),
 }));
 
 vi.mock("../src/ipc/bindings", () => ({
@@ -26,6 +27,7 @@ vi.mock("../src/ipc/bindings", () => ({
     sessionListFiles: native.list,
     sessionEnqueueUpload: native.upload,
     sessionCancelFileOperation: native.cancel,
+    sessionEditorSnapshot: native.editorSnapshot,
   },
   events: { sessionFileDrag: { listen: native.listen } },
 }));
@@ -152,6 +154,7 @@ beforeEach(() => {
   native.list.mockReset().mockResolvedValue({ status: "ok", data: { entries: [] } });
   native.upload.mockReset().mockResolvedValue({ status: "ok", data: { status: "cancelled" } });
   native.cancel.mockReset().mockResolvedValue({ status: "ok", data: null });
+  native.editorSnapshot.mockReset().mockResolvedValue({ status: "ok", data: null });
   native.listen.mockReset().mockImplementation(async (listener: Listener) => {
     listeners.add(listener);
     return () => listeners.delete(listener);

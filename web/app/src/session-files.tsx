@@ -13,6 +13,8 @@ import {
 import { SessionTransferQueue } from "./session-transfer-queue";
 import { SessionFilePreview } from "./session-file-preview";
 import { useSessionFileDrop } from "./use-session-file-drop";
+import { SessionEditor } from "./session-editor";
+import { useSessionEditor } from "./use-session-editor";
 
 type Location = { name: string; path: number[] };
 type Activity = "listing" | "creating" | "renaming" | "deleting" | "cancelling" | "waiting" | null;
@@ -75,6 +77,7 @@ export function SessionFiles({
   const [name, setName] = useState("");
   const [reload, setReload] = useState(0);
   const [preview, setPreview] = useState<{ id: string; owner: string; entry: RemoteFileEntry } | null>(null);
+  const [editDialog, setEditDialog] = useState<{ owner: string; entry: RemoteFileEntry } | null>(null);
   const operation = useRef<string | null>(null);
   const cancelled = useRef<string | null>(null);
   const pendingCancellation = useRef<Promise<unknown>>(Promise.resolve());
@@ -86,13 +89,19 @@ export function SessionFiles({
   const currentPath = locations[locations.length - 1]!.path;
   const previewOwner = `${sessionId}:${transportId}:${currentPath.join(",")}`;
   if (preview && (!active || preview.owner !== previewOwner)) setPreview(null);
+  if (editDialog && (!active || editDialog.owner !== previewOwner)) setEditDialog(null);
   const previewOpen = active && preview?.owner === previewOwner;
+  const editDialogOpen = active && editDialog?.owner === previewOwner;
+  const editor = useSessionEditor(sessionId, transportId, active);
   const queueReady = queue !== null;
   const queueBlocked = !queueReady || !!queue?.blocksFileOperations;
-  const fileOperationsDisabled = activity !== null || queueBlocked || !transportId || selecting || previewOpen;
+  const fileOperationsDisabled =
+    activity !== null || queueBlocked || !transportId || selecting || previewOpen || editDialogOpen;
   const selectionDisabled =
     activity !== null ||
     previewOpen ||
+    editDialogOpen ||
+    editor.pending === "start" ||
     !transportId ||
     !queueReady ||
     selecting ||
@@ -105,7 +114,9 @@ export function SessionFiles({
     !error &&
     !selecting &&
     !nameDialog &&
-    !previewOpen;
+    !previewOpen &&
+    !editDialogOpen &&
+    editor.pending !== "start";
   const drop = useSessionFileDrop({
     sessionId,
     transportId,
@@ -387,6 +398,7 @@ export function SessionFiles({
           );
         })}
       </nav>
+      <SessionEditor editor={editor} transportId={transportId} active={active} queueAvailable={!selectionDisabled} />
       {activity ? (
         <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2 text-xs" role="status">
           <span>{t(`session.files.${activity}`)}</span>
@@ -484,6 +496,15 @@ export function SessionFiles({
               ) : null}
               {entry.kind === "file" ? (
                 <IconButton
+                  label={t("session.editor.action", { name: entry.name })}
+                  disabled={selectionDisabled || !active || editor.loading || editor.snapshot !== null}
+                  onClick={() => setEditDialog({ owner: previewOwner, entry })}
+                >
+                  <Pencil aria-hidden="true" className="size-4" />
+                </IconButton>
+              ) : null}
+              {entry.kind === "file" ? (
+                <IconButton
                   label={t("session.files.download", { name: entry.name })}
                   disabled={selectionDisabled}
                   onClick={() => enqueue(entry)}
@@ -554,6 +575,40 @@ export function SessionFiles({
           onClose={() => setPreview((current) => (current?.id === preview.id ? null : current))}
         />
       ) : null}
+      <Dialog
+        open={!!editDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) setEditDialog(null);
+        }}
+        title={t("session.editor.confirmTitle", { name: editDialog?.entry.name ?? "" })}
+        description={t("session.editor.description", { connection: connectionLabel })}
+        closeLabel={t("session.files.cancel")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setEditDialog(null)}>
+              {t("session.files.cancel")}
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!transportId || !active || editor.pending !== null || editor.snapshot !== null}
+              onClick={() => {
+                if (!editDialog || !transportId || !active) return;
+                const selected = editDialog.entry;
+                setEditDialog(null);
+                void editor.start(selected.path, locale === "zh-Hans" ? "zh-Hans" : "en").then((result) => {
+                  if (mounted.current && result?.status === "ok" && result.data.kind === "cancelled")
+                    setNotice(translator.current("session.transfers.selectionCancelled"));
+                });
+              }}
+            >
+              {t("session.editor.chooseCopy")}
+            </Button>
+          </>
+        }
+      >
+        <p className="m-0 text-sm">{t("session.editor.localDisclosure")}</p>
+        <p className="mb-0 mt-3 text-sm text-muted-foreground">{t("session.editor.manualUpload")}</p>
+      </Dialog>
       <Dialog
         open={nameDialog !== null}
         onOpenChange={(open) => {

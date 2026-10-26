@@ -147,6 +147,31 @@ the local store, Recent, terminal snapshots, synchronization or diagnostics; no 
 local write or remote write is started. SFTP v3 path resolution is not confinement or atomic
 no-follow opening. Matching metadata and EOF do not establish an immutable snapshot.
 
+## Local-editor working copies
+
+Each ordinary file has a separate Edit locally action. Its confirmation explains the 256 KiB
+complete UTF-8 limit, ordinary local storage and explicit upload. Choose copy and open editor
+opens the native destination picker; the fixed text editor starts only after safe download
+publication. Preview remains a read-only operation. Only one editing record is active per
+logical terminal, and the captured remote path remains visible after directory navigation.
+
+`sessionEditFile(sessionId, transportId, remotePath, locale)` returns Started or Cancelled;
+`sessionEditorSnapshot(sessionId)` observes the current record without network access.
+`sessionEditorOpen(sessionId, editorId)` explicitly reopens its text editor.
+`sessionEditorUpload(sessionId, transportId, editorId, locale)` queues a new explicit upload
+to the original remote destination, with the usual native replacement confirmation.
+`sessionEditorStop(sessionId, editorId)` stops editing without removing the selected local
+file or closing the external application. All five commands retain the current profile
+generation boundary.
+
+The Local editing region shows the captured target, local basename and preparing/opening/
+watching/changed/queued/uploading/uploaded/unavailable/unknown state. Saving only updates
+Rust's observation; no renderer timer or editor save sends a remote write. Existing transfer
+rows own progress, cancellation and unknown-result acknowledgement. Unknown results require
+manual remote review before another upload. Hiding Files does not stop observation; transport
+replacement cannot reuse the old record's upload authority. Errors use fixed localized
+messages, and the renderer receives no native path or file contents.
+
 ## Personal account
 
 Settings → Personal account reads saved public status without network access or database

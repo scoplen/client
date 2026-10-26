@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added explicit local editing for complete remote UTF-8 files up to 256 KiB. A native-selected
+  working copy opens in the platform text editor; saved-change detection never uploads by
+  itself. Upload changes uses the original remote target and existing queue/replacement
+  confirmation. Stopping or losing the connection retains the local copy. Native editor
+  and picker interaction remain separate platform acceptance.
+
 - Added explicit Team name editing with a Rust-verified current Resource and captured ETag.
   Save sends one conditional update and replaces only that team's verified metadata. Stale
   and uncertain edits require explicit refresh and review; Account changes and Close suppress
