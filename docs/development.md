@@ -198,6 +198,13 @@ Fixtures construct public K-2 artifacts and signed K-4 updates without retired D
 Retained fresh-challenge, JWKS, invalid-response, refresh, account, sync, history and notification
 regressions remain applicable alongside the separate password sign-in entry flow.
 
+The retained-device fixtures also issue signed access tokens with one or more Organization
+memberships. Personal authentication, Account queries, refresh and key bootstrap continue for
+the same Account and Device when that discovery snapshot changes. Negative controls retain
+Account, Device, proof-key, issuer, signature and scope checks; membership alone grants no
+Organization operation. These tests exercise public shared token codecs and real TLS peers,
+not production Team invitation or authorization support.
+
 ## Password registration preparation and HTTPS
 
 The public Rust preparation API uses the production D-127 profile, not a cheaper test KDF:

@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Accepted signed Organization membership snapshots during retained Device authentication,
+  Account queries and native refresh, preserving independent Personal identity and sync keys.
+  Membership snapshots do not authorize Team operations or relax Account, Device or proof-key checks.
+
 - Extended public HTTPS password acceptance to independent Accounts on one deployment, checking
   Personal vault discovery, symmetric foreign-key-read denial and separate encrypted inventories.
 

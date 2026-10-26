@@ -11,7 +11,7 @@ use scoplen_api::{
         AuthTokenResponse, INITIAL_DEVICE_ACCESS_SCOPE,
     },
 };
-use scoplen_crypto::{DeviceAuthContext, p256_verify};
+use scoplen_crypto::{DeviceAuthContext, DeviceOrganizationSnapshot, p256_verify};
 
 use super::*;
 use crate::personal_server::PersonalServerPhase;
@@ -49,6 +49,7 @@ pub(super) struct RefreshPeer {
     challenges: usize,
     devices: usize,
     device_mode: Option<Mode>,
+    organizations: Vec<DeviceOrganizationSnapshot>,
 }
 
 impl RefreshPeer {
@@ -180,7 +181,7 @@ impl RefreshPeer {
             did: expected.device,
             jti: scoplen_model::new_uuid_v7().unwrap(),
             cnf_jkt: expected.jkt.clone(),
-            org: vec![],
+            org: self.organizations.clone(),
             scope: INITIAL_DEVICE_ACCESS_SCOPE.into(),
             iat: issued_at,
             exp: issued_at + 600,
@@ -275,6 +276,7 @@ pub(super) fn install(peer: &Peer, store: &Arc<Store>, modes: Vec<Mode>) {
         challenges: 0,
         devices: 0,
         device_mode: None,
+        organizations: Vec::new(),
     });
     due(store);
 }
@@ -292,6 +294,7 @@ pub(super) fn install_revalidation(peer: &Peer, store: &Arc<Store>, mode: Mode) 
         challenges: 0,
         devices: 0,
         device_mode: Some(mode),
+        organizations: Vec::new(),
     });
 }
 
@@ -302,6 +305,80 @@ fn due(store: &Store) {
 }
 pub(super) fn calls(peer: &Peer) -> usize {
     peer.state.lock().unwrap().refresh.as_ref().unwrap().calls
+}
+
+pub(super) fn organizations(count: usize) -> Vec<DeviceOrganizationSnapshot> {
+    let mut organizations = (0..count)
+        .map(|index| DeviceOrganizationSnapshot {
+            id: scoplen_model::new_uuid_v7().unwrap(),
+            sso_authenticated_at: (index > 0).then_some(1),
+        })
+        .collect::<Vec<_>>();
+    organizations.sort_by_key(|organization| organization.id);
+    organizations
+}
+
+#[tokio::test]
+async fn organization_snapshots_preserve_personal_authentication_account_query_and_refresh() {
+    for count in [1, 2] {
+        let peer = Peer::new().await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = local(&dir);
+        let manager = peer.prepare(&store).await;
+        super::account::install(&peer, &store);
+        let identity = record(&store).unwrap();
+        install_revalidation(&peer, &store, Mode::Success);
+        peer.state.lock().unwrap().refresh.as_mut().unwrap().organizations = organizations(count);
+
+        let authenticated = manager.authenticate(store.clone()).await.unwrap();
+        assert_eq!(authenticated.account_id, Some(identity.account_id.to_string()));
+        assert_eq!(authenticated.personal_vault_id, Some(identity.personal_vault_id.to_string()));
+        let original_account = manager.query_account(store.clone()).await.unwrap();
+        let original_bootstrap = manager.bootstrap_sync(store.clone()).await.unwrap();
+
+        peer.state.lock().unwrap().refresh.as_mut().unwrap().organizations =
+            organizations(3 - count);
+        due(&store);
+        let refreshed_account = manager.query_account(store.clone()).await.unwrap();
+        let refreshed_bootstrap = manager.bootstrap_sync(store.clone()).await.unwrap();
+        assert_eq!(calls(&peer), 1);
+        assert_eq!(refreshed_account.account_id, original_account.account_id);
+        assert!(refreshed_account.devices == original_account.devices);
+        assert_eq!(refreshed_bootstrap.session(), original_bootstrap.session());
+        assert_eq!(
+            refreshed_bootstrap.personal_vault_key().as_bytes(),
+            original_bootstrap.personal_vault_key().as_bytes()
+        );
+        let retained = record(&store).unwrap();
+        assert_eq!(retained.account_id, identity.account_id);
+        assert_eq!(retained.personal_vault_id, identity.personal_vault_id);
+        assert_eq!(retained.private_material.as_bytes(), identity.private_material.as_bytes());
+        assert!(!peer.state.lock().unwrap().paths.iter().any(|path| path.contains("/orgs/")));
+        peer.assert_healthy();
+    }
+}
+
+#[tokio::test]
+async fn organization_snapshots_do_not_authorize_another_account_device_or_proof_key() {
+    for mode in [Mode::ForeignAccount, Mode::ForeignDevice, Mode::ForeignKey] {
+        let peer = Peer::new().await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = local(&dir);
+        let manager = peer.prepare(&store).await;
+        let identity = record(&store).unwrap();
+        install_revalidation(&peer, &store, mode);
+        peer.state.lock().unwrap().refresh.as_mut().unwrap().organizations = organizations(2);
+        assert_eq!(
+            manager.authenticate(store.clone()).await,
+            Err(PersonalServerError::InvalidResponse)
+        );
+        let retained = record(&store).unwrap();
+        assert_eq!(retained.account_id, identity.account_id);
+        assert_eq!(retained.personal_vault_id, identity.personal_vault_id);
+        assert_eq!(retained.private_material.as_bytes(), identity.private_material.as_bytes());
+        assert!(store.personal_access_token(now().unwrap()).unwrap().is_none());
+        peer.assert_healthy();
+    }
 }
 
 #[tokio::test]
@@ -467,6 +544,7 @@ async fn mismatched_or_invalid_rotated_credentials_are_never_accepted_or_replaye
         let manager = peer.prepare(&store).await;
         manager.bootstrap_sync(store.clone()).await.unwrap();
         install(&peer, &store, vec![mode]);
+        peer.state.lock().unwrap().refresh.as_mut().unwrap().organizations = organizations(2);
         assert!(matches!(
             manager.bootstrap_sync(store.clone()).await,
             Err(PersonalSyncError::Personal(PersonalServerError::InvalidResponse))

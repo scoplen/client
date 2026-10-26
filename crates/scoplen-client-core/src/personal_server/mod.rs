@@ -373,7 +373,6 @@ async fn authentication_tokens<G>(
         || claims.cnf_jkt
             != dpop_jwk_thumbprint(&signing_public).map_err(|_| PersonalServerError::Identity)?
         || claims.scope != scoplen_api::auth::INITIAL_DEVICE_ACCESS_SCOPE
-        || !claims.org.is_empty()
     {
         return Err(PersonalServerError::InvalidResponse);
     }
