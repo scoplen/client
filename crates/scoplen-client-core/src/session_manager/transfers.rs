@@ -210,7 +210,7 @@ impl SessionManager {
             let destination = DownloadDestination::capture(path).await?;
             let resources = SelectedTransfer::Download {
                 remote_path,
-                destination,
+                destination: Box::new(destination),
                 confirm: Box::new(move |review| Box::pin(confirm_replace(review))),
                 editor: None,
             };
@@ -555,7 +555,7 @@ impl SessionManager {
                         identity,
                         &context,
                         guard,
-                        Some((remote_path, destination, confirm, editor.is_some())),
+                        Some((remote_path, *destination, confirm, editor.is_some())),
                         None,
                     )
                     .await;

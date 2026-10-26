@@ -25,7 +25,7 @@ pub(crate) enum SelectedTransfer {
     },
     Download {
         remote_path: Vec<u8>,
-        destination: DownloadDestination,
+        destination: Box<DownloadDestination>,
         confirm: ReplaceConfirmation,
         editor: Option<uuid::Uuid>,
     },
