@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { Channel } from "@tauri-apps/api/core";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode, type ComponentProps } from "react";
 import { AppearanceProvider } from "@scoplen/ui";
@@ -17,7 +17,10 @@ import type {
 } from "../src/ipc/bindings";
 import type { ScoplenTerminalElement } from "@scoplen/terminal";
 
-afterEach(() => clearMocks());
+afterEach(() => {
+  cleanup();
+  clearMocks();
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -43,31 +46,34 @@ function fixture() {
     pending.set(command, [...(pending.get(command) ?? []), reply]);
     return reply;
   };
-  mockIPC((command, args) => {
-    const payload = (args ?? {}) as Record<string, unknown>;
-    calls.push({ command, args: payload });
-    if (command === "session_connect") {
-      const finish = deferred<null>();
-      connections.push({ ...(payload as unknown as (typeof connections)[number]), finish });
-      return finish.promise;
-    }
-    if (command === "session_transfer_queue")
-      return (
-        pending.get(command)?.shift()?.promise ?? {
-          sessionId: payload.sessionId,
-          queueId: "queue-1",
-          revision: "1",
-          capacity: 16,
-          outstanding: 0,
-          pickerBusy: false,
-          blocksFileOperations: false,
-          items: [],
-          recent: [],
-          ...transferState,
-        }
-      );
-    return pending.get(command)?.shift()?.promise ?? null;
-  });
+  mockIPC(
+    (command, args) => {
+      const payload = (args ?? {}) as Record<string, unknown>;
+      calls.push({ command, args: payload });
+      if (command === "session_connect") {
+        const finish = deferred<null>();
+        connections.push({ ...(payload as unknown as (typeof connections)[number]), finish });
+        return finish.promise;
+      }
+      if (command === "session_transfer_queue")
+        return (
+          pending.get(command)?.shift()?.promise ?? {
+            sessionId: payload.sessionId,
+            queueId: "queue-1",
+            revision: "1",
+            capacity: 16,
+            outstanding: 0,
+            pickerBusy: false,
+            blocksFileOperations: false,
+            items: [],
+            recent: [],
+            ...transferState,
+          }
+        );
+      return pending.get(command)?.shift()?.promise ?? null;
+    },
+    { shouldMockEvents: true },
+  );
   return {
     connections,
     delay,
@@ -1251,4 +1257,60 @@ it("ignores late prompts, readiness, output and replies after tab closure", asyn
   expect(report).not.toHaveBeenCalled();
   expect(f.matching("session_respond")).toHaveLength(1);
   expect(f.matching("session_close_transport").at(-1)?.args.sessionId).toBe(c.sessionId);
+});
+
+it("exposes snippets only on a ready foreground terminal and invalidates an open dialog when its tab is hidden", async () => {
+  const f = fixture();
+  const view = render(sessionView());
+  const c = await connect(f);
+  expect(screen.queryByRole("button", { name: "Snippets" })).toBeNull();
+  await c.ready();
+  const list = f.delay("snippets_list");
+  await userEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  await act(() => list.resolve([]));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  view.rerender(sessionView("en", false));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Snippets" })).toBeNull();
+  view.rerender(sessionView());
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(f.matching("session_input")).toHaveLength(0);
+});
+
+it("discards a snippet preview on transport replacement and never sends it to the new connection", async () => {
+  const f = fixture();
+  render(sessionView());
+  const c = await connect(f);
+  await c.ready();
+  const list = f.delay("snippets_list");
+  await userEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  await act(() =>
+    list.resolve([
+      {
+        id: "0199a653-8392-7355-8b91-70ab85182e3a",
+        name: "Show user",
+        template: "whoami",
+        variables: [],
+        tags: [],
+        folder: null,
+        readOnly: false,
+        issue: null,
+      },
+    ]),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Use snippet" }));
+  const preparation = f.delay("snippets_prepare");
+  await userEvent.click(screen.getByRole("button", { name: "Review command" }));
+  await act(() => preparation.resolve({ snippetId: "0199a653-8392-7355-8b91-70ab85182e3a", command: "whoami" }));
+  expect(screen.getByRole("button", { name: "Send command" })).toBeTruthy();
+  await c.emit({ kind: "retrying", attempt: 1, delaySeconds: 1, error: "Network connection lost" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  const replacement = await c.start(true);
+  await replacement.ready();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(f.matching("session_input")).toHaveLength(0);
+  const fresh = f.delay("snippets_list");
+  await userEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  await act(() => fresh.resolve([]));
+  expect(screen.queryByRole("button", { name: "Send command" })).toBeNull();
 });

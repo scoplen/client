@@ -46,6 +46,10 @@ const sample = {
   total: "4,096",
   percent: 25,
   sequence: "9007199254740993",
+  target: "Deployment host",
+  folder: "Services",
+  tags: "operations",
+  number: 1,
 };
 
 describe("message catalogs", () => {

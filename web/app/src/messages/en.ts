@@ -1208,6 +1208,93 @@ export const en = {
     "Review the retained creation before starting another. Refresh your teams if its confirmation window has ended.",
   "teams.error.generic":
     "Team setup could not be verified or saved. Your existing account data was kept. Review the retained creation before retrying.",
+  "snippets.open": "Snippets",
+  "snippets.title": "Command snippets",
+  "snippets.editor": "Edit snippet",
+  "snippets.preview": "Review command",
+  "snippets.target": "Terminal: {target}",
+  "snippets.close": "Close snippets",
+  "snippets.back": "Back to snippets",
+  "snippets.add": "Add snippet",
+  "snippets.save": "Save snippet",
+  "snippets.review": "Review command",
+  "snippets.send": "Send command",
+  "snippets.delete": "Delete snippet",
+  "snippets.return": "Return to terminal",
+  "snippets.loading": "Loading saved snippets…",
+  "snippets.refresh": "Refresh snippets",
+  "snippets.empty": "No snippets yet. Add a command you want to reuse.",
+  "snippets.list": "Saved snippets",
+  "snippets.folderValue": "Folder: {folder}",
+  "snippets.tagsValue": "Tags: {tags}",
+  "snippets.readOnly":
+    "This snippet uses an unsupported definition. You can inspect it; its saved fields are kept unchanged.",
+  "snippets.inspect": "View snippet",
+  "snippets.use": "Use snippet",
+  "snippets.edit": "Edit snippet",
+  "snippets.name": "Name",
+  "snippets.template": "Command template",
+  "snippets.templateHint":
+    "Use two opening and two closing braces around a variable name. Keep the command on one line.",
+  "snippets.literal": "Values are inserted literally. Add any shell quoting the command needs in the template.",
+  "snippets.folder": "Folder (optional)",
+  "snippets.tags": "Tags (optional)",
+  "snippets.lines": "One tag per line.",
+  "snippets.variables": "Variables",
+  "snippets.variableNumber": "Variable {number}",
+  "snippets.variableName": "Variable name",
+  "snippets.variableKind": "Type",
+  "snippets.kind.text": "Text",
+  "snippets.kind.integer": "Integer",
+  "snippets.kind.choice": "Choice",
+  "snippets.kind.secret": "Secret",
+  "snippets.choices": "Choices",
+  "snippets.choicesHint": "One exact value per line. A blank line is an empty choice; do not repeat values.",
+  "snippets.hasDefault": "Use a default value",
+  "snippets.default": "Default value",
+  "snippets.defaultPresent": "Default saved",
+  "snippets.removeVariable": "Remove variable",
+  "snippets.addVariable": "Add variable",
+  "snippets.choose": "Choose a value",
+  "snippets.emptyChoice": "(empty value)",
+  "snippets.integerHint": "Whole number in signed 64-bit range. No spaces, plus sign or leading zeroes.",
+  "snippets.promptWarning":
+    "Leave this terminal at the intended empty shell prompt. Sending into an editor, REPL or a partially typed command changes its meaning.",
+  "snippets.command": "Complete command to send",
+  "snippets.enterWarning":
+    "Send command adds one Enter. The terminal and remote shell may retain this command in output or history.",
+  "snippets.deleteBody": "Delete “{name}”? This removes the saved snippet.",
+  "snippets.sent":
+    "Sent to terminal. Check the terminal output for the result; sending does not confirm successful execution.",
+  "snippets.sending": "Sending to the terminal…",
+  "snippets.sendFailed":
+    "The send could not be confirmed. Inspect the terminal before preparing another command. Nothing will be sent again automatically.",
+  "snippets.issue.unavailable": "The local store is unavailable. Reopen your account before trying again.",
+  "snippets.issue.invalidId": "This snippet reference is invalid. Refresh the list.",
+  "snippets.issue.notFound": "This snippet no longer exists. Refresh the list.",
+  "snippets.issue.readOnly": "This definition is read-only. Its saved fields have been kept.",
+  "snippets.issue.secretUnsupported":
+    "Secret variables cannot be sent through this workflow. Their defaults remain hidden.",
+  "snippets.issue.invalidName": "Enter a valid snippet name within the saved-object limits.",
+  "snippets.issue.invalidTemplate":
+    "Use a single-line command without control characters, within the saved-object limits.",
+  "snippets.issue.invalidVariableName":
+    "Start variable names with an ASCII letter or underscore, then use letters, digits or underscores.",
+  "snippets.issue.duplicateVariable": "Each variable name must be unique.",
+  "snippets.issue.invalidDefinition": "Check the template, variables, tags and folder against the saved-object limits.",
+  "snippets.issue.commandTooLarge":
+    "The expanded command and Enter must fit within 65,536 UTF-8 bytes. Shorten the command or values.",
+  "snippets.issue.storage": "The local operation could not be confirmed. Refresh the snippets before retrying.",
+  "snippets.issue.unknownPlaceholder":
+    "Declare the variable “{name}”, or escape its opening and closing braces by doubling them.",
+  "snippets.issue.unusedVariable": "Use the variable “{name}” in the template or remove its definition.",
+  "snippets.issue.invalidDefault": "Check the default for “{name}” against its type and choices.",
+  "snippets.issue.invalidChoices": "Give “{name}” a nonempty list of unique choices without control characters.",
+  "snippets.issue.missingValue": "Enter a value for “{name}”.",
+  "snippets.issue.unknownValue":
+    "The template has changed. Review the definition of “{name}” before preparing it again.",
+  "snippets.issue.invalidValue":
+    "Check the value for “{name}” against its type and choices. Control characters are not allowed.",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };
