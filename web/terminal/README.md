@@ -7,11 +7,11 @@ sink and decide which session or transport they represent.
 
 The package now provides the first terminal experience slice: xterm.js core
 emulation with bounded output retention and scrollback, search, copy and paste,
-profiles, accessible fallback rendering, explicitly confirmed broadcast input,
-and a DOM-free IME composition bridge. `TerminalWorkspace` provides tabs and
-split-pane layout state without pretending to create a connection. WebGL,
-Unicode width addons, serialization, image protocols, platform-wide IME
-verification, and the compatibility suite remain planned work.
+profiles, Unicode 15 character widths, rendered-state serialization, accessible
+fallback rendering, explicitly confirmed broadcast input, and a DOM-free IME
+composition bridge. `TerminalWorkspace` provides tabs and split-pane layout state
+without pretending to create a connection. WebGL, image protocols, platform-wide
+IME verification, and the compatibility suite remain planned work.
 
 The package build copies xterm's CSS into `dist`; each custom element loads it
 inside its shadow root so renderer styles apply without leaking into the host
@@ -173,11 +173,45 @@ The binding only assigns element properties and subscribes to element events.
 It does not know about Tauri or Scoplen client state, and removes its event
 listeners when the component unmounts.
 
+## Unicode character widths
+
+Every renderer uses Unicode 15.0.0 codepoint widths, including supplementary CJK
+and Unicode 15 emoji. Wide and fullwidth characters occupy two columns;
+ambiguous characters occupy one. Nonspacing/enclosing marks (`Mn`, `Me`) and
+format characters (`Cf`) occupy zero, except soft hyphen (U+00AD), which keeps
+one column. Hangul Jamo U+1160-U+11FF and C0/C1 controls keep xterm's existing
+zero-width policy. Zero-width characters join a preceding occupied cell without
+changing its width. This is ordinary codepoint mode: ZWJ sequences and variation
+selectors do not introduce grapheme-dependent width changes.
+
+The provider uses four generated interval tables and adds no runtime dependency.
+Its `charProperties` packing follows the pinned xterm 6 provider API; xterm upgrades
+must retain the combining, cursor-report, wrapping and restoration regressions.
+Data comes from the official [UnicodeData.txt](https://www.unicode.org/Public/15.0.0/ucd/UnicodeData.txt)
+and [EastAsianWidth.txt](https://www.unicode.org/Public/15.0.0/ucd/EastAsianWidth.txt).
+Unicode's copyright and permission notice ships in `licenses/UNICODE.txt` under
+Unicode-3.0; package source remains Apache-2.0.
+
+To regenerate, download those two versioned files to a local directory and run:
+
+```bash
+node web/terminal/scripts/generate-unicode15.mjs /path/to/ucd-15.0.0
+node web/terminal/scripts/generate-unicode15.mjs /path/to/ucd-15.0.0 --check
+```
+
+The Node-only generator rejects inputs unless their SHA-256 matches
+`806e9aed65037197f1ec85e12be6e8cd870fc5608b4de0fffd990f689f376a73`
+and `743e7bc435c04ab1a8459710b1c3cad56eedced5b806b4659b6e69b85d0adf2a`,
+respectively. Normal build and test commands are offline and use the checked-in
+tables. The full-codepoint regression uses an independent dense width reference
+derived from those inputs with Python `csv` and `bytearray`; integration tests
+consume the built public package through its binary source/sink and snapshot API.
+
 ## Current boundaries
 
 The following are deliberately not claimed by this slice:
 
-- WebGL renderer and Unicode 15 width provider;
+- WebGL renderer;
 - SIXEL and iTerm2 image protocols;
 - IME behavior verified on every desktop platform;
 - `vttest`, `esctest`, and recorded full-screen program compatibility runs.
@@ -207,3 +241,6 @@ pnpm --dir web/terminal typecheck
 pnpm --dir web/terminal test
 pnpm --dir web/terminal build
 ```
+
+Typecheck and test commands build the package first so public-package tests work
+on a fresh checkout.
