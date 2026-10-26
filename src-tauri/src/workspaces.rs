@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Profile-bound saved-tab intents. Core validation never opens a connection.
+//! Profile-bound saved terminal-layout intents. Validation never opens a connection.
 
 use crate::profile_context::ProfileRequest;
 use scoplen_client_core::workspaces::{
@@ -27,7 +27,7 @@ pub async fn workspaces_list(local: ProfileRequest) -> Result<Vec<WorkspaceView>
     operation(local, |workspaces| workspaces.list()).await
 }
 
-/// Save the complete current terminal-tab intent as a new local object.
+/// Save every current terminal tree and focused pane as a new local object.
 #[tauri::command]
 #[specta::specta]
 pub async fn workspaces_create(
@@ -37,7 +37,7 @@ pub async fn workspaces_create(
     operation(local, move |workspaces| workspaces.create(input)).await
 }
 
-/// Validate every saved slot and return fresh tab identities without connecting.
+/// Validate every saved slot and return complete trees with fresh pane identities.
 #[tauri::command]
 #[specta::specta]
 pub async fn workspaces_open(

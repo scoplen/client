@@ -113,9 +113,9 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	snippetsPrepare: (id: string, values: { [key in string]: string }) => typedError<PreparedSnippet, SnippetIssue>(__TAURI_INVOKE("snippets_prepare", { id, values })),
 	/**  List complete saved definitions and fixed unavailable reasons. */
 	workspacesList: () => typedError<WorkspaceView[], WorkspaceIssue>(__TAURI_INVOKE("workspaces_list")),
-	/**  Save the complete current terminal-tab intent as a new local object. */
+	/**  Save every current terminal tree and focused pane as a new local object. */
 	workspacesCreate: (input: WorkspaceInput) => typedError<WorkspaceView, WorkspaceIssue>(__TAURI_INVOKE("workspaces_create", { input })),
-	/**  Validate every saved slot and return fresh tab identities without connecting. */
+	/**  Validate every saved slot and return complete trees with fresh pane identities. */
 	workspacesOpen: (id: string) => typedError<OpenedWorkspace, WorkspaceIssue>(__TAURI_INVOKE("workspaces_open", { id })),
 	/**  Tombstone a selected definition, including unsupported retained definitions. */
 	workspacesDelete: (id: string) => typedError<null, WorkspaceIssue>(__TAURI_INVOKE("workspaces_delete", { id })),
@@ -1179,9 +1179,9 @@ export type OpenSshUnsupportedDirective = {
 /**  A complete tab set that the shell appends only after successful validation. */
 export type OpenedWorkspace = {
 	/**  Saved order with fresh runtime identities. */
-	tabs: WorkspaceTerminal[],
-	/**  Selected fresh tab identifier, or Hosts when absent. */
-	activeSessionId: string | null,
+	tabs: WorkspaceTab[],
+	/**  Selected tab index, or Hosts when absent. */
+	active: number | null,
 };
 
 /**  Explicit next action for one original Device admission. */
@@ -2476,16 +2476,30 @@ export type WorkspaceIssue =
 /**  The store could not complete the operation. */
 { kind: "storage" };
 
-/**  One visible tab supplied by the shell, including outputs that cannot be saved. */
-export type WorkspaceTabInput =
-/**  An ordinary terminal retains only its Login reference. */
-{ kind: "terminal";
-/**  Canonical Login object identifier. */
-profileId: string } |
-/**  Offline output must not silently become a new SSH connection. */
-{ kind: "savedOutput" };
+/**  Equal-half terminal split direction. */
+export type WorkspaceSplitDirection =
+/**  Left and right children. */
+"horizontal" |
+/**  Top and bottom children. */
+"vertical";
 
-/**  A fresh runtime tab, resolved without reserving or connecting a session. */
+/**  A restored tab with its own remembered focused pane. */
+export type WorkspaceTab = {
+	/**  Complete restored tree. */
+	tree: WorkspaceTree,
+	/**  One terminal identity in this tree. */
+	focusedSessionId: string,
+};
+
+/**  A complete tab and its remembered depth-first pane selection. */
+export type WorkspaceTabInput = {
+	/**  Entire tree, including inactive panes. */
+	tree: WorkspaceTreeInput,
+	/**  Zero-based depth-first leaf index. */
+	focused: number,
+};
+
+/**  A fresh runtime pane, resolved without reserving or connecting a session. */
 export type WorkspaceTerminal = {
 	/**  Fresh Rust-generated runtime identifier for this Open. */
 	sessionId: string,
@@ -2495,13 +2509,45 @@ export type WorkspaceTerminal = {
 	label: string,
 };
 
+/**  A restored tree using fresh ordinary runtime session identities. */
+export type WorkspaceTree =
+/**  A fresh ordinary terminal. */
+{ kind: "terminal";
+/**  Safe current Login projection. */
+terminal: WorkspaceTerminal } |
+/**  A saved equal-half split. */
+{ kind: "split";
+/**  Saved orientation. */
+direction: WorkspaceSplitDirection;
+/**  Left or top subtree. */
+first: WorkspaceTree;
+/**  Right or bottom subtree. */
+second: WorkspaceTree };
+
+/**  One complete tree supplied by the shell, including unsupported offline output. */
+export type WorkspaceTreeInput =
+/**  An ordinary terminal retains only its Login reference. */
+{ kind: "terminal";
+/**  Canonical Login object identifier. */
+profileId: string } |
+/**  Offline output must not silently become a new SSH connection. */
+{ kind: "savedOutput" } |
+/**  An ordered pair of equal-half children. */
+{ kind: "split";
+/**  Orientation of the first and second child. */
+direction: WorkspaceSplitDirection;
+/**  Left or top subtree. */
+first: WorkspaceTreeInput;
+/**  Right or bottom subtree. */
+second: WorkspaceTreeInput };
+
 /**  One saved definition, including retained unsupported and orphaned objects. */
 export type WorkspaceView = {
 	/**  Canonical Workspace identifier. */
 	id: string,
 	/**  Retained display name. */
 	name: string,
-	/**  Number of saved terminal slots, when readable. */
+	/**  Number of saved terminal tabs, when readable. */
 	tabCount: number,
 	/**  A fixed reason Open is unavailable; Delete remains explicit. */
 	issue: WorkspaceIssue | null,

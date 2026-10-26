@@ -30,6 +30,18 @@ afterEach(() => {
 });
 
 describe("terminal experience adapter", () => {
+  it("moves actual input focus between independent xterm textareas", () => {
+    const first = mount();
+    const second = mount();
+    first.focusInput();
+    expect(document.activeElement).toBe(first);
+    expect(first.shadowRoot?.activeElement?.classList.contains("xterm-helper-textarea")).toBe(true);
+    second.focusInput();
+    expect(document.activeElement).toBe(second);
+    expect(second.shadowRoot?.activeElement?.classList.contains("xterm-helper-textarea")).toBe(true);
+    expect(first.shadowRoot?.activeElement).toBeNull();
+  });
+
   it("does not write xterm constructor-only dimensions when applying a profile", () => {
     const element = mount();
     let assigned: Record<string, unknown> | undefined;

@@ -76,7 +76,10 @@ emulator and does not claim full-screen program compatibility.
   secondary copy without redirecting it or cancelling the primary write.
 - **Tabs and splits:** `TerminalWorkspace` stores only layout metadata. It does
   not create, close, or reconnect sessions; callers bind terminal elements and
-  transports to pane IDs.
+  transports to pane IDs. Complete per-tab trees and remembered focus are isolated
+  snapshot data. Pane close collapses its parent and selects the preceding surviving
+  leaf; restoring a tab validates binary shape and globally unique pane identities.
+  Callers retain stable DOM parents and explicitly move actual input with `focusInput()`.
 
 ## Capability boundaries
 

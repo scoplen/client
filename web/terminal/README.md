@@ -136,7 +136,7 @@ the copy; old secondary write failures do not report into a new target assignmen
 ## Tabs and split panes
 
 `TerminalWorkspace` is a pure layout model. It owns tab titles, pane identity,
-active-tab state, nested horizontal or vertical splits, and subscriptions. It
+active-tab state, remembered pane focus, nested horizontal or vertical splits, and subscriptions. It
 does not own sessions, credentials, or transports:
 
 ```ts
@@ -152,7 +152,20 @@ The client or web console attaches a `scoplen-terminal` element and its
 caller-owned source/sink to each pane. A tab owns its own layout; switching tabs
 changes `snapshot().layout` without altering another tab's panes. Closing a tab
 removes all of its panes; no connection is silently created or destroyed by
-this model.
+this model. `snapshot().layouts` and `focusedPaneIds` project every tab; `layout`
+and `activePaneId` project the selected tab, or null after `setActiveTab(null)`.
+`restoreTab(tab, tree, focusedPaneId)` appends a complete binary tree with unique
+pane identities. `focusPane` and `moveFocus(-1 | 1)` select metadata in depth-first
+order, wrapping inside the tab. Call the selected terminal element's `focusInput()`
+to move actual keyboard input into its xterm textarea.
+
+After the caller successfully checkpoints and closes a session, `closePane(id)`
+removes its leaf and collapses the parent to its sibling. Focus stays on a surviving
+pane, choosing the preceding leaf when the selected leaf closes. The last leaf closes
+its tab and selects the preceding tab or no tab. Render pane components under a stable
+parent and position them from layout metadata; recursively reparenting a custom element
+disconnects its source. The new required snapshot fields are a pre-Stable source change;
+callers constructing snapshots must supply complete layouts and focus.
 
 ## React
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { Button, Dialog, Field, Mark } from "@scoplen/ui";
-import { useEffect, useId, useMemo, useRef } from "react";
+import { useEffect, useId, useMemo, useRef, type ComponentProps } from "react";
 import { useI18n } from "./i18n";
 import type { PreparationEvent, PreparationContext, HostKeyTrustSource } from "./ipc/bindings";
 
@@ -11,6 +11,7 @@ export function TrustDialog({
   error: trustError,
   onAccept: trustAndConnect,
   onCancel: cancelTrust,
+  finalFocus,
 }: {
   active: boolean;
   prompt: Extract<PreparationEvent, { kind: "trust" }> | null;
@@ -18,12 +19,14 @@ export function TrustDialog({
   error: string | null;
   onAccept: () => void;
   onCancel: () => void;
+  finalFocus?: ComponentProps<typeof Dialog>["finalFocus"];
 }) {
   const { t } = useI18n();
   const hostKey = prompt?.hostKey ?? null;
   const context = prompt?.context ?? null;
   return (
     <Dialog
+      finalFocus={finalFocus}
       open={active && hostKey !== null}
       onOpenChange={(open) => {
         if (!open && active) cancelTrust();
@@ -107,6 +110,7 @@ export function PassphraseDialog({
   error: passphraseError,
   onPassphrase,
   onCancel: cancelPassphrase,
+  finalFocus,
 }: {
   active: boolean;
   promptId: string | null;
@@ -115,6 +119,7 @@ export function PassphraseDialog({
   error: string | null;
   onPassphrase: (value: string) => void;
   onCancel: () => void;
+  finalFocus?: ComponentProps<typeof Dialog>["finalFocus"];
 }) {
   const { t } = useI18n();
   const passphraseInput = useRef<HTMLInputElement>(null);
@@ -133,6 +138,7 @@ export function PassphraseDialog({
   };
   return (
     <Dialog
+      finalFocus={finalFocus}
       open={active && passphrasePrompt !== null}
       onOpenChange={(open) => {
         if (!open && active) cancelPassphrase();
@@ -178,6 +184,7 @@ export function InteractiveDialog({
   error,
   onAnswer,
   onCancel,
+  finalFocus,
 }: {
   active: boolean;
   challenge: Extract<PreparationEvent, { kind: "keyboardInteractive" }>;
@@ -185,6 +192,7 @@ export function InteractiveDialog({
   error: string | null;
   onAnswer: (answers: string[]) => void;
   onCancel: () => void;
+  finalFocus?: ComponentProps<typeof Dialog>["finalFocus"];
 }) {
   const { t } = useI18n();
   const form = useId();
@@ -216,6 +224,7 @@ export function InteractiveDialog({
   }, [active]);
   return (
     <Dialog
+      finalFocus={finalFocus}
       open={active}
       onOpenChange={(open) => {
         if (!open && active) cancel();

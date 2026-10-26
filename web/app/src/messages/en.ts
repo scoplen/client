@@ -1296,9 +1296,17 @@ export const en = {
   "snippets.issue.invalidValue":
     "Check the value for “{name}” against its type and choices. Control characters are not allowed.",
   "workspaces.title": "Workspaces",
+  "panes.workspace": "Terminal workspace",
+  "panes.previous": "Previous pane",
+  "panes.next": "Next pane",
+  "panes.right": "Split right",
+  "panes.below": "Split below",
+  "panes.offline": "Saved output cannot be split into a live connection.",
+  "panes.closing": "Wait for this pane to finish closing before splitting.",
+  "panes.limit": "A tab supports up to eight panes and three levels of splits.",
   "workspaces.close": "Close workspaces",
   "workspaces.description":
-    "Save this device's terminal tabs and selected tab. Opening appends new SSH sessions; each uses its current Login and ordinary connection review.",
+    "Save this device's terminal trees, focused panes and selected tab. Opening appends new SSH sessions; each uses its current Login and ordinary connection review.",
   "workspaces.name": "Workspace name",
   "workspaces.save": "Save current tabs",
   "workspaces.saved": "Saved workspaces",

@@ -176,6 +176,22 @@ it("uses an explicit Workspace runtime identity with the ordinary interactive sh
   expect(f.matching("session_respond").at(-1)?.args.sessionId).toBe(identity);
 });
 
+it("reports the current target Login label without replacing its ordinary session for a label update", async () => {
+  const f = fixture();
+  const onLabelChange = vi.fn();
+  const view = render(sessionView("en", true, undefined, undefined, { onLabelChange }));
+  const c = await connect(f);
+  await c.prepare(verified(1));
+  expect(onLabelChange).not.toHaveBeenCalled();
+  await c.prepare(verified(3));
+  expect(onLabelChange).toHaveBeenLastCalledWith("Host 3 · Login 3");
+  view.rerender(sessionView("en", true, undefined, undefined, { onLabelChange, label: "Host 3 · Login 3" }));
+  expect(screen.getByRole("heading", { name: "Host 3 · Login 3" })).toBeTruthy();
+  expect(f.matching("session_reserve_transport")).toHaveLength(1);
+  expect(f.connections).toHaveLength(1);
+  expect(f.matching("session_close_transport")).toHaveLength(0);
+});
+
 it("binds literal mixed-echo responses to the exact attempt and clears them before submission", async () => {
   const f = fixture();
   const pending = f.delay("session_respond");

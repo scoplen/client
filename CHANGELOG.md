@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added terminal-only split Workspaces with independent ordinary SSH panes,
+  remembered focus, keyboard pane selection and checkpoint-aware pane/tab close.
+  Layout changes retain surviving terminal DOM and transports. New version-two
+  saves capture complete trees and focus; older tab-only definitions remain
+  unavailable and explicitly deletable. Files/tunnel restoration, divider dragging,
+  detached windows and native restart acceptance remain separate work.
+
 - Updated the shared protocol pin to `2ac0767` and the SSH engine to russh 0.65.0,
   including authentication keepalive and signing-refusal fixes. The Windows Pageant
   build patch remains pinned to the same shared revision; credential selection and
@@ -13,7 +20,8 @@ All notable changes to the Scoplen desktop client are recorded here.
   layouts, current-profile inventory checks and explicit Open/Delete. Open appends
   fresh ordinary SSH sessions while preserving existing tabs. Unsupported definitions
   and missing dependencies remain visible; saved-output tabs cannot be saved as live
-  connection intent. Full layouts and native restart acceptance remain incomplete.
+  connection intent. This records the initial tab-only layout; new saves use the
+  terminal-pane profile above.
 
 - Correct terminal character widths with Unicode 15 data, preserving ordinary
   combining cells across input chunks, cursor reports, wrapping and restored output.

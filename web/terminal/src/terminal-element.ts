@@ -136,6 +136,12 @@ function cameFromXtermHelper(event: Event): boolean {
 
 /** A bounded terminal surface; transport remains a caller-owned binary source/sink. */
 export class ScoplenTerminalElement extends HTMLElementBase {
+  /** Move keyboard input to xterm's textarea, or the text fallback when unavailable. */
+  focusInput(): void {
+    if (this.terminal) this.terminal.focus();
+    else this.focus({ preventScroll: true });
+  }
+
   private _source: TerminalSource | null = null;
   private _sink: TerminalSink | null = null;
   private _broadcastSink: TerminalSink | null = null;
