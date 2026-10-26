@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Updated every shared library and the Windows Pageant patch to published `proto@4576b7a`,
+  including the conditional Team name contract and `orgs:write` scope. Fresh Device
+  authentication obtains the new scope; refresh cannot expand an existing session's ceiling.
+  This dependency adoption does not enable the Team name editor on its own.
+
 - Added explicit Snippet target selection for up to 64 existing ready terminals in
   the current Account, including same-Login split panes and other tabs. Review
   captures the complete command and ordered targets; sending uses each original
