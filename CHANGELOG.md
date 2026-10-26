@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Updated the shared protocol pin to `2ac0767` and the SSH engine to russh 0.65.0,
+  including authentication keepalive and signing-refusal fixes. The Windows Pageant
+  build patch remains pinned to the same shared revision; credential selection and
+  host-key review keep their existing behavior.
+
 - Added device-local saved terminal-tab Workspaces with Rust-validated deterministic
   layouts, current-profile inventory checks and explicit Open/Delete. Open appends
   fresh ordinary SSH sessions while preserving existing tabs. Unsupported definitions

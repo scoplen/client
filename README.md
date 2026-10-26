@@ -75,6 +75,10 @@ and discards the authentication result; no shell is opened by the cancelled task
 Missing keys, locked or unavailable agents, signing refusal, and timeouts are
 explicit failures. Agent RSA keys use the same SHA-2 selection policy as software keys.
 
+The pinned shared SSH engine uses russh 0.65.0. Waiting for authentication with configured
+keepalives no longer busy-polls, and an agent's signing refusal returns through the ordinary
+authentication error path.
+
 Saved encrypted OpenSSH keys use bcrypt-pbkdf for this connection only. The
 passphrase is never saved and is cleared from the input after submission;
 incorrect entry can be retried. Before decryption the client enforces a 64 KiB
