@@ -242,7 +242,7 @@ impl SessionManager {
                         None,
                         SelectedTransfer::Download {
                             remote_path,
-                            destination,
+                            destination: Box::new(destination),
                             confirm: Box::new(move |review| Box::pin(confirm_replace(review))),
                             editor: Some(id),
                         },
