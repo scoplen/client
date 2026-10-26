@@ -99,8 +99,9 @@ fn batch_reservation_holds_every_slot_and_appends_contiguously_in_order() {
     assert_eq!(queue.snapshot("session").outstanding, 16);
     assert_eq!(queue.reserve_selection(transport), Err(SessionTransferIssue::QueueFull));
     queue
-        .enqueue_upload_batch(
+        .enqueue_batch(
             selection,
+            SessionTransferDirection::Upload,
             (1..16).map(|value| (format!("{value}.bin"), 64, value)).collect(),
         )
         .unwrap();
@@ -124,7 +125,11 @@ fn failed_or_obsolete_batch_reservations_add_nothing_and_release_every_slot() {
     );
     let reservation = queue.reserve_selections(transport, 16).unwrap();
     assert_eq!(
-        queue.enqueue_upload_batch(reservation, vec![("short".into(), 1, 0)]),
+        queue.enqueue_batch(
+            reservation,
+            SessionTransferDirection::Upload,
+            vec![("short".into(), 1, 0)]
+        ),
         Err(SessionTransferIssue::InvalidSelection)
     );
     assert!(queue.snapshot("session").items.is_empty());
@@ -133,8 +138,9 @@ fn failed_or_obsolete_batch_reservations_add_nothing_and_release_every_slot() {
     let reservation = queue.reserve_selections(transport, 16).unwrap();
     queue.interrupt_transport(transport);
     assert_eq!(
-        queue.enqueue_upload_batch(
+        queue.enqueue_batch(
             reservation,
+            SessionTransferDirection::Upload,
             (0..16).map(|value| ("file".into(), 1, value)).collect()
         ),
         Err(SessionTransferIssue::TransportEnded)

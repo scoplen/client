@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use uuid::Uuid;
 
@@ -22,7 +22,7 @@ const TRANSFER_HISTORY: usize = 32;
 const MAX_NAME_CHARACTERS: usize = 128;
 
 /// The direction of a terminal-owned transfer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionTransferDirection {
     /// Publish one native-selected local file on the remote host.
@@ -469,25 +469,27 @@ impl<T> TransferQueue<T> {
         Ok(self.append_selected(selected.transport, name, direction, total, resources))
     }
 
-    pub fn enqueue_upload_batch(
+    pub fn enqueue_batch(
         &mut self,
         selected: SelectionReservation,
+        direction: SessionTransferDirection,
         resources: Vec<(String, u64, T)>,
-    ) -> Result<(), SessionTransferIssue> {
+    ) -> Result<Vec<SessionTransferEnqueueResult>, SessionTransferIssue> {
         if resources.len() != selected.count {
             return Err(SessionTransferIssue::InvalidSelection);
         }
         self.accept_selection(selected)?;
+        let mut admitted = Vec::with_capacity(resources.len());
         for (name, total, resource) in resources {
-            self.append_selected(
+            admitted.push(self.append_selected(
                 selected.transport,
                 &name,
-                SessionTransferDirection::Upload,
+                direction,
                 Some(total),
                 resource,
-            );
+            ));
         }
-        Ok(())
+        Ok(admitted)
     }
 
     fn accept_selection(

@@ -154,6 +154,12 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	sessionEditorUpload: (sessionId: string, transportId: string, editorId: string, locale: Locale) => typedError<SessionTransferEnqueueResult, SessionEditorIssue>(__TAURI_INVOKE("session_editor_upload", { sessionId, transportId, editorId, locale })),
 	/**  Stop observation and further uploads while preserving the selected local copy. */
 	sessionEditorStop: (sessionId: string, editorId: string) => typedError<null, SessionEditorIssue>(__TAURI_INVOKE("session_editor_stop", { sessionId, editorId })),
+	/**  Select an ordinary local folder and compare contents without writing files. */
+	sessionPrepareDirectorySync: (sessionId: string, transportId: string, operationId: string, remotePath: number[], direction: SessionTransferDirection, locale: Locale) => typedError<SessionDirectorySyncPrepareResult, SessionDirectorySyncIssue>(__TAURI_INVOKE("session_prepare_directory_sync", { sessionId, transportId, operationId, remotePath, direction, locale })),
+	/**  Queue only the reviewed Create and Changed files through the existing FIFO. */
+	sessionApplyDirectorySync: (sessionId: string, transportId: string, planId: string, locale: Locale) => typedError<SessionDirectorySyncApplyResult, SessionDirectorySyncIssue>(__TAURI_INVOKE("session_apply_directory_sync", { sessionId, transportId, planId, locale })),
+	/**  Discard one unapplied comparison without changing admitted queue rows. */
+	sessionDiscardDirectorySync: (sessionId: string, planId: string) => typedError<null, SessionDirectorySyncIssue>(__TAURI_INVOKE("session_discard_directory_sync", { sessionId, planId })),
 	/**  Read a complete queue snapshot without changing any transfer's lifetime. */
 	sessionTransferQueue: (sessionId: string) => typedError<SessionTransferQueueSnapshot, SessionTransferIssue>(__TAURI_INVOKE("session_transfer_queue", { sessionId })),
 	/**  Select a local source, then leave its transfer owned by the logical session. */
@@ -1950,6 +1956,104 @@ export type SessionChanged = {
 	/**  The lifecycle transition. */
 	change: SessionChangeKind,
 };
+
+/**  Explicit Apply either queued its complete changes or had nothing to write. */
+export type SessionDirectorySyncApplyResult =
+/**  The existing queue owns progress and per-file results. */
+{ kind: "queued";
+/**  Captured queue lifetime. */
+queueId: string;
+/**  Initial FIFO admission order. */
+items: SessionDirectorySyncItem[] } |
+/**  Every source was Same or there were no ordinary source files. */
+{ kind: "unchanged" };
+
+/**  Content comparison of one source file with its destination. */
+export type SessionDirectorySyncChange =
+/**  The destination does not exist. */
+"create" |
+/**  Complete contents differ. */
+"changed" |
+/**  Complete contents match and will be skipped. */
+"same";
+
+/**  One bounded filename and its comparison result. */
+export type SessionDirectorySyncEntry = {
+	/**  Safe source basename; never used to reconstruct a target. */
+	name: string,
+	/**  Planned action or genuine content equality. */
+	change: SessionDirectorySyncChange,
+	/**  Decimal source length. */
+	sourceSizeBytes: string,
+	/**  Decimal destination length, or absence. */
+	targetSizeBytes: string | null,
+};
+
+/**  Fixed operational categories without native paths, contents or digests. */
+export type SessionDirectorySyncIssue =
+/**  The captured session, transport or plan is unavailable. */
+"unavailable" |
+/**  An existing ordinary directory is required. */
+"invalidSelection" |
+/**  Links, special sources or non-file destinations are unsupported. */
+"unsupportedEntry" |
+/**  A name cannot map losslessly or conflicts with another destination. */
+"unsupportedName" |
+/**  The source-file count or complete directory listing exceeded its bound. */
+"tooManyFiles" |
+/**  Complete hashing exceeded its per-file or total byte bound. */
+"tooLarge" |
+/**  The absolute comparison or an existing request deadline expired. */
+"timeout" |
+/**  The comparison was explicitly cancelled. */
+"cancelled" |
+/**  A compared file or source filename set changed. */
+"fileChanged" |
+/**  The complete batch cannot currently enter the existing queue. */
+"queueFull" |
+/**  A local file operation failed. */
+"localIo" |
+/**  The SSH server refused an operation. */
+"remoteDenied" |
+/**  The comparison could not complete. */
+"failed";
+
+/**  One admitted execution remains owned by the existing transfer queue. */
+export type SessionDirectorySyncItem = {
+	/**  Stable queue item. */
+	itemId: string,
+	/**  Exact initial execution. */
+	executionId: string,
+};
+
+/**  A read-only observation whose native resources remain in Rust. */
+export type SessionDirectorySyncPlan = {
+	/**  One process-local comparison identity. */
+	planId: string,
+	/**  Owning logical terminal. */
+	sessionId: string,
+	/**  Original authenticated transport. */
+	transportId: string,
+	/**  Explicit source-to-destination direction. */
+	direction: SessionTransferDirection,
+	/**  Safe captured remote directory display. */
+	remoteName: string,
+	/**  Safe selected local directory basename. */
+	localName: string,
+	/**  At most sixteen ordinary source files. */
+	entries: SessionDirectorySyncEntry[],
+	/**  Source subdirectories deliberately excluded from this shallow profile. */
+	excludedDirectories: number,
+};
+
+/**  Native folder selection either produced a complete plan or was cancelled. */
+export type SessionDirectorySyncPrepareResult =
+/**  Ready for explicit review; no file has been written. */
+{ kind: "prepared";
+/**  Complete bounded observation. */
+plan: SessionDirectorySyncPlan } |
+/**  The native folder picker was closed. */
+{ kind: "cancelled" };
 
 /**  Fixed operational categories without paths, contents or native errors. */
 export type SessionEditorIssue =

@@ -16,6 +16,7 @@ pub mod password_sign_in;
 pub mod personal_inventory;
 pub mod personal_server;
 pub mod profile_context;
+pub mod session_directory_sync;
 pub mod session_editor;
 pub mod session_transfers;
 mod smoke;
@@ -85,6 +86,9 @@ pub fn ipc() -> Builder<tauri::Wry> {
             session_editor::session_editor_open,
             session_editor::session_editor_upload,
             session_editor::session_editor_stop,
+            session_directory_sync::session_prepare_directory_sync,
+            session_directory_sync::session_apply_directory_sync,
+            session_directory_sync::session_discard_directory_sync,
             session_transfers::session_transfer_queue,
             session_transfers::session_enqueue_upload,
             session_transfers::session_enqueue_download,

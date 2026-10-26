@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added directional current-folder comparison for up to sixteen ordinary source files.
+  Content-identical files are skipped; explicit Apply admits the complete changed batch to
+  the existing queue with fresh replacement review and independent per-file results.
+  Native folder-picker and rendered platform acceptance remain unverified.
+
 - Added explicit local editing for complete remote UTF-8 files up to 256 KiB. A native-selected
   working copy opens in the platform text editor; saved-change detection never uploads by
   itself. Upload changes uses the original remote target and existing queue/replacement

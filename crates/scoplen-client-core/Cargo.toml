@@ -39,6 +39,7 @@ uuid.workspace = true
 zeroize.workspace = true
 httpdate = "1.0.3"
 tokio-tungstenite = { version = "=0.30.0", default-features = false }
+unicode-normalization = "=0.1.25"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.190"

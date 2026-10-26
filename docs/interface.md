@@ -172,6 +172,33 @@ manual remote review before another upload. Hiding Files does not stop observati
 replacement cannot reuse the old record's upload authority. Errors use fixed localized
 messages, and the renderer receives no native path or file contents.
 
+## Directional folder comparison
+
+Files > Compare folder files explains the current-layer, sixteen-source-file scope before
+the person chooses upload or download and opens a native folder picker. The preview names
+both captured folders, reports excluded subfolders and lists Create, Changed and Same with
+source and destination byte sizes. Same files and empty input disable Apply. Capacity must
+be available for the complete changed batch; transfer rows own progress and individual
+results after admission, with fresh replacement review for existing targets. Download names
+must be valid UTF-8, and potentially equivalent native names refuse the complete comparison
+without changing filenames, including on case-sensitive destinations.
+
+`sessionPrepareDirectorySync(sessionId, transportId, operationId, remotePath, direction, locale)`
+compares contents without writing and returns a Rust-owned plan or cancelled selection.
+`sessionApplyDirectorySync(sessionId, transportId, planId, locale)` explicitly admits a
+reviewed batch to the existing FIFO. `sessionDiscardDirectorySync(sessionId, planId)` releases
+unapplied authority, and the existing file-operation cancellation command stops comparison.
+All commands retain profile generation and original transport ownership. No native path,
+digest or file contents enter the projection.
+
+Comparison and Apply require separate intent. Closing, inactive panes, navigation and
+transport or Account replacement discard an unapplied plan; late replies cannot restore it.
+A changed file requires a fresh comparison. A queue-capacity rejection permits only another
+explicit Apply. An uncertain invocation requires closing and reviewing the transfer queue;
+it never triggers automatic comparison or replay. Already admitted transfers remain
+session-owned when Files closes. Actual native folder-picker and platform rendering remain
+separate acceptance from component checks.
+
 ## Personal account
 
 Settings → Personal account reads saved public status without network access or database

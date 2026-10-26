@@ -79,7 +79,7 @@ impl AsyncWrite for HashWriter<'_> {
 }
 
 #[derive(Default)]
-struct HashSink(Sha256);
+pub(super) struct HashSink(pub(super) Sha256);
 
 impl AsyncWrite for HashSink {
     fn poll_write(

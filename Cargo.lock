@@ -4907,6 +4907,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
+ "unicode-normalization",
  "uuid",
  "zeroize",
 ]
