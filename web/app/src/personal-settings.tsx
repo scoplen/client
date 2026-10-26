@@ -7,6 +7,7 @@ import { useProfileCommands } from "./account-profiles";
 import { AccountRegistration } from "./account-registration";
 import { PersonalSyncSettings } from "./personal-sync-settings";
 import { PersonalAccountSettings } from "./personal-account-settings";
+import { TeamSettings } from "./team-settings";
 
 export function PersonalSettings() {
   const commands = useProfileCommands();
@@ -158,6 +159,7 @@ export function PersonalSettings() {
           {!revalidation ? (
             <>
               <PersonalAccountSettings authenticated={authenticated} disabled={busy} onBusyChange={childBusy} />
+              <TeamSettings authenticated={authenticated} disabled={busy} onBusyChange={childBusy} />
               <PersonalSyncSettings authenticated={authenticated} disabled={busy} onBusyChange={childBusy} />
             </>
           ) : null}

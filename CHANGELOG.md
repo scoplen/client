@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added Teams to Personal account settings with explicit membership discovery, team creation,
+  retained-request recovery and paginated results in English and Simplified Chinese. Roles
+  remain display metadata; invitations and shared inventory are not available in this panel.
+
 - Added Rust-owned team creation and current-membership discovery with generation-bound native
   commands. One canonical request and original retry deadline survive uncertain outcomes and
   encrypted-store reopen. Explicit retry confirms the same creation; verified discovery binds

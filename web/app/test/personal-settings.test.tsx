@@ -55,6 +55,7 @@ function fixture(initial = empty) {
         return status;
       }
       if (command === "personal_account_snapshot") return null;
+      if (command === "pending_team_creation") return null;
       if (command === "personal_sync_key_status") return "notConnected";
       if (command === "personal_sync_background_status") return "inactive";
       throw new Error(`Unexpected command: ${command}`);
