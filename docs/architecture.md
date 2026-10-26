@@ -19,9 +19,11 @@ web/app (React)  ── typed commands, binary channels ──  src-tauri  ─�
 - `scoplen-client-core` holds every behavior, so it is the same on both platforms and testable without a window.
 - `scoplen-client-platform` is the only crate that may contain `unsafe` code or FFI; it is denied by default there too and allowed per module with each block documented.
 
-The shared libraries and Pageant patch are pinned to published `proto@183cc5c`, including the
-D-127/D-128 password-account contracts and shared strict JSON problem reader. It retains
-kind-8 descriptor validation and the D-121 asynchronous challenge API with
+The shared libraries and Pageant patch are pinned to published `proto@4576b7a`, including the
+D-134 conditional Organization name contract and `orgs:write` scope. Fresh Device authentication
+obtains that scope; refresh preserves or narrows the retained family's ceiling. This pin does
+not by itself expose Team name editing. It retains the D-127/D-128 password-account contracts,
+shared strict JSON problem reader, kind-8 descriptor validation and the D-121 asynchronous challenge API with
 zeroizing response custody. D-116 adds the object-safe
 `Signer::sign_async` hook, awaited by concrete SSH authentication. The built-in agent signer
 runs each serialized signing exchange on Tokio's blocking pool. Existing synchronous signers
