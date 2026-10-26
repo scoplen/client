@@ -9,6 +9,7 @@ use crate::{
 use super::*;
 
 mod isolation;
+mod teams;
 
 const LOCAL_PASSPHRASE: &str = "Disposable local data passphrase";
 
@@ -246,6 +247,8 @@ async fn roundtrip(deployment: PasswordDeployment, directory: &Path) {
     assert_ne!(second_profile.device_id, first_profile.device_id);
     let second_store = second.store(&second_lease);
     assert!(second_store.get(second_local.id).expect("separate Account namespace").is_none());
+    let created_teams =
+        teams::verify_pair(&first_manager, &first_store, &second_manager, &second_store).await;
     let original = rotate_live_session(
         &first_manager,
         &first_store,
@@ -290,8 +293,16 @@ async fn roundtrip(deployment: PasswordDeployment, directory: &Path) {
         first_store.get(shared.id).expect("bidirectional synchronized Host"),
         Some(edited.clone())
     );
-    let foreign_host =
-        isolation::verify(&deployment, directory, &ca, &first_manager, &first_store, &edited).await;
+    let foreign_host = isolation::verify(
+        &deployment,
+        directory,
+        &ca,
+        &first_manager,
+        &first_store,
+        &edited,
+        &created_teams,
+    )
+    .await;
     settings
         .synchronize(&second_manager, second_store.clone(), None)
         .await
@@ -320,6 +331,7 @@ async fn roundtrip(deployment: PasswordDeployment, directory: &Path) {
     let offline = PersonalServer::default();
     assert!(offline.load_sync_bootstrap(&reopened_store).expect("offline verified keys").is_some());
     assert_eq!(reopened_store.get(shared.id).expect("offline reopened Host"), Some(edited));
+    teams::verify_reopened(&second_manager, &reopened_store, &created_teams).await;
 }
 
 #[tokio::test]

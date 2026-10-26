@@ -244,6 +244,23 @@ confirmation; it creates new local objects whose upload requires a fresh review 
 Failed or unconfirmed sync actions reload this durable attention state without another network
 attempt. Concurrent server changes ask for an explicit retry with a fresh session.
 
+## Teams
+
+The generation-bound native API keeps access tokens, DPoP proofs, canonical create bytes and
+the original idempotency key in Rust. `pending_team_creation` reads SQLCipher locally, while
+`teams_page` queries one current membership page only on an explicit intent. Rust validates the
+complete Account-bound response before returning team ids, names and role identifiers for
+display. `prepare_team_creation` saves a valid exact name without dispatching; a subsequent
+`submit_team_creation` sends only that retained operation.
+
+Unknown creation keeps the original operation through restart. Explicit retry uses fresh DPoP
+and the same key/body within the original 24-hour window. A verified first unchanged response
+can return to prepared; a later denial does not erase earlier uncertainty. Confirmed state can
+be explicitly dismissed. An expired operation requires refreshed discovery before the person
+decides to clear it or create another team. `discard_team_creation` rejects a still-retryable
+unknown operation. These intents do not change the selected Personal profile or its inventory,
+and role labels never grant client-side asset permissions.
+
 ## Inventory (roadmap C3)
 
 Contract: `web/app/src/inventory/api.ts` (`InventoryApi`). Screens: `inventory/home.tsx` (sidebar, list, details; the logins, keys, and routes editors open beside the sidebar, which stays), `inventory/host-details.tsx`, `inventory/add-host.tsx`.

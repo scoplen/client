@@ -49,6 +49,7 @@ struct PeerState {
     errors: Vec<String>,
     inventory: Option<InventoryPeer>,
     refresh: Option<RefreshPeer>,
+    teams: Option<teams::TeamPeer>,
     pause: Option<(String, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     notification: Option<notification::NotificationPeer>,
 }
@@ -245,13 +246,17 @@ async fn answer(
         let mut state = state.lock().unwrap();
         let path = request.uri().path();
         state.paths.push(path.into());
+        let team_create = path == "/api/v1/orgs" && request.method() == http::Method::POST;
         if request.headers().contains_key("cookie")
-            || request.headers().contains_key("idempotency-key")
+            || request.headers().contains_key("idempotency-key") && !team_create
         {
             return Err("unexpected credential transport".into());
         }
         {
-            if path.starts_with("/sync/") || path.starts_with("/api/v1/accounts/me") {
+            if path.starts_with("/sync/")
+                || path.starts_with("/api/v1/accounts/me")
+                || path.starts_with("/api/v1/orgs")
+            {
                 let expected = state.expected.as_ref().ok_or("missing fixture identity")?;
                 let token = request
                     .headers()
@@ -301,6 +306,7 @@ async fn answer(
                         return Err("wrong session identity".into());
                     }
                 } else if state.inventory.is_none()
+                    && !team_create
                     && (request.method() != http::Method::GET || !body.is_empty())
                 {
                     return Err("wrong protected request".into());
@@ -324,6 +330,8 @@ async fn answer(
                     proofs,
                     origin,
                 )?
+            } else if path.starts_with("/api/v1/orgs") && state.teams.is_some() {
+                state.teams.as_mut().unwrap().answer(&request, &body)?
             } else if state.inventory.is_some()
                 && matches!(
                     path.rsplit('/').next(),
@@ -375,6 +383,7 @@ fn local(dir: &tempfile::TempDir) -> Arc<Store> {
 mod account;
 mod membership;
 mod revalidation;
+mod teams;
 mod trust;
 
 #[tokio::test]

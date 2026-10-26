@@ -48,6 +48,7 @@ async fn unavailable_keys(
     problem
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn verify(
     deployment: &PasswordDeployment,
     directory: &Path,
@@ -55,6 +56,7 @@ pub(super) async fn verify(
     first_manager: &PersonalServer,
     first_store: &Arc<Store>,
     first_host: &scoplen_model::Object,
+    created_teams: &[TeamSummary],
 ) -> scoplen_model::Object {
     let other = Device::new(&directory.join("other-account"));
     let other_manager = manager(ca);
@@ -73,6 +75,14 @@ pub(super) async fn verify(
     assert_ne!(other_profile.account_id, first_identity.account_id);
     assert_ne!(other_profile.personal_vault_id, first_identity.personal_vault_id);
     let other_store = other.store(&lease);
+    teams::verify_isolation(
+        first_manager,
+        first_store,
+        &other_manager,
+        &other_store,
+        created_teams,
+    )
+    .await;
     let settings = PersonalInventorySettings::default();
     settings
         .synchronize(&other_manager, other_store.clone(), None)

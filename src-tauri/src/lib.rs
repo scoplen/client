@@ -19,6 +19,7 @@ pub mod profile_context;
 pub mod session_transfers;
 mod smoke;
 pub mod ssh;
+pub mod teams;
 mod window_state;
 
 use tauri::Manager as _;
@@ -140,6 +141,11 @@ pub fn ipc() -> Builder<tauri::Wry> {
             personal_server::personal_sync_key_status,
             personal_server::connect_personal_sync,
             personal_server::personal_sync_background_status,
+            teams::teams_page,
+            teams::pending_team_creation,
+            teams::prepare_team_creation,
+            teams::submit_team_creation,
+            teams::discard_team_creation,
             personal_inventory::personal_inventory_status,
             personal_inventory::preview_personal_inventory,
             personal_inventory::synchronize_personal_inventory,
