@@ -115,16 +115,24 @@ line breaks or terminal control characters; the command plus Enter fits 64 KiB.
 Retained Secret definitions are read-only and their defaults are hidden. Secret,
 multiline and multi-target execution remain incomplete.
 
-Use Workspaces in the tab bar to save the current terminal-tab order and selection
-as a new device-local definition. Explicit Open appends fresh SSH sessions using
-their current saved Logins and normal host-key and authentication review. Existing
-tabs remain open. Saving includes failed or closed terminal tabs, but refuses any
-saved-output tab; it never converts offline output into a live connection. Loading
-or listing a Workspace never connects. Output, working directories, commands and
-remote processes are not restored. Unsupported layouts and missing inventory
-dependencies remain in Unavailable workspaces until repaired or explicitly deleted.
-Personal adoption is a separate explicit workflow. Full session layouts and native
-restart acceptance remain incomplete.
+Split right or Split below opens a fresh ordinary SSH terminal for the focused
+pane's Login. Panes keep independent input, output and connection prompts. Select
+a pane or use Previous pane and Next pane to move terminal input focus. A tab supports
+eight panes and three split levels. Equal halves keep a 320 by 240 CSS-pixel minimum;
+smaller windows scroll inside the workspace. Closing a pane checkpoints its output
+before removing it; failed checkpoints retain the pane for retry or explicit discard.
+
+Use Workspaces in the tab bar to save all terminal trees, each tab's focused pane,
+tab order and selection as a new device-local definition. Explicit Open appends
+fresh SSH sessions using current saved Logins and normal host-key and authentication
+review, preserving existing connections. Saving includes failed or closed ordinary
+panes, but refuses the entire definition if any pane contains saved output. Loading
+or listing never connects. Output, directories, commands and remote processes are
+not restored. Older tab-only layouts and other unsupported definitions remain
+byte-identical in Unavailable workspaces with explicit Delete. Missing inventory
+dependencies require repair before opening. Personal adoption, Files and tunnel
+restoration, divider dragging, detached windows and native restart acceptance remain
+separate work.
 
 Tunnels manages saved Local TCP, Remote TCP and Dynamic SOCKS forwards independently of terminal
 tabs. Local and Dynamic use a numeric local IPv4 or IPv6 address and a nonzero local
@@ -494,6 +502,13 @@ the exact preview plus Enter through the public session manager to disposable
 OpenSSH. It verifies the executed output marker once and rejects old transport input
 after the shell exits. Successful checks remove their owned fixture; failed checks
 stop their owned container and retain temporary evidence.
+
+`scripts/test-ssh-workspace.ps1` connects two independent ordinary terminals to an
+owned OpenSSH fixture, checks separate marker output, resize and close while the
+other pane stays usable, then reopens a saved split after SQLCipher reopen. The
+restored terminals have fresh identities and no replayed commands. This verifies
+Rust session and persistence behavior; native pane focus and rendering need their
+separate platform acceptance.
 
 `scripts/test-ssh-local-forward.ps1` checks saved standalone TCP tunnels against
 disposable OpenSSH listeners with session channels disabled. It exercises password,

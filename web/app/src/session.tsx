@@ -10,7 +10,7 @@ import {
   useContextMenu,
   type MarkMood,
 } from "@scoplen/ui";
-import type { ScoplenTerminalElement, TerminalSnapshot } from "@scoplen/terminal";
+import type { ScoplenTerminalElement, TerminalSnapshot, TerminalSplitDirection } from "@scoplen/terminal";
 import { FolderOpen, Palette } from "lucide-react";
 import { Channel } from "@tauri-apps/api/core";
 import { Terminal, type TerminalSink, type TerminalSource } from "@scoplen/terminal/react";
@@ -67,10 +67,14 @@ export function SessionTerminal({
   active = true,
   onClose,
   onStateChange,
+  onLabelChange,
   onOpenColors,
   savedOutput,
   registerClose,
   sessionId: restoredSessionId,
+  onSplit,
+  splitIssue,
+  registerFocus,
 }: {
   profileId: string;
   label: string;
@@ -81,8 +85,15 @@ export function SessionTerminal({
   /** Fresh runtime identity supplied by an explicit saved-Workspace Open. */
   sessionId?: string;
   registerClose?: (close: (discard?: boolean) => Promise<boolean>) => () => void;
+  /** Explicitly start one independent ordinary terminal beside this pane. */
+  onSplit?: (direction: TerminalSplitDirection) => void;
+  splitIssue?: string;
+  /** Register actual input focus without transferring session ownership. */
+  registerFocus?: (focus: () => void) => () => void;
   /** Told whenever the connection state changes, so the window can show it on the tab. */
   onStateChange?: (state: SessionState) => void;
+  /** Current target label resolved through ordinary Login preparation. */
+  onLabelChange?: (label: string) => void;
   /** Opens the terminal color settings. */
   onOpenColors?: () => void;
 }) {
@@ -138,9 +149,11 @@ export function SessionTerminal({
   const localEnd = useRef<{ state: "closed" | "failed"; message: string | null } | null>(null);
   const trusting = useRef(false);
   const reportState = useRef(onStateChange);
+  const reportLabel = useRef(onLabelChange);
   const translate = useRef(t);
   useEffect(() => {
     reportState.current = onStateChange;
+    reportLabel.current = onLabelChange;
     translate.current = t;
   });
   useEffect(() => {
@@ -232,6 +245,8 @@ export function SessionTerminal({
               clearPreparation();
               const preparation = event.event;
               setContext(preparation.context);
+              if (preparation.context.target)
+                reportLabel.current?.(`${preparation.context.host} · ${preparation.context.login}`);
               if (preparation.kind === "verified") {
                 setVerified((current) => [
                   ...current.filter((item) => item.context.position !== preparation.context.position),
@@ -359,6 +374,22 @@ export function SessionTerminal({
   );
   const { colors } = useTerminalColors();
   const terminal = useRef<ScoplenTerminalElement>(null);
+  const selected = useRef(active);
+  useEffect(() => {
+    selected.current = active;
+  }, [active]);
+  const returnInputFocus = () => {
+    if (selected.current) terminal.current?.focusInput();
+    return false;
+  };
+  useEffect(
+    () =>
+      registerFocus?.(() => {
+        if (!["trusting", "passphrase", "keyboardInteractive"].includes(state) && !detailsOpen)
+          terminal.current?.focusInput();
+      }),
+    [registerFocus, state, detailsOpen],
+  );
   const menu = useContextMenu();
 
   // The remote terminal follows the window: the size is sent once the session
@@ -681,14 +712,14 @@ export function SessionTerminal({
     transfers.snapshot?.items.some((item) => item.stagingMayRemain) ||
     transfers.snapshot?.recent.some((item) => item.stagingMayRemain);
   return (
-    <main className="flex h-full min-h-0 flex-col bg-background text-foreground" aria-labelledby={titleId}>
-      <header className="flex shrink-0 flex-col gap-2 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+    <section className="flex h-full min-h-0 flex-col bg-background text-foreground" aria-labelledby={titleId}>
+      <header className="flex shrink-0 flex-col gap-2 px-4 py-2.5">
         <div className="flex min-w-0 items-center gap-3">
           <HostEgg seed={profileId} size="1.75rem" mood={face.mood} active={face.active} attention={face.attention} />
           <div className="min-w-0">
-            <h1 id={titleId} className="ui-display truncate text-base">
+            <h2 id={titleId} className="ui-display truncate text-base">
               {label}
-            </h1>
+            </h2>
             <p className="m-0 flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
               <span
                 aria-hidden="true"
@@ -699,6 +730,24 @@ export function SessionTerminal({
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+          {onSplit ? (
+            <span className="flex flex-wrap gap-1" title={splitIssue ?? (closingView ? t("panes.closing") : undefined)}>
+              <Button
+                variant="ghost"
+                disabled={!active || !!splitIssue || offline || closingView}
+                onClick={() => onSplit("horizontal")}
+              >
+                {t("panes.right")}
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={!active || !!splitIssue || offline || closingView}
+                onClick={() => onSplit("vertical")}
+              >
+                {t("panes.below")}
+              </Button>
+            </span>
+          ) : null}
           {verified.length ? (
             <Button variant="ghost" onClick={() => setDetailsOpen(true)}>
               {t("session.details.open")}
@@ -758,6 +807,11 @@ export function SessionTerminal({
           </Button>
         </div>
       </header>
+      {onSplit && active && (splitIssue || offline || closingView) ? (
+        <p className="mx-4 mt-0 mb-2 text-xs text-muted-foreground">
+          {splitIssue ?? t(offline ? "panes.offline" : "panes.closing")}
+        </p>
+      ) : null}
       {saveError ? (
         <div className="mx-4 mb-2 flex flex-wrap items-center gap-2">
           <p role="alert" className="m-0 text-sm text-attention">
@@ -900,6 +954,7 @@ export function SessionTerminal({
         ) : null}
       </div>
       <TrustDialog
+        finalFocus={returnInputFocus}
         active={active}
         prompt={hostPrompt}
         busy={trustBusy}
@@ -935,6 +990,7 @@ export function SessionTerminal({
       </Dialog>
       {challenge ? (
         <InteractiveDialog
+          finalFocus={returnInputFocus}
           key={challenge.promptId}
           active={active}
           challenge={challenge}
@@ -945,6 +1001,7 @@ export function SessionTerminal({
         />
       ) : null}
       <PassphraseDialog
+        finalFocus={returnInputFocus}
         active={active}
         promptId={passphrasePrompt}
         context={context}
@@ -959,7 +1016,7 @@ export function SessionTerminal({
           if (passphrasePrompt) void respond(passphrasePrompt, { kind: "passphrase", value });
         }}
       />
-    </main>
+    </section>
   );
 }
 

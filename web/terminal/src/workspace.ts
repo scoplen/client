@@ -22,6 +22,10 @@ export interface TerminalWorkspaceSnapshot {
   panes: TerminalPane[];
   /** The active tab's layout, or null when no tab is open. */
   layout: TerminalLayoutNode | null;
+  /** Complete layouts and remembered focus, including inactive tabs. */
+  layouts: Record<string, TerminalLayoutNode>;
+  focusedPaneIds: Record<string, string>;
+  activePaneId: string | null;
   activeTabId: string | null;
 }
 
@@ -30,6 +34,11 @@ export type TerminalWorkspaceListener = (snapshot: TerminalWorkspaceSnapshot) =>
 interface WorkspaceTab {
   tab: TerminalTab;
   layout: TerminalLayoutNode;
+  focusedPaneId: string;
+}
+
+function leaves(node: TerminalLayoutNode): string[] {
+  return node.type === "pane" ? [node.paneId] : node.children.flatMap(leaves);
 }
 
 function cloneNode(node: TerminalLayoutNode): TerminalLayoutNode {
@@ -62,6 +71,9 @@ export class TerminalWorkspace {
       tabs: this.tabs.map(({ tab }) => ({ ...tab })),
       panes: this.panes.map((pane) => ({ ...pane })),
       layout: active ? cloneNode(active.layout) : null,
+      layouts: Object.fromEntries(this.tabs.map(({ tab, layout }) => [tab.id, cloneNode(layout)])),
+      focusedPaneIds: Object.fromEntries(this.tabs.map(({ tab, focusedPaneId }) => [tab.id, focusedPaneId])),
+      activePaneId: active?.focusedPaneId ?? null,
       activeTabId: this.activeTabId,
     };
   }
@@ -73,17 +85,39 @@ export class TerminalWorkspace {
   }
 
   openTab(tab: TerminalTab): string {
+    const paneId = this.paneId(tab.id);
+    this.restoreTab(tab, { type: "pane", paneId }, paneId);
+    return paneId;
+  }
+
+  /** Append a complete layout; identities and connection creation belong to the caller. */
+  restoreTab(tab: TerminalTab, layout: TerminalLayoutNode, focusedPaneId: string): void {
     const id = requireId(tab.id, "tab.id");
     const title = requireId(tab.title, "tab.title");
     if (this.tabs.some((entry) => entry.tab.id === id)) {
       throw new Error(`terminal tab already exists: ${id}`);
     }
-    const paneId = this.paneId(id);
-    this.tabs.push({ tab: { id, title }, layout: { type: "pane", paneId } });
-    this.panes.push({ id: paneId, tabId: id });
+    const paneIds: string[] = [];
+    const validate = (node: TerminalLayoutNode) => {
+      if (node.type === "pane") {
+        const paneId = requireId(node.paneId, "paneId");
+        if (paneIds.includes(paneId) || this.panes.some((pane) => pane.id === paneId)) {
+          throw new Error(`terminal pane already exists: ${paneId}`);
+        }
+        paneIds.push(paneId);
+      } else {
+        if ((node.direction !== "horizontal" && node.direction !== "vertical") || node.children.length !== 2) {
+          throw new TypeError("terminal splits require a direction and exactly two children");
+        }
+        node.children.forEach(validate);
+      }
+    };
+    validate(layout);
+    if (!paneIds.includes(focusedPaneId)) throw new Error("focused pane must belong to its tab");
+    this.tabs.push({ tab: { id, title }, layout: cloneNode(layout), focusedPaneId });
+    this.panes.push(...paneIds.map((paneId) => ({ id: paneId, tabId: id })));
     this.activeTabId = id;
     this.notify();
-    return paneId;
   }
 
   splitPane(paneId: string, direction: TerminalSplitDirection, newPaneId: string): string {
@@ -109,13 +143,14 @@ export class TerminalWorkspace {
       ],
     });
     this.panes.push({ id: nextPaneId, tabId: owner.tab.id });
+    owner.focusedPaneId = nextPaneId;
     this.notify();
     return nextPaneId;
   }
 
-  setActiveTab(tabId: string): void {
-    requireId(tabId, "tabId");
-    if (!this.tabs.some((entry) => entry.tab.id === tabId)) {
+  setActiveTab(tabId: string | null): void {
+    if (tabId !== null) requireId(tabId, "tabId");
+    if (tabId !== null && !this.tabs.some((entry) => entry.tab.id === tabId)) {
       throw new Error(`terminal tab does not exist: ${tabId}`);
     }
     if (this.activeTabId === tabId) {
@@ -123,6 +158,46 @@ export class TerminalWorkspace {
     }
     this.activeTabId = tabId;
     this.notify();
+  }
+
+  focusPane(paneId: string): void {
+    const owner = this.tabs.find((entry) => this.containsPane(entry.layout, paneId));
+    if (!owner) throw new Error(`terminal pane does not exist: ${paneId}`);
+    if (owner.focusedPaneId === paneId && this.activeTabId === owner.tab.id) return;
+    owner.focusedPaneId = paneId;
+    this.activeTabId = owner.tab.id;
+    this.notify();
+  }
+
+  /** Select metadata only; callers move the actual terminal input focus. */
+  moveFocus(offset: -1 | 1): string | null {
+    const owner = this.tabs.find((entry) => entry.tab.id === this.activeTabId);
+    if (!owner) return null;
+    const order = leaves(owner.layout);
+    const id = order[(order.indexOf(owner.focusedPaneId) + offset + order.length) % order.length];
+    this.focusPane(id);
+    return id;
+  }
+
+  /** Remove a successfully closed pane and collapse its parent to its sibling. */
+  closePane(paneId: string): boolean {
+    const owner = this.tabs.find((entry) => this.containsPane(entry.layout, paneId));
+    if (!owner) return false;
+    const order = leaves(owner.layout);
+    if (order.length === 1) return this.closeTab(owner.tab.id);
+    const remove = (node: TerminalLayoutNode): TerminalLayoutNode | null => {
+      if (node.type === "pane") return node.paneId === paneId ? null : node;
+      const remaining = node.children.map(remove).filter((child) => child !== null);
+      return remaining.length === 1 ? remaining[0] : { ...node, children: remaining };
+    };
+    owner.layout = remove(owner.layout)!;
+    this.panes = this.panes.filter((pane) => pane.id !== paneId);
+    if (owner.focusedPaneId === paneId) {
+      const index = order.indexOf(paneId);
+      owner.focusedPaneId = order[index - 1] ?? order[1];
+    }
+    this.notify();
+    return true;
   }
 
   closeTab(tabId: string): boolean {
@@ -135,14 +210,16 @@ export class TerminalWorkspace {
     this.tabs.splice(tabIndex, 1);
     this.panes = this.panes.filter((pane) => !paneIds.includes(pane.id));
     if (this.activeTabId === tabId) {
-      this.activeTabId = this.tabs[tabIndex]?.tab.id ?? this.tabs[tabIndex - 1]?.tab.id ?? null;
+      this.activeTabId = this.tabs[tabIndex - 1]?.tab.id ?? null;
     }
     this.notify();
     return true;
   }
 
   paneForTab(tabId: string): TerminalPane | undefined {
-    return this.panes.find((pane) => pane.tabId === tabId);
+    const owner = this.tabs.find((entry) => entry.tab.id === tabId);
+    const first = owner ? leaves(owner.layout)[0] : undefined;
+    return this.panes.find((pane) => pane.id === first);
   }
 
   private paneId(tabId: string): string {

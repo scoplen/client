@@ -3,7 +3,13 @@ import { Button, Dialog, Field } from "@scoplen/ui";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useProfileCommands } from "./account-profiles";
 import { useI18n } from "./i18n";
-import type { OpenedWorkspace, WorkspaceInput, WorkspaceIssue, WorkspaceView } from "./ipc/bindings";
+import type {
+  OpenedWorkspace,
+  WorkspaceInput,
+  WorkspaceIssue,
+  WorkspaceView,
+  WorkspaceTreeInput,
+} from "./ipc/bindings";
 import { useStoreChanges } from "./ipc/store-events";
 
 /** The shell supplies current visible intent; Rust validates and saves the complete set. */
@@ -30,8 +36,11 @@ export function WorkspacesDialog({
   const inFlight = useRef(false);
   const revision = useRef(0);
   const formId = useId();
-  const offline = tabs.some((tab) => tab.kind === "savedOutput");
-  const hasTerminal = tabs.some((tab) => tab.kind === "terminal");
+  const containsOutput = (tree: WorkspaceTreeInput): boolean =>
+    tree.kind === "savedOutput" ||
+    (tree.kind === "split" && (containsOutput(tree.first) || containsOutput(tree.second)));
+  const offline = tabs.some((tab) => containsOutput(tab.tree));
+  const hasTerminal = tabs.length > 0;
 
   const reload = useCallback(() => {
     const request = ++revision.current;

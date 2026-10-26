@@ -416,6 +416,110 @@ impl Drop for RegistrationRun {
 mod tests {
     use super::*;
 
+    fn workspace_request(local: Arc<LocalData>, store: Arc<Store>) -> ProfileRequest {
+        let owner = Arc::new(NativeProfiles::default());
+        owner.state.lock().unwrap().active = 1;
+        ProfileRequest {
+            owner,
+            binding: Binding::Retained { store, generation: uuid::Uuid::now_v7().to_string() },
+            local,
+        }
+    }
+
+    #[test]
+    fn workspace_commands_save_restore_delete_and_reject_an_unbound_store() {
+        use crate::workspaces::{
+            workspaces_create, workspaces_delete, workspaces_list, workspaces_open,
+        };
+        use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
+        use scoplen_client_core::workspaces::{
+            WorkspaceInput, WorkspaceIssue, WorkspaceSplitDirection, WorkspaceTabInput,
+            WorkspaceTree, WorkspaceTreeInput,
+        };
+
+        let directory =
+            std::env::temp_dir().join(format!("scoplen-workspace-native-{}", uuid::Uuid::now_v7()));
+        tauri::async_runtime::block_on(async {
+            let local = Arc::new(LocalData::start(&directory, None).unwrap());
+            local.create("native workspace fixture").unwrap();
+            let store = local.store().unwrap();
+            let host = Inventory::new(store.clone())
+                .add_host(NewHost {
+                    name: Some("Native fixture".into()),
+                    address: "host.example".into(),
+                    port: Some(22),
+                    username: "operator".into(),
+                    sign_in: SignIn::KeyboardInteractive,
+                })
+                .unwrap();
+            let leaf = WorkspaceTreeInput::Terminal { profile_id: host.logins[0].id.clone() };
+            let saved = workspaces_create(
+                workspace_request(local.clone(), store.clone()),
+                WorkspaceInput {
+                    name: "Native split".into(),
+                    tabs: vec![WorkspaceTabInput {
+                        tree: WorkspaceTreeInput::Split {
+                            direction: WorkspaceSplitDirection::Vertical,
+                            first: Box::new(leaf.clone()),
+                            second: Box::new(leaf),
+                        },
+                        focused: 1,
+                    }],
+                    active: Some(0),
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                workspaces_list(workspace_request(local.clone(), store.clone()))
+                    .await
+                    .unwrap()
+                    .as_slice(),
+                std::slice::from_ref(&saved)
+            );
+            let opened =
+                workspaces_open(workspace_request(local.clone(), store.clone()), saved.id.clone())
+                    .await
+                    .unwrap();
+            assert_eq!(opened.active, Some(0));
+            let WorkspaceTree::Split { direction, first, second } = &opened.tabs[0].tree else {
+                panic!("split missing")
+            };
+            assert_eq!(*direction, WorkspaceSplitDirection::Vertical);
+            let WorkspaceTree::Terminal { terminal: first } = first.as_ref() else {
+                panic!("first missing")
+            };
+            let WorkspaceTree::Terminal { terminal: second } = second.as_ref() else {
+                panic!("second missing")
+            };
+            assert_ne!(first.session_id, second.session_id);
+            assert_eq!(opened.tabs[0].focused_session_id, second.session_id);
+            let unbound = Arc::new(
+                Store::open(
+                    &directory.join("unbound.db"),
+                    &scoplen_crypto::LocalDatabaseKey::new([3; 32]),
+                )
+                .unwrap(),
+            );
+            assert_eq!(
+                workspaces_open(
+                    workspace_request(local.clone(), unbound.clone()),
+                    saved.id.clone()
+                )
+                .await,
+                Err(WorkspaceIssue::Unavailable)
+            );
+            assert_eq!(
+                workspaces_delete(workspace_request(local.clone(), unbound), saved.id.clone())
+                    .await,
+                Err(WorkspaceIssue::Unavailable)
+            );
+            workspaces_delete(workspace_request(local, store.clone()), saved.id).await.unwrap();
+            assert!(store.recent_sessions(10).unwrap().is_empty());
+        });
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn stop_before_dispatch_and_unknown_stop_cannot_cancel_another_run() {
         let profiles = Arc::new(NativeProfiles::default());

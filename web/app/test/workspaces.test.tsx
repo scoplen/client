@@ -39,9 +39,14 @@ vi.mock("../src/session", () => ({
 
 const saved: WorkspaceView = { id: "saved-workspace", name: "Operations", tabCount: 2, issue: null };
 const tabs: WorkspaceInput["tabs"] = [
-  { kind: "terminal", profileId: "login-first" },
-  { kind: "terminal", profileId: "login-second" },
+  { tree: { kind: "terminal", profileId: "login-first" }, focused: 0 },
+  { tree: { kind: "terminal", profileId: "login-second" }, focused: 0 },
 ];
+
+const openedTab = (sessionId: string, profileId: string, label: string) => ({
+  tree: { kind: "terminal", terminal: { sessionId, profileId, label } },
+  focusedSessionId: sessionId,
+});
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -104,10 +109,10 @@ it("saves actual terminal selection, survives app remount and connects only afte
     status: "ok",
     data: {
       tabs: [
-        { sessionId: "fresh-first", profileId: "login-first", label: "Restored first" },
-        { sessionId: "fresh-second", profileId: "login-second", label: "Restored second" },
+        openedTab("fresh-first", "login-first", "Restored first"),
+        openedTab("fresh-second", "login-second", "Restored second"),
       ],
-      activeSessionId: "fresh-second",
+      active: 1,
     },
   });
   await userEvent.click(screen.getByRole("button", { name: "Open workspace" }));
@@ -127,10 +132,10 @@ it("saves actual terminal selection, survives app remount and connects only afte
     status: "ok",
     data: {
       tabs: [
-        { sessionId: "fresh-third", profileId: "login-first", label: "Another first" },
-        { sessionId: "fresh-fourth", profileId: "login-second", label: "Another second" },
+        openedTab("fresh-third", "login-first", "Another first"),
+        openedTab("fresh-fourth", "login-second", "Another second"),
       ],
-      activeSessionId: null,
+      active: null,
     },
   });
   await userEvent.click(screen.getByRole("button", { name: "Workspaces" }));
@@ -167,7 +172,7 @@ it("retains unavailable definitions separately, disables Open and explicitly del
   expect(fixture.onOpen).not.toHaveBeenCalled();
 });
 
-it.each([{ input: [] }, { input: [...tabs, { kind: "savedOutput" }] }])(
+it.each([{ input: [] }, { input: [...tabs, { tree: { kind: "savedOutput" }, focused: 0 }] }])(
   "refuses unsavable tab intent without omitting offline tabs",
   async ({ input }) => {
     dialog(input as WorkspaceInput["tabs"]);
