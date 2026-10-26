@@ -29,7 +29,8 @@ can bound transport memory even when a profile keeps a larger scrollback.
 
 ## Lifecycle
 
-1. `connectedCallback` creates xterm.js, loads the search addon, installs input
+1. `connectedCallback` creates xterm.js, registers and selects the Unicode 15
+   codepoint provider before opening the renderer, loads the search addon, installs input
    and IME listeners, and subscribes to the source.
 2. Source chunks are copied, emitted as `terminal-output`, retained under the
    byte cap, and written to xterm.js.
@@ -79,10 +80,18 @@ emulator and does not claim full-screen program compatibility.
 
 ## Capability boundaries
 
-This slice intentionally leaves WebGL, Unicode 15 width handling,
+This slice intentionally leaves WebGL,
 inline image protocols, cross-platform IME verification, and the
 `vttest`/`esctest` compatibility suite for later C4 outcomes. The package does
 not describe those capabilities as available through a hidden fallback.
+
+Unicode widths come from checked-in Unicode 15.0.0 UCD intervals with no additional
+runtime dependency. The provider preserves
+xterm's ordinary combining-cell policy and narrow ambiguous characters; it does
+not enable grapheme-cluster width changes. The generator pins both official source
+checksums, and offline full-codepoint and public-package rendering-state regressions
+cover the tables and integration. Source provenance, licensing and regeneration
+instructions are in the package README.
 
 Serialization uses xterm's serialize addon after a write-barrier callback, preserving rendered
 state rather than replaying the bounded raw transport suffix. Snapshots include version, grid

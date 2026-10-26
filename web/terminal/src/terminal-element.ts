@@ -22,6 +22,7 @@ import {
   type TerminalSubscription,
 } from "./types";
 import { TerminalImeCompositionBridge } from "./ime";
+import { Unicode15Provider } from "./unicode15";
 
 export const TERMINAL_TAG_NAME = "scoplen-terminal";
 export const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
@@ -629,6 +630,8 @@ export class ScoplenTerminalElement extends HTMLElementBase {
     }
     try {
       const terminal = new XtermTerminal(this.xtermOptions());
+      terminal.unicode.register(new Unicode15Provider());
+      terminal.unicode.activeVersion = "15";
       terminal.open(this.terminalHost);
       this.terminal = terminal;
       this.searchAddon = new SearchAddon();
@@ -714,6 +717,7 @@ export class ScoplenTerminalElement extends HTMLElementBase {
   private xtermOptions(): ITerminalOptions {
     return {
       ...this._profile,
+      allowProposedApi: true,
       screenReaderMode: true,
       scrollOnUserInput: true,
       logLevel: "off",
