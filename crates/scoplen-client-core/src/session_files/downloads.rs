@@ -22,7 +22,7 @@ pub(crate) enum DownloadPreparation {
         session: Box<SftpSession>,
         handle: Vec<u8>,
         attributes: SftpAttributes,
-        destination: DownloadDestination,
+        destination: Box<DownloadDestination>,
         text_path: Option<Vec<u8>>,
     },
     Resume(Box<DownloadCheckpoint>),
@@ -232,7 +232,7 @@ pub(crate) async fn prepare_download(
                 session: Box::new(session),
                 handle,
                 attributes,
-                destination,
+                destination: Box::new(destination),
                 text_path: text_only.then_some(remote_path),
             })
         }
@@ -279,7 +279,7 @@ where
                     attributes,
                     temporary,
                     partial_baseline: None,
-                    destination,
+                    destination: *destination,
                     digest: Sha256::new(),
                     offset: 0,
                     total,
