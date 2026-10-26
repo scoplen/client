@@ -83,6 +83,42 @@ The package copies xterm's stylesheet into its distribution and loads it inside
 the terminal custom element's shadow root, so the renderer styles are scoped to
 the component in both desktop and browser consumers.
 
+## Saved terminal workspaces
+
+The Rust `workspaces::Workspaces` facade creates, lists, opens and tombstones
+device-local Workspace objects in SQLCipher. The internal version-two layout
+stores ordered binary terminal trees, each tab's focused slot and the selected
+tab or Hosts. Session slots retain only Login references. Create validates the
+entire definition before writing; Open resolves every current Login and dependency
+before returning complete trees with fresh runtime session identifiers. Neither
+operation reserves or connects a transport. The four generated `workspaces*`
+commands run against the captured `ProfileRequest`; a replaced or unavailable
+profile cannot apply an old request to the new store.
+
+Trees are bounded to eight leaves per tab, three branch levels and 64 total
+slots, within the existing object and 64 KiB layout limits. Unsupported layouts,
+including retained version-one definitions, remain byte-identical and deletable.
+Missing dependencies make Open unavailable. Foreign Workspace metadata is omitted
+from the list, and foreign reads and deletes are refused. New saves stay local;
+they do not adopt existing inventory into sync.
+
+`shell.tsx` binds each layout leaf to an ordinary `SessionTerminal` with its own
+SSH transport, prompts and output. Flat keyed wrappers stay under one stable DOM
+parent; `terminal-layout.ts` calculates their rectangles without remounting
+terminal elements when a sibling splits or closes. Equal halves retain a minimum
+320 by 240 CSS pixels per pane, including its header, and scroll inside smaller
+windows. The shell moves actual input focus separately from layout selection and
+checks the selected pane before restoring focus after a connection prompt.
+
+Closing a pane awaits its output checkpoint before collapsing the parent to its
+surviving child. Whole-tab and window close use the same per-pane controllers;
+failed checkpoints keep the affected panes for retry or explicit discard.
+Explicit Workspace Open appends fresh ordinary sessions and preserves existing
+ones. Startup, unlock and list do not restore connections automatically. Saved
+output, Files, tunnels and remote processes are outside this terminal-only
+restoration profile. Native interaction and application/system restart acceptance
+remain separate roadmap outcomes.
+
 ## Local data
 
 `scoplen-client-core::store` is the SQLCipher store. It is opened with a raw 32-byte key, so SQLCipher runs no key derivation of its own; a wrong key fails on the first page. Migrations in `store/migrations.rs` run at startup in one transaction, and a store with a newer schema than the build knows is refused rather than modified. Replicated objects are kept as their deterministic CBOR envelopes with per-field clocks. A local write is stamped with the next device clock, applied to the stored object, merged with the stored version through `scoplen_model::merge`, validated, and committed; subscribers hear about it only after the commit. The store also enforces the 100,000-objects-per-vault limit (D-36). Objects created before sync enrollment have no vault.

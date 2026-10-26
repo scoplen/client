@@ -439,6 +439,42 @@ enter React state, history, terminal output, saved objects or reconnect state. A
 password/key/agent factor continues into Interactive only through a typed partial-success
 rejection advertising that method; ordinary rejection never selects a fallback.
 
+## Terminal panes and saved workspaces
+
+**Split right** and **Split below** open an independent ordinary SSH session for
+the selected pane's Login. Each pane retains its own input, output, connection
+prompts and Files view. Selecting a pane, **Previous pane** and **Next pane** move
+actual terminal input focus; previous/next wraps in tree order within the current
+tab. Only the selected pane can show a connection prompt or target Snippets.
+Splitting is unavailable for saved output and at the eight-pane or three-level
+limit. Equal halves scroll inside a window too small for the pane minimums.
+
+Closing a pane waits for its output checkpoint before collapsing its branch.
+Closing the tab applies that flow to every pane. Failed checkpoints keep their
+panes visible for retry or explicit **Close without saving**; a failed whole-tab
+close focuses the first retained failure. Sibling terminals stay mounted and
+connected during these changes and while another tab or Settings is shown.
+
+**Workspaces** in the tab bar opens the saved-definition dialog from Hosts or a
+terminal. Save captures every terminal tab's complete tree, remembered focused
+pane and the active tab or Hosts selection. It requires a name and at least one
+terminal, and refuses the complete save if any pane contains saved output.
+The dialog separates available definitions from unavailable ones, explains fixed
+failure categories, offers Refresh after a failure and confirms Delete.
+
+| Generated command | What the core does |
+| --- | --- |
+| `workspacesCreate(input)` | Validates all trees and current Login dependencies, then creates one new local Workspace. It stores no output, commands, authentication answers or connection state. |
+| `workspacesList()` | Lists current-profile definitions and their availability without reserving or connecting sessions. Unsupported definitions remain visible and deletable. |
+| `workspacesOpen(id)` | Validates the complete saved definition and returns fresh runtime identities and current Login labels. Only a successful explicit Open appends the new trees through the normal connection owner, preserving existing tabs. |
+| `workspacesDelete(id)` | Tombstones the selected definition after ownership checks, including definitions this build cannot open. It does not close live sessions. |
+
+Loading the dialog, startup and unlock never connect automatically. Open starts
+fresh shells with current trust and authentication; it does not replay commands
+or restore remote processes, Files views or tunnels. Retained version-one layouts
+appear unavailable without conversion. Native interaction and restart acceptance
+remain unverified in the roadmap.
+
 ## Current-terminal command snippets
 
 A connected terminal exposes **Snippets** in its header. The dialog lists saved snippets
