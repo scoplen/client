@@ -263,6 +263,21 @@ or closing the session never deletes your local copy or closes the external edit
 A replacement connection does not inherit upload authority. Native editor and picker
 interaction on each platform remain separate acceptance.
 
+Choose Compare folder files in the Files toolbar to compare the current remote directory
+with an existing local folder. Choose upload or download, select the local folder, then
+review Create, Changed and Same before Apply. This first profile processes at most sixteen
+ordinary source files directly in that folder; the preview reports excluded subfolders.
+Content-identical files are skipped, and target-only files stay unchanged.
+Download names must be valid UTF-8; potentially equivalent native names refuse the entire
+comparison without renaming files, including on a case-sensitive destination. Equal-size
+contents use complete streaming comparison, with a 64 MiB per-file hash limit, 256 MiB total
+read budget and a 120-second comparison deadline after folder selection. Comparison writes
+nothing. Apply requires capacity for the entire changed batch, then each transfer uses the
+normal confirmation, cancellation and result rules. Files finish separately. A changed
+preview requires comparison again; an uncertain Apply requires reviewing the transfer queue.
+Local files remain outside encrypted application storage. Native folder-picker and rendered
+Windows/macOS interaction remain separate acceptance.
+
 When a session closes or fails, choose Reconnect in its header to connect again
 in the same tab. Its displayed terminal output stays available. Reconnect waits
 for the previous connection task to finish, rechecks the host key, resolves the

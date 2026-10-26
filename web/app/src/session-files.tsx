@@ -1,7 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useProfileCommands } from "./account-profiles";
 import { Button, Dialog, Field, IconButton } from "@scoplen/ui";
-import { Download, Eye, File, Folder, FolderPlus, Pencil, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import {
+  Download,
+  Eye,
+  File,
+  Folder,
+  FolderPlus,
+  FolderSync,
+  Pencil,
+  RefreshCw,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useI18n } from "./i18n";
 import {
@@ -15,6 +27,7 @@ import { SessionFilePreview } from "./session-file-preview";
 import { useSessionFileDrop } from "./use-session-file-drop";
 import { SessionEditor } from "./session-editor";
 import { useSessionEditor } from "./use-session-editor";
+import { SessionDirectorySync } from "./session-directory-sync";
 
 type Location = { name: string; path: number[] };
 type Activity = "listing" | "creating" | "renaming" | "deleting" | "cancelling" | "waiting" | null;
@@ -78,6 +91,7 @@ export function SessionFiles({
   const [reload, setReload] = useState(0);
   const [preview, setPreview] = useState<{ id: string; owner: string; entry: RemoteFileEntry } | null>(null);
   const [editDialog, setEditDialog] = useState<{ owner: string; entry: RemoteFileEntry } | null>(null);
+  const [directoryDialog, setDirectoryDialog] = useState<string | null>(null);
   const operation = useRef<string | null>(null);
   const cancelled = useRef<string | null>(null);
   const pendingCancellation = useRef<Promise<unknown>>(Promise.resolve());
@@ -90,17 +104,26 @@ export function SessionFiles({
   const previewOwner = `${sessionId}:${transportId}:${currentPath.join(",")}`;
   if (preview && (!active || preview.owner !== previewOwner)) setPreview(null);
   if (editDialog && (!active || editDialog.owner !== previewOwner)) setEditDialog(null);
+  if (directoryDialog && (!active || directoryDialog !== previewOwner)) setDirectoryDialog(null);
   const previewOpen = active && preview?.owner === previewOwner;
   const editDialogOpen = active && editDialog?.owner === previewOwner;
+  const directoryDialogOpen = active && directoryDialog === previewOwner;
   const editor = useSessionEditor(sessionId, transportId, active);
   const queueReady = queue !== null;
   const queueBlocked = !queueReady || !!queue?.blocksFileOperations;
   const fileOperationsDisabled =
-    activity !== null || queueBlocked || !transportId || selecting || previewOpen || editDialogOpen;
+    activity !== null ||
+    queueBlocked ||
+    !transportId ||
+    selecting ||
+    previewOpen ||
+    editDialogOpen ||
+    directoryDialogOpen;
   const selectionDisabled =
     activity !== null ||
     previewOpen ||
     editDialogOpen ||
+    directoryDialogOpen ||
     editor.pending === "start" ||
     !transportId ||
     !queueReady ||
@@ -116,6 +139,7 @@ export function SessionFiles({
     !nameDialog &&
     !previewOpen &&
     !editDialogOpen &&
+    !directoryDialogOpen &&
     editor.pending !== "start";
   const drop = useSessionFileDrop({
     sessionId,
@@ -345,6 +369,20 @@ export function SessionFiles({
             {t("session.files.upload.action")}
           </Button>
           <IconButton
+            label={t("session.directorySync.action")}
+            disabled={
+              fileOperationsDisabled ||
+              !active ||
+              loadedLocation !== previewOwner ||
+              !!error ||
+              !!nameDialog ||
+              editor.pending === "start"
+            }
+            onClick={() => setDirectoryDialog(previewOwner)}
+          >
+            <FolderSync aria-hidden="true" className="size-4" />
+          </IconButton>
+          <IconButton
             label={t("session.files.create.action")}
             disabled={fileOperationsDisabled}
             onClick={() => {
@@ -573,6 +611,18 @@ export function SessionFiles({
           connectionLabel={connectionLabel}
           entry={preview.entry}
           onClose={() => setPreview((current) => (current?.id === preview.id ? null : current))}
+        />
+      ) : null}
+      {directoryDialogOpen && transportId ? (
+        <SessionDirectorySync
+          key={previewOwner}
+          sessionId={sessionId}
+          transportId={transportId}
+          remotePath={currentPath}
+          connectionLabel={connectionLabel}
+          availableSlots={queue ? Math.max(0, queue.capacity - queue.outstanding) : 0}
+          onClose={() => setDirectoryDialog(null)}
+          onQueued={(count) => setNotice(t("session.directorySync.queued", { count }))}
         />
       ) : null}
       <Dialog

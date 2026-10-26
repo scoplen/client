@@ -812,6 +812,30 @@ own or stop the Rust observer. Stop and owner replacement end further upload aut
 preserving the user-selected ordinary file and external editor. A new connection or process
 does not restore that authority. File contents and native paths never enter the projection.
 
+## Directional folder comparison
+
+Rust owns a bounded, process-local directory plan under the captured profile, logical
+session, transport and original remote/local folders. The first profile compares at most
+sixteen ordinary source files in the current layer. Missing targets are Create, different
+sizes are Changed and equal-size files require complete streaming SHA-256 comparison. Same
+files are skipped; source subfolders are reported without traversal, and target-only files
+remain untouched. Hash work uses bounded chunks, per-file/aggregate read budgets and an
+absolute deadline. Comparison creates no local or remote file. Download basenames require
+valid UTF-8; a canonically decomposed Unicode uppercase key conservatively rejects colliding
+names without changing their original path bytes, including on case-sensitive destinations.
+
+Explicit Apply rechecks the source set and all retained metadata, then admits every changed
+file together through the existing FIFO reservation. Per-file publication, replacement,
+pause/cancellation and uncertain-result behavior stays in the existing transfer owner.
+Admission does not make the batch a filesystem transaction. Existing metadata and retained
+handle limitations apply without an immutable-source or compare-and-swap promise.
+
+The profile-bound Prepare, Apply and Discard commands expose only safe names, sizes,
+dispositions, counts and opaque plan/queue identities. `SessionDirectorySync` renders the
+preview, supplies explicit intents and discards obsolete results. Its cleanup cancels a
+comparison or releases a plan, while accepted transfers retain session ownership. Native
+paths, comparison digests and contents remain in Rust.
+
 ## Localization
 
 Messages are ICU MessageFormat catalogs in `web/app/src/messages`. English (`en.ts`) is the source; every other catalog has its type, so a missing key fails type checking, and the catalog tests format every message. The interface language is chosen in the core (`Locale::negotiate`) from the system's preferred languages: Simplified Chinese for `zh-Hans` and Simplified-script regions, otherwise English. A language setting arrives with Preference objects (roadmap C2).
