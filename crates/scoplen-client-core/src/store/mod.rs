@@ -13,6 +13,7 @@ mod migrations;
 pub(crate) mod personal;
 pub(crate) mod profiles;
 pub(crate) mod sync;
+pub(crate) mod teams;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added Rust-owned team creation and current-membership discovery with generation-bound native
+  commands. One canonical request and original retry deadline survive uncertain outcomes and
+  encrypted-store reopen. Explicit retry confirms the same creation; verified discovery binds
+  every Resource to the authenticated Account. Personal identity, keys and sync remain separate;
+  Team inventory switching, invitations and shared assets remain incomplete.
+
 - Accepted signed Organization membership snapshots during retained Device authentication,
   Account queries and native refresh, preserving independent Personal identity and sync keys.
   Membership snapshots do not authorize Team operations or relax Account, Device or proof-key checks.

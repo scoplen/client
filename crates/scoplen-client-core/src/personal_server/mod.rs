@@ -17,6 +17,7 @@ pub use password_login::{PasswordLoginError, PasswordLoginPhase, PasswordLoginSt
 mod retained;
 mod revalidation;
 mod sync;
+mod teams;
 mod transport;
 pub(crate) mod trust;
 
@@ -29,6 +30,9 @@ pub use registration::{
 pub(crate) use sync::load_retained_bootstrap;
 pub use sync::{
     PersonalInventoryIntent, PersonalInventoryProgress, PersonalSyncBootstrap, PersonalSyncError,
+};
+pub use teams::{
+    TeamCreationPhase, TeamCreationView, TeamError, TeamFailure, TeamPageView, TeamSummary,
 };
 
 use std::sync::Arc;

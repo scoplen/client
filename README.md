@@ -285,6 +285,18 @@ preserves the original database bytes. The admitted profile binds its canonical 
 Personal vault, device, and keys immutably to this encrypted store. Existing local SSH data stays local.
 Team context switching remains incomplete.
 
+The Rust-owned Teams API creates a team and discovers this Account's current memberships
+through the selected deployment. It validates complete shared Resources and pages, including
+their Account binding, continuation and HTTP metadata. Role identifiers are display values;
+the server checks current membership for each request. Creation retains one original request
+and operation id in SQLCipher before dispatch. An uncertain result survives restart and permits
+only an explicit retry of that request within its original 24-hour window. After expiry, refresh
+discovery before explicitly clearing the reminder and deciding whether another creation is needed.
+Creating a team preserves the Account's Personal vault, Device keys and existing Personal sync.
+These commands do not switch inventory, invite members or grant access to shared assets.
+Older saved sessions need fresh Device authentication to obtain the team scopes; refresh never
+expands an existing family's permission ceiling.
+
 When a historical profile retains its original device keys, ARK and both private Account roots,
 Revalidate this device explicitly proves its current server authority through ordinary device
 authentication and verifies the complete K-4 bootstrap. Credentials stay transient until the

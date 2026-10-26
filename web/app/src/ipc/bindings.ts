@@ -273,6 +273,27 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	connectPersonalSync: () => typedError<PersonalSyncKeyStatus, PersonalSyncCommandError>(__TAURI_INVOKE("connect_personal_sync")),
 	/**  Read the native background owner's state without activating network activity. */
 	personalSyncBackgroundStatus: () => __TAURI_INVOKE<PersonalBackgroundStatus>("personal_sync_background_status"),
+	/**  Read one current membership page only after the user requests it. */
+	teamsPage: (cursor: string | null) => typedError<TeamPageView, TeamError>(__TAURI_INVOKE("teams_page", { cursor })),
+	/**  Read local pending state without contacting the server. */
+	pendingTeamCreation: () => typedError<{
+	/**  Public local operation identity; it cannot authorize a server request. */
+	operationId: string,
+	/**  The original team name, retained without normalization. */
+	name: string,
+	/**  The next allowed explicit action. */
+	phase: TeamCreationPhase,
+	/**  The historical confirmed projection, not current membership authority. */
+	organization: TeamSummary | null,
+	/**  Original retry deadline in Unix milliseconds, without JavaScript precision loss. */
+	retryUntil: string | null,
+} | null, TeamError>(__TAURI_INVOKE("pending_team_creation")),
+	/**  Persist a new canonical creation; no network operation occurs here. */
+	prepareTeamCreation: (name: string) => typedError<TeamCreationView, TeamError>(__TAURI_INVOKE("prepare_team_creation", { name })),
+	/**  Dispatch or explicitly retry only this Account's retained original creation. */
+	submitTeamCreation: (operationId: string) => typedError<TeamCreationView, TeamError>(__TAURI_INVOKE("submit_team_creation", { operationId })),
+	/**  Clear only a prepared, confirmed or explicitly reviewed expired operation. */
+	discardTeamCreation: (operationId: string) => typedError<null, TeamError>(__TAURI_INVOKE("discard_team_creation", { operationId })),
 	/**  Read public inventory metadata and durable sync progress without network access. */
 	personalInventoryStatus: () => typedError<PersonalInventoryStatus, PersonalInventoryError>(__TAURI_INVOKE("personal_inventory_status")),
 	/**  Preview exact ids and missing references; keys and object content remain in Rust. */
@@ -2164,6 +2185,77 @@ export type StoreChanged = {
 	recordType: RecordType,
 	/**  Their identifiers, as lowercase hyphenated UUIDs. */
 	ids: string[],
+};
+
+/**  Local state of the one retained team-creation operation. */
+export type TeamCreationPhase =
+/**  No request was sent, or the first-party server confirmed no creation. */
+"prepared" |
+/**  A dispatched creation needs its original key and payload for explicit retry. */
+"unknown" |
+/**  A verified 201 response confirmed the original operation's outcome. */
+"confirmed" |
+/**  The original retry window ended; review discovery before deciding on another creation. */
+"expired";
+
+/**  Safe local recovery state; no access token, proof or canonical request crosses IPC. */
+export type TeamCreationView = {
+	/**  Public local operation identity; it cannot authorize a server request. */
+	operationId: string,
+	/**  The original team name, retained without normalization. */
+	name: string,
+	/**  The next allowed explicit action. */
+	phase: TeamCreationPhase,
+	/**  The historical confirmed projection, not current membership authority. */
+	organization: TeamSummary | null,
+	/**  Original retry deadline in Unix milliseconds, without JavaScript precision loss. */
+	retryUntil: string | null,
+};
+
+/**  Safe flattened IPC errors, without arbitrary server text or diagnostics. */
+export type TeamError =
+/**  Existing authenticated Account or local-store failure. */
+PersonalServerError |
+/**  A failure specific to discovery or creation recovery. */
+TeamFailure;
+
+/**  Content-free team failures supplement the existing Account/session failures. */
+export type TeamFailure =
+/**  Name is outside the exact shared request profile. */
+"invalidName" |
+/**  Resolve or explicitly clear the existing operation before preparing another. */
+"creationPending" |
+/**  No retained request exists in this Account store. */
+"operationMissing" |
+/**  The supplied operation or continuation does not match its canonical identity. */
+"operationMismatch" |
+/**  The same receipt cannot be retried outside its original lifetime. */
+"operationExpired" |
+/**  A missing or uncertain result retains the original idempotency key and payload. */
+"outcomeUnknown" |
+/**  The complete response, HTTP metadata or Account binding was invalid. */
+"invalidTeamResponse" |
+/**  The server refused the key/payload binding; never replace it silently. */
+"conflict" |
+/**  Confirmed rollback permits an explicit retry of the same operation. */
+"serviceUnavailable";
+
+/**  One explicit discovery request; the caller chooses whether to fetch another page. */
+export type TeamPageView = {
+	/**  Only the authenticated Account's current active memberships. */
+	teams: TeamSummary[],
+	/**  A verified ascending continuation, or None at the end. */
+	nextCursor: string | null,
+};
+
+/**  Current discovery metadata; role names are display values, never client authorization. */
+export type TeamSummary = {
+	/**  Organization identity within this Account's canonical deployment. */
+	id: string,
+	/**  Server-provided team name. */
+	name: string,
+	/**  This Account's current membership role identifiers, including unknown values. */
+	roles: string[],
 };
 
 /**  Rendered terminal state, rather than an unbounded SSH transport log. */

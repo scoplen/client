@@ -10,6 +10,7 @@ use scoplen_crypto::{DpopProof, SecretVec, validate_server_origin};
 use super::PersonalServerError;
 
 mod registration;
+mod teams;
 pub(super) use registration::RegistrationResponse;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
