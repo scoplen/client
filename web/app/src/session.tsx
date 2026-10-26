@@ -27,6 +27,7 @@ import { useTerminalColors, xtermTheme } from "./terminal-colors";
 import { SessionFiles, type EnqueueFeedback, type FileOperationOutcome } from "./session-files";
 import { dismissUploadAttention, initialUploadAttention, recordUploadAttention } from "./session-upload-attention";
 import { useSessionTransfers } from "./use-session-transfers";
+import { SessionSnippetsButton } from "./session-snippets";
 import {
   TrustDialog,
   PassphraseDialog,
@@ -694,7 +695,7 @@ export function SessionTerminal({
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center justify-end gap-1">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
           {verified.length ? (
             <Button variant="ghost" onClick={() => setDetailsOpen(true)}>
               {t("session.details.open")}
@@ -709,6 +710,15 @@ export function SessionTerminal({
             <Button variant="primary" disabled={transportPending || !restored || closingView} onClick={reconnect}>
               {t("session.reconnect")}
             </Button>
+          ) : null}
+          {active && !offline && !closingView && state === "connected" && transportId ? (
+            <SessionSnippetsButton
+              key={transportId}
+              sessionId={sessionId}
+              transportId={transportId}
+              target={label}
+              canSend={() => currentTransport.current === transportId && !connectionEnded.current && !closing.current}
+            />
           ) : null}
           {!offline &&
           !closingView &&

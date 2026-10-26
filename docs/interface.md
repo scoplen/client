@@ -439,6 +439,26 @@ enter React state, history, terminal output, saved objects or reconnect state. A
 password/key/agent factor continues into Interactive only through a typed partial-success
 rejection advertising that method; ordinary rejection never selects a fallback.
 
+## Current-terminal command snippets
+
+A connected terminal exposes **Snippets** in its header. The dialog lists saved snippets
+and supports adding, editing and deleting their name, single-line command template,
+Text/Integer/Choice variables, defaults, tags and folder. Rust owns validation and
+literal one-pass substitution through the generated `snippets*` commands. The editor
+does not automatically quote values for a shell. Existing Secret definitions have a
+redacted, read-only view and cannot be prepared or changed here.
+
+**Use snippet** opens the variable form. **Review command** displays the complete Rust
+preparation and the current terminal's target. **Send command** sends exactly that
+preview followed by one CR, through the existing Account-bound `sessionInput` and
+exact transport identity. The user must first leave the intended terminal at an empty
+shell prompt. The client does not clear a line or infer the foreground program.
+
+Switching tabs or Accounts, reconnecting or closing the transport unmounts the dialog
+and invalidates its preview. A successful local acknowledgement displays **Sent to
+terminal**; results remain in the terminal. A failed or uncertain send requires manual
+inspection before another explicit preparation. Input is never automatically retried.
+
 ## Connecting a contract
 
 1. Add the commands in `src-tauri` with `#[specta::specta]` and run `pnpm bindings`.

@@ -20,6 +20,7 @@ pub mod session_files;
 pub mod session_lifecycle;
 pub mod session_manager;
 pub mod session_transfers;
+pub mod snippets;
 pub mod store;
 pub mod terminal_output;
 
