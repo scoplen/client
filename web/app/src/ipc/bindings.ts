@@ -101,6 +101,16 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	sessionConnect: (profileId: string, command: string | null, pty: boolean, sessionId: string, messages: Channel<SessionEvent | ArrayBuffer>) => typedError<null, string>(__TAURI_INVOKE("session_connect", { profileId, command, pty, sessionId, messages })),
 	/**  Route one bounded input frame to the exact ready transport. */
 	sessionInput: (sessionId: string, transportId: string, data: number[]) => typedError<null, string>(__TAURI_INVOKE("session_input", { sessionId, transportId, data })),
+	/**  List retained safe definitions in the captured local store. */
+	snippetsList: () => typedError<SnippetView[], SnippetIssue>(__TAURI_INVOKE("snippets_list")),
+	/**  Save a validated nonsecret definition, without sending terminal input. */
+	snippetsCreate: (input: SnippetInput) => typedError<SnippetView, SnippetIssue>(__TAURI_INVOKE("snippets_create", { input })),
+	/**  Replace the editable fields of one existing nonsecret definition. */
+	snippetsUpdate: (id: string, input: SnippetInput) => typedError<SnippetView, SnippetIssue>(__TAURI_INVOKE("snippets_update", { id, input })),
+	/**  Delete an editable definition through its ordinary tombstone. */
+	snippetsDelete: (id: string) => typedError<null, SnippetIssue>(__TAURI_INVOKE("snippets_delete", { id })),
+	/**  Produce a bounded exact preview; this command performs no SSH input. */
+	snippetsPrepare: (id: string, values: { [key in string]: string }) => typedError<PreparedSnippet, SnippetIssue>(__TAURI_INVOKE("snippets_prepare", { id, values })),
 	/**  Resize the exact ready transport's pseudo-terminal. */
 	sessionResize: (sessionId: string, transportId: string, columns: number, rows: number) => typedError<null, string>(__TAURI_INVOKE("session_resize", { sessionId, transportId, columns, rows })),
 	/**  Browse files on the terminal's authenticated SSH connection. */
@@ -1576,6 +1586,14 @@ export type PreparationPhase =
 /**  Authentication after host trust. */
 "authenticating";
 
+/**  An exact nonsecret preview; the Send action adds one CR. */
+export type PreparedSnippet = {
+	/**  The definition used for this preparation. */
+	snippetId: string,
+	/**  Complete literal command, without a terminating CR. */
+	command: string,
+};
+
 /**  Published only after a replacement namespace becomes current. */
 export type ProfileChanged = {
 	/**  Fresh selection state. */
@@ -2156,6 +2174,132 @@ key: string } |
 { kind: "generateKey" } |
 /**  Resolve a key from the system agent. */
 { kind: "agent" };
+
+/**  A complete editable Snippet description; storage retains unknown fields. */
+export type SnippetInput = {
+	/**  User-visible name. */
+	name: string,
+	/**  Single-line command and exact placeholders. */
+	template: string,
+	/**  Distinct named variable definitions. */
+	variables: SnippetVariableInput[],
+	/**  Search labels. */
+	tags: string[],
+	/**  Optional folder label. */
+	folder: string | null,
+};
+
+/**  Fixed failures carry variable names but never their submitted values. */
+export type SnippetIssue =
+/**  The owning local data context is unavailable. */
+{ kind: "unavailable" } |
+/**  An identifier is not a canonical UUIDv7. */
+{ kind: "invalidId" } |
+/**  This live object does not exist in the current store. */
+{ kind: "notFound" } |
+/**  Retained unsupported contents cannot be changed by this editor. */
+{ kind: "readOnly" } |
+/**  Ordinary terminal input cannot provide Secret history exclusion. */
+{ kind: "secretUnsupported" } |
+/**  The display name is blank or too long. */
+{ kind: "invalidName" } |
+/**  A template is blank, too long or contains terminal controls. */
+{ kind: "invalidTemplate" } |
+/**  Placeholder names use the documented ASCII identifier grammar. */
+{ kind: "invalidVariableName" } |
+/**  A submitted definition repeats a variable name. */
+{ kind: "duplicateVariable" } |
+/**  A saved object is outside the supported typed shape or model limits. */
+{ kind: "invalidDefinition" } |
+/**  A complete command and its final CR exceed the terminal input bound. */
+{ kind: "commandTooLarge" } |
+/**  Storage failed without exposing its data or internal error text. */
+{ kind: "storage" } |
+/**  A placeholder has no definition. */
+{ kind: "unknownPlaceholder";
+/**  The undeclared placeholder identifier. */
+name: string } |
+/**  A definition has no unescaped placeholder. */
+{ kind: "unusedVariable";
+/**  The unused definition's identifier. */
+name: string } |
+/**  A saved default does not match the definition. */
+{ kind: "invalidDefault";
+/**  The definition's identifier, never its default value. */
+name: string } |
+/**  Choices are missing, repeated or invalid for the variable kind. */
+{ kind: "invalidChoices";
+/**  The definition's identifier, never a choice value. */
+name: string } |
+/**  Neither an explicit input nor a default is available. */
+{ kind: "missingValue";
+/**  The missing input's identifier. */
+name: string } |
+/**  A submitted input does not name a saved variable. */
+{ kind: "unknownValue";
+/**  The unmatched input's identifier, never its submitted value. */
+name: string } |
+/**  A value violates its type or single-line input rule. */
+{ kind: "invalidValue";
+/**  The definition's identifier, never the rejected input. */
+name: string };
+
+/**  A definition submitted to the nonsecret editor. */
+export type SnippetVariableInput = {
+	/**  Exact placeholder name. */
+	name: string,
+	/**  Value validation rule. */
+	kind: SnippetVariableKind,
+	/**  Optional default, using the repository's string projection. */
+	default: string | null,
+	/**  Exact values for Choice; empty for other kinds. */
+	choices: string[],
+};
+
+/**  Variable kinds in the editor and retained read-only definitions. */
+export type SnippetVariableKind =
+/**  Literal text, including an explicit empty value. */
+"text" |
+/**  Canonical signed 64-bit decimal. */
+"integer" |
+/**  One exact member of a saved list. */
+"choice" |
+/**  Retained metadata only; this workflow cannot edit or execute secrets. */
+"secret";
+
+/**  A safe definition, excluding any retained Secret default or choices. */
+export type SnippetVariableView = {
+	/**  Exact placeholder name. */
+	name: string,
+	/**  Value validation rule. */
+	kind: SnippetVariableKind,
+	/**  Nonsecret default; always absent for Secret. */
+	default: string | null,
+	/**  Nonsecret Choice members; always empty for Secret. */
+	choices: string[],
+	/**  Distinguishes a redacted default from an absent default. */
+	hasDefault: boolean,
+};
+
+/**  Display-safe contents of one retained Snippet. */
+export type SnippetView = {
+	/**  Canonical object identifier. */
+	id: string,
+	/**  User-visible name. */
+	name: string,
+	/**  Command template, never expanded with a Secret. */
+	template: string,
+	/**  Safe variable definitions. */
+	variables: SnippetVariableView[],
+	/**  Search labels. */
+	tags: string[],
+	/**  Optional folder label. */
+	folder: string | null,
+	/**  This editor cannot alter retained Secret or unreadable definitions. */
+	readOnly: boolean,
+	/**  Why this definition is unavailable for preparation. */
+	issue: SnippetIssue | null,
+};
 
 /**  Whether the local data can be used, and if not, what is needed. */
 export type Status =

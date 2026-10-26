@@ -617,13 +617,26 @@ pub enum VariableKind {
 }
 
 /// A snippet variable.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Variable {
     pub kind: VariableKind,
     /// The default value, as text.
     pub default: Option<String>,
     /// The choices of a choice variable.
     pub choices: Vec<String>,
+}
+
+impl std::fmt::Debug for Variable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut view = f.debug_struct("Variable");
+        view.field("kind", &self.kind);
+        if self.kind == VariableKind::Secret {
+            view.field("has_default", &self.default.is_some());
+        } else {
+            view.field("default", &self.default).field("choices", &self.choices);
+        }
+        view.finish()
+    }
 }
 
 /// A command template (`04` §4.8).

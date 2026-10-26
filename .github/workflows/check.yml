@@ -92,6 +92,9 @@ jobs:
       - name: Rust terminal reconnect, normal exit, cancellation, current credentials, and exhaustion
         shell: pwsh
         run: ./scripts/test-ssh-session-reconnect.ps1
+      - name: Saved typed snippet preparation and current-terminal OpenSSH input
+        shell: pwsh
+        run: ./scripts/test-ssh-snippet.ps1
       - name: Terminal-owned SFTP browse, transfer, remote changes, refusal, and cancellation
         shell: pwsh
         run: ./scripts/test-ssh-session-files.ps1

@@ -91,6 +91,26 @@ Interactive SSH sessions become ready after authentication and shell setup,
 even when the server sends no initial output. Terminal input and PTY resizing
 are available without waiting for a welcome message or prompt.
 
+Use Snippets to save single-line commands with Text, Integer and Choice variables,
+tags and an optional folder. From a connected terminal, choose a saved snippet, fill its
+values and review the complete command and current target before Send command.
+The terminal must be at the intended empty shell prompt. Sending adds one Enter;
+Sent to terminal confirms local input acceptance, while the terminal shows the
+remote result. Switching accounts or tabs, disconnecting or reconnecting invalidates
+the preview. Input is never automatically replayed.
+
+Use exact `{{name}}` placeholders with ASCII letters, digits and underscores, starting
+with a letter or underscore. A repeated placeholder uses one value. `{{{{` and `}}}}`
+produce literal double braces; ordinary Docker actions such as `{{.State.Status}}`
+and `{{json .Config}}` remain literal. Variables are inserted once without automatic
+shell quoting: write the intended quoting in the template and inspect the expanded
+command. Integer values are canonical signed 64-bit decimal, without spaces, `+`,
+leading zeros or `-0`; Choice values must match a saved option exactly. Empty Text
+and explicit empty Choice values are supported. Commands and values cannot contain
+line breaks or terminal control characters; the command plus Enter fits 64 KiB.
+Retained Secret definitions are read-only and their defaults are hidden. Secret,
+multiline and multi-target execution remain incomplete.
+
 Tunnels manages saved Local TCP, Remote TCP and Dynamic SOCKS forwards independently of terminal
 tabs. Local and Dynamic use a numeric local IPv4 or IPv6 address and a nonzero local
 port. Local also needs a destination hostname or address and nonzero destination
@@ -452,6 +472,13 @@ and late replies, another terminal while one challenge waits, and Interactive
 Jump plus target authentication. Every successful connection must execute the
 exact expected command with exit status zero. The fixture cleans up its own
 containers and temporary keys.
+
+`scripts/test-ssh-snippet.ps1` uses PowerShell 7 and Docker to save and prepare a
+snippet in a real encrypted Store, fill all three supported variable kinds and send
+the exact preview plus Enter through the public session manager to disposable
+OpenSSH. It verifies the executed output marker once and rejects old transport input
+after the shell exits. Successful checks remove their owned fixture; failed checks
+stop their owned container and retain temporary evidence.
 
 `scripts/test-ssh-local-forward.ps1` checks saved standalone TCP tunnels against
 disposable OpenSSH listeners with session channels disabled. It exercises password,
