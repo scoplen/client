@@ -10,6 +10,9 @@ use std::time::Duration;
 
 use scoplen_client_core::connection::preparation::{PreparationEvent, PreparationResponse};
 use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
+use scoplen_client_core::session_editor::{
+    SessionEditorIssue, SessionEditorSnapshot, SessionEditorStartResult, SessionEditorState,
+};
 use scoplen_client_core::session_files::{
     RemoteFileKind, RemoteTextPreviewIssue, SessionDownloadStatus, SessionFileMutationStatus,
     SessionFileTransferPhase, SessionUploadStatus,
@@ -144,6 +147,7 @@ async fn exercise(
     assert_eq!(file.size_bytes.as_deref(), Some("262149"));
 
     exercise_preview(manager, &transport, local, output).await?;
+    exercise_editor(manager, &transport, local, output).await?;
 
     let destination = local.join("downloaded.bin");
     fs::write(&destination, b"original")?;
@@ -731,6 +735,160 @@ async fn exercise_preview(
     Ok(())
 }
 
+async fn exercise_editor(
+    manager: &SessionManager,
+    transport: &str,
+    local: &std::path::Path,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    manager.input("fixture-terminal", transport, b"printf 'original editor text\\n' > .scoplen-files-smoke/editor.txt; printf '%s%s\\n' SCOPLEN- EDITOR-READY\n".to_vec())?;
+    wait_for(output, b"SCOPLEN-EDITOR-READY").await?;
+    let copy = local.join("different-editor-name.txt");
+    let picked = copy.clone();
+    let expected = copy.clone();
+    let launches = Arc::new(AtomicUsize::new(0));
+    let observed = launches.clone();
+    let result = manager
+        .edit_file_with_picker(
+            "fixture-terminal",
+            transport,
+            b"./.scoplen-files-smoke/editor.txt".to_vec(),
+            move || async { Ok(Some(picked)) },
+            |_| async { panic!("new editor copy must not request replacement") },
+            move |path| {
+                assert_eq!(path, expected);
+                let observed = observed.clone();
+                async move {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            },
+        )
+        .await?;
+    let SessionEditorStartResult::Started { editor_id } = result else {
+        return Err("editor selection cancelled".into());
+    };
+    let saved =
+        wait_editor(manager, |snapshot| snapshot.state == SessionEditorState::Watching).await?;
+    assert_eq!(saved.remote_name, "./.scoplen-files-smoke/editor.txt");
+    assert_eq!(fs::read(&copy)?, b"original editor text\n");
+    assert_eq!(launches.load(Ordering::SeqCst), 1);
+    let replacement = local.join("editor-atomic-save.txt");
+    fs::write(&replacement, b"explicit edited text\n")?;
+    fs::rename(replacement, &copy)?;
+    wait_editor(manager, |snapshot| snapshot.state == SessionEditorState::ChangesDetected).await?;
+    assert_drop_bytes(
+        manager,
+        local,
+        transport,
+        b"./.scoplen-files-smoke",
+        "editor.txt",
+        b"original editor text\n",
+    )
+    .await?;
+    let declined = manager
+        .upload_editor("fixture-terminal", transport, &editor_id, |_| async { Ok(false) })
+        .await?;
+    assert_eq!(
+        wait_queue_item(manager, &queue_identity(&declined).1).await?.state,
+        SessionTransferState::Cancelled
+    );
+    wait_editor(manager, |snapshot| snapshot.state == SessionEditorState::ChangesDetected).await?;
+    assert_drop_bytes(
+        manager,
+        local,
+        transport,
+        b"./.scoplen-files-smoke",
+        "editor.txt",
+        b"original editor text\n",
+    )
+    .await?;
+    manager.input("fixture-terminal", transport, b"printf 'remote edit\\n' > .scoplen-files-smoke/editor.txt; printf '%s%s\\n' SCOPLEN- EDITOR-REMOTE-CHANGED\n".to_vec())?;
+    wait_for(output, b"SCOPLEN-EDITOR-REMOTE-CHANGED").await?;
+    let confirmations = Arc::new(AtomicUsize::new(0));
+    let confirmed = confirmations.clone();
+    let uploaded = manager
+        .upload_editor("fixture-terminal", transport, &editor_id, move |review| {
+            assert_eq!(review.name, "editor.txt");
+            async move {
+                confirmed.fetch_add(1, Ordering::SeqCst);
+                Ok(true)
+            }
+        })
+        .await?;
+    assert_eq!(
+        wait_queue_item(manager, &queue_identity(&uploaded).1).await?.state,
+        SessionTransferState::Saved
+    );
+    wait_editor(manager, |snapshot| snapshot.state == SessionEditorState::Uploaded).await?;
+    assert_eq!(confirmations.load(Ordering::SeqCst), 1);
+    assert_drop_bytes(
+        manager,
+        local,
+        transport,
+        b"./.scoplen-files-smoke",
+        "editor.txt",
+        b"explicit edited text\n",
+    )
+    .await?;
+    fs::write(&copy, [0])?;
+    assert_eq!(
+        manager
+            .upload_editor("fixture-terminal", transport, &editor_id, |_| async {
+                panic!("invalid text must not reach confirmation")
+            })
+            .await,
+        Err(SessionEditorIssue::NotText)
+    );
+    assert_eq!(fs::read(&copy)?, [0]);
+    manager.stop_editor("fixture-terminal", &editor_id)?;
+    assert!(copy.exists());
+    for (name, issue) in [
+        ("invalid.txt", SessionEditorIssue::NotText),
+        ("binary.bin", SessionEditorIssue::TooLarge),
+        ("preview-link", SessionEditorIssue::InvalidSelection),
+    ] {
+        let destination = local.join(format!("refused-editor-{name}.txt"));
+        fs::write(&destination, b"existing local copy")?;
+        let picked = destination.clone();
+        let result = manager
+            .edit_file_with_picker(
+                "fixture-terminal",
+                transport,
+                format!("./.scoplen-files-smoke/{name}").into_bytes(),
+                move || async { Ok(Some(picked)) },
+                |_| async { Ok(true) },
+                |_| async { panic!("refused editor download must never launch") },
+            )
+            .await?;
+        let SessionEditorStartResult::Started { editor_id } = result else { panic!() };
+        wait_editor(manager, |snapshot| snapshot.issue == Some(issue)).await?;
+        assert_eq!(fs::read(destination)?, b"existing local copy");
+        manager.stop_editor("fixture-terminal", &editor_id)?;
+    }
+    println!(
+        "local editor core: real OpenSSH text download, atomic local save detection, explicit original-target upload, refusal and retained copy passed; editor launch was injected"
+    );
+    Ok(())
+}
+
+async fn wait_editor(
+    manager: &SessionManager,
+    expected: impl Fn(&SessionEditorSnapshot) -> bool,
+) -> Result<SessionEditorSnapshot, Box<dyn std::error::Error>> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let snapshot =
+                manager.editor_snapshot("fixture-terminal")?.ok_or("editor registration ended")?;
+            if expected(&snapshot) {
+                return Ok::<_, Box<dyn std::error::Error>>(snapshot);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await?
+}
+
 async fn exercise_upload_resume(
     manager: &SessionManager,
     local: &std::path::Path,
@@ -993,7 +1151,14 @@ async fn exercise_queue(
     }
     let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
     assert_eq!(
-        snapshot.recent.iter().map(|row| row.item_id.as_str()).collect::<Vec<_>>(),
+        snapshot
+            .recent
+            .iter()
+            .rev()
+            .take(3)
+            .rev()
+            .map(|row| row.item_id.as_str())
+            .collect::<Vec<_>>(),
         [first_id.1.as_str(), second_id.1.as_str(), download_id.1.as_str(),]
     );
     assert_eq!(snapshot.outstanding, 0);

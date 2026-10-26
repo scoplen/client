@@ -289,7 +289,7 @@ impl SessionManager {
                         .await
                         .map_err(transfers::file_issue)?;
                     let target = source.target(&directory).map_err(transfers::file_issue)?;
-                    if !targets.insert(target) {
+                    if !targets.insert(target.clone()) {
                         return Err(SessionTransferIssue::InvalidSelection);
                     }
                     let callback = confirm.clone();
@@ -299,7 +299,9 @@ impl SessionManager {
                         SelectedTransfer::Upload {
                             source,
                             directory: directory.clone(),
+                            target,
                             confirm: Box::new(move |review| Box::pin(callback(review))),
+                            editor: None,
                         },
                     ));
                 }

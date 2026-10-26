@@ -19,12 +19,15 @@ pub(crate) enum SelectedTransfer {
     Upload {
         source: UploadSource,
         directory: Vec<u8>,
+        target: Vec<u8>,
         confirm: ReplaceConfirmation,
+        editor: Option<uuid::Uuid>,
     },
     Download {
         remote_path: Vec<u8>,
         destination: DownloadDestination,
         confirm: ReplaceConfirmation,
+        editor: Option<uuid::Uuid>,
     },
     ResumeDownload(Box<DownloadCheckpoint>),
     ResumeUpload(Box<UploadCheckpoint>),

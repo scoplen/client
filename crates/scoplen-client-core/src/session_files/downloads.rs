@@ -13,7 +13,7 @@ use super::*;
 const SEGMENT_BYTES: u64 = 1024 * 1024;
 
 pub(crate) enum DownloadInput {
-    New { remote_path: Vec<u8>, destination: DownloadDestination },
+    New { remote_path: Vec<u8>, destination: DownloadDestination, text_only: bool },
     Resume(Box<DownloadCheckpoint>),
 }
 
@@ -23,6 +23,7 @@ pub(crate) enum DownloadPreparation {
         handle: Vec<u8>,
         attributes: SftpAttributes,
         destination: DownloadDestination,
+        text_path: Option<Vec<u8>>,
     },
     Resume(Box<DownloadCheckpoint>),
 }
@@ -45,6 +46,7 @@ pub(crate) struct DownloadCheckpoint {
     digest: Sha256,
     offset: u64,
     total: u64,
+    text_path: Option<Vec<u8>>,
 }
 
 struct HashWriter<'a> {
@@ -188,7 +190,7 @@ pub(crate) async fn prepare_download(
 ) -> Result<DownloadPreparation, FileAccessError> {
     match input {
         DownloadInput::Resume(checkpoint) => Ok(DownloadPreparation::Resume(checkpoint)),
-        DownloadInput::New { remote_path, destination } => {
+        DownloadInput::New { remote_path, destination, text_only } => {
             validate_path(&remote_path)?;
             let mut session = tokio::time::timeout(
                 SFTP_STEP_TIMEOUT,
@@ -196,7 +198,19 @@ pub(crate) async fn prepare_download(
             )
             .await
             .map_err(|_| FileAccessError::Timeout)??;
-            let request = session.client_mut().open(remote_path, 1, SftpAttributes::default())?;
+            let before = if text_only {
+                let request = session.client_mut().lstat(remote_path.clone())?;
+                let attrs = match response(&mut session, request).await? {
+                    SftpPacket::Attrs { attrs, .. } => attrs,
+                    _ => return Err(FileAccessError::UnexpectedResponse),
+                };
+                preview::admitted_size(&attrs)?;
+                Some(attrs)
+            } else {
+                None
+            };
+            let request =
+                session.client_mut().open(remote_path.clone(), 1, SftpAttributes::default())?;
             let handle = match response(&mut session, request).await? {
                 SftpPacket::Handle { handle, .. } => handle,
                 _ => return Err(FileAccessError::UnexpectedResponse),
@@ -210,11 +224,16 @@ pub(crate) async fn prepare_download(
                 return Err(FileAccessError::NotRegularFile);
             }
             attributes.size.ok_or(FileAccessError::MissingFileSize)?;
+            if let Some(before) = before {
+                preview::admitted_size(&attributes)?;
+                preview::unchanged(&before, &attributes)?;
+            }
             Ok(DownloadPreparation::New {
                 session: Box::new(session),
                 handle,
                 attributes,
                 destination,
+                text_path: text_only.then_some(remote_path),
             })
         }
     }
@@ -243,7 +262,7 @@ where
 {
     let (mut checkpoint, resuming) = match prepared {
         DownloadPreparation::Resume(checkpoint) => (*checkpoint, true),
-        DownloadPreparation::New { session, handle, attributes, destination } => {
+        DownloadPreparation::New { session, handle, attributes, destination, text_path } => {
             // Local creation belongs to this task so transport teardown cannot
             // release the queue slot before the creation guard settles cleanup.
             let temporary = match temporary_download_owned_with(destination.path(), create).await {
@@ -264,6 +283,7 @@ where
                     digest: Sha256::new(),
                     offset: 0,
                     total,
+                    text_path,
                 },
                 false,
             )
@@ -356,6 +376,26 @@ where
         }
         reporter.finalizing(checkpoint.offset, checkpoint.total);
         checkpoint.check_source().await?;
+        if let Some(path) = &checkpoint.text_path {
+            let request = checkpoint.session.client_mut().read(
+                checkpoint.handle.clone(),
+                checkpoint.total,
+                1,
+            )?;
+            match response(&mut checkpoint.session, request).await {
+                Err(FileAccessError::RemoteStatus(1)) => {}
+                _ => return Err(FileAccessError::FileChanged),
+            }
+            let request = checkpoint.session.client_mut().lstat(path.clone())?;
+            match response(&mut checkpoint.session, request).await? {
+                SftpPacket::Attrs { attrs, .. } => {
+                    preview::unchanged(&checkpoint.attributes, &attrs)?
+                }
+                _ => return Err(FileAccessError::UnexpectedResponse),
+            }
+            validate_editor_text(checkpoint.temporary.file.as_mut().expect("retained partial"))
+                .await?;
+        }
         close_handle(&mut checkpoint.session, checkpoint.handle.clone()).await?;
         checkpoint.temporary.file.as_mut().expect("retained partial").sync_all().await?;
         Ok::<_, FileAccessError>(false)

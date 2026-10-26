@@ -16,6 +16,7 @@ pub mod password_sign_in;
 pub mod personal_inventory;
 pub mod personal_server;
 pub mod profile_context;
+pub mod session_editor;
 pub mod session_transfers;
 mod smoke;
 pub mod snippets;
@@ -79,6 +80,11 @@ pub fn ipc() -> Builder<tauri::Wry> {
             ssh::session_resize,
             ssh::session_list_files,
             ssh::session_preview_file,
+            session_editor::session_edit_file,
+            session_editor::session_editor_snapshot,
+            session_editor::session_editor_open,
+            session_editor::session_editor_upload,
+            session_editor::session_editor_stop,
             session_transfers::session_transfer_queue,
             session_transfers::session_enqueue_upload,
             session_transfers::session_enqueue_download,

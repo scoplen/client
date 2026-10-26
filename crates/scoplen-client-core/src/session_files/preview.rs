@@ -4,7 +4,7 @@
 
 use super::*;
 
-const MAX_PREVIEW_BYTES: usize = 256 * 1024;
+pub(super) const MAX_PREVIEW_BYTES: usize = 256 * 1024;
 
 /// Transient complete text, never included in session status or diagnostics.
 #[derive(Serialize, Type)]
@@ -69,7 +69,7 @@ impl From<FileAccessError> for RemoteTextPreviewIssue {
     }
 }
 
-fn admitted_size(attributes: &SftpAttributes) -> Result<usize, FileAccessError> {
+pub(super) fn admitted_size(attributes: &SftpAttributes) -> Result<usize, FileAccessError> {
     if kind(attributes) != RemoteFileKind::File {
         return Err(FileAccessError::NotRegularFile);
     }
@@ -80,7 +80,10 @@ fn admitted_size(attributes: &SftpAttributes) -> Result<usize, FileAccessError> 
     Ok(size as usize)
 }
 
-fn unchanged(before: &SftpAttributes, after: &SftpAttributes) -> Result<(), FileAccessError> {
+pub(super) fn unchanged(
+    before: &SftpAttributes,
+    after: &SftpAttributes,
+) -> Result<(), FileAccessError> {
     if kind(after) != RemoteFileKind::File
         || before.size != after.size
         || before.modify_time != after.modify_time
@@ -90,7 +93,7 @@ fn unchanged(before: &SftpAttributes, after: &SftpAttributes) -> Result<(), File
     Ok(())
 }
 
-fn text(bytes: Vec<u8>) -> Result<RemoteTextPreview, FileAccessError> {
+pub(super) fn text(bytes: Vec<u8>) -> Result<RemoteTextPreview, FileAccessError> {
     let size_bytes = u32::try_from(bytes.len()).map_err(|_| FileAccessError::PreviewTooLarge)?;
     if bytes.len() > MAX_PREVIEW_BYTES {
         return Err(FileAccessError::PreviewTooLarge);

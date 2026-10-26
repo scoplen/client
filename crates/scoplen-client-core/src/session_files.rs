@@ -503,11 +503,19 @@ pub(crate) fn validate_path(path: &[u8]) -> Result<&[u8], FileAccessError> {
     Ok(path)
 }
 
-fn display_name(name: &[u8]) -> String {
+pub(crate) fn display_name(name: &[u8]) -> String {
+    display_bytes(name, MAX_DISPLAY_CHARS)
+}
+
+pub(crate) fn display_remote_path(path: &[u8]) -> String {
+    display_bytes(path, MAX_REMOTE_PATH)
+}
+
+fn display_bytes(name: &[u8], limit: usize) -> String {
     let text = String::from_utf8_lossy(name);
     let mut chars = text.chars();
     let mut shown = String::new();
-    for character in chars.by_ref().take(MAX_DISPLAY_CHARS) {
+    for character in chars.by_ref().take(limit) {
         shown.push(
             if character.is_control()
                 || matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
@@ -637,6 +645,29 @@ pub(crate) async fn open_upload_source(path: &Path) -> Result<UploadSource, File
         return Err(FileAccessError::InvalidSource);
     }
     open_upload_source_after_preflight(path, name).await
+}
+
+/// Admit the current editor save while retaining ordinary upload handle semantics.
+pub(crate) async fn open_editor_upload_source(
+    path: &Path,
+) -> Result<UploadSource, FileAccessError> {
+    let mut source = open_upload_source(path).await?;
+    validate_editor_text(&mut source.file).await?;
+    source.check_current().await?;
+    Ok(source)
+}
+
+async fn validate_editor_text(file: &mut File) -> Result<(), FileAccessError> {
+    use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
+    if file.metadata().await?.len() > preview::MAX_PREVIEW_BYTES as u64 {
+        return Err(FileAccessError::PreviewTooLarge);
+    }
+    file.seek(std::io::SeekFrom::Start(0)).await?;
+    let mut bytes = Vec::new();
+    (&mut *file).take(preview::MAX_PREVIEW_BYTES as u64 + 1).read_to_end(&mut bytes).await?;
+    preview::text(bytes)?;
+    file.seek(std::io::SeekFrom::Start(0)).await?;
+    Ok(())
 }
 
 async fn open_upload_source_after_preflight(
@@ -1848,6 +1879,21 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Err(FileAccessError::Timeout)));
+    }
+
+    #[tokio::test]
+    async fn editor_upload_admission_accepts_complete_bounded_text_and_rewinds_the_handle() {
+        use tokio::io::AsyncReadExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("working-copy.txt");
+        for bytes in [Vec::new(), vec![b'x'; 262_144]] {
+            tokio::fs::write(&path, &bytes).await.unwrap();
+            let mut source = open_editor_upload_source(&path).await.unwrap();
+            let mut reread = Vec::new();
+            source.file.read_to_end(&mut reread).await.unwrap();
+            assert_eq!(reread, bytes);
+        }
     }
 
     #[cfg(unix)]

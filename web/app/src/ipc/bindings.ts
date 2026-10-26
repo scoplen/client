@@ -125,6 +125,35 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	sessionListFiles: (sessionId: string, transportId: string, operationId: string, path: number[]) => typedError<RemoteDirectory, string>(__TAURI_INVOKE("session_list_files", { sessionId, transportId, operationId, path })),
 	/**  Preview complete bounded text without saving or executing it. */
 	sessionPreviewFile: (sessionId: string, transportId: string, operationId: string, path: number[]) => typedError<RemoteTextPreview, RemoteTextPreviewIssue>(__TAURI_INVOKE("session_preview_file", { sessionId, transportId, operationId, path })),
+	/**  Save a user-selected local text copy and open the fixed platform text editor. */
+	sessionEditFile: (sessionId: string, transportId: string, remotePath: number[], locale: Locale) => typedError<SessionEditorStartResult, SessionEditorIssue>(__TAURI_INVOKE("session_edit_file", { sessionId, transportId, remotePath, locale })),
+	/**  Read display-only state without starting a local or remote action. */
+	sessionEditorSnapshot: (sessionId: string) => typedError<{
+	/**  Logical terminal owning the working copy. */
+	sessionId: string,
+	/**  Opaque working-copy registration. */
+	editorId: string,
+	/**  The original authenticated transport, including after it ends. */
+	transportId: string,
+	/**  Safe display of the complete original remote path. */
+	remoteName: string,
+	/**  Bounded selected local basename, once selected. */
+	localName: string | null,
+	/**  Current workflow state. */
+	state: SessionEditorState,
+	/**  Fixed localized operational category. */
+	issue: SessionEditorIssue | null,
+	/**  The retained copy is saved and no transfer or launch is pending. */
+	canOpen: boolean,
+	/**  Progress and transfer actions remain on the existing queue row. */
+	transfer: SessionEditorTransfer | null,
+} | null, SessionEditorIssue>(__TAURI_INVOKE("session_editor_snapshot", { sessionId })),
+	/**  Explicitly open the saved copy again after a failed or completed launch. */
+	sessionEditorOpen: (sessionId: string, editorId: string) => typedError<null, SessionEditorIssue>(__TAURI_INVOKE("session_editor_open", { sessionId, editorId })),
+	/**  Queue the current local save for an explicitly confirmed remote replacement. */
+	sessionEditorUpload: (sessionId: string, transportId: string, editorId: string, locale: Locale) => typedError<SessionTransferEnqueueResult, SessionEditorIssue>(__TAURI_INVOKE("session_editor_upload", { sessionId, transportId, editorId, locale })),
+	/**  Stop observation and further uploads while preserving the selected local copy. */
+	sessionEditorStop: (sessionId: string, editorId: string) => typedError<null, SessionEditorIssue>(__TAURI_INVOKE("session_editor_stop", { sessionId, editorId })),
 	/**  Read a complete queue snapshot without changing any transfer's lifetime. */
 	sessionTransferQueue: (sessionId: string) => typedError<SessionTransferQueueSnapshot, SessionTransferIssue>(__TAURI_INVOKE("session_transfer_queue", { sessionId })),
 	/**  Select a local source, then leave its transfer owned by the logical session. */
@@ -1920,6 +1949,93 @@ export type SessionChanged = {
 	sessionId: string,
 	/**  The lifecycle transition. */
 	change: SessionChangeKind,
+};
+
+/**  Fixed operational categories without paths, contents or native errors. */
+export type SessionEditorIssue =
+/**  Stop the current editor registration before selecting another copy. */
+"alreadyEditing" |
+/**  The captured editor, session or transport is unavailable. */
+"unavailable" |
+/**  An ordinary local file or destination is required. */
+"invalidSelection" |
+/**  The complete file must satisfy the UTF-8 text policy. */
+"notText" |
+/**  The complete file exceeds 262,144 bytes. */
+"tooLarge" |
+/**  A local file operation failed. */
+"localIo" |
+/**  The saved copy remains available for another explicit launch. */
+"editorLaunchFailed" |
+/**  Transfer capacity or the native selection permit is occupied. */
+"queueFull" |
+/**  The transfer failed with a known result. */
+"transferFailed" |
+/**  The reviewed destination changed. */
+"targetChanged" |
+/**  Inspect the remote file and acknowledge the existing transfer reminder. */
+"publicationUnknown";
+
+/**  A bounded observation; native paths and file contents remain in Rust. */
+export type SessionEditorSnapshot = {
+	/**  Logical terminal owning the working copy. */
+	sessionId: string,
+	/**  Opaque working-copy registration. */
+	editorId: string,
+	/**  The original authenticated transport, including after it ends. */
+	transportId: string,
+	/**  Safe display of the complete original remote path. */
+	remoteName: string,
+	/**  Bounded selected local basename, once selected. */
+	localName: string | null,
+	/**  Current workflow state. */
+	state: SessionEditorState,
+	/**  Fixed localized operational category. */
+	issue: SessionEditorIssue | null,
+	/**  The retained copy is saved and no transfer or launch is pending. */
+	canOpen: boolean,
+	/**  Progress and transfer actions remain on the existing queue row. */
+	transfer: SessionEditorTransfer | null,
+};
+
+/**  Native selection either started one working copy or was cancelled. */
+export type SessionEditorStartResult =
+/**  Rust owns the pending download independently of Files visibility. */
+{ kind: "started";
+/**  Opaque working-copy registration. */
+editorId: string } |
+/**  The native save picker was closed without selecting a destination. */
+{ kind: "cancelled" };
+
+/**  One stage of the explicit local-editor workflow. */
+export type SessionEditorState =
+/**  Selecting or safely downloading the local copy. */
+"preparing" |
+/**  An explicit text-editor launch is pending. */
+"opening" |
+/**  The saved local copy has no detected changes. */
+"watching" |
+/**  Local changes need an explicit upload. */
+"changesDetected" |
+/**  An explicit upload is waiting in the existing queue. */
+"queued" |
+/**  An explicit upload is executing or awaiting confirmation. */
+"uploading" |
+/**  The latest upload was acknowledged. */
+"uploaded" |
+/**  The copy or its original transport cannot currently be used. */
+"unavailable" |
+/**  Publication needs manual inspection and queue acknowledgement. */
+"unknown";
+
+/**  The existing queue row associated with this copy's latest transfer. */
+export type SessionEditorTransfer = {
+	/**  Owning queue lifetime. */
+	queueId: string,
+	/**  Stable transfer identity. */
+	itemId: string,
+	/**  Exact execution identity. */
+	executionId: string,
 };
 
 /**  Why a device-local session event could not be applied. */
