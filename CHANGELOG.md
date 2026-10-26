@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Correct terminal character widths with Unicode 15 data, preserving ordinary
+  combining cells across input chunks, cursor reports, wrapping and restored output.
+  The generated tables add no runtime dependency; grapheme-cluster width changes
+  and native platform rendering acceptance remain separate work.
+
 - Added saved single-line Snippets with Rust-owned Text, signed Integer and exact
   Choice validation, literal one-pass preparation and generated profile-bound commands.
   Preview and send use the current terminal's existing transport fence; local send

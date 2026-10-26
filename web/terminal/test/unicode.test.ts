@@ -74,6 +74,15 @@ describe("Unicode 15 widths", () => {
     expect(errors).toEqual([]);
   });
 
+  it("preserves xterm's leading combining-cell behavior without a base", async () => {
+    const { element, replies, errors } = await terminal();
+    element.source = { subscribe: (emit) => emit(new TextEncoder().encode("\u0301X\x1b[6n")) };
+    expect((await element.serialize()).data).toContain("X");
+    // xterm allocates a cell when a leading mark has no occupied base to join.
+    await vi.waitFor(() => expect(replies).toEqual(["\x1b[1;3R"]));
+    expect(errors).toEqual([]);
+  });
+
   it("keeps UTF-8 and combining cells intact across byte chunks", async () => {
     const { element, replies, errors } = await terminal();
     const bytes = new TextEncoder().encode("\u{1fae8}\u0301X\x1b[6n");
