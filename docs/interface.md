@@ -246,6 +246,17 @@ attempt. Concurrent server changes ask for an explicit retry with a fresh sessio
 
 ## Teams
 
+Settings > Personal account includes Teams. Opening it reads only local pending state.
+Refresh teams and Load more teams explicitly discover current memberships; each row shows
+the team name, the Account's roles and its id. Unknown roles are displayed literally. Create
+team prepares and submits one Rust-owned operation from a single explicit action. Failures
+preserve the name and show localized recovery guidance.
+
+An unconfirmed creation offers Retry original creation and keeps the new-creation form hidden.
+After expiry, Clear this preparation remains disabled until Refresh teams succeeds. Confirmed
+creation offers Done. The panel explains that invitations and shared inventory are not yet
+available. Keyboard controls, English and Simplified Chinese use the existing design system.
+
 The generation-bound native API keeps access tokens, DPoP proofs, canonical create bytes and
 the original idempotency key in Rust. `pending_team_creation` reads SQLCipher locally, while
 `teams_page` queries one current membership page only on an explicit intent. Rust validates the

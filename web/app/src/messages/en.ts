@@ -1172,6 +1172,42 @@ export const en = {
   "accounts.error.signInDenied": "Sign-in could not be verified. Check the server URL, username and account password.",
   "accounts.error.signInPolicy": "The server does not permit this sign-in. Contact its operator.",
   "accounts.error.deviceQuota": "This account cannot admit another device. Contact the server operator.",
+  "teams.title": "Teams",
+  "teams.body": "Create a team and view your memberships. Invitations and shared inventory are not available yet.",
+  "teams.loading": "Reading pending team setup…",
+  "teams.working": "Contacting your server…",
+  "teams.refresh": "Refresh teams",
+  "teams.more": "Load more teams",
+  "teams.list": "Your teams",
+  "teams.notQueried": "Refresh to see the teams you belong to on this server.",
+  "teams.empty": "You do not belong to any teams. Create one to become its owner.",
+  "teams.name": "Team name",
+  "teams.create": "Create team",
+  "teams.retry": "Retry original creation",
+  "teams.done": "Done",
+  "teams.clear": "Clear this preparation",
+  "teams.roles": "Your roles: {roles}",
+  "teams.role.owner": "Owner",
+  "teams.role.administrator": "Administrator",
+  "teams.role.securityAuditor": "Security auditor",
+  "teams.role.approver": "Approver",
+  "teams.role.member": "Member",
+  "teams.phase.prepared": "This team creation is ready to submit. No team has been confirmed.",
+  "teams.phase.unknown":
+    "The result is unconfirmed. Retry the original creation to check it before creating another team.",
+  "teams.phase.confirmed": "Team creation confirmed. Your personal hosts remain in your personal workspace.",
+  "teams.phase.expired":
+    "The confirmation window has ended. Refresh your teams before clearing this preparation and deciding whether another team is needed.",
+  "teams.error.name": "Shorten the team name and remove spaces at the beginning or end.",
+  "teams.error.permission":
+    "Authenticate this device again. If creation is still refused, ask the server administrator to enable team creation.",
+  "teams.error.authentication": "Authenticate this device to view or create teams.",
+  "teams.error.network":
+    "The server could not complete this request. Check your connection and review any pending creation before retrying.",
+  "teams.error.pending":
+    "Review the retained creation before starting another. Refresh your teams if its confirmation window has ended.",
+  "teams.error.generic":
+    "Team setup could not be verified or saved. Your existing account data was kept. Review the retained creation before retrying.",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };

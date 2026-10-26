@@ -29,6 +29,7 @@ const sample = {
   line: 5,
   directive: "Include",
   name: "prod-db-01",
+  roles: "Owner",
   query: "db",
   username: "deploy",
   label: "laptop",
