@@ -81,7 +81,7 @@ impl server::Handler for Handler {
     async fn auth_publickey(
         &mut self,
         user: &str,
-        _key: &ssh_key::PublicKey,
+        _key: server::VerifiedPublicKey<'_>,
     ) -> Result<server::Auth, Self::Error> {
         self.authentications.fetch_add(1, Ordering::SeqCst);
         self.factor_accepted =

@@ -18,16 +18,16 @@ repository = "https://github.com/scoplen/client"
 [workspace.dependencies]
 scoplen-client-core = { path = "crates/scoplen-client-core" }
 scoplen-client-platform = { path = "crates/scoplen-client-platform" }
-scoplen-ssh = { git = "https://github.com/scoplen/proto.git", rev = "e6be4fa7bb3e265444b3fd26ee14af42337f1889" }
-scoplen-api = { git = "https://github.com/scoplen/proto.git", rev = "e6be4fa7bb3e265444b3fd26ee14af42337f1889" }
+scoplen-ssh = { git = "https://github.com/scoplen/proto.git", rev = "2ac0767fbbba6f0a1588fdbbed6703455fafef1e" }
+scoplen-api = { git = "https://github.com/scoplen/proto.git", rev = "2ac0767fbbba6f0a1588fdbbed6703455fafef1e" }
 ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["ed25519", "encryption", "getrandom", "p256", "p384", "p521", "rsa", "std"] }
 base64 = "0.22.1"
 rcgen = { version = "0.14.7", default-features = false, features = ["ring", "crypto"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "http2"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl"] }
-scoplen-crypto = { git = "https://github.com/scoplen/proto.git", rev = "e6be4fa7bb3e265444b3fd26ee14af42337f1889" }
-scoplen-model = { git = "https://github.com/scoplen/proto.git", rev = "e6be4fa7bb3e265444b3fd26ee14af42337f1889" }
+scoplen-crypto = { git = "https://github.com/scoplen/proto.git", rev = "2ac0767fbbba6f0a1588fdbbed6703455fafef1e" }
+scoplen-model = { git = "https://github.com/scoplen/proto.git", rev = "2ac0767fbbba6f0a1588fdbbed6703455fafef1e" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10.9"
@@ -54,4 +54,4 @@ missing_docs = "warn"
 all = { level = "warn", priority = -1 }
 
 [patch.crates-io]
-pageant = { git = "https://github.com/scoplen/proto.git", rev = "e6be4fa7bb3e265444b3fd26ee14af42337f1889" }
+pageant = { git = "https://github.com/scoplen/proto.git", rev = "2ac0767fbbba6f0a1588fdbbed6703455fafef1e" }

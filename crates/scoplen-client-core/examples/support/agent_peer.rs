@@ -25,13 +25,17 @@ impl server::Handler for Handler {
     async fn auth_publickey(
         &mut self,
         user: &str,
-        key: &PublicKey,
+        key: server::VerifiedPublicKey<'_>,
     ) -> Result<server::Auth, Self::Error> {
-        Ok(if user == "smoke" && key.to_bytes().is_ok_and(|key| key == self.expected_key) {
-            server::Auth::Accept
-        } else {
-            server::Auth::reject()
-        })
+        Ok(
+            if user == "smoke"
+                && key.public_key.to_bytes().is_ok_and(|key| key == self.expected_key)
+            {
+                server::Auth::Accept
+            } else {
+                server::Auth::reject()
+            },
+        )
     }
 
     async fn channel_open_session(
