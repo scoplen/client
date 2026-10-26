@@ -1295,6 +1295,40 @@ export const en = {
     "The template has changed. Review the definition of “{name}” before preparing it again.",
   "snippets.issue.invalidValue":
     "Check the value for “{name}” against its type and choices. Control characters are not allowed.",
+  "workspaces.title": "Workspaces",
+  "workspaces.close": "Close workspaces",
+  "workspaces.description":
+    "Save this device's terminal tabs and selected tab. Opening appends new SSH sessions; each uses its current Login and ordinary connection review.",
+  "workspaces.name": "Workspace name",
+  "workspaces.save": "Save current tabs",
+  "workspaces.saved": "Saved workspaces",
+  "workspaces.unavailable": "Unavailable workspaces",
+  "workspaces.unnamed": "Unnamed workspace",
+  "workspaces.tabs": "{count, plural, one {# terminal tab} other {# terminal tabs}}",
+  "workspaces.open": "Open workspace",
+  "workspaces.delete": "Delete workspace",
+  "workspaces.cancel": "Cancel",
+  "workspaces.deleteBody": "Delete “{name}”? Existing terminal sessions remain open.",
+  "workspaces.loading": "Loading workspaces…",
+  "workspaces.empty": "No saved workspaces. Open terminal tabs, then save their order here.",
+  "workspaces.refresh": "Refresh workspaces",
+  "workspaces.issue.unavailable": "Local data is unavailable. Reopen your account before trying again.",
+  "workspaces.issue.invalidId": "This workspace reference is invalid. Refresh the list.",
+  "workspaces.issue.notFound": "This workspace no longer exists. Refresh the list.",
+  "workspaces.issue.invalidName": "Enter a nonempty workspace name within the saved-object limits.",
+  "workspaces.issue.emptyTabs": "Open at least one terminal tab before saving a workspace.",
+  "workspaces.issue.savedOutputUnsupported":
+    "Close saved-output tabs before saving. Offline output cannot be restored as a new SSH connection.",
+  "workspaces.issue.invalidActive": "The selected tab is no longer in this workspace. Try saving again.",
+  "workspaces.issue.unsupportedLayout":
+    "This layout is unsupported. Its saved definition has been kept; use a compatible client to open it or explicitly delete it.",
+  "workspaces.issue.missingDependency":
+    "A saved Login or its inventory dependencies is unavailable. Repair the inventory before opening this workspace.",
+  "workspaces.issue.foreignDependency":
+    "This workspace references inventory outside the current Personal profile. Open it in its owning profile.",
+  "workspaces.issue.definitionTooLarge":
+    "The workspace exceeds the saved layout or object limits. Save fewer tabs or a shorter name.",
+  "workspaces.issue.storage": "The local operation could not be confirmed. Refresh the workspaces before retrying.",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };

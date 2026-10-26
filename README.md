@@ -111,6 +111,17 @@ line breaks or terminal control characters; the command plus Enter fits 64 KiB.
 Retained Secret definitions are read-only and their defaults are hidden. Secret,
 multiline and multi-target execution remain incomplete.
 
+Use Workspaces in the tab bar to save the current terminal-tab order and selection
+as a new device-local definition. Explicit Open appends fresh SSH sessions using
+their current saved Logins and normal host-key and authentication review. Existing
+tabs remain open. Saving includes failed or closed terminal tabs, but refuses any
+saved-output tab; it never converts offline output into a live connection. Loading
+or listing a Workspace never connects. Output, working directories, commands and
+remote processes are not restored. Unsupported layouts and missing inventory
+dependencies remain in Unavailable workspaces until repaired or explicitly deleted.
+Personal adoption is a separate explicit workflow. Full session layouts and native
+restart acceptance remain incomplete.
+
 Tunnels manages saved Local TCP, Remote TCP and Dynamic SOCKS forwards independently of terminal
 tabs. Local and Dynamic use a numeric local IPv4 or IPv6 address and a nonzero local
 port. Local also needs a destination hostname or address and nonzero destination

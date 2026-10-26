@@ -22,6 +22,7 @@ pub mod snippets;
 pub mod ssh;
 pub mod teams;
 mod window_state;
+pub mod workspaces;
 
 use tauri::Manager as _;
 use tauri_specta::{Builder, collect_commands, collect_events};
@@ -71,6 +72,10 @@ pub fn ipc() -> Builder<tauri::Wry> {
             snippets::snippets_update,
             snippets::snippets_delete,
             snippets::snippets_prepare,
+            workspaces::workspaces_list,
+            workspaces::workspaces_create,
+            workspaces::workspaces_open,
+            workspaces::workspaces_delete,
             ssh::session_resize,
             ssh::session_list_files,
             ssh::session_preview_file,

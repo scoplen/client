@@ -70,6 +70,7 @@ export function SessionTerminal({
   onOpenColors,
   savedOutput,
   registerClose,
+  sessionId: restoredSessionId,
 }: {
   profileId: string;
   label: string;
@@ -77,6 +78,8 @@ export function SessionTerminal({
   active?: boolean;
   onClose: (discardOutput?: boolean) => void;
   savedOutput?: TerminalSnapshot;
+  /** Fresh runtime identity supplied by an explicit saved-Workspace Open. */
+  sessionId?: string;
   registerClose?: (close: (discard?: boolean) => Promise<boolean>) => () => void;
   /** Told whenever the connection state changes, so the window can show it on the tab. */
   onStateChange?: (state: SessionState) => void;
@@ -120,7 +123,7 @@ export function SessionTerminal({
   const [source, setSource] = useState<TerminalSource | null>(null);
   const [hasOutput, setHasOutput] = useState(!!savedOutput);
   const [transportPending, setTransportPending] = useState(false);
-  const [sessionId] = useState(() => crypto.randomUUID());
+  const [sessionId] = useState(() => restoredSessionId ?? crypto.randomUUID());
   const [runRevision, setRunRevision] = useState(0);
   const transfers = useSessionTransfers(sessionId, active && !offline);
   const [transportId, setTransportId] = useState<string | null>(null);

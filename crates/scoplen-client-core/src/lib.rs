@@ -23,6 +23,7 @@ pub mod session_transfers;
 pub mod snippets;
 pub mod store;
 pub mod terminal_output;
+pub mod workspaces;
 
 #[cfg(test)]
 mod testing;
