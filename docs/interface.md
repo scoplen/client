@@ -257,12 +257,24 @@ After expiry, Clear this preparation remains disabled until Refresh teams succee
 creation offers Done. The panel explains that invitations and shared inventory are not yet
 available. Keyboard controls, English and Simplified Chinese use the existing design system.
 
+Each listed team offers Edit. It explicitly reads the current Resource before focusing the
+name field. Save team name uses that captured version once; successful verification replaces
+only the matching row. Close and successful Save return focus to the original Edit button.
+Conflict, uncertain result or unavailable membership keeps the entered name and requires
+Refresh team settings before another Save. Permission and missing-scope failures have fixed
+localized guidance. Role labels do not hide or authorize this action. Closing or replacing the
+Account view suppresses late results, while creation recovery remains independent.
+
 The generation-bound native API keeps access tokens, DPoP proofs, canonical create bytes and
 the original idempotency key in Rust. `pending_team_creation` reads SQLCipher locally, while
 `teams_page` queries one current membership page only on an explicit intent. Rust validates the
 complete Account-bound response before returning team ids, names and role identifiers for
 display. `prepare_team_creation` saves a valid exact name without dispatching; a subsequent
 `submit_team_creation` sends only that retained operation.
+`team_settings` returns a verified `TeamSettingsView` with the Account-bound team and exact
+Resource ETag. `update_team_name` validates the shared name and strong precondition in Rust,
+sends one PATCH with that ETag, and accepts only the complete matching 200 Resource. It never
+performs a hidden GET or replay. Missing write scope does not disable discovery or Personal use.
 
 Unknown creation keeps the original operation through restart. Explicit retry uses fresh DPoP
 and the same key/body within the original 24-hour window. A verified first unchanged response

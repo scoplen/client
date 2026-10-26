@@ -1173,7 +1173,26 @@ export const en = {
   "accounts.error.signInPolicy": "The server does not permit this sign-in. Contact its operator.",
   "accounts.error.deviceQuota": "This account cannot admit another device. Contact the server operator.",
   "teams.title": "Teams",
-  "teams.body": "Create a team and view your memberships. Invitations and shared inventory are not available yet.",
+  "teams.body":
+    "Create a team, view your memberships and edit team names. Invitations and shared inventory are not available yet.",
+  "teams.settings.title": "Team name settings",
+  "teams.settings.edit": "Edit {name}",
+  "teams.settings.name": "New team name",
+  "teams.settings.hint": "Review the name before saving. Your server checks your current permission.",
+  "teams.settings.save": "Save team name",
+  "teams.settings.refresh": "Refresh team settings",
+  "teams.settings.close": "Close name editor",
+  "teams.settings.saved": "Team name saved.",
+  "teams.settings.permission": "You do not have permission to change this team's name. Contact a team administrator.",
+  "teams.settings.conflict":
+    "This team changed after you opened the editor. Refresh its settings and review the name before saving again.",
+  "teams.settings.scope":
+    "This session cannot update team settings. Authenticate this device above; you can still view teams and use your Personal workspace.",
+  "teams.settings.unknown":
+    "The name may have changed. Refresh team settings and inspect the current name before making another edit. This update will not be retried automatically.",
+  "teams.settings.notFound": "This team is no longer available to your Account. Refresh your teams.",
+  "teams.settings.failed":
+    "Team settings could not be verified or saved. Your Personal data was kept. Check your connection and explicitly refresh the settings.",
   "teams.loading": "Reading pending team setup…",
   "teams.working": "Contacting your server…",
   "teams.refresh": "Refresh teams",

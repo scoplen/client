@@ -343,6 +343,12 @@ and operation id in SQLCipher before dispatch. An uncertain result survives rest
 only an explicit retry of that request within its original 24-hour window. After expiry, refresh
 discovery before explicitly clearing the reminder and deciding whether another creation is needed.
 Creating a team preserves the Account's Personal vault, Device keys and existing Personal sync.
+Edit reads that team's current name and exact version before offering Save team name. Saving
+sends one conditional update and replaces only the verified team's displayed metadata. A stale
+or uncertain result requires explicit Refresh team settings and review before another Save;
+the client never automatically retries the edit. Closing the editor or changing Account ignores
+late results. Name editing needs the session's organization write scope, while discovery and
+Personal use remain available without it.
 The panel does not switch inventory, invite members or grant access to shared assets.
 Older saved sessions need fresh Device authentication to obtain the team scopes; refresh never
 expands an existing family's permission ceiling.

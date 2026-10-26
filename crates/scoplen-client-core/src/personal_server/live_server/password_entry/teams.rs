@@ -41,6 +41,52 @@ pub(super) async fn verify_pair(
         second_manager.team(second_store.clone(), &first_team.id).await.unwrap(),
         first_team
     );
+    let captured = first_manager
+        .team_settings(first_store.clone(), &first_team.id)
+        .await
+        .expect("capture the current public Resource and ETag");
+    let stale = second_manager.team_settings(second_store.clone(), &first_team.id).await.unwrap();
+    assert_eq!(stale, captured);
+    let saved = first_manager
+        .update_team_name(
+            first_store.clone(),
+            &first_team.id,
+            &captured.etag,
+            "Renamed team".into(),
+        )
+        .await
+        .expect("one public HTTPS conditional name update");
+    assert_ne!(saved.etag, captured.etag);
+    assert_eq!(saved.team.id, first_team.id);
+    assert_eq!(saved.team.name, "Renamed team");
+    assert_eq!(
+        second_manager
+            .update_team_name(
+                second_store.clone(),
+                &first_team.id,
+                &stale.etag,
+                "Stale edit".into()
+            )
+            .await,
+        Err(crate::personal_server::TeamFailure::SettingsConflict.into())
+    );
+    assert_eq!(
+        first_manager
+            .update_team_name(
+                first_store.clone(),
+                &first_team.id,
+                &saved.etag,
+                saved.team.name.clone()
+            )
+            .await
+            .unwrap(),
+        saved
+    );
+    assert_eq!(
+        second_manager.team_settings(second_store.clone(), &first_team.id).await.unwrap(),
+        saved
+    );
+    let first_team = saved.team;
     first_manager
         .discard_team_creation(first_store, &prepared.operation_id)
         .expect("explicitly close the confirmed local operation");
@@ -199,6 +245,10 @@ pub(super) async fn verify_isolation(
         assert_eq!(denied.problem_type, absent.problem_type);
         assert_eq!(denied.title, absent.title);
         assert_eq!(denied.detail, absent.detail);
+        assert_eq!(
+            manager.update_team_name(store.clone(), foreign, "\"foreign\"", "Refused".into()).await,
+            Err(crate::personal_server::TeamFailure::TeamNotFound.into())
+        );
     }
 }
 

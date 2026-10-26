@@ -149,6 +149,23 @@ contract, generated IPC or production Rust change is required for this target se
 Public-session OpenSSH evidence and simulated frontend lifecycle tests remain separate
 from rendered/native feature acceptance.
 
+## Team name settings
+
+`personal_server::teams` resolves the selected team's current Account-bound Resource and
+returns only its display metadata and exact strong ETag through `TeamSettingsView`. The
+existing captured `ProfileRequest` and session checks bind reads and updates to the Account.
+An explicit Save validates the shared name codec and If-Match profile, signs the actual PATCH
+target and sends one request. Only a complete matching 200 Resource with valid HTTP metadata
+can replace that team's displayed metadata. Personal identity, inventory and sync are unchanged.
+
+The existing Teams view retains the captured edit transiently. Conflict or uncertain completion
+requires an explicit fresh read and review before another Save; no durable mutation job,
+automatic retry or silent ETag replacement is created. The editor's local revision suppresses
+late replies after Close, while the existing Account boundary remounts the view on generation
+changes. Roles remain display values and server authorization is authoritative. Missing write
+scope leaves discovery and Personal use available. Creation keeps its separate durable recovery.
+Rendered/native acceptance remains separate from frontend simulation and HTTPS verification.
+
 ## Local data
 
 `scoplen-client-core::store` is the SQLCipher store. It is opened with a raw 32-byte key, so SQLCipher runs no key derivation of its own; a wrong key fails on the first page. Migrations in `store/migrations.rs` run at startup in one transaction, and a store with a newer schema than the build knows is refused rather than modified. Replicated objects are kept as their deterministic CBOR envelopes with per-field clocks. A local write is stamped with the next device clock, applied to the stored object, merged with the stored version through `scoplen_model::merge`, validated, and committed; subscribers hear about it only after the commit. The store also enforces the 100,000-objects-per-vault limit (D-36). Objects created before sync enrollment have no vault.

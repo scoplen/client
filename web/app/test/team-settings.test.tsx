@@ -9,6 +9,8 @@ import { violations } from "../../ui/test/axe";
 const commands = vi.hoisted(() => ({
   pendingTeamCreation: vi.fn(),
   teamsPage: vi.fn(),
+  teamSettings: vi.fn(),
+  updateTeamName: vi.fn(),
   prepareTeamCreation: vi.fn(),
   submitTeamCreation: vi.fn(),
   discardTeamCreation: vi.fn(),
@@ -30,6 +32,11 @@ beforeEach(() => {
   vi.resetAllMocks();
   commands.pendingTeamCreation.mockResolvedValue({ status: "ok", data: null });
   commands.teamsPage.mockResolvedValue({ status: "ok", data: { teams: [team], nextCursor: null } });
+  commands.teamSettings.mockResolvedValue({ status: "ok", data: { team, etag: '"captured"' } });
+  commands.updateTeamName.mockResolvedValue({
+    status: "ok",
+    data: { team: { ...team, name: "Platform" }, etag: '"updated"' },
+  });
   commands.prepareTeamCreation.mockResolvedValue({ status: "ok", data: pending });
   commands.submitTeamCreation.mockResolvedValue({ status: "ok", data: confirmed });
   commands.discardTeamCreation.mockResolvedValue({ status: "ok", data: null });
@@ -248,4 +255,152 @@ it("redacts unexpected diagnostics and reloads the original pending operation", 
   expect(await screen.findByRole("alert")).toBeTruthy();
   expect(await screen.findByRole("button", { name: "Retry original creation" })).toBeTruthy();
   expect(container.textContent).not.toContain("private diagnostic");
+});
+
+async function openNameEditor() {
+  await ready();
+  await userEvent.click(screen.getByRole("button", { name: "Refresh teams" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Edit Operations" }));
+  return screen.findByRole("textbox", { name: "New team name" });
+}
+
+it("captures current settings on explicit Edit and saves only the selected team's exact ETag once", async () => {
+  const other = { ...team, id: "0199a653-8392-7355-8b91-70ab85182e3c", name: "Other team", roles: ["member"] };
+  commands.teamsPage.mockResolvedValue({ status: "ok", data: { teams: [team, other], nextCursor: null } });
+  const { container } = fixture();
+  expect(commands.teamSettings).not.toHaveBeenCalled();
+  const input = await openNameEditor();
+  expect(commands.teamSettings).toHaveBeenCalledExactlyOnceWith(team.id);
+  expect(commands.updateTeamName).not.toHaveBeenCalled();
+  await userEvent.clear(input);
+  await userEvent.type(input, "Platform");
+  const save = screen.getByRole("button", { name: "Save team name" });
+  await act(async () => {
+    save.click();
+    save.click();
+  });
+  await screen.findByText("Team name saved.");
+  expect(commands.updateTeamName).toHaveBeenCalledExactlyOnceWith(team.id, '"captured"', "Platform");
+  const list = screen.getByRole("list", { name: "Your teams" });
+  expect(within(list).getByText("Platform")).toBeTruthy();
+  expect(within(list).getByText("Other team")).toBeTruthy();
+  expect(commands.teamSettings).toHaveBeenCalledTimes(1);
+  expect(commands.prepareTeamCreation).not.toHaveBeenCalled();
+  expect(commands.pendingTeamCreation).toHaveBeenCalledTimes(1);
+  expect(await violations(container)).toEqual([]);
+});
+
+it.each(["settingsConflict", "settingsUnknown", "rejection"] as const)(
+  "requires explicit settings refresh and another reviewed Save after %s",
+  async (failure) => {
+    if (failure === "rejection") commands.updateTeamName.mockRejectedValueOnce(new Error("private network diagnostic"));
+    else commands.updateTeamName.mockResolvedValueOnce({ status: "error", error: failure });
+    fixture();
+    const input = await openNameEditor();
+    await userEvent.clear(input);
+    await userEvent.type(input, "First edit");
+    await userEvent.click(screen.getByRole("button", { name: "Save team name" }));
+    const error = await screen.findByRole("alert");
+    expect(error.textContent).toContain(failure === "settingsConflict" ? "team changed" : "name may have changed");
+    expect(document.body.textContent).not.toContain("private network diagnostic");
+    expect(screen.getByRole("button", { name: "Save team name" }).hasAttribute("disabled")).toBe(true);
+    expect(commands.updateTeamName).toHaveBeenCalledTimes(1);
+    expect(commands.teamSettings).toHaveBeenCalledTimes(1);
+    commands.teamSettings.mockResolvedValueOnce({
+      status: "ok",
+      data: { team: { ...team, name: "Current name" }, etag: '"refreshed"' },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Refresh team settings" }));
+    const refreshed = await screen.findByRole("textbox", { name: "New team name" });
+    expect((refreshed as HTMLInputElement).value).toBe("Current name");
+    expect(commands.updateTeamName).toHaveBeenCalledTimes(1);
+    await userEvent.clear(refreshed);
+    await userEvent.type(refreshed, "Platform");
+    await userEvent.click(screen.getByRole("button", { name: "Save team name" }));
+    await screen.findByText("Team name saved.");
+    expect(commands.updateTeamName.mock.calls).toEqual([
+      [team.id, '"captured"', "First edit"],
+      [team.id, '"refreshed"', "Platform"],
+    ]);
+  },
+);
+
+it.each(["permissionDenied", "updateScopeRequired", "teamNotFound", "invalidName"] as const)(
+  "shows fixed localized name-setting failure %s without retrying or touching creation recovery",
+  async (error) => {
+    commands.updateTeamName.mockResolvedValue({ status: "error", error });
+    commands.pendingTeamCreation.mockResolvedValue({ status: "ok", data: unknown });
+    fixture(true, "zh-Hans");
+    await waitFor(() => expect(screen.getByRole("button", { name: "刷新团队" }).hasAttribute("disabled")).toBe(false));
+    await userEvent.click(screen.getByRole("button", { name: "刷新团队" }));
+    await userEvent.click(await screen.findByRole("button", { name: "编辑 Operations" }));
+    const input = await screen.findByRole("textbox", { name: "新的团队名称" });
+    input.focus();
+    await userEvent.keyboard("{Control>}a{/Control}团队名称");
+    await userEvent.click(screen.getByRole("button", { name: "保存团队名称" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      error === "permissionDenied"
+        ? "无权修改"
+        : error === "updateScopeRequired"
+          ? "请在上方重新验证此设备"
+          : error === "teamNotFound"
+            ? "无法供您的账号访问"
+            : "缩短团队名称",
+    );
+    expect(commands.updateTeamName).toHaveBeenCalledTimes(1);
+    expect(commands.submitTeamCreation).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "重试原创建请求" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "刷新团队" }).hasAttribute("disabled")).toBe(false);
+  },
+);
+
+it.each(["read", "save"] as const)("ignores late %s results after the name editor closes", async (phase) => {
+  let finish!: (value: unknown) => void;
+  const operation = new Promise((resolve) => {
+    finish = resolve;
+  });
+  if (phase === "read") commands.teamSettings.mockReturnValueOnce(operation);
+  fixture();
+  await ready();
+  await userEvent.click(screen.getByRole("button", { name: "Refresh teams" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Edit Operations" }));
+  if (phase === "save") {
+    await screen.findByRole("textbox", { name: "New team name" });
+    commands.updateTeamName.mockReturnValueOnce(operation);
+    await userEvent.click(screen.getByRole("button", { name: "Save team name" }));
+  }
+  await userEvent.click(screen.getByRole("button", { name: "Close name editor" }));
+  await act(async () => finish({ status: "ok", data: { team: { ...team, name: "Late name" }, etag: '"late"' } }));
+  expect(screen.queryByRole("form", { name: "Team name settings" })).toBeNull();
+  expect(screen.queryByText("Team name saved.")).toBeNull();
+  expect(screen.queryByText("Late name")).toBeNull();
+  expect(within(screen.getByRole("list", { name: "Your teams" })).getByText("Operations")).toBeTruthy();
+});
+
+it("focuses the name field from a team's keyboard action and returns focus after close and save", async () => {
+  commands.teamsPage.mockResolvedValue({
+    status: "ok",
+    data: {
+      teams: [
+        team,
+        ...Array.from({ length: 8 }, (_, index) => ({ ...team, id: `other-${index}`, name: `Other team ${index}` })),
+      ],
+      nextCursor: null,
+    },
+  });
+  fixture();
+  await ready();
+  await userEvent.click(screen.getByRole("button", { name: "Refresh teams" }));
+  const opener = await screen.findByRole("button", { name: "Edit Operations" });
+  opener.focus();
+  await userEvent.keyboard("{Enter}");
+  const input = await screen.findByRole("textbox", { name: "New team name" });
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  await userEvent.click(screen.getByRole("button", { name: "Close name editor" }));
+  await waitFor(() => expect(document.activeElement).toBe(opener));
+  await userEvent.keyboard("{Enter}");
+  await screen.findByRole("textbox", { name: "New team name" });
+  await userEvent.click(screen.getByRole("button", { name: "Save team name" }));
+  await screen.findByText("Team name saved.");
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit Platform" })));
 });

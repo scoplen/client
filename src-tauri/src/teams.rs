@@ -6,6 +6,7 @@ use std::sync::Arc;
 use scoplen_client_core::{
     personal_server::{
         PersonalServer, PersonalServerError, TeamCreationView, TeamError, TeamPageView,
+        TeamSettingsView,
     },
     store::Store,
 };
@@ -26,6 +27,30 @@ pub async fn teams_page(
     cursor: Option<String>,
 ) -> Result<TeamPageView, TeamError> {
     personal.teams_page(store(&context)?, cursor.as_deref()).await
+}
+
+/// Capture one current team's metadata and exact precondition for an explicit edit.
+#[tauri::command]
+#[specta::specta]
+pub async fn team_settings(
+    context: ProfileRequest,
+    personal: tauri::State<'_, PersonalServer>,
+    organization_id: String,
+) -> Result<TeamSettingsView, TeamError> {
+    personal.team_settings(store(&context)?, &organization_id).await
+}
+
+/// Send one name update without changing or refreshing its captured precondition.
+#[tauri::command]
+#[specta::specta]
+pub async fn update_team_name(
+    context: ProfileRequest,
+    personal: tauri::State<'_, PersonalServer>,
+    organization_id: String,
+    etag: String,
+    name: String,
+) -> Result<TeamSettingsView, TeamError> {
+    personal.update_team_name(store(&context)?, &organization_id, &etag, name).await
 }
 
 /// Read local pending state without contacting the server.

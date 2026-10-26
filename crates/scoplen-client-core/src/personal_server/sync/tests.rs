@@ -307,6 +307,8 @@ async fn answer(
                     }
                 } else if state.inventory.is_none()
                     && !team_create
+                    && !(path.starts_with("/api/v1/orgs/")
+                        && request.method() == http::Method::PATCH)
                     && (request.method() != http::Method::GET || !body.is_empty())
                 {
                     return Err("wrong protected request".into());

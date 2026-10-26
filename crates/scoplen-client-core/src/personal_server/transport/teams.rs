@@ -18,7 +18,7 @@ impl Transport {
         proof: &DpopProof,
         limit: usize,
     ) -> Result<Response, PersonalServerError> {
-        self.team_exchange(origin, path, None, access, proof, None, limit).await
+        self.team_exchange(origin, path, Method::GET, None, access, proof, None, None, limit).await
     }
 
     pub(in crate::personal_server) async fn team_create(
@@ -32,10 +32,35 @@ impl Transport {
         self.team_exchange(
             origin,
             "/api/v1/orgs",
+            Method::POST,
             Some(body),
             access,
             proof,
             Some(operation_id),
+            None,
+            MAX_ORGANIZATION_RESOURCE_BYTES,
+        )
+        .await
+    }
+
+    pub(in crate::personal_server) async fn team_update(
+        &self,
+        origin: &str,
+        path: &str,
+        body: &[u8],
+        etag: &str,
+        access: &str,
+        proof: &DpopProof,
+    ) -> Result<Response, PersonalServerError> {
+        self.team_exchange(
+            origin,
+            path,
+            Method::PATCH,
+            Some(body),
+            access,
+            proof,
+            None,
+            Some(etag),
             MAX_ORGANIZATION_RESOURCE_BYTES,
         )
         .await
@@ -46,10 +71,12 @@ impl Transport {
         &self,
         origin: &str,
         path: &str,
+        method: Method,
         body: Option<&[u8]>,
         access: &str,
         proof: &DpopProof,
         operation_id: Option<Uuid>,
+        etag: Option<&str>,
         limit: usize,
     ) -> Result<Response, PersonalServerError> {
         validate_server_origin(origin).map_err(|_| PersonalServerError::Identity)?;
@@ -62,10 +89,7 @@ impl Transport {
         dpop.set_sensitive(true);
         let mut request = self
             .sync_client
-            .request(
-                if body.is_some() { Method::POST } else { Method::GET },
-                format!("{origin}{path}"),
-            )
+            .request(method, format!("{origin}{path}"))
             .version(reqwest::Version::HTTP_2)
             .header(header::AUTHORIZATION, authorization)
             .header("DPoP", dpop)
@@ -76,6 +100,9 @@ impl Transport {
         }
         if let Some(operation_id) = operation_id {
             request = request.header("Idempotency-Key", operation_id.to_string());
+        }
+        if let Some(etag) = etag {
+            request = request.header(header::IF_MATCH, etag);
         }
         let response = request.send().await.map_err(|error| {
             if error.is_connect() && !error.is_timeout() {

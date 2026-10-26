@@ -293,6 +293,10 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	personalSyncBackgroundStatus: () => __TAURI_INVOKE<PersonalBackgroundStatus>("personal_sync_background_status"),
 	/**  Read one current membership page only after the user requests it. */
 	teamsPage: (cursor: string | null) => typedError<TeamPageView, TeamError>(__TAURI_INVOKE("teams_page", { cursor })),
+	/**  Capture one current team's metadata and exact precondition for an explicit edit. */
+	teamSettings: (organizationId: string) => typedError<TeamSettingsView, TeamError>(__TAURI_INVOKE("team_settings", { organizationId })),
+	/**  Send one name update without changing or refreshing its captured precondition. */
+	updateTeamName: (organizationId: string, etag: string, name: string) => typedError<TeamSettingsView, TeamError>(__TAURI_INVOKE("update_team_name", { organizationId, etag, name })),
 	/**  Read local pending state without contacting the server. */
 	pendingTeamCreation: () => typedError<{
 	/**  Public local operation identity; it cannot authorize a server request. */
@@ -2398,7 +2402,15 @@ export type TeamFailure =
 /**  The server refused the key/payload binding; never replace it silently. */
 "conflict" |
 /**  Confirmed rollback permits an explicit retry of the same operation. */
-"serviceUnavailable";
+"serviceUnavailable" |
+/**  The captured edit is stale and requires an explicit Resource refresh. */
+"settingsConflict" |
+/**  A dispatched update cannot be confirmed; never automatically replay it. */
+"settingsUnknown" |
+/**  This session's fixed scope ceiling does not permit Organization updates. */
+"updateScopeRequired" |
+/**  Missing and unavailable membership share one non-disclosing outcome. */
+"teamNotFound";
 
 /**  One explicit discovery request; the caller chooses whether to fetch another page. */
 export type TeamPageView = {
@@ -2406,6 +2418,14 @@ export type TeamPageView = {
 	teams: TeamSummary[],
 	/**  A verified ascending continuation, or None at the end. */
 	nextCursor: string | null,
+};
+
+/**  One verified current Resource captured for an explicit name edit. */
+export type TeamSettingsView = {
+	/**  Current caller-specific team metadata; roles grant no frontend authority. */
+	team: TeamSummary,
+	/**  Exact strong Resource precondition; Save must not replace it silently. */
+	etag: string,
 };
 
 /**  Current discovery metadata; role names are display values, never client authorization. */
