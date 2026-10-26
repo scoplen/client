@@ -18,6 +18,7 @@ pub mod personal_server;
 pub mod profile_context;
 pub mod session_transfers;
 mod smoke;
+pub mod snippets;
 pub mod ssh;
 pub mod teams;
 mod window_state;
@@ -65,6 +66,11 @@ pub fn ipc() -> Builder<tauri::Wry> {
             ssh::session_reserve_transport,
             ssh::session_connect,
             ssh::session_input,
+            snippets::snippets_list,
+            snippets::snippets_create,
+            snippets::snippets_update,
+            snippets::snippets_delete,
+            snippets::snippets_prepare,
             ssh::session_resize,
             ssh::session_list_files,
             ssh::session_preview_file,

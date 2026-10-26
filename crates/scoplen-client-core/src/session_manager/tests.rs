@@ -39,6 +39,45 @@ fn ready_file_manager()
 }
 
 #[tokio::test]
+async fn prepared_snippet_and_one_enter_use_only_the_captured_ready_transport() {
+    use crate::snippets::{SnippetInput, SnippetVariableInput, SnippetVariableKind, Snippets};
+    use std::collections::BTreeMap;
+
+    let (_dir, store) = store();
+    let snippets = Snippets::new(store);
+    let saved = snippets
+        .create(SnippetInput {
+            name: "Inspect".into(),
+            template: "printf '%s' '{{label}}'".into(),
+            variables: vec![SnippetVariableInput {
+                name: "label".into(),
+                kind: SnippetVariableKind::Text,
+                default: Some("ready".into()),
+                choices: Vec::new(),
+            }],
+            tags: Vec::new(),
+            folder: None,
+        })
+        .unwrap();
+    let preview = snippets.prepare(&saved.id, BTreeMap::new()).unwrap();
+    let (manager, transport, mut commands, _files) = ready_file_manager();
+    let exact_input = format!("{}\r", preview.command).into_bytes();
+    manager.input("terminal", &transport.to_string(), exact_input.clone()).unwrap();
+    let Some(TransportCommand::Input(received)) = commands.recv().await else {
+        panic!("prepared command must reach the captured input queue")
+    };
+    assert_eq!(received, b"printf '%s' 'ready'\r");
+    assert!(manager.input("terminal", &Uuid::now_v7().to_string(), exact_input.clone()).is_err());
+    let replacement = Uuid::now_v7();
+    manager.sessions.lock().unwrap().get_mut("terminal").unwrap().active.as_mut().unwrap().id =
+        replacement;
+    assert!(manager.input("terminal", &transport.to_string(), exact_input.clone()).is_err());
+    assert!(commands.try_recv().is_err());
+    manager.close_all().unwrap();
+    assert!(manager.input("terminal", &replacement.to_string(), exact_input).is_err());
+}
+
+#[tokio::test]
 async fn profile_switch_closes_live_and_reserved_sessions_without_reusing_their_transports() {
     let (manager, transport, _commands, _files) = ready_file_manager();
     manager.reserve("pending", true).unwrap();
