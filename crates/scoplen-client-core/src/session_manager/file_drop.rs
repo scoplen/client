@@ -8,7 +8,9 @@ use serde::Serialize;
 use specta::Type;
 
 use super::*;
-use crate::session_transfers::{SessionTransferIssue, SessionTransferReview, TRANSFER_CAPACITY};
+use crate::session_transfers::{
+    SessionTransferDirection, SessionTransferIssue, SessionTransferReview, TRANSFER_CAPACITY,
+};
 
 const DROP_TTL: Duration = Duration::from_secs(30);
 
@@ -330,7 +332,11 @@ impl SessionManager {
                     let entry = sessions
                         .get_mut(&session)
                         .ok_or(SessionTransferIssue::SessionUnavailable)?;
-                    entry.transfers.enqueue_upload_batch(reservation, selected)?;
+                    entry.transfers.enqueue_batch(
+                        reservation,
+                        SessionTransferDirection::Upload,
+                        selected,
+                    )?;
                     entry.transfer_notify.notify_one();
                     context.ticket = None;
                 }

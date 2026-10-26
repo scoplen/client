@@ -16,6 +16,7 @@ pub mod personal_inventory;
 pub mod personal_server;
 pub mod profiles;
 pub mod repository;
+pub mod session_directory_sync;
 pub mod session_editor;
 pub mod session_files;
 pub mod session_lifecycle;

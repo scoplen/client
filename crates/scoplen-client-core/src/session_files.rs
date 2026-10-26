@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 use crate::connection::{SshConnection, SshConnectionError};
 
+pub(crate) mod directory_sync;
 pub(crate) mod downloads;
 mod preview;
 pub(crate) mod uploads;
@@ -1131,6 +1132,14 @@ pub async fn list_directory(
     connection: &SshConnection,
     path: Vec<u8>,
 ) -> Result<RemoteDirectory, FileAccessError> {
+    list_directory_with_policy(connection, path, false).await
+}
+
+async fn list_directory_with_policy(
+    connection: &SshConnection,
+    path: Vec<u8>,
+    strict: bool,
+) -> Result<RemoteDirectory, FileAccessError> {
     validate_path(&path)?;
     let mut session = tokio::time::timeout(
         SFTP_STEP_TIMEOUT,
@@ -1154,7 +1163,14 @@ pub async fn list_directory(
                     return Err(FileAccessError::TooManyEntries);
                 }
                 for item in batch {
-                    if let Ok(child) = child_path(&path, &item.filename) {
+                    if item.filename == b"." || item.filename == b".." {
+                        continue;
+                    }
+                    let child = child_path(&path, &item.filename);
+                    if strict && child.is_err() {
+                        return Err(FileAccessError::InvalidPath);
+                    }
+                    if let Ok(child) = child {
                         let name = display_name(&item.filename);
                         metadata_bytes = metadata_bytes
                             .saturating_add(item.filename.len())

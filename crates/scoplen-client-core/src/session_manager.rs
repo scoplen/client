@@ -45,6 +45,7 @@ const FILE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(60);
 const STABLE_READY: Duration = Duration::from_secs(30);
 const RETRY_DELAYS: [u8; 5] = [1, 2, 4, 8, 16];
 
+mod directory_sync;
 mod editor;
 pub mod file_drop;
 mod transfers;
@@ -143,6 +144,26 @@ enum TransportCommand {
 }
 
 enum FileCommand {
+    CompareDirectory {
+        remote: Vec<u8>,
+        local: PathBuf,
+        direction: crate::session_transfers::SessionTransferDirection,
+        reply: oneshot::Sender<
+            Result<
+                session_files::directory_sync::ComparedDirectory,
+                crate::session_directory_sync::SessionDirectorySyncIssue,
+            >,
+        >,
+    },
+    ValidateDirectory {
+        plan: Box<session_files::directory_sync::ComparedDirectory>,
+        reply: oneshot::Sender<
+            Result<
+                Box<session_files::directory_sync::ComparedDirectory>,
+                crate::session_directory_sync::SessionDirectorySyncIssue,
+            >,
+        >,
+    },
     TransferUpload {
         input: UploadInput,
         control: watch::Receiver<TransferControl>,
@@ -280,6 +301,7 @@ struct SessionEntry {
     transfer_notify: Arc<Notify>,
     transfer_worker_running: bool,
     editor: Option<editor::EditorRecord>,
+    directory_sync: Option<directory_sync::DirectoryRecord>,
 }
 
 struct CheckpointOwner {
@@ -290,6 +312,9 @@ struct CheckpointOwner {
 }
 
 fn interrupt_transfers(entry: &mut SessionEntry, transport: Uuid) {
+    if entry.directory_sync.as_ref().is_some_and(|plan| plan.transport == transport) {
+        entry.directory_sync = None;
+    }
     if let Some(editor) = entry.editor.as_mut()
         && editor.transport == transport
     {
@@ -483,6 +508,7 @@ impl SessionManager {
                 transfer_notify: Arc::new(Notify::new()),
                 transfer_worker_running: false,
                 editor: None,
+                directory_sync: None,
             },
         );
         Ok(())
@@ -1065,6 +1091,9 @@ impl SessionManager {
         let file = active.file.as_mut().ok_or("file operation has ended")?;
         if file.id != operation {
             return Err("file operation has ended".into());
+        }
+        if entry.directory_sync.as_ref().is_some_and(|plan| plan.operation == operation) {
+            entry.directory_sync = None;
         }
         if file.transfer.is_some() {
             return Err("cancel this file through its transfer-queue action".into());
@@ -1852,6 +1881,25 @@ async fn serve_files(
                         );
                     }),
                 )));
+            }
+            FileCommand::CompareDirectory { remote, local, direction, mut reply } => {
+                tokio::select! { biased;
+                    _ = reply.closed() => {},
+                    result = session_files::directory_sync::compare(connection, remote, local, direction) => {
+                        let _ = reply.send(result);
+                    }
+                }
+            }
+            FileCommand::ValidateDirectory { plan, mut reply } => {
+                tokio::select! { biased;
+                    _ = reply.closed() => {},
+                    result = async {
+                        session_files::directory_sync::validate(connection, &plan).await?;
+                        Ok(plan)
+                    } => {
+                        let _ = reply.send(result);
+                    }
+                }
             }
             FileCommand::List { path, mut reply } => {
                 tokio::select! { biased;

@@ -10,6 +10,10 @@ use std::time::Duration;
 
 use scoplen_client_core::connection::preparation::{PreparationEvent, PreparationResponse};
 use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
+use scoplen_client_core::session_directory_sync::{
+    SessionDirectorySyncApplyResult, SessionDirectorySyncChange, SessionDirectorySyncIssue,
+    SessionDirectorySyncPlan, SessionDirectorySyncPrepareResult,
+};
 use scoplen_client_core::session_editor::{
     SessionEditorIssue, SessionEditorSnapshot, SessionEditorStartResult, SessionEditorState,
 };
@@ -148,6 +152,7 @@ async fn exercise(
 
     exercise_preview(manager, &transport, local, output).await?;
     exercise_editor(manager, &transport, local, output).await?;
+    exercise_directory_sync(manager, &transport, local, output).await?;
 
     let destination = local.join("downloaded.bin");
     fs::write(&destination, b"original")?;
@@ -887,6 +892,338 @@ async fn wait_editor(
         }
     })
     .await?
+}
+
+async fn directory_plan(
+    manager: &SessionManager,
+    transport: &str,
+    remote: &[u8],
+    local: &std::path::Path,
+    direction: SessionTransferDirection,
+) -> Result<SessionDirectorySyncPlan, Box<dyn std::error::Error>> {
+    let folder = local.to_path_buf();
+    let result = manager
+        .prepare_directory_sync_with_picker(
+            "fixture-terminal",
+            transport,
+            &Uuid::now_v7().to_string(),
+            remote.to_vec(),
+            direction,
+            move || async { Ok(Some(folder)) },
+        )
+        .await?;
+    let SessionDirectorySyncPrepareResult::Prepared { plan } = result else {
+        return Err("directory selection cancelled".into());
+    };
+    Ok(plan)
+}
+
+async fn apply_directory(
+    manager: &SessionManager,
+    transport: &str,
+    plan: &SessionDirectorySyncPlan,
+    decline: bool,
+) -> Result<Vec<SessionTransferItem>, Box<dyn std::error::Error>> {
+    let result = manager
+        .apply_directory_sync(
+            "fixture-terminal",
+            transport,
+            &plan.plan_id,
+            move |review| async move {
+                assert!(matches!(review.name.as_str(), "b-size" | "c-bytes"));
+                Ok(!(decline && review.name == "b-size"))
+            },
+        )
+        .await?;
+    let SessionDirectorySyncApplyResult::Queued { items, .. } = result else {
+        return Err("changed directory batch was not queued".into());
+    };
+    let mut results = Vec::new();
+    for item in items {
+        results.push(wait_queue_item(manager, &item.item_id).await?);
+    }
+    Ok(results)
+}
+
+async fn exercise_directory_sync(
+    manager: &SessionManager,
+    transport: &str,
+    local: &std::path::Path,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    manager.input("fixture-terminal", transport, b"mkdir -p .scoplen-files-smoke/sync-upload/remote-dir .scoplen-files-smoke/sync-download/source-dir .scoplen-files-smoke/sync-links; printf longer > .scoplen-files-smoke/sync-upload/b-size; printf old > .scoplen-files-smoke/sync-upload/c-bytes; printf same > .scoplen-files-smoke/sync-upload/d-same; : > .scoplen-files-smoke/sync-upload/e-empty; printf preserved > .scoplen-files-smoke/sync-upload/remote-only; touch -t 200001010000 .scoplen-files-smoke/sync-upload/d-same; ln -s missing .scoplen-files-smoke/sync-links/link; printf '%s%s\\n' SCOPLEN- DIRECTORY-READY\n".to_vec())?;
+    wait_for(output, b"SCOPLEN-DIRECTORY-READY").await?;
+    let upload = local.join("directory-upload");
+    fs::create_dir_all(upload.join("excluded-empty"))?;
+    fs::create_dir_all(upload.join("excluded-nested"))?;
+    fs::write(upload.join("excluded-nested/ignored"), b"not traversed")?;
+    for (name, bytes) in [
+        ("a-create", &[0, 255, 3][..]),
+        ("b-size", b"x"),
+        ("c-bytes", b"new"),
+        ("d-same", b"same"),
+        ("e-empty", b""),
+    ] {
+        fs::write(upload.join(name), bytes)?;
+    }
+    let remote_upload = b"./.scoplen-files-smoke/sync-upload";
+    let before = manager
+        .list_files(
+            "fixture-terminal",
+            transport,
+            &Uuid::now_v7().to_string(),
+            remote_upload.to_vec(),
+        )
+        .await?;
+    let plan = directory_plan(
+        manager,
+        transport,
+        remote_upload,
+        &upload,
+        SessionTransferDirection::Upload,
+    )
+    .await?;
+    assert_eq!(plan.excluded_directories, 2);
+    assert_eq!(plan.entries.len(), 5);
+    for (name, change) in [
+        ("a-create", SessionDirectorySyncChange::Create),
+        ("b-size", SessionDirectorySyncChange::Changed),
+        ("c-bytes", SessionDirectorySyncChange::Changed),
+        ("d-same", SessionDirectorySyncChange::Same),
+        ("e-empty", SessionDirectorySyncChange::Same),
+    ] {
+        assert_eq!(plan.entries.iter().find(|row| row.name == name).unwrap().change, change);
+    }
+    assert_eq!(fs::read_dir(&upload)?.count(), 7);
+    let after = manager
+        .list_files(
+            "fixture-terminal",
+            transport,
+            &Uuid::now_v7().to_string(),
+            remote_upload.to_vec(),
+        )
+        .await?;
+    assert_eq!(
+        serde_json::to_value(before)?,
+        serde_json::to_value(after)?,
+        "comparison must not write"
+    );
+    let rows = apply_directory(manager, transport, &plan, true).await?;
+    assert_eq!(
+        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+        ["a-create", "b-size", "c-bytes"]
+    );
+    assert_eq!(
+        rows.iter().map(|row| row.state).collect::<Vec<_>>(),
+        [SessionTransferState::Saved, SessionTransferState::Cancelled, SessionTransferState::Saved]
+    );
+    assert_eq!(
+        manager
+            .apply_directory_sync("fixture-terminal", transport, &plan.plan_id, |_| async {
+                panic!("consumed plan cannot ask again")
+            })
+            .await,
+        Err(SessionDirectorySyncIssue::Unavailable)
+    );
+    for (name, bytes) in [
+        ("a-create", &[0, 255, 3][..]),
+        ("b-size", b"longer"),
+        ("c-bytes", b"new"),
+        ("remote-only", b"preserved"),
+    ] {
+        assert_drop_bytes(manager, local, transport, remote_upload, name, bytes).await?;
+    }
+    let plan = directory_plan(
+        manager,
+        transport,
+        remote_upload,
+        &upload,
+        SessionTransferDirection::Upload,
+    )
+    .await?;
+    let rows = apply_directory(manager, transport, &plan, false).await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].state, SessionTransferState::Saved);
+    assert_drop_bytes(manager, local, transport, remote_upload, "b-size", b"x").await?;
+    let plan = directory_plan(
+        manager,
+        transport,
+        remote_upload,
+        &upload,
+        SessionTransferDirection::Upload,
+    )
+    .await?;
+    assert!(plan.entries.iter().all(|row| row.change == SessionDirectorySyncChange::Same));
+    let outstanding = manager.transfer_queue_snapshot("fixture-terminal")?.outstanding;
+    assert_eq!(
+        manager
+            .apply_directory_sync("fixture-terminal", transport, &plan.plan_id, |_| async {
+                panic!("Same rows cannot ask for replacement")
+            })
+            .await?,
+        SessionDirectorySyncApplyResult::Unchanged
+    );
+    assert_eq!(manager.transfer_queue_snapshot("fixture-terminal")?.outstanding, outstanding);
+    for membership in [false, true] {
+        let plan = directory_plan(
+            manager,
+            transport,
+            remote_upload,
+            &upload,
+            SessionTransferDirection::Upload,
+        )
+        .await?;
+        if membership {
+            fs::write(upload.join("new-member"), b"x")?;
+        } else {
+            fs::write(upload.join("d-same"), b"metadata change")?;
+        }
+        assert_eq!(
+            manager
+                .apply_directory_sync("fixture-terminal", transport, &plan.plan_id, |_| async {
+                    panic!("changed plan cannot ask for replacement")
+                })
+                .await,
+            Err(SessionDirectorySyncIssue::FileChanged)
+        );
+        if membership {
+            fs::remove_file(upload.join("new-member"))?;
+        } else {
+            fs::write(upload.join("d-same"), b"same")?;
+        }
+    }
+    let empty = local.join("empty-directory");
+    fs::create_dir(&empty)?;
+    let plan =
+        directory_plan(manager, transport, remote_upload, &empty, SessionTransferDirection::Upload)
+            .await?;
+    assert!(plan.entries.is_empty());
+    assert_eq!(
+        manager
+            .apply_directory_sync("fixture-terminal", transport, &plan.plan_id, |_| async {
+                Ok(true)
+            })
+            .await?,
+        SessionDirectorySyncApplyResult::Unchanged
+    );
+    for index in 0..17 {
+        fs::write(empty.join(format!("{index}")), b"x")?;
+    }
+    assert_eq!(
+        manager
+            .prepare_directory_sync_with_picker(
+                "fixture-terminal",
+                transport,
+                &Uuid::now_v7().to_string(),
+                remote_upload.to_vec(),
+                SessionTransferDirection::Upload,
+                || async { Ok(Some(empty.clone())) }
+            )
+            .await,
+        Err(SessionDirectorySyncIssue::TooManyFiles)
+    );
+
+    manager.input("fixture-terminal", transport, b"printf '\\000\\377\\003' > .scoplen-files-smoke/sync-download/a-create; printf remote > .scoplen-files-smoke/sync-download/b-size; printf new > .scoplen-files-smoke/sync-download/c-bytes; printf same > .scoplen-files-smoke/sync-download/d-same; : > .scoplen-files-smoke/sync-download/e-empty; touch -t 200001010000 .scoplen-files-smoke/sync-download/d-same; printf '%s%s\\n' SCOPLEN- DIRECTORY-DOWNLOAD\n".to_vec())?;
+    wait_for(output, b"SCOPLEN-DIRECTORY-DOWNLOAD").await?;
+    let download = local.join("directory-download");
+    fs::create_dir(&download)?;
+    for (name, bytes) in [
+        ("b-size", &b"x"[..]),
+        ("c-bytes", b"old"),
+        ("d-same", b"same"),
+        ("e-empty", b""),
+        ("local-only", b"preserved"),
+    ] {
+        fs::write(download.join(name), bytes)?;
+    }
+    let remote_download = b"./.scoplen-files-smoke/sync-download";
+    let plan = directory_plan(
+        manager,
+        transport,
+        remote_download,
+        &download,
+        SessionTransferDirection::Download,
+    )
+    .await?;
+    assert_eq!(plan.excluded_directories, 1);
+    assert_eq!(
+        plan.entries.iter().map(|row| row.change).collect::<Vec<_>>(),
+        [
+            SessionDirectorySyncChange::Create,
+            SessionDirectorySyncChange::Changed,
+            SessionDirectorySyncChange::Changed,
+            SessionDirectorySyncChange::Same,
+            SessionDirectorySyncChange::Same
+        ]
+    );
+    assert!(!download.join("a-create").exists());
+    assert_eq!(fs::read(download.join("b-size"))?, b"x");
+    assert_eq!(fs::read_dir(&download)?.count(), 5);
+    assert!(
+        apply_directory(manager, transport, &plan, false)
+            .await?
+            .iter()
+            .all(|row| row.state == SessionTransferState::Saved)
+    );
+    for (name, bytes) in [
+        ("a-create", &[0, 255, 3][..]),
+        ("b-size", b"remote"),
+        ("c-bytes", b"new"),
+        ("d-same", b"same"),
+        ("e-empty", b""),
+        ("local-only", b"preserved"),
+    ] {
+        assert_eq!(fs::read(download.join(name))?, bytes);
+    }
+    assert!(!download.join("source-dir").exists());
+    assert_eq!(
+        manager
+            .prepare_directory_sync_with_picker(
+                "fixture-terminal",
+                transport,
+                &Uuid::now_v7().to_string(),
+                b"./.scoplen-files-smoke/sync-links".to_vec(),
+                SessionTransferDirection::Download,
+                || async { Ok(Some(download.clone())) }
+            )
+            .await,
+        Err(SessionDirectorySyncIssue::UnsupportedEntry)
+    );
+    for (label, first, second) in [
+        ("ascii", "A.txt", "a.txt"),
+        ("unicode-case", "\u{00c4}.txt", "\u{00e4}.txt"),
+        ("unicode-form", "\u{00e9}.txt", "e\u{0301}.txt"),
+    ] {
+        let remote = format!("./.scoplen-files-smoke/collision-{label}");
+        manager.input("fixture-terminal", transport, format!(
+            "mkdir -p '{remote}'; printf a > '{remote}/{first}'; printf b > '{remote}/{second}'; printf '%s%s\\n' SCOPLEN- DIRECTORY-COLLISION-READY\n"
+        ).into_bytes())?;
+        wait_for(output, b"SCOPLEN-DIRECTORY-COLLISION-READY").await?;
+        assert_eq!(
+            manager
+                .prepare_directory_sync_with_picker(
+                    "fixture-terminal",
+                    transport,
+                    &Uuid::now_v7().to_string(),
+                    remote.into_bytes(),
+                    SessionTransferDirection::Download,
+                    || async { Ok(Some(download.clone())) },
+                )
+                .await,
+            Err(SessionDirectorySyncIssue::UnsupportedName)
+        );
+        assert_eq!(fs::read_dir(&download)?.count(), 6);
+    }
+    manager.input(
+        "fixture-terminal",
+        transport,
+        b"printf '%s%s\\n' SCOPLEN- DIRECTORY-TERMINAL-ALIVE\n".to_vec(),
+    )?;
+    wait_for(output, b"SCOPLEN-DIRECTORY-TERMINAL-ALIVE").await?;
+    println!(
+        "directory sync core: read-only Upload/Download comparison, complete equality, empty/binary bytes, excluded directories, target preservation, explicit FIFO Apply, replacement refusal/acceptance, stale-plan refusal and terminal input passed; folder selection was injected"
+    );
+    Ok(())
 }
 
 async fn exercise_upload_resume(
