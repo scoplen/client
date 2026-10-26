@@ -99,6 +99,16 @@ impl server::Handler for Handler {
                         },
                     }
                 }
+                SftpPacket::Lstat { id, .. } => SftpPacket::Attrs {
+                    id,
+                    attrs: SftpAttributes {
+                        size: Some(self.bytes.lock().unwrap().len() as u64),
+                        permissions: Some(0o100600),
+                        access_time: Some(100),
+                        modify_time: Some(100),
+                        ..Default::default()
+                    },
+                },
                 SftpPacket::Read { id, handle, offset, length } => {
                     assert_eq!(handle, b"original-handle");
                     self.reads.lock().unwrap().push((offset, length));
@@ -193,6 +203,7 @@ impl Peer {
 
     pub(crate) async fn paused(&self, destination: PathBuf) -> Box<DownloadCheckpoint> {
         let input = DownloadInput::New {
+            text_only: false,
             remote_path: b"./source.bin".to_vec(),
             destination: DownloadDestination::capture(destination).await.unwrap(),
         };
@@ -234,6 +245,7 @@ async fn refused_new_channel_does_not_evict_an_existing_download_checkpoint() {
     let partial = checkpoint.temporary.path.clone();
     peer.refuse_channels.store(true, Ordering::SeqCst);
     let later = DownloadInput::New {
+        text_only: false,
         remote_path: b"./later.bin".to_vec(),
         destination: DownloadDestination::capture(directory.path().join("later.bin"))
             .await
@@ -422,4 +434,69 @@ async fn pause_never_drops_an_inflight_exchange_but_cancel_preempts_it() {
     assert!(!task.is_finished());
     sender.send_replace(TransferControl::Cancel);
     assert!(matches!(task.await.unwrap(), Err(FileAccessError::Cancelled)));
+}
+
+#[tokio::test]
+async fn editor_download_validates_complete_text_before_publishing_the_local_copy() {
+    let peer = Peer::start().await;
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("working-copy.txt");
+    for bytes in [Vec::new(), vec![b'x'; 262_144]] {
+        *peer.bytes.lock().unwrap() = bytes.clone();
+        tokio::fs::write(&destination, b"existing local copy").await.unwrap();
+        let prepared = peer
+            .prepare(DownloadInput::New {
+                remote_path: b"./source.txt".to_vec(),
+                destination: DownloadDestination::capture(destination.clone()).await.unwrap(),
+                text_only: true,
+            })
+            .await;
+        let (_sender, control) = watch::channel(TransferControl::Run);
+        let DownloadExecution::Ready { prepared, .. } =
+            continue_download(prepared, control, |_| {}).await
+        else {
+            panic!("text download failed")
+        };
+        assert_eq!(tokio::fs::read(&destination).await.unwrap(), b"existing local copy");
+        prepared.commit().unwrap();
+        assert_eq!(tokio::fs::read(&destination).await.unwrap(), bytes);
+    }
+    *peer.bytes.lock().unwrap() = vec![0xff];
+    let prepared = peer
+        .prepare(DownloadInput::New {
+            remote_path: b"./source.txt".to_vec(),
+            destination: DownloadDestination::capture(destination.clone()).await.unwrap(),
+            text_only: true,
+        })
+        .await;
+    let (_sender, control) = watch::channel(TransferControl::Run);
+    assert!(matches!(
+        continue_download(prepared, control, |_| {}).await,
+        DownloadExecution::Failed {
+            error: FileAccessError::PreviewNotText,
+            staging_may_remain: false
+        }
+    ));
+    assert_eq!(tokio::fs::read(&destination).await.unwrap(), vec![b'x'; 262_144]);
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn editor_download_rejects_an_oversized_source_before_local_partial_creation() {
+    let peer = Peer::start().await;
+    *peer.bytes.lock().unwrap() = vec![b'x'; 262_145];
+    let directory = tempfile::tempdir().unwrap();
+    let result = prepare_download(
+        &peer.connection,
+        DownloadInput::New {
+            remote_path: b"./source.txt".to_vec(),
+            destination: DownloadDestination::capture(directory.path().join("copy.txt"))
+                .await
+                .unwrap(),
+            text_only: true,
+        },
+    )
+    .await;
+    assert!(matches!(result, Err(FileAccessError::PreviewTooLarge)));
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }

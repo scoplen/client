@@ -135,7 +135,7 @@ pub fn session_acknowledge_transfer(
     manager.acknowledge_transfer(&session_id, &queue_id, &item_id, &execution_id)
 }
 
-async fn pick_file(
+pub(crate) async fn pick_file(
     app: tauri::AppHandle,
     title: &'static str,
     suggested: Option<String>,

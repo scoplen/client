@@ -313,6 +313,50 @@ export const en = {
   "session.files.drop.invalid":
     "No files were added. Drop 1–16 ordinary files into this directory list, or choose Upload file.",
   "session.files.download": "Download {name}",
+  "session.editor.action": "Edit {name} locally",
+  "session.editor.title": "Local editing",
+  "session.editor.confirmTitle": "Edit locally: {name}",
+  "session.editor.description": "Create a working copy from {connection}. Supports complete UTF-8 text up to 256 KiB.",
+  "session.editor.localDisclosure":
+    "Choose where to save an ordinary local file outside Scoplen's encrypted storage. The text editor opens after the copy is saved.",
+  "session.editor.manualUpload":
+    "Saving in the editor does not upload changes. Return here and choose Upload changes, then confirm replacing the remote file.",
+  "session.editor.chooseCopy": "Choose copy and open editor",
+  "session.editor.target": "Remote target: {name}",
+  "session.editor.copy": "Local copy: {name}",
+  "session.editor.open": "Open editor",
+  "session.editor.upload": "Upload changes",
+  "session.editor.stop": "Stop editing",
+  "session.editor.keepCopy": "Stopping keeps your local copy and leaves the external editor open.",
+  "session.editor.state.preparing": "Preparing the local working copy…",
+  "session.editor.state.opening": "Opening the text editor…",
+  "session.editor.state.watching": "Watching for saved local changes. Upload is always explicit.",
+  "session.editor.state.changesDetected": "Saved local changes are ready to upload.",
+  "session.editor.state.queued": "Changes are queued for upload. See the transfer queue below.",
+  "session.editor.state.uploading": "Uploading changes. See the transfer queue below.",
+  "session.editor.state.uploaded": "Saved version uploaded. Later saves need another explicit upload.",
+  "session.editor.state.unavailable": "This editing connection is unavailable. Your local copy is retained.",
+  "session.editor.state.unknown":
+    "Upload result unknown. Review the remote file and acknowledge the transfer reminder before uploading again.",
+  "session.editor.issue.alreadyEditing": "Stop the current editing session before choosing another file.",
+  "session.editor.issue.unavailable": "Editing is unavailable on this connection. Your local copy is retained.",
+  "session.editor.issue.invalidSelection": "Choose an ordinary local working-copy file.",
+  "session.editor.issue.notText":
+    "Editing supports complete UTF-8 text without non-text control characters. Use ordinary Download or Upload for other formats.",
+  "session.editor.issue.tooLarge":
+    "This file exceeds the 256 KiB editing limit. Use ordinary Download or Upload instead.",
+  "session.editor.issue.localIo":
+    "The local copy could not be read or saved. Check its location and access before trying again.",
+  "session.editor.issue.editorLaunchFailed":
+    "The text editor could not open. Your saved local copy is retained; try Open editor again.",
+  "session.editor.issue.queueFull":
+    "The transfer queue is full. Wait for a transfer to finish or cancel one before trying again.",
+  "session.editor.issue.transferFailed":
+    "Local editing could not be completed. Check the connection and local copy before trying again.",
+  "session.editor.issue.targetChanged":
+    "The reviewed file destination changed. Check it before trying the operation again.",
+  "session.editor.issue.publicationUnknown":
+    "The upload may have completed. Review the remote file and acknowledge the transfer reminder before uploading again.",
   "session.files.preview.action": "Preview {name}",
   "session.files.preview.title": "Preview: {name}",
   "session.files.preview.description": "Read-only text from {connection}. This is a single read, not a live view.",

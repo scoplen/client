@@ -60,7 +60,7 @@ struct TransferExecution {
 
 enum TransferExecutionResult {
     Finished(TransferCompletion),
-    Paused(SelectedTransfer),
+    Paused(Box<SelectedTransfer>),
 }
 
 impl SessionManager {
@@ -153,13 +153,15 @@ impl SessionManager {
                 return Ok(SessionTransferEnqueueResult::Cancelled);
             };
             let source = session_files::open_upload_source(&path).await.map_err(file_issue)?;
-            source.target(&directory).map_err(file_issue)?;
+            let target = source.target(&directory).map_err(file_issue)?;
             let name = source.display_name();
             let total = source.size();
             let resources = SelectedTransfer::Upload {
                 source,
                 directory,
+                target,
                 confirm: Box::new(move |review| Box::pin(confirm_replace(review))),
+                editor: None,
             };
             manager.enqueue_selected_transfer(
                 &session,
@@ -210,6 +212,7 @@ impl SessionManager {
                 remote_path,
                 destination,
                 confirm: Box::new(move |review| Box::pin(confirm_replace(review))),
+                editor: None,
             };
             manager.enqueue_selected_transfer(
                 &session,
@@ -282,7 +285,7 @@ impl SessionManager {
         entry.transfers.acknowledge(queue, item, execution)
     }
 
-    fn reserve_transfer_selection(
+    pub(super) fn reserve_transfer_selection(
         &self,
         session_id: &str,
         transport_id: &str,
@@ -300,7 +303,7 @@ impl SessionManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn enqueue_selected_transfer(
+    pub(super) fn enqueue_selected_transfer(
         &self,
         session: &str,
         transport: Uuid,
@@ -320,8 +323,21 @@ impl SessionManager {
             {
                 return Err(SessionTransferIssue::TransportEnded);
             }
+            let editor = match &resources {
+                SelectedTransfer::Upload { editor, .. }
+                | SelectedTransfer::Download { editor, .. } => *editor,
+                _ => None,
+            };
+            if let Some(id) = editor
+                && entry.editor.as_ref().is_none_or(|editor| editor.id != id || editor.ended)
+            {
+                return Err(SessionTransferIssue::StaleItem);
+            }
             let result =
                 entry.transfers.enqueue_selected(reservation, name, direction, total, resources)?;
+            if let Some(editor) = editor {
+                editor::attach_transfer(entry, editor, direction, &result);
+            }
             entry.transfer_notify.notify_one();
             result
         };
@@ -432,7 +448,8 @@ impl SessionManager {
                         entry.transfers.finish(identity, completion);
                     }
                     TransferExecutionResult::Paused(resources) => {
-                        if let Err(resources) = entry.transfers.retain_paused(identity, resources) {
+                        if let Err(resources) = entry.transfers.retain_paused(identity, *resources)
+                        {
                             let manager = self.clone();
                             let session = session.to_owned();
                             drop(tokio::spawn(async move {
@@ -466,11 +483,10 @@ impl SessionManager {
             upload_state: state,
         };
         let completion = match selected.resources {
-            SelectedTransfer::Upload { source, directory, confirm } => {
+            SelectedTransfer::Upload { source, directory, target, confirm, .. } => {
                 let preparation = Abortable::new(
                     async {
                         source.check_current().await.map_err(file_issue)?;
-                        let target = source.target(&directory).map_err(file_issue)?;
                         let (reply, received) = oneshot::channel();
                         self.queue_file_request(
                             &guard,
@@ -493,7 +509,9 @@ impl SessionManager {
                             }
                             let review = SessionTransferReview::new(
                                 &context,
-                                &source.display_name(),
+                                &session_files::display_name(
+                                    target.rsplit(|byte| *byte == b'/').next().unwrap_or_default(),
+                                ),
                                 SessionTransferDirection::Upload,
                             );
                             if !self
@@ -529,7 +547,7 @@ impl SessionManager {
                     }
                 }
             }
-            SelectedTransfer::Download { remote_path, destination, confirm } => {
+            SelectedTransfer::Download { remote_path, destination, confirm, editor } => {
                 return self
                     .execute_download_transfer(
                         session,
@@ -537,7 +555,7 @@ impl SessionManager {
                         identity,
                         &context,
                         guard,
-                        Some((remote_path, destination, confirm)),
+                        Some((remote_path, destination, confirm, editor.is_some())),
                         None,
                     )
                     .await;
@@ -665,9 +683,9 @@ impl SessionManager {
             }
         };
         let result = match result {
-            Some(UploadExecution::Paused(checkpoint)) => {
-                TransferExecutionResult::Paused(SelectedTransfer::ResumeUpload(checkpoint))
-            }
+            Some(UploadExecution::Paused(checkpoint)) => TransferExecutionResult::Paused(Box::new(
+                SelectedTransfer::ResumeUpload(checkpoint),
+            )),
             Some(UploadExecution::Published) => {
                 TransferExecutionResult::Finished(known_completion(SessionTransferState::Saved))
             }
@@ -765,14 +783,14 @@ impl SessionManager {
         identity: TransferIdentity,
         context: &PreparationContext,
         guard: FileRequestGuard<'_>,
-        selected: Option<(Vec<u8>, DownloadDestination, ReplaceConfirmation)>,
+        selected: Option<(Vec<u8>, DownloadDestination, ReplaceConfirmation, bool)>,
         checkpoint: Option<Box<DownloadCheckpoint>>,
     ) -> TransferExecutionResult {
         let result = async {
             let input = if let Some(checkpoint) = checkpoint {
                 DownloadInput::Resume(checkpoint)
             } else {
-                let (remote_path, destination, confirm) =
+                let (remote_path, destination, confirm, text_only) =
                     selected.expect("download selection or checkpoint");
                 destination.check().await?;
                 if destination.exists()
@@ -793,7 +811,7 @@ impl SessionManager {
                     return Ok(None);
                 }
                 destination.check().await?;
-                DownloadInput::New { remote_path, destination }
+                DownloadInput::New { remote_path, destination, text_only }
             };
             let (reply, received) = oneshot::channel();
             if let Err(failed) = self.dispatch_download(&guard, identity, input, reply) {
@@ -813,19 +831,23 @@ impl SessionManager {
             })? {
                 Ok(result) => Ok(Some(result)),
                 Err(FileAccessError::Cancelled) => Ok(None),
-                Err(error) => Err(file_issue(error)),
+                Err(error) => {
+                    self.editor_transfer_error(session, identity, &error);
+                    Err(file_issue(error))
+                }
             }
         }
         .await;
         drop(guard);
         match result {
-            Ok(Some(DownloadExecution::Paused(checkpoint))) => {
-                TransferExecutionResult::Paused(SelectedTransfer::ResumeDownload(checkpoint))
-            }
+            Ok(Some(DownloadExecution::Paused(checkpoint))) => TransferExecutionResult::Paused(
+                Box::new(SelectedTransfer::ResumeDownload(checkpoint)),
+            ),
             Ok(Some(DownloadExecution::Ready { .. })) => {
                 unreachable!("file owner publishes prepared downloads")
             }
             Ok(Some(DownloadExecution::Failed { error, staging_may_remain })) => {
+                self.editor_transfer_error(session, identity, &error);
                 TransferExecutionResult::Finished(if matches!(error, FileAccessError::Cancelled) {
                     self.stopped_completion(session, identity, staging_may_remain)
                 } else {

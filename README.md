@@ -251,6 +251,18 @@ changing tabs or ending the connection discards the text. Runnable transfers tak
 paused or unknown-result items do not prevent preview. Remote handle and path metadata and EOF
 are checked, but SFTP v3 provides neither an immutable snapshot nor atomic no-follow opening.
 
+Edit locally creates a working copy of one complete UTF-8 file up to 256 KiB at a location
+you choose, then opens the platform text editor. This is an ordinary local file outside
+Scoplen's encrypted storage. Files detects saved changes without uploading them. Choose
+Upload changes to queue a write to the original remote path, then confirm replacement;
+a different local filename does not change that target. Normal transfer progress,
+cancellation, source checks and uncertain-result reminders still apply. An unknown upload
+requires reviewing the remote file before another explicit attempt. One working copy is
+active per terminal. Hiding Files keeps observation running; Stop editing, disconnecting
+or closing the session never deletes your local copy or closes the external editor.
+A replacement connection does not inherit upload authority. Native editor and picker
+interaction on each platform remain separate acceptance.
+
 When a session closes or fails, choose Reconnect in its header to connect again
 in the same tab. Its displayed terminal output stays available. Reconnect waits
 for the previous connection task to finish, rechecks the host key, resolves the

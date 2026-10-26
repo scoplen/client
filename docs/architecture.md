@@ -789,6 +789,29 @@ SFTP v3 has no stable file identifier or compare-and-swap: matching attributes a
 hashes do not prove inode identity or an immutable snapshot, an unchanged unread suffix,
 or absence of later concurrent writes. Cross-transport and durable continuation remain open.
 
+## Local-editor working copies
+
+`session_editor` projects one process-local working copy per logical terminal;
+`session_manager::editor` retains its native destination, opaque original remote path and
+captured transport. Edit locally uses the existing download FIFO and safe local publication
+with the complete 256 KiB UTF-8 policy applied before commit. The platform layer launches a
+fixed text editor with literal arguments after the copy is saved, independently of the
+remote extension. A launch failure leaves the saved copy available for explicit reopening.
+
+Rust periodically checks the selected local copy and reports detected saves without network
+work. Explicit upload reopens the selected path, including after an editor's atomic-save
+replacement, validates text and retains the ordinary upload source handle. The selected
+transfer captures an independent remote target, so a local basename cannot redirect it.
+The existing FIFO, source metadata checks, native remote-replacement review, staging and
+publication semantics remain authoritative. This adds no immutable snapshot guarantee.
+
+Five profile-bound native commands expose only editor identity, bounded display names,
+state, fixed issues and associated queue identities. `useSessionEditor` observes on demand
+with one snapshot request outstanding and discards obsolete replies; hiding Files does not
+own or stop the Rust observer. Stop and owner replacement end further upload authority while
+preserving the user-selected ordinary file and external editor. A new connection or process
+does not restore that authority. File contents and native paths never enter the projection.
+
 ## Localization
 
 Messages are ICU MessageFormat catalogs in `web/app/src/messages`. English (`en.ts`) is the source; every other catalog has its type, so a missing key fails type checking, and the catalog tests format every message. The interface language is chosen in the core (`Locale::negotiate`) from the system's preferred languages: Simplified Chinese for `zh-Hans` and Simplified-script regions, otherwise English. A language setting arrives with Preference objects (roadmap C2).

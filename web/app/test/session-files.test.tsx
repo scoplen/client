@@ -16,6 +16,7 @@ const fileCommands = vi.hoisted(() => ({
   rename: vi.fn(),
   delete: vi.fn(),
   cancel: vi.fn(),
+  editorSnapshot: vi.fn(),
 }));
 
 vi.mock("../src/ipc/bindings", () => ({
@@ -28,6 +29,7 @@ vi.mock("../src/ipc/bindings", () => ({
     sessionRenameRemoteEntry: fileCommands.rename,
     sessionDeleteRemoteEntry: fileCommands.delete,
     sessionCancelFileOperation: fileCommands.cancel,
+    sessionEditorSnapshot: fileCommands.editorSnapshot,
   },
 }));
 
@@ -116,6 +118,7 @@ beforeEach(() => {
   fileCommands.rename.mockReset().mockResolvedValue({ status: "ok", data: { status: "saved", message: null } });
   fileCommands.delete.mockReset().mockResolvedValue({ status: "ok", data: { status: "saved", message: null } });
   fileCommands.cancel.mockReset().mockResolvedValue({ status: "ok", data: null });
+  fileCommands.editorSnapshot.mockReset().mockResolvedValue({ status: "ok", data: null });
 });
 
 afterEach(() => clearMocks());

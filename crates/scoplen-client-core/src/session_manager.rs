@@ -45,6 +45,7 @@ const FILE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(60);
 const STABLE_READY: Duration = Duration::from_secs(30);
 const RETRY_DELAYS: [u8; 5] = [1, 2, 4, 8, 16];
 
+mod editor;
 pub mod file_drop;
 mod transfers;
 
@@ -278,6 +279,7 @@ struct SessionEntry {
     transfers: TransferQueue<SelectedTransfer>,
     transfer_notify: Arc<Notify>,
     transfer_worker_running: bool,
+    editor: Option<editor::EditorRecord>,
 }
 
 struct CheckpointOwner {
@@ -288,6 +290,11 @@ struct CheckpointOwner {
 }
 
 fn interrupt_transfers(entry: &mut SessionEntry, transport: Uuid) {
+    if let Some(editor) = entry.editor.as_mut()
+        && editor.transport == transport
+    {
+        editor.end_transport();
+    }
     let interrupted = entry.transfers.interrupt_transport(transport);
     if let Some(identity) = interrupted.running
         && let Some(file) = entry.active.as_ref().and_then(|active| active.file.as_ref())
@@ -339,7 +346,7 @@ impl Drop for Registration<'_> {
                     file.abort.abort();
                 }
             }
-            if entry.transfers.has_state()
+            if (entry.transfers.has_state() || entry.editor.is_some())
                 && (!closing || entry.transfers.has_pending() || entry.transfers.is_settling())
             {
                 entry.phase = Phase::Ended;
@@ -475,6 +482,7 @@ impl SessionManager {
                 transfers: TransferQueue::default(),
                 transfer_notify: Arc::new(Notify::new()),
                 transfer_worker_running: false,
+                editor: None,
             },
         );
         Ok(())
