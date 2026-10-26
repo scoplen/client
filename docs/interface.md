@@ -445,7 +445,8 @@ rejection advertising that method; ordinary rejection never selects a fallback.
 the selected pane's Login. Each pane retains its own input, output, connection
 prompts and Files view. Selecting a pane, **Previous pane** and **Next pane** move
 actual terminal input focus; previous/next wraps in tree order within the current
-tab. Only the selected pane can show a connection prompt or target Snippets.
+tab. Only the selected pane can show a connection prompt or open Snippets; its
+target selector can include other ready panes.
 Splitting is unavailable for saved output and at the eight-pane or three-level
 limit. Equal halves scroll inside a window too small for the pane minimums.
 
@@ -475,7 +476,7 @@ or restore remote processes, Files views or tunnels. Retained version-one layout
 appear unavailable without conversion. Native interaction and restart acceptance
 remain unverified in the roadmap.
 
-## Current-terminal command snippets
+## Command snippets
 
 A connected terminal exposes **Snippets** in its header. The dialog lists saved snippets
 and supports adding, editing and deleting their name, single-line command template,
@@ -484,16 +485,30 @@ literal one-pass substitution through the generated `snippets*` commands. The ed
 does not automatically quote values for a shell. Existing Secret definitions have a
 redacted, read-only view and cannot be prepared or changed here.
 
-**Use snippet** opens the variable form. **Review command** displays the complete Rust
-preparation and the current terminal's target. **Send command** sends exactly that
-preview followed by one CR, through the existing Account-bound `sessionInput` and
-exact transport identity. The user must first leave the intended terminal at an empty
-shell prompt. The client does not clear a line or infer the foreground program.
+**Use snippet** opens the variable form and a target selector containing existing ready
+ordinary terminals in this Account, across all tabs. Only the current pane is selected
+initially. Each checkbox shows its Host/Login and tab/pane location, distinguishing
+repeated connections. Saved output and non-ready panes are omitted. The selection
+must contain one to 64 distinct connections; selecting a target starts no connection.
 
-Switching tabs or Accounts, reconnecting or closing the transport unmounts the dialog
-and invalidates its preview. A successful local acknowledgement displays **Sent to
-terminal**; results remain in the terminal. A failed or uncertain send requires manual
-inspection before another explicit preparation. Input is never automatically retried.
+**Review command** displays the complete Rust preparation and ordered target list.
+**Change command or targets** returns to the form and requires a new review.
+**Send command** for one target, or **Send to selected terminals** for several, sends
+exactly that preview followed by one CR to each captured transport in displayed order,
+with only one input invocation pending at a time. The user must first leave every
+selected terminal at the intended empty shell prompt. The client does not clear a line
+or infer the foreground program.
+
+Switching tabs or Accounts, replacing or closing the originating connection, or closing
+the dialog invalidates its preview and stops starting further sends. Input already
+dispatched cannot be withdrawn. Other captured targets that become unavailable are
+skipped without sending to a replacement; confirmed surviving targets continue.
+The transient result list shows **Sent to terminal** only for local queue acceptance,
+**Not sent** for a connection known to be unavailable before invocation, and
+**Result unknown** when an invoked send fails or loses its result. Inspect the terminal
+before a new explicit preparation. The client collects no remote exit result and never
+retries input automatically. Native interaction and narrow-layout acceptance remain
+separate roadmap outcomes.
 
 ## Connecting a contract
 

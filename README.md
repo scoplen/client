@@ -96,12 +96,18 @@ even when the server sends no initial output. Terminal input and PTY resizing
 are available without waiting for a welcome message or prompt.
 
 Use Snippets to save single-line commands with Text, Integer and Choice variables,
-tags and an optional folder. From a connected terminal, choose a saved snippet, fill its
-values and review the complete command and current target before Send command.
-The terminal must be at the intended empty shell prompt. Sending adds one Enter;
-Sent to terminal confirms local input acceptance, while the terminal shows the
-remote result. Switching accounts or tabs, disconnecting or reconnecting invalidates
-the preview. Input is never automatically replayed.
+tags and an optional folder. From a connected terminal, choose a saved snippet, fill
+its values once and select up to 64 already-connected terminals in the current Account.
+Only the current pane is selected initially; tab and pane locations distinguish repeated
+connections to the same Login. Review the complete command and ordered targets before
+Send command or Send to selected terminals. Changing values or targets requires a new review.
+Every selected terminal must be at the intended empty shell prompt. Sending adds one
+Enter to each target in order. Sent to terminal confirms local input acceptance; inspect
+each terminal for the remote result. Unavailable captured connections show Not sent;
+uncertain invocations show Result unknown and require manual inspection. Switching
+accounts or tabs, closing the dialog, or losing its originating connection stops later
+sends. A selected connection is never redirected to its replacement. Input is never
+automatically replayed.
 
 Use exact `{{name}}` placeholders with ASCII letters, digits and underscores, starting
 with a letter or underscore. A repeated placeholder uses one value. `{{{{` and `}}}}`
@@ -113,7 +119,7 @@ leading zeros or `-0`; Choice values must match a saved option exactly. Empty Te
 and explicit empty Choice values are supported. Commands and values cannot contain
 line breaks or terminal control characters; the command plus Enter fits 64 KiB.
 Retained Secret definitions are read-only and their defaults are hidden. Secret,
-multiline and multi-target execution remain incomplete.
+multiline, automatic connections and saved-Workspace execution remain incomplete.
 
 Split right or Split below opens a fresh ordinary SSH terminal for the focused
 pane's Login. Panes keep independent input, output and connection prompts. Select
@@ -500,8 +506,12 @@ containers and temporary keys.
 snippet in a real encrypted Store, fill all three supported variable kinds and send
 the exact preview plus Enter through the public session manager to disposable
 OpenSSH. It verifies the executed output marker once and rejects old transport input
-after the shell exits. Successful checks remove their owned fixture; failed checks
-stop their owned container and retain temporary evidence.
+after the shell exits. Independent same-Login sessions also receive one exact marker
+each; a captured stale transport is refused without replaying input to its replacement,
+while surviving peers remain usable. This verifies the public Rust session boundary;
+cross-tab selection and per-target interface results have separate frontend tests and
+rendered/native acceptance. Successful checks remove their owned fixture; failed
+checks stop their owned container and retain temporary evidence.
 
 `scripts/test-ssh-workspace.ps1` connects two independent ordinary terminals to an
 owned OpenSSH fixture, checks separate marker output, resize and close while the

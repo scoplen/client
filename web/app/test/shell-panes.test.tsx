@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { Channel } from "@tauri-apps/api/core";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { emit } from "@tauri-apps/api/event";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppearanceProvider } from "@scoplen/ui";
 import type { ScoplenTerminalElement } from "@scoplen/terminal";
 import { I18nProvider } from "../src/i18n";
 import { Shell } from "../src/shell";
 import { TerminalColorsProvider } from "../src/terminal-colors";
+import { AccountProfilesBoundary } from "../src/account-profiles";
 import type { PreparationContext, PreparationEvent, SavedTerminalOutput, SessionEvent } from "../src/ipc/bindings";
 
 vi.mock("../src/inventory/home", () => ({
@@ -62,6 +64,7 @@ function deferred<T>() {
 
 function fixture() {
   const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const handlers = new Map<string, (args: Record<string, unknown>) => unknown>();
   const connections: Array<{
     profileId: string;
     sessionId: string;
@@ -76,6 +79,9 @@ function fixture() {
     (command, args) => {
       const payload = (args ?? {}) as Record<string, unknown>;
       calls.push({ command, args: payload });
+      if (handlers.has(command)) return handlers.get(command)!(payload);
+      if (command === "account_profiles_snapshot")
+        return { generation: "1", selected: null, accounts: [], retainedProfile: false };
       if (command === "session_connect") {
         const finish = deferred<null>();
         connections.push({ ...(payload as unknown as (typeof connections)[number]), finish });
@@ -133,6 +139,7 @@ function fixture() {
   );
   return {
     calls,
+    handlers,
     connections,
     saveFailures,
     matching: (command: string) => calls.filter((call) => call.command === command),
@@ -142,16 +149,19 @@ function fixture() {
   };
 }
 
-function shell(locale: "en" | "zh-Hans" = "en") {
+function shell(locale: "en" | "zh-Hans" = "en", profiles = false) {
+  const content = (
+    <Shell
+      info={{ version: "0.1.0", platform: "windows", locale }}
+      status={{ state: "open", protection: "keystore" }}
+      onStatus={vi.fn()}
+    />
+  );
   return render(
     <AppearanceProvider>
       <TerminalColorsProvider>
         <I18nProvider locale={locale}>
-          <Shell
-            info={{ version: "0.1.0", platform: "windows", locale }}
-            status={{ state: "open", protection: "keystore" }}
-            onStatus={vi.fn()}
-          />
+          {profiles ? <AccountProfilesBoundary>{content}</AccountProfilesBoundary> : content}
         </I18nProvider>
       </TerminalColorsProvider>
     </AppearanceProvider>,
@@ -184,6 +194,7 @@ async function connect(f: ReturnType<typeof fixture>, index: number, ready = tru
   return {
     ...connection,
     transportId,
+    emit,
     ready: () => emit({ kind: "ready", transportId }),
     output: (text: string) => emit(outputFrame(transportId, text)),
     prepare: (event: PreparationEvent) => emit({ kind: "preparation", transportId, event }),
@@ -449,6 +460,160 @@ it("targets snippets at the selected ordinary pane without broadcasting to its s
     data: Array.from(new TextEncoder().encode("printf pane-marker\r")),
   });
 });
+
+async function snippetPanes(profiles = false) {
+  const f = fixture();
+  const view = shell("en", profiles);
+  await userEvent.click(await screen.findByRole("button", { name: "Start first" }));
+  const first = await connect(f, 0);
+  await userEvent.click(screen.getByRole("button", { name: "Split right" }));
+  const second = await connect(f, 1);
+  await userEvent.click(screen.getByRole("tab", { name: "Hosts" }));
+  await userEvent.click(screen.getByRole("button", { name: "Start second" }));
+  const third = await connect(f, 2);
+  await userEvent.click(screen.getByRole("tab", { name: /^First host/ }));
+  return { f, view, first, second, third };
+}
+
+async function selectAllSnippetTargets() {
+  await userEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Use snippet" }));
+  for (const checkbox of screen.getAllByRole("checkbox")) {
+    if (!(checkbox as HTMLInputElement).checked) await userEvent.click(checkbox);
+  }
+  await userEvent.click(screen.getByRole("button", { name: "Review command" }));
+  return screen.findByRole("button", { name: "Send to selected terminals" });
+}
+
+it("selects ready same-Login sibling panes and another tab without opening connections or saved output", async () => {
+  const { f, first, second, third } = await snippetPanes();
+  for (const connection of [first, second, third]) {
+    const host = connection.profileId === "login-first" ? "First host" : "Second host";
+    await connection.prepare({
+      kind: "progress",
+      phase: "authenticating",
+      context: {
+        profileId: connection.profileId,
+        hostId: `host-${connection.profileId}`,
+        host,
+        login: "ops",
+        username: "operator",
+        address: "shell.example.test",
+        port: 22,
+        position: 1,
+        total: 1,
+        target: true,
+      },
+    });
+    await connection.ready();
+  }
+  await userEvent.click(screen.getByRole("tab", { name: /^Second host/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Split right" }));
+  await connect(f, 3, false);
+  await userEvent.click(screen.getByRole("tab", { name: "Hosts" }));
+  await userEvent.click(screen.getByRole("button", { name: "View saved output" }));
+  await userEvent.click(screen.getByRole("tab", { name: /^First host/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Use snippet" }));
+  const checkboxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
+  expect(checkboxes).toHaveLength(3);
+  expect(checkboxes.map((checkbox) => checkbox.checked)).toEqual([false, true, false]);
+  expect(checkboxes.map((checkbox) => checkbox.labels?.[0]?.textContent)).toEqual([
+    "First host · opsTab 1 · Pane 1",
+    "First host · opsTab 1 · Pane 2",
+    "Second host · opsTab 2 · Pane 1",
+  ]);
+  await userEvent.click(checkboxes[0]!);
+  await userEvent.click(checkboxes[2]!);
+  await userEvent.click(screen.getByRole("button", { name: "Review command" }));
+  const preview = screen.getByRole("list", { name: "Confirmed target terminals" });
+  expect(
+    within(preview)
+      .getAllByRole("listitem")
+      .map((row) => row.textContent),
+  ).toEqual(["First host · opsTab 1 · Pane 1", "First host · opsTab 1 · Pane 2", "Second host · opsTab 2 · Pane 1"]);
+  expect(screen.getByLabelText("Complete command to send").textContent).toBe("printf pane-marker");
+  const send = screen.getByRole("button", { name: "Send to selected terminals" });
+  await act(async () => {
+    send.click();
+    send.click();
+  });
+  await waitFor(() => expect(f.matching("session_input")).toHaveLength(3));
+  expect(f.matching("session_input").map((call) => call.args)).toEqual(
+    [first, second, third].map(({ sessionId, transportId }) => ({
+      sessionId,
+      transportId,
+      data: Array.from(new TextEncoder().encode("printf pane-marker\r")),
+    })),
+  );
+  expect(screen.getAllByText("Sent to terminal")).toHaveLength(3);
+  expect(f.matching("session_reserve_transport")).toHaveLength(4);
+  expect(f.matching("session_connect")).toHaveLength(4);
+  expect(f.matching("session_stop_reconnecting")).toHaveLength(0);
+  expect(f.matching("session_close_transport")).toHaveLength(0);
+  expect(f.matching("workspaces_open")).toHaveLength(0);
+});
+
+it("does not redirect a reviewed pane to its replacement transport and continues confirmed peers", async () => {
+  const { f, first, second, third } = await snippetPanes();
+  const send = await selectAllSnippetTargets();
+  const replacement = crypto.randomUUID();
+  await first.emit({ kind: "starting", transportId: replacement, automatic: true });
+  await first.emit({ kind: "ready", transportId: replacement });
+  await userEvent.click(send);
+  await waitFor(() => expect(f.matching("session_input")).toHaveLength(2));
+  expect(f.matching("session_input").map((call) => [call.args.sessionId, call.args.transportId])).toEqual([
+    [second.sessionId, second.transportId],
+    [third.sessionId, third.transportId],
+  ]);
+  const rows = within(screen.getByRole("list", { name: "Per-terminal send results" })).getAllByRole("listitem");
+  expect(within(rows[0]!).getByText("Not sent. This connection is no longer ready.")).toBeTruthy();
+  expect(within(rows[1]!).getByText("Sent to terminal")).toBeTruthy();
+  expect(within(rows[2]!).getByText("Sent to terminal")).toBeTruthy();
+  expect(f.matching("session_reserve_transport")).toHaveLength(3);
+  expect(f.matching("session_stop_reconnecting")).toHaveLength(0);
+});
+
+it.each(["tab", "source-transport", "source-pane", "dialog-close", "account"] as const)(
+  "stops later sends and ignores late results after %s context changes",
+  async (change) => {
+    const { f, view, second } = await snippetPanes(true);
+    const send = await selectAllSnippetTargets();
+    const pending = deferred<null>();
+    f.handlers.set("session_input", () => pending.promise);
+    await userEvent.click(send);
+    expect(f.matching("session_input")).toHaveLength(1);
+    if (change === "tab") {
+      fireEvent.click(screen.getByRole("tab", { name: "Hosts", hidden: true }));
+    } else if (change === "source-transport") {
+      const replacement = crypto.randomUUID();
+      await second.emit({ kind: "starting", transportId: replacement, automatic: true });
+      await second.emit({ kind: "ready", transportId: replacement });
+    } else if (change === "dialog-close") {
+      await userEvent.click(screen.getByRole("button", { name: "Close snippets" }));
+    } else if (change === "source-pane") {
+      fireEvent.click(
+        within(panes(view.container)[1]!.pane).getByRole("button", { name: "Close session", hidden: true }),
+      );
+    } else {
+      await act(async () => {
+        await emit("profile-changed", {
+          snapshot: { generation: "2", selected: "another-account", accounts: [], retainedProfile: false },
+        });
+      });
+    }
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    if (change === "tab") await userEvent.click(screen.getByRole("tab", { name: /^First host/ }));
+    if (change !== "account") {
+      await userEvent.click(screen.getByRole("button", { name: "Snippets" }));
+      await screen.findByRole("button", { name: "Use snippet" });
+    }
+    await act(async () => pending.resolve(null));
+    expect(f.matching("session_input")).toHaveLength(1);
+    expect(screen.queryByRole("list", { name: "Per-terminal send results" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send to selected terminals" })).toBeNull();
+  },
+);
 
 it("saves complete active and inactive trees and focus, then explicitly opens them into fresh ordinary sessions", async () => {
   const f = fixture();

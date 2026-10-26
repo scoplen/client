@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "../src/i18n";
 import type { SnippetView } from "../src/ipc/bindings";
-import { SessionSnippets } from "../src/session-snippets";
+import { SessionSnippets, type SnippetTarget } from "../src/session-snippets";
 import { violations } from "../../ui/test/axe";
 
 const commands = vi.hoisted(() => ({
@@ -47,7 +47,7 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
-function fixture(locale: "en" | "zh-Hans" = "en") {
+function fixture(locale: "en" | "zh-Hans" = "en", targets?: SnippetTarget[]) {
   const close = vi.fn();
   const canSend = vi.fn(() => true);
   return {
@@ -59,12 +59,23 @@ function fixture(locale: "en" | "zh-Hans" = "en") {
           target="Deployment host"
           onClose={close}
           canSend={canSend}
+          getTargets={targets ? () => targets : undefined}
         />
       </I18nProvider>,
     ),
     close,
     canSend,
   };
+}
+
+function terminalTargets(count = 3): SnippetTarget[] {
+  return Array.from({ length: count }, (_, index) => ({
+    sessionId: index ? `session-${index}` : "session-original",
+    transportId: index ? `transport-${index}` : "transport-original",
+    target: index < 2 ? "Deployment host" : `Other host ${index}`,
+    location: { tab: index < 2 ? 1 : 2, pane: index < 2 ? index + 1 : index - 1 },
+    canSend: vi.fn(() => true),
+  }));
 }
 async function chooseSnippet() {
   await userEvent.click(await screen.findByRole("button", { name: "Use snippet" }));
@@ -314,4 +325,198 @@ it("renders Chinese labels, recovers list errors through an explicit refresh and
   expect(await screen.findByText(/还没有命令片段/)).toBeTruthy();
   expect(screen.queryByRole("alert")).toBeNull();
   expect(await violations(screen.getByRole("dialog"))).toEqual([]);
+});
+
+it("defaults only to the current target and reviews same-Login siblings and other tabs before sending", async () => {
+  fixture("en", terminalTargets());
+  await chooseSnippet();
+  const checkboxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
+  expect(checkboxes.map((checkbox) => checkbox.checked)).toEqual([true, false, false]);
+  await userEvent.click(checkboxes[1]!);
+  await userEvent.click(checkboxes[2]!);
+  expect(commands.sessionInput).not.toHaveBeenCalled();
+  expect(commands.snippetsPrepare).not.toHaveBeenCalled();
+  expect(await violations(screen.getByRole("dialog"))).toEqual([]);
+  await userEvent.click(screen.getByRole("button", { name: "Review command" }));
+  const targets = await screen.findByRole("list", { name: "Confirmed target terminals" });
+  expect(
+    within(targets)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent),
+  ).toEqual(["Deployment hostTab 1 · Pane 1", "Deployment hostTab 1 · Pane 2", "Other host 2Tab 2 · Pane 1"]);
+  expect(screen.getByLabelText("Complete command to send").textContent).toBe("printf '%s' 'api'");
+  await userEvent.click(screen.getByRole("button", { name: "Send to selected terminals" }));
+  await waitFor(() => expect(commands.sessionInput).toHaveBeenCalledTimes(3));
+  expect(commands.sessionInput.mock.calls).toEqual(
+    terminalTargets().map((target) => [
+      target.sessionId,
+      target.transportId,
+      Array.from(new TextEncoder().encode("printf '%s' 'api'\r")),
+    ]),
+  );
+  expect(commands.snippetsPrepare).toHaveBeenCalledTimes(1);
+  expect(screen.getAllByText("Sent to terminal")).toHaveLength(3);
+  expect(screen.queryByRole("button", { name: "Send to selected terminals" })).toBeNull();
+});
+
+it("requires a new preparation after changing command values or the reviewed targets", async () => {
+  fixture("en", terminalTargets());
+  await preview();
+  await userEvent.click(screen.getByRole("button", { name: "Change command or targets" }));
+  expect(screen.queryByRole("button", { name: "Send command" })).toBeNull();
+  await userEvent.clear(screen.getByRole("textbox", { name: "service" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "service" }), "worker");
+  await userEvent.click(screen.getAllByRole("checkbox")[1]!);
+  commands.snippetsPrepare.mockResolvedValue({
+    status: "ok",
+    data: { snippetId: snippet.id, command: "worker command" },
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Review command" }));
+  await screen.findByRole("button", { name: "Send to selected terminals" });
+  expect(commands.snippetsPrepare).toHaveBeenLastCalledWith(snippet.id, { service: "worker" });
+  expect(screen.getByLabelText("Complete command to send").textContent).toBe("worker command");
+  expect(
+    within(screen.getByRole("list", { name: "Confirmed target terminals" })).getAllByRole("listitem"),
+  ).toHaveLength(2);
+  expect(commands.sessionInput).not.toHaveBeenCalled();
+});
+
+it.each(["error", "rejection"])(
+  "sends in order, skips known stale targets and continues after an uncertain %s",
+  async (failure) => {
+    const targets = terminalTargets(4);
+    fixture("en", targets);
+    await chooseSnippet();
+    for (const checkbox of screen.getAllByRole("checkbox").slice(1)) await userEvent.click(checkbox);
+    await userEvent.click(screen.getByRole("button", { name: "Review command" }));
+    await screen.findByRole("button", { name: "Send to selected terminals" });
+    vi.mocked(targets[1]!.canSend).mockReturnValue(false);
+    let finish!: (value: unknown) => void;
+    commands.sessionInput.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    if (failure === "error")
+      commands.sessionInput.mockResolvedValueOnce({ status: "error", error: "private native detail" });
+    else commands.sessionInput.mockRejectedValueOnce(new Error("private IPC detail"));
+    await userEvent.click(screen.getByRole("button", { name: "Send to selected terminals" }));
+    expect(commands.sessionInput).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Send to selected terminals" })).toBeNull();
+    await act(async () => finish({ status: "ok", data: null }));
+    await waitFor(() => expect(commands.sessionInput).toHaveBeenCalledTimes(3));
+    expect(commands.sessionInput.mock.calls.map((args) => args.slice(0, 2))).toEqual([
+      ["session-original", "transport-original"],
+      ["session-2", "transport-2"],
+      ["session-3", "transport-3"],
+    ]);
+    const rows = within(screen.getByRole("list", { name: "Per-terminal send results" })).getAllByRole("listitem");
+    expect(rows[0]!.textContent).toContain("Sent to terminal");
+    expect(rows[1]!.textContent).toContain("Not sent");
+    expect(rows[2]!.textContent).toContain("Result unknown");
+    expect(rows[3]!.textContent).toContain("Sent to terminal");
+    expect(document.body.textContent).not.toContain("private native detail");
+    expect(document.body.textContent).not.toContain("private IPC detail");
+    expect(commands.snippetsPrepare).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("stops starting further sends after its owning view unmounts and discards late results", async () => {
+  const view = fixture("en", terminalTargets());
+  await chooseSnippet();
+  await userEvent.click(screen.getAllByRole("checkbox")[1]!);
+  await userEvent.click(screen.getByRole("button", { name: "Review command" }));
+  let finish!: (value: unknown) => void;
+  commands.sessionInput.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await userEvent.click(await screen.findByRole("button", { name: "Send to selected terminals" }));
+  expect(commands.sessionInput).toHaveBeenCalledTimes(1);
+  view.unmount();
+  fixture("en", terminalTargets());
+  await screen.findByRole("button", { name: "Use snippet" });
+  await act(async () => finish({ status: "ok", data: null }));
+  expect(commands.sessionInput).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("list", { name: "Per-terminal send results" })).toBeNull();
+});
+
+it.each(["before-send", "pending-send"] as const)(
+  "invalidates its source even when only other ready terminals are selected: %s",
+  async (phase) => {
+    const targets = terminalTargets();
+    const { canSend, close } = fixture("en", targets);
+    await chooseSnippet();
+    for (const checkbox of screen.getAllByRole("checkbox")) await userEvent.click(checkbox);
+    await userEvent.click(screen.getByRole("button", { name: "Review command" }));
+    const send = await screen.findByRole("button", { name: "Send to selected terminals" });
+    let finish!: (value: unknown) => void;
+    commands.sessionInput.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    if (phase === "before-send") canSend.mockReturnValue(false);
+    await userEvent.click(send);
+    if (phase === "pending-send") {
+      expect(commands.sessionInput).toHaveBeenCalledTimes(1);
+      canSend.mockReturnValue(false);
+      await act(async () => finish({ status: "ok", data: null }));
+    }
+    expect(commands.sessionInput).toHaveBeenCalledTimes(phase === "before-send" ? 0 : 1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Sent to terminal")).toBeNull();
+    expect(targets.every((target) => target.canSend())).toBe(true);
+  },
+);
+
+it.each(["empty", "duplicate", "unavailable"] as const)(
+  "refuses %s target selection before preparing or sending",
+  async (problem) => {
+    const targets = terminalTargets(1);
+    if (problem === "duplicate") targets.push({ ...targets[0]! });
+    fixture("en", targets);
+    await chooseSnippet();
+    if (problem === "empty") await userEvent.click(screen.getByRole("checkbox"));
+    if (problem === "unavailable") vi.mocked(targets[0]!.canSend).mockReturnValue(false);
+    await userEvent.click(screen.getByRole("button", { name: "Review command" }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(commands.snippetsPrepare).not.toHaveBeenCalled();
+    expect(commands.sessionInput).not.toHaveBeenCalled();
+  },
+);
+
+it("accepts 64 distinct targets but explicitly refuses selecting a 65th", async () => {
+  fixture("en", terminalTargets(65));
+  await chooseSnippet();
+  const choices = screen.getAllByRole("checkbox") as HTMLInputElement[];
+  for (const checkbox of choices.slice(1)) await userEvent.click(checkbox);
+  expect(choices.filter((checkbox) => checkbox.checked)).toHaveLength(64);
+  expect(choices[64]!.checked).toBe(false);
+  expect((await screen.findByRole("alert")).textContent).toContain("no more than 64");
+  await userEvent.click(screen.getByRole("button", { name: "Review command" }));
+  const reviewed = await screen.findByRole("list", { name: "Confirmed target terminals" });
+  expect(within(reviewed).getAllByRole("listitem")).toHaveLength(64);
+  expect(commands.snippetsPrepare).toHaveBeenCalledTimes(1);
+  expect(commands.sessionInput).not.toHaveBeenCalled();
+}, 15_000);
+
+it("localizes target selection, confirmation and individual results in Chinese", async () => {
+  const targets = terminalTargets(2);
+  fixture("zh-Hans", targets);
+  await userEvent.click(await screen.findByRole("button", { name: "使用片段" }));
+  const other = screen.getAllByRole("checkbox")[1]!;
+  other.focus();
+  await userEvent.keyboard(" ");
+  await userEvent.click(screen.getByRole("button", { name: "预览命令" }));
+  await screen.findByRole("list", { name: "已确认的目标终端" });
+  vi.mocked(targets[1]!.canSend).mockReturnValue(false);
+  await userEvent.click(screen.getByRole("button", { name: "发送到所选终端" }));
+  expect(await screen.findByText("已发送到终端")).toBeTruthy();
+  expect(screen.getByText("未发送，此连接已不可用。")).toBeTruthy();
+  expect(commands.sessionInput).toHaveBeenCalledTimes(1);
 });

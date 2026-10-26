@@ -23,6 +23,7 @@ import { ForwardsContext, useForwards } from "./use-forwards";
 import { useProfile, useProfileCommands } from "./account-profiles";
 import { WorkspacesDialog } from "./workspaces";
 import { canvasMinimum, paneDepth, paneOrder, paneRectangles } from "./terminal-layout";
+import type { SnippetTarget } from "./session-snippets";
 
 type View = "hosts" | "settings";
 
@@ -85,6 +86,7 @@ export function Shell({
   const forwards = useForwards();
   const closeControllers = useRef(new Map<string, (discard?: boolean) => Promise<boolean>>());
   const focusControllers = useRef(new Map<string, () => void>());
+  const snippetTargets = useRef(new Map<string, () => SnippetTarget | null>());
   const paneElements = useRef(new Map<string, HTMLDivElement>());
   const [focusRequest, setFocusRequest] = useState<{ id: string } | null>(null);
   const [closingPanes, setClosingPanes] = useState<string[]>([]);
@@ -387,6 +389,21 @@ export function Shell({
                           focusControllers.current.delete(session.id);
                       };
                     }}
+                    registerSnippetTarget={(target) => {
+                      snippetTargets.current.set(session.id, target);
+                      return () => {
+                        if (snippetTargets.current.get(session.id) === target)
+                          snippetTargets.current.delete(session.id);
+                      };
+                    }}
+                    getSnippetTargets={() =>
+                      layout.tabs.flatMap((tab, tabIndex) =>
+                        paneOrder(layout.layouts[tab.id]!).flatMap((id, paneIndex) => {
+                          const target = snippetTargets.current.get(id)?.();
+                          return target ? [{ ...target, location: { tab: tabIndex + 1, pane: paneIndex + 1 } }] : [];
+                        }),
+                      )
+                    }
                     onClose={(discard) => closeSession(session.id, discard)}
                     registerClose={(close) => {
                       closeControllers.current.set(session.id, close);

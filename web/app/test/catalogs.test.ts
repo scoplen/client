@@ -50,6 +50,8 @@ const sample = {
   folder: "Services",
   tags: "operations",
   number: 1,
+  tab: 1,
+  pane: 2,
 };
 
 describe("message catalogs", () => {

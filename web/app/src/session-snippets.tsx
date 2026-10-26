@@ -6,8 +6,19 @@ import { useI18n } from "./i18n";
 import type { PreparedSnippet, SnippetInput, SnippetIssue, SnippetVariableInput, SnippetView } from "./ipc/bindings";
 import { useStoreChanges } from "./ipc/store-events";
 
-type Mode = "library" | "edit" | "values" | "preview" | "delete" | "sent" | "sendFailed";
+type Mode = "library" | "edit" | "values" | "preview" | "delete" | "results";
 type DraftVariable = SnippetVariableInput & { key: string };
+
+export interface SnippetTarget {
+  sessionId: string;
+  transportId: string;
+  target: string;
+  location?: { tab: number; pane: number };
+  canSend: () => boolean;
+}
+
+type TargetOutcome = "pending" | "sent" | "notSent" | "unknown";
+const targetKey = (target: SnippetTarget) => JSON.stringify([target.sessionId, target.transportId]);
 
 export function SessionSnippetsButton(props: Omit<Parameters<typeof SessionSnippets>[0], "onClose" | "finalFocus">) {
   const { t } = useI18n();
@@ -31,6 +42,7 @@ export function SessionSnippets({
   onClose,
   canSend,
   finalFocus,
+  getTargets,
 }: {
   sessionId: string;
   transportId: string;
@@ -38,6 +50,7 @@ export function SessionSnippets({
   onClose: () => void;
   canSend: () => boolean;
   finalFocus?: () => HTMLButtonElement | null;
+  getTargets?: () => SnippetTarget[];
 }) {
   const commands = useProfileCommands();
   const { t } = useI18n();
@@ -51,6 +64,11 @@ export function SessionSnippets({
   const [variables, setVariables] = useState<DraftVariable[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [prepared, setPrepared] = useState<PreparedSnippet | null>(null);
+  const [targets, setTargets] = useState<SnippetTarget[]>([]);
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [reviewed, setReviewed] = useState<SnippetTarget[]>([]);
+  const [outcomes, setOutcomes] = useState<TargetOutcome[]>([]);
+  const [targetIssue, setTargetIssue] = useState<"empty" | "limit" | "duplicate" | "unavailable" | null>(null);
   const alive = useRef(false);
   const inFlight = useRef(false);
   const listRevision = useRef(0);
@@ -104,6 +122,11 @@ export function SessionSnippets({
     setDraft(null);
     setVariables([]);
     setPrepared(null);
+    setTargets([]);
+    setChosen([]);
+    setReviewed([]);
+    setOutcomes([]);
+    setTargetIssue(null);
     setValues({});
     setIssue(null);
   };
@@ -143,28 +166,54 @@ export function SessionSnippets({
   };
   const prepare = () => {
     if (!selected || selected.readOnly) return;
+    const selectedTargets = targets.filter((candidate) => chosen.includes(targetKey(candidate)));
+    const keys = selectedTargets.map(targetKey);
+    const problem = !selectedTargets.length
+      ? "empty"
+      : selectedTargets.length > 64
+        ? "limit"
+        : new Set(keys).size !== keys.length
+          ? "duplicate"
+          : selectedTargets.some((candidate) => !candidate.canSend())
+            ? "unavailable"
+            : null;
+    setTargetIssue(problem);
+    if (problem) return;
     void run(async () => {
       const result = await commands.snippetsPrepare(selected.id, values);
       if (!alive.current) return;
       if (result.status === "error") setIssue(result.error);
       else {
         setPrepared(result.data);
+        setReviewed(selectedTargets);
         setMode("preview");
       }
     });
   };
   const send = () => {
-    if (!prepared || !canSend()) return;
+    if (!prepared || !reviewed.length) return;
+    if (!canSend()) return onClose();
     void run(async () => {
-      // The preview is the input. Never reread the snippet or replay an uncertain send.
-      setMode("sendFailed");
-      const result = await commands
-        .sessionInput(sessionId, transportId, Array.from(new TextEncoder().encode(prepared.command + "\r")))
-        .catch(() => ({ status: "error" as const }));
-      if (!alive.current) return;
+      const data = Array.from(new TextEncoder().encode(prepared.command + "\r"));
       setPrepared(null);
       setValues({});
-      setMode(result.status === "ok" ? "sent" : "sendFailed");
+      setMode("results");
+      setOutcomes(reviewed.map(() => "pending"));
+      for (const [index, candidate] of reviewed.entries()) {
+        if (!alive.current) return;
+        if (!canSend()) return onClose();
+        let outcome: TargetOutcome = "notSent";
+        if (candidate.canSend()) {
+          // A failure after invocation cannot prove whether input reached the queue.
+          const result = await commands
+            .sessionInput(candidate.sessionId, candidate.transportId, data)
+            .catch(() => ({ status: "error" as const }));
+          outcome = result.status === "ok" ? "sent" : "unknown";
+        }
+        if (!alive.current) return;
+        if (!canSend()) return onClose();
+        setOutcomes((current) => current.map((value, position) => (position === index ? outcome : value)));
+      }
     });
   };
   const remove = () => {
@@ -185,6 +234,8 @@ export function SessionSnippets({
   const issueText = (value: SnippetIssue) =>
     t(`snippets.issue.${value.kind}`, { name: "name" in value ? value.name : "" });
   const error = issue ? issueText(issue) : null;
+  const location = (candidate: SnippetTarget) =>
+    candidate.location ? t("snippets.location", candidate.location) : t("snippets.current");
 
   return (
     <Dialog
@@ -219,16 +270,29 @@ export function SessionSnippets({
             </Button>
           ) : null}
           {mode === "preview" ? (
-            <Button variant="primary" busy={busy} onClick={send}>
-              {t("snippets.send")}
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  setPrepared(null);
+                  setReviewed([]);
+                  setMode("values");
+                }}
+              >
+                {t("snippets.changeReview")}
+              </Button>
+              <Button variant="primary" busy={busy} onClick={send}>
+                {t(reviewed.length === 1 ? "snippets.send" : "snippets.sendSelected")}
+              </Button>
+            </>
           ) : null}
           {mode === "delete" ? (
             <Button variant="destructive" busy={busy} onClick={remove}>
               {t("snippets.delete")}
             </Button>
           ) : null}
-          {mode === "sent" || mode === "sendFailed" ? (
+          {mode === "results" ? (
             <Button variant="primary" disabled={busy} onClick={onClose}>
               {t("snippets.return")}
             </Button>
@@ -244,6 +308,11 @@ export function SessionSnippets({
       {error ? (
         <p role="alert" className="mb-4 text-sm wrap-anywhere text-attention">
           {error}
+        </p>
+      ) : null}
+      {targetIssue ? (
+        <p role="alert" className="mb-4 text-sm text-attention">
+          {t(`snippets.targets.${targetIssue}`)}
         </p>
       ) : null}
       {mode === "library" ? (
@@ -290,6 +359,12 @@ export function SessionSnippets({
                         ),
                       );
                       setPrepared(null);
+                      const current = { sessionId, transportId, target, canSend };
+                      setTargets((getTargets?.() ?? [current]).filter((candidate) => candidate.canSend()));
+                      setChosen([targetKey(current)]);
+                      setReviewed([]);
+                      setOutcomes([]);
+                      setTargetIssue(null);
                       setIssue(null);
                       setMode("values");
                     }}
@@ -458,6 +533,39 @@ export function SessionSnippets({
           {selected.issue ? (
             <p className="m-0 text-sm wrap-anywhere text-attention">{issueText(selected.issue)}</p>
           ) : null}
+          {!selected.readOnly && !selected.issue ? (
+            <fieldset disabled={busy} className="min-w-0 border-0 border-t border-border p-0 pt-4">
+              <legend className="px-1 text-sm font-medium">{t("snippets.targets")}</legend>
+              <p className="mt-1 text-sm text-muted-foreground">{t("snippets.targetsHint")}</p>
+              <div className="flex max-h-52 flex-col gap-3 overflow-auto">
+                {targets.map((candidate, index) => {
+                  const key = targetKey(candidate);
+                  const checked = chosen.includes(key);
+                  return (
+                    <label key={`${key}/${index}`} className="flex items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={!checked && !candidate.canSend()}
+                        onChange={(event) => {
+                          setTargetIssue(null);
+                          if (event.target.checked && chosen.length >= 64) {
+                            setTargetIssue("limit");
+                            return;
+                          }
+                          setChosen(event.target.checked ? [...chosen, key] : chosen.filter((value) => value !== key));
+                        }}
+                      />
+                      <span className="min-w-0 wrap-anywhere">
+                        {candidate.target}
+                        <span className="block text-xs text-muted-foreground">{location(candidate)}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
+          ) : null}
           {selected.variables.map((variable, index) =>
             selected.readOnly || selected.issue ? (
               <p key={index} className="m-0 text-sm wrap-anywhere">
@@ -515,20 +623,42 @@ export function SessionSnippets({
             {prepared.command}
           </pre>
           <p className="m-0 text-sm text-muted-foreground">{t("snippets.enterWarning")}</p>
+          <ol aria-label={t("snippets.confirmedTargets")} className="m-0 list-decimal space-y-2 pl-5 text-sm">
+            {reviewed.map((candidate) => (
+              <li key={targetKey(candidate)} className="wrap-anywhere">
+                {candidate.target}
+                <span className="block text-xs text-muted-foreground">{location(candidate)}</span>
+              </li>
+            ))}
+          </ol>
         </div>
       ) : null}
       {mode === "delete" ? (
         <p className="text-sm wrap-anywhere">{t("snippets.deleteBody", { name: selected?.name ?? "" })}</p>
       ) : null}
-      {mode === "sent" ? (
-        <p role="status" className="text-sm">
-          {t("snippets.sent")}
-        </p>
-      ) : null}
-      {mode === "sendFailed" ? (
-        <p role={busy ? "status" : "alert"} className="text-sm">
-          {t(busy ? "snippets.sending" : "snippets.sendFailed")}
-        </p>
+      {mode === "results" ? (
+        <>
+          <p className="text-sm text-muted-foreground">{t("snippets.resultsHint")}</p>
+          <ol aria-label={t("snippets.results")} className="m-0 list-decimal space-y-4 pl-5 text-sm">
+            {reviewed.map((candidate, index) => (
+              <li key={targetKey(candidate)} className="wrap-anywhere">
+                <span className="font-medium">{candidate.target}</span>
+                <span className="block text-xs text-muted-foreground">{location(candidate)}</span>
+                <p role={outcomes[index] === "unknown" ? "alert" : "status"} className="my-1">
+                  {t(
+                    outcomes[index] === "sent"
+                      ? "snippets.sent"
+                      : outcomes[index] === "notSent"
+                        ? "snippets.notSent"
+                        : outcomes[index] === "unknown"
+                          ? "snippets.sendFailed"
+                          : "snippets.sending",
+                  )}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </>
       ) : null}
     </Dialog>
   );
