@@ -104,7 +104,6 @@ impl PersonalServer {
         let claims = verified.claims();
         if claims.sub != pending.account_id
             || claims.did != store.device_id()
-            || !claims.org.is_empty()
             || pending.auth_scope.as_deref() != Some(claims.scope.as_str())
             || claims.cnf_jkt != dpop_jwk_thumbprint(&signing.public_key_sec1()).map_err(invalid)?
         {

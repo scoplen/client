@@ -521,16 +521,19 @@ async fn invalid_tokens_and_scopes_send_no_protected_request() {
     for field in 0..7 {
         peer.install_token(
             &store,
-            |claims| match field {
-                0 => claims.sub = scoplen_model::new_uuid_v7().unwrap(),
-                1 => claims.did = scoplen_model::new_uuid_v7().unwrap(),
-                2 => claims.scope = "keys:read".into(),
-                3 => claims.scope = "sync:read".into(),
-                4 => {
-                    claims.iat -= 1200;
-                    claims.exp = claims.iat + 600;
+            |claims| {
+                claims.org = refresh::organizations(2);
+                match field {
+                    0 => claims.sub = scoplen_model::new_uuid_v7().unwrap(),
+                    1 => claims.did = scoplen_model::new_uuid_v7().unwrap(),
+                    2 => claims.scope = "keys:read".into(),
+                    3 => claims.scope = "sync:read".into(),
+                    4 => {
+                        claims.iat -= 1200;
+                        claims.exp = claims.iat + 600;
+                    }
+                    _ => {}
                 }
-                _ => {}
             },
             if field == 5 {
                 Some(P256SigningKey::from_bytes(&[77; 32]).unwrap().public_key_sec1())

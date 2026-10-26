@@ -292,6 +292,38 @@ async fn profile_metadata_and_transport_failures_keep_the_entire_cached_pair() {
 }
 
 #[tokio::test]
+async fn organization_snapshots_do_not_replace_account_query_identity() {
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    install(&peer, &store);
+    let original = manager.query_account(store.clone()).await.unwrap();
+    let protected = peer.state.lock().unwrap().proofs.len();
+    for field in 0..3 {
+        peer.install_token(
+            &store,
+            |claims| {
+                claims.org = super::refresh::organizations(2);
+                match field {
+                    0 => claims.sub = scoplen_model::new_uuid_v7().unwrap(),
+                    1 => claims.did = scoplen_model::new_uuid_v7().unwrap(),
+                    _ => {}
+                }
+            },
+            (field == 2).then(|| P256SigningKey::from_bytes(&[77; 32]).unwrap().public_key_sec1()),
+        );
+        assert_eq!(
+            manager.query_account(store.clone()).await,
+            Err(PersonalServerError::AuthenticationRequired)
+        );
+        assert_eq!(peer.state.lock().unwrap().proofs.len(), protected);
+        assert_eq!(manager.account_snapshot(&store).unwrap(), Some(original.clone()));
+    }
+    peer.assert_healthy();
+}
+
+#[tokio::test]
 async fn session_scope_and_denial_never_grant_device_access_and_keep_offline_state() {
     let peer = Peer::new().await;
     let dir = tempfile::tempdir().unwrap();

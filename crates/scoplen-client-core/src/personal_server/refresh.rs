@@ -119,7 +119,6 @@ impl PersonalServer {
                 }
                 if claims.sub != identity.account_id
                     || claims.did != store.device_id()
-                    || !claims.org.is_empty()
                     || claims.cnf_jkt
                         != dpop_jwk_thumbprint(&signing.public_key_sec1())
                             .map_err(|_| PersonalServerError::Identity)?
