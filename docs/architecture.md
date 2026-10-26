@@ -119,6 +119,34 @@ output, Files, tunnels and remote processes are outside this terminal-only
 restoration profile. Native interaction and application/system restart acceptance
 remain separate roadmap outcomes.
 
+## Selected-terminal snippets
+
+The existing Rust `snippets` facade owns saved definitions, validation and nonsecret
+Text/Integer/Choice preparation. `SessionSnippets` presents one prepared command and
+an ordered snapshot of one to 64 existing session/transport pairs. The shell enumerates
+tabs in display order and panes in depth-first order through getters registered by
+ordinary `SessionTerminal` views. Only ready live connections are candidates. The current
+pane is the only default; each target retains its Host/Login label and tab/pane location.
+These getters expose existing connection state without owning or reserving sessions.
+
+Changing variables or selection discards the review. Explicit confirmation sends the
+exact prepared bytes plus one CR through the existing profile-bound `sessionInput`,
+sequentially with one invocation outstanding. Captured readiness guards refuse known
+stale targets without substituting their replacement transports. Surviving targets
+continue after individual failures. A queue acknowledgement displays Sent to terminal;
+known pre-invocation unavailability displays Not sent. Any failure after invocation
+displays Result unknown, because a generic IPC failure does not establish queue handoff.
+Diagnostic strings never determine execution status.
+
+The originating dialog's existing mounted and exact-transport guards stop later sends
+after close, pane/transport replacement, active-tab or Account changes. Late replies
+cannot update a replacement dialog. Review and outcomes are transient React state;
+there is no execution job, retry owner, additional lease, automatic connection or remote
+exit-status collector. Secret definitions remain redacted and read-only. No shared
+contract, generated IPC or production Rust change is required for this target selector.
+Public-session OpenSSH evidence and simulated frontend lifecycle tests remain separate
+from rendered/native feature acceptance.
+
 ## Local data
 
 `scoplen-client-core::store` is the SQLCipher store. It is opened with a raw 32-byte key, so SQLCipher runs no key derivation of its own; a wrong key fails on the first page. Migrations in `store/migrations.rs` run at startup in one transaction, and a store with a newer schema than the build knows is refused rather than modified. Replicated objects are kept as their deterministic CBOR envelopes with per-field clocks. A local write is stamped with the next device clock, applied to the stored object, merged with the stored version through `scoplen_model::merge`, validated, and committed; subscribers hear about it only after the commit. The store also enforces the 100,000-objects-per-vault limit (D-36). Objects created before sync enrollment have no vault.

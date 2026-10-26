@@ -27,7 +27,7 @@ import { useTerminalColors, xtermTheme } from "./terminal-colors";
 import { SessionFiles, type EnqueueFeedback, type FileOperationOutcome } from "./session-files";
 import { dismissUploadAttention, initialUploadAttention, recordUploadAttention } from "./session-upload-attention";
 import { useSessionTransfers } from "./use-session-transfers";
-import { SessionSnippetsButton } from "./session-snippets";
+import { SessionSnippetsButton, type SnippetTarget } from "./session-snippets";
 import {
   TrustDialog,
   PassphraseDialog,
@@ -75,6 +75,8 @@ export function SessionTerminal({
   onSplit,
   splitIssue,
   registerFocus,
+  registerSnippetTarget,
+  getSnippetTargets,
 }: {
   profileId: string;
   label: string;
@@ -90,6 +92,8 @@ export function SessionTerminal({
   splitIssue?: string;
   /** Register actual input focus without transferring session ownership. */
   registerFocus?: (focus: () => void) => () => void;
+  registerSnippetTarget?: (target: () => SnippetTarget | null) => () => void;
+  getSnippetTargets?: () => SnippetTarget[];
   /** Told whenever the connection state changes, so the window can show it on the tab. */
   onStateChange?: (state: SessionState) => void;
   /** Current target label resolved through ordinary Login preparation. */
@@ -389,6 +393,16 @@ export function SessionTerminal({
           terminal.current?.focusInput();
       }),
     [registerFocus, state, detailsOpen],
+  );
+  useEffect(
+    () =>
+      registerSnippetTarget?.(() => {
+        if (state !== "connected" || offline || closingView || !transportId) return null;
+        const canSend = () =>
+          mounted.current && currentTransport.current === transportId && !connectionEnded.current && !closing.current;
+        return canSend() ? { sessionId, transportId, target: label, canSend } : null;
+      }),
+    [registerSnippetTarget, state, offline, closingView, transportId, sessionId, label],
   );
   const menu = useContextMenu();
 
@@ -769,6 +783,7 @@ export function SessionTerminal({
               sessionId={sessionId}
               transportId={transportId}
               target={label}
+              getTargets={getSnippetTargets}
               canSend={() => currentTransport.current === transportId && !connectionEnded.current && !closing.current}
             />
           ) : null}

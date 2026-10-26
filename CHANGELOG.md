@@ -4,6 +4,14 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added explicit Snippet target selection for up to 64 existing ready terminals in
+  the current Account, including same-Login split panes and other tabs. Review
+  captures the complete command and ordered targets; sending uses each original
+  transport once and shows individual local acknowledgements, unavailable targets
+  and uncertain results. Closing the source dialog or changing its Account, tab or
+  transport stops later sends. It opens no connections and retries no input.
+  Secret variables and rendered/native feature acceptance remain separate work.
+
 - Added terminal-only split Workspaces with independent ordinary SSH panes,
   remembered focus, keyboard pane selection and checkpoint-aware pane/tab close.
   Layout changes retain surviving terminal DOM and transports. New version-two
@@ -32,8 +40,7 @@ All notable changes to the Scoplen desktop client are recorded here.
   Choice validation, literal one-pass preparation and generated profile-bound commands.
   Preview and send use the current terminal's existing transport fence; local send
   acknowledgement does not claim a remote exit result. Retained Secret definitions
-  redact defaults and stay read-only. Secret, multiline and multi-target execution
-  remain incomplete.
+  redact defaults and stay read-only. Secret and multiline execution remain incomplete.
 
 - Added Teams to Personal account settings with explicit membership discovery, team creation,
   retained-request recovery and paginated results in English and Simplified Chinese. Roles
