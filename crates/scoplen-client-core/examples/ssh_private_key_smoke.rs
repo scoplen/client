@@ -2,13 +2,15 @@
 
 //! Disposable OpenSSH check for direct software-key authentication.
 
-use std::{env, fs, sync::Arc};
+use std::{env, fs, path::Path, sync::Arc};
 
 use scoplen_client_core::connection::{
     ConnectionPlan, ConnectionRoute, CredentialMaterial, HostKeyPresentation, HostKeyTrust,
     SshConnection, SshConnectionError, probe_host_key,
 };
-use scoplen_crypto::SecretVec;
+use scoplen_client_core::inventory::{HostSource, Inventory, NewHost, SignIn};
+use scoplen_client_core::store::Store;
+use scoplen_crypto::{LocalDatabaseKey, SecretVec};
 use scoplen_ssh::{ClientError, HostKey, HostKeyVerificationError};
 use uuid::Uuid;
 
@@ -25,24 +27,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "encrypted",
             "wrong-passphrase",
             "unsupported",
+            "generate",
+            "generated",
         ]
         .contains(&args[1].as_str())
     {
-        return Err("usage: ssh_private_key_smoke <success|wrong-key|wrong-rsa-key|sha1-only|untrusted|invalid|encrypted|wrong-passphrase|unsupported> <host> <port> <user> <key-file> [passphrase-file]".into());
+        return Err("usage: ssh_private_key_smoke <success|wrong-key|wrong-rsa-key|sha1-only|untrusted|invalid|encrypted|wrong-passphrase|unsupported|generate|generated> <host> <port> <user> <key-file-or-generated-store> [passphrase-file]".into());
     }
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     runtime.block_on(run(&args))
 }
 
 async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let plan = ConnectionPlan {
-        profile_id: Uuid::nil(),
-        host_id: Uuid::nil(),
-        address: args[2].clone(),
-        port: args[3].parse()?,
-        username: args[4].clone(),
-        route: ConnectionRoute::Direct,
-        credential: CredentialMaterial::PrivateKey(SecretVec::new(fs::read(&args[5])?)),
+    let plan = if ["generate", "generated"].contains(&args[1].as_str()) {
+        // This fixed wrapping key belongs only to the disposable smoke database.
+        let store = Store::open(Path::new(&args[5]), &LocalDatabaseKey::new([73; 32]))?;
+        let inventory = Inventory::new(Arc::new(store));
+        if args[1] == "generate" {
+            if !inventory.hosts(HostSource::All, String::new())?.is_empty() {
+                return Err("generated-key fixture already contains a Host".into());
+            }
+            let host = inventory.add_host(NewHost {
+                name: None,
+                address: args[2].clone(),
+                port: Some(args[3].parse()?),
+                username: args[4].clone(),
+                sign_in: SignIn::GenerateKey,
+            })?;
+            let public_key = host.logins[0]
+                .credential
+                .as_ref()
+                .and_then(|credential| credential.public_key.as_deref())
+                .ok_or("generated credential has no public key")?;
+            println!("{public_key}");
+            return Ok(());
+        }
+        let hosts = inventory.hosts(HostSource::All, String::new())?;
+        if hosts.len() != 1 {
+            return Err("generated-key fixture must contain one Host".into());
+        }
+        let host = inventory.host(hosts[0].id.clone())?.ok_or("generated Host disappeared")?;
+        let plan = inventory.connection_plan(host.logins[0].id.clone())?;
+        if plan.address != args[2]
+            || plan.port != args[3].parse::<u16>()?
+            || plan.username != args[4]
+        {
+            return Err("generated-key fixture endpoint changed".into());
+        }
+        if !matches!(plan.credential, CredentialMaterial::PrivateKey(_)) {
+            return Err("generated Login did not resolve its private key".into());
+        }
+        plan
+    } else {
+        ConnectionPlan {
+            profile_id: Uuid::nil(),
+            host_id: Uuid::nil(),
+            address: args[2].clone(),
+            port: args[3].parse()?,
+            username: args[4].clone(),
+            route: ConnectionRoute::Direct,
+            credential: CredentialMaterial::PrivateKey(SecretVec::new(fs::read(&args[5])?)),
+        }
     };
     let trust = if args[1] == "untrusted" {
         None
