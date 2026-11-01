@@ -549,6 +549,15 @@ Migration 3 adds `implicit_objects`, an encrypted, device-local visibility marke
 
 The empty Hosts list can open a native file picker and preview a limited OpenSSH config before writing. The Rust core reads a bounded UTF-8 file, separates representable literal `Host` blocks from skipped hosts, and reports unsupported directives with line numbers. `Include`, `Match`, wildcard hosts, or global rules can change the meaning of every block, so a file containing them yields a report without importable hosts. The frontend displays that report and sends the preview back for confirmation. The core re-reads and compares the source before import; if it changed, the user must preview again. Identity files and every host are validated before one atomic store transaction. The source config is never written. Complete OpenSSH import and idempotent re-import remain roadmap C10.
 
+The Add Host `GenerateKey` intent creates a fresh software Ed25519 identity in
+Rust using the existing random source and OpenSSH encoder. Its private key and
+public-key metadata are saved with the Host, implicit Login and implicit Credential
+in one store transaction. Generation does not scan existing credentials for reuse; imported
+keys keep the existing bounded reuse behavior. Only the public key and redacted
+metadata are returned to the frontend. Reopening the encrypted store resolves
+the same saved Credential through the ordinary connection preparation path.
+Public-key installation on the remote host remains an explicit user action.
+
 ## SSH session routes
 
 `scoplen-client-core::connection` resolves an AccessProfile into an endpoint,

@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added software Ed25519 key generation when adding a host. The host, Login and
+  private-key Credential save together in the encrypted store. Copy public key
+  provides the public half for manual installation on the remote host and reports
+  clipboard failures with a retry; generation never connects automatically.
+
 - Added directional current-folder comparison for up to sixteen ordinary source files.
   Content-identical files are skipped; explicit Apply admits the complete changed batch to
   the existing queue with fresh replacement review and independent per-file results.

@@ -609,19 +609,33 @@ function LoginLine({
 function CopyPublicKey({ credential }: { credential: CredentialLabel }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const copy = async () => {
+    setCopyFailed(false);
+    try {
+      await navigator.clipboard.writeText(credential.publicKey ?? "");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+      setCopyFailed(true);
+    }
+  };
   return (
-    <button
-      type="button"
-      title={t("host.publicKey.hint")}
-      onClick={() =>
-        void navigator.clipboard.writeText(credential.publicKey ?? "").then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        })
-      }
-      className="mt-1 self-start rounded text-xs text-primary hover:underline"
-    >
-      <span aria-live="polite">{copied ? t("host.publicKey.copied") : t("host.publicKey.copy")}</span>
-    </button>
+    <>
+      <button
+        type="button"
+        title={t("host.publicKey.hint")}
+        onClick={() => void copy()}
+        className="mt-1 self-start rounded text-xs text-primary hover:underline"
+      >
+        <span aria-live="polite">{copied ? t("host.publicKey.copied") : t("host.publicKey.copy")}</span>
+      </button>
+      {copyFailed ? (
+        <p role="alert" className="m-0 text-xs text-attention">
+          {t("host.publicKey.copyFailed")}
+        </p>
+      ) : null}
+    </>
   );
 }
