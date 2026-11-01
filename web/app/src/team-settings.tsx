@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useProfileCommands } from "./account-profiles";
 import { useI18n } from "./i18n";
 import type { TeamCreationView, TeamPageView, TeamSettingsView, TeamSummary } from "./ipc/bindings";
+import { TeamMembership } from "./team-membership";
 
 export function TeamSettings({
   authenticated,
@@ -29,9 +30,12 @@ export function TeamSettings({
   const [editFailure, setEditFailure] = useState<string | null>(null);
   const [reviewRequired, setReviewRequired] = useState(false);
   const [nameSaved, setNameSaved] = useState(false);
+  const [membership, setMembership] = useState<{ teamId: string | null } | null>(null);
   const editRevision = useRef(0);
   const editField = useRef<HTMLInputElement>(null);
   const editOpener = useRef<HTMLButtonElement | null>(null);
+  const membershipOpener = useRef<HTMLButtonElement | null>(null);
+  const joinButton = useRef<HTMLButtonElement>(null);
   const returnEditFocus = useRef(false);
   const mounted = useRef(false);
   const inFlight = useRef(false);
@@ -286,6 +290,18 @@ export function TeamSettings({
       <Button className="mt-4" variant="secondary" disabled={locked || !authenticated} onClick={() => query(null)}>
         {t("teams.refresh")}
       </Button>
+      <Button
+        ref={joinButton}
+        className="mt-4 ml-2"
+        variant="secondary"
+        disabled={locked || !authenticated}
+        onClick={(event) => {
+          membershipOpener.current = event.currentTarget;
+          setMembership({ teamId: null });
+        }}
+      >
+        {t("teams.membership.join")}
+      </Button>
       {page ? (
         page.teams.length ? (
           <ul aria-label={t("teams.list")} className="mt-4 list-none divide-y divide-border p-0">
@@ -302,6 +318,17 @@ export function TeamSettings({
                   }}
                 >
                   {t("teams.settings.edit", { name: team.name })}
+                </Button>
+                <Button
+                  className="mt-3 ml-2"
+                  variant="secondary"
+                  disabled={locked || !authenticated}
+                  onClick={(event) => {
+                    membershipOpener.current = event.currentTarget;
+                    setMembership({ teamId: team.id });
+                  }}
+                >
+                  {t("teams.membership.manage")}
                 </Button>
               </li>
             ))}
@@ -418,6 +445,20 @@ export function TeamSettings({
           </Button>
         </form>
       )}
+      {membership ? (
+        <TeamMembership
+          key={membership.teamId ?? "join"}
+          initialTeamId={membership.teamId}
+          disabled={locked || !authenticated}
+          onBusyChange={onBusyChange}
+          onClose={() => {
+            setMembership(null);
+            const opener = membershipOpener.current;
+            (opener?.isConnected ? opener : joinButton.current)?.focus();
+          }}
+          onMembershipChanged={(current) => setPage(current ?? null)}
+        />
+      ) : null}
     </section>
   );
 }

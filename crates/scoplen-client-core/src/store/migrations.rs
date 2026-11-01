@@ -678,4 +678,26 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         CHECK(phase=0 OR first_attempt_ms IS NOT NULL)
     ) STRICT;
     "#,
+    // 18: original invitation, acceptance and dissolution requests survive Account reopening.
+    r#"
+    CREATE TABLE team_operation (
+        kind INTEGER PRIMARY KEY CHECK(kind IN(0,1,2)),
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK(length(account_id)=16),
+        operation_id BLOB NOT NULL CHECK(length(operation_id)=16),
+        organization_id BLOB NOT NULL CHECK(length(organization_id)=16),
+        invitation_id BLOB CHECK(invitation_id IS NULL OR length(invitation_id)=16),
+        payload BLOB NOT NULL CHECK(length(payload) BETWEEN 1 AND 4096),
+        password BLOB CHECK(password IS NULL OR length(password)=8),
+        etag TEXT CHECK(etag IS NULL OR length(etag) BETWEEN 1 AND 256),
+        phase INTEGER NOT NULL CHECK(phase IN(0,1,2)),
+        first_attempt_ms INTEGER CHECK(first_attempt_ms IS NULL OR first_attempt_ms>0),
+        response BLOB CHECK(response IS NULL OR length(response) BETWEEN 1 AND 4096),
+        CHECK((kind=0)=(password IS NOT NULL)),
+        CHECK((kind=2)=(etag IS NOT NULL)),
+        CHECK((kind=2)=(invitation_id IS NULL)),
+        CHECK((phase=2)=(response IS NOT NULL)),
+        CHECK(phase=0 OR first_attempt_ms IS NOT NULL)
+    ) STRICT;
+    "#,
 ];

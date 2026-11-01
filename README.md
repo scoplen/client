@@ -384,7 +384,23 @@ or uncertain result requires explicit Refresh team settings and review before an
 the client never automatically retries the edit. Closing the editor or changing Account ignores
 late results. Name editing needs the session's organization write scope, while discovery and
 Personal use remain available without it.
-The panel does not switch inventory, invite members or grant access to shared assets.
+Join team accepts a public invitation link and its separate eight-character password. Rust
+checks the signed-in Account's exact deployment and recipient-authorized preview before
+acceptance. Administrators invite an existing username with built-in roles, inspect or revoke
+invitations, and update, suspend or remove members through Invitations and members. Active members
+can leave; Owners can explicitly dissolve a team after reviewing its current version.
+Invitation, acceptance and dissolution retain their original protected request and operation
+key before dispatch. Explicit confirmation uses that same request within its 24-hour window;
+dissolution also keeps its original validator. A historical receipt does not establish current
+team access. Expired uncertainty can be archived only after an explicit current-status review.
+The separate invitation password stays in the encrypted Account-local operation. Reveal fills
+only an explicit transient uncontrolled field; Copy password writes directly from Rust to the
+native clipboard. No WebView clipboard permission is granted. Dismissing the confirmed operation
+erases the local password; a lost password requires revoking and replacing the invitation.
+Conditional member changes, invitation revocation and Leave team never replay automatically.
+Conflict or unknown outcome requires an explicit refresh and review. Personal data and other
+teams remain independent; installed host trust needs separate removal after dissolution.
+The panel does not switch inventory or grant access to shared assets.
 Older saved sessions need fresh Device authentication to obtain the team scopes; refresh never
 expands an existing family's permission ceiling.
 

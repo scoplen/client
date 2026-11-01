@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The original team-creation request remains inside its Account's encrypted store.
+//! Original team requests and separate invitation passwords remain in the encrypted Account store.
 
 use rusqlite::{OptionalExtension, params};
 use scoplen_api::organization::{
@@ -19,7 +19,202 @@ pub(crate) struct TeamCreationRecord {
     pub response: Option<SecretVec>,
 }
 
+pub(crate) struct TeamOperationRecord {
+    pub kind: i64,
+    pub operation_id: Uuid,
+    pub organization_id: Uuid,
+    pub invitation_id: Option<Uuid>,
+    pub payload: SecretVec,
+    pub password: Option<SecretVec>,
+    pub etag: Option<String>,
+    pub phase: i64,
+    pub first_attempt_ms: Option<u64>,
+    pub response: Option<SecretVec>,
+}
+
 impl Store {
+    pub(crate) fn team_operation(
+        &self,
+        identity: &PersonalRecord,
+        kind: i64,
+    ) -> Result<Option<TeamOperationRecord>, StoreError> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT operation_id,organization_id,invitation_id,payload,password,etag,phase,
+                first_attempt_ms,response,length(payload),length(response)
+             FROM team_operation WHERE kind=?1 AND origin=?2 AND account_id=?3",
+                params![kind, identity.origin, identity.account_id.as_bytes().as_slice()],
+                |row| {
+                    let payload_size: i64 = row.get(9)?;
+                    let response_size: Option<i64> = row.get(10)?;
+                    if !(1..=4096).contains(&payload_size)
+                        || response_size.is_some_and(|size| !(1..=4096).contains(&size))
+                    {
+                        return Err(rusqlite::Error::InvalidQuery);
+                    }
+                    let id = |index| {
+                        Uuid::from_slice(&row.get::<_, Vec<u8>>(index)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)
+                    };
+                    Ok(TeamOperationRecord {
+                        kind,
+                        operation_id: id(0)?,
+                        organization_id: id(1)?,
+                        invitation_id: row
+                            .get::<_, Option<Vec<u8>>>(2)?
+                            .map(|bytes| {
+                                Uuid::from_slice(&bytes).map_err(|_| rusqlite::Error::InvalidQuery)
+                            })
+                            .transpose()?,
+                        payload: SecretVec::new(row.get(3)?),
+                        password: row.get::<_, Option<Vec<u8>>>(4)?.map(SecretVec::new),
+                        etag: row.get(5)?,
+                        phase: row.get(6)?,
+                        first_attempt_ms: row
+                            .get::<_, Option<i64>>(7)?
+                            .map(u64::try_from)
+                            .transpose()
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        response: row.get::<_, Option<Vec<u8>>>(8)?.map(SecretVec::new),
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub(crate) fn prepare_team_operation(
+        &self,
+        identity: &PersonalRecord,
+        pending: &TeamOperationRecord,
+    ) -> Result<bool, StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Ok(false);
+        }
+        let conn = self.conn();
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        Ok(conn.execute(
+            "INSERT INTO team_operation(kind,origin,account_id,operation_id,organization_id,
+                invitation_id,payload,password,etag,phase)
+             SELECT ?1,origin,account_id,?2,?3,?4,?5,?6,?7,0 FROM personal_server
+             WHERE singleton=1 AND origin=?8 AND account_id=?9 AND private_material=?10
+             ON CONFLICT(kind) DO NOTHING",
+            params![
+                pending.kind,
+                pending.operation_id.as_bytes().as_slice(),
+                pending.organization_id.as_bytes().as_slice(),
+                pending.invitation_id.as_ref().map(|id| id.as_bytes().as_slice()),
+                pending.payload.as_bytes(),
+                pending.password.as_ref().map(SecretVec::as_bytes),
+                pending.etag,
+                identity.origin,
+                identity.account_id.as_bytes().as_slice(),
+                identity.private_material.as_bytes()
+            ],
+        )? == 1)
+    }
+
+    pub(crate) fn dispatch_team_operation(
+        &self,
+        identity: &PersonalRecord,
+        previous: &TeamOperationRecord,
+        access: &SecretVec,
+        now_ms: u64,
+    ) -> Result<bool, StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Ok(false);
+        }
+        let current_ms = i64::try_from(now_ms).map_err(|_| StoreError::InvalidIdentifier)?;
+        let conn = self.conn();
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        Ok(conn.execute(
+            "UPDATE team_operation SET phase=1,first_attempt_ms=COALESCE(first_attempt_ms,?1)
+             WHERE kind=?2 AND operation_id=?3 AND payload=?4 AND phase=?5
+                AND first_attempt_ms IS ?6 AND response IS NULL AND origin=?7 AND account_id=?8
+                AND EXISTS(SELECT 1 FROM personal_server WHERE singleton=1 AND origin=?7
+                    AND account_id=?8 AND private_material=?9 AND auth_generation=?10
+                    AND access_token=?11 AND access_expires_at>?12 AND refresh_claimed=0)",
+            params![
+                current_ms,
+                previous.kind,
+                previous.operation_id.as_bytes().as_slice(),
+                previous.payload.as_bytes(),
+                previous.phase,
+                previous.first_attempt_ms.map(|v| v as i64),
+                identity.origin,
+                identity.account_id.as_bytes().as_slice(),
+                identity.private_material.as_bytes(),
+                identity.auth_generation,
+                access.as_bytes(),
+                current_ms / 1000
+            ],
+        )? == 1)
+    }
+
+    pub(crate) fn finish_team_operation(
+        &self,
+        identity: &PersonalRecord,
+        sent: &TeamOperationRecord,
+        access: &SecretVec,
+        response: Option<&[u8]>,
+        now_ms: u64,
+    ) -> Result<bool, StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Ok(false);
+        }
+        let current_ms = i64::try_from(now_ms).map_err(|_| StoreError::InvalidIdentifier)?;
+        let conn = self.conn();
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        Ok(conn.execute(
+            "UPDATE team_operation SET phase=?1,response=?2 WHERE kind=?3 AND phase=1
+                AND operation_id=?4 AND payload=?5 AND first_attempt_ms IS ?6
+                AND origin=?7 AND account_id=?8
+                AND EXISTS(SELECT 1 FROM personal_server WHERE singleton=1 AND origin=?7
+                    AND account_id=?8 AND private_material=?9 AND auth_generation=?10
+                    AND access_token=?11 AND access_expires_at>?12 AND refresh_claimed=0)",
+            params![
+                if response.is_some() { 2 } else { 0 },
+                response,
+                sent.kind,
+                sent.operation_id.as_bytes().as_slice(),
+                sent.payload.as_bytes(),
+                sent.first_attempt_ms.map(|v| v as i64),
+                identity.origin,
+                identity.account_id.as_bytes().as_slice(),
+                identity.private_material.as_bytes(),
+                identity.auth_generation,
+                access.as_bytes(),
+                current_ms / 1000
+            ],
+        )? == 1)
+    }
+
+    pub(crate) fn discard_team_operation(
+        &self,
+        identity: &PersonalRecord,
+        pending: &TeamOperationRecord,
+        now_ms: u64,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn();
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        let cutoff = now_ms.saturating_sub(ORGANIZATION_CREATION_RECEIPT_SECONDS * 1000);
+        Ok(conn.execute(
+            "DELETE FROM team_operation WHERE kind=?1 AND origin=?2 AND account_id=?3
+                AND operation_id=?4 AND payload=?5 AND phase=?6 AND first_attempt_ms IS ?7
+                AND (phase IN(0,2) OR first_attempt_ms<=?8)",
+            params![
+                pending.kind,
+                identity.origin,
+                identity.account_id.as_bytes().as_slice(),
+                pending.operation_id.as_bytes().as_slice(),
+                pending.payload.as_bytes(),
+                pending.phase,
+                pending.first_attempt_ms.map(|v| v as i64),
+                cutoff.min(i64::MAX as u64) as i64
+            ],
+        )? == 1)
+    }
+
     pub(crate) fn team_creation(
         &self,
         identity: &PersonalRecord,

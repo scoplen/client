@@ -50,6 +50,7 @@ struct PeerState {
     inventory: Option<InventoryPeer>,
     refresh: Option<RefreshPeer>,
     teams: Option<teams::TeamPeer>,
+    team_lifecycle: Option<team_lifecycle::TeamLifecyclePeer>,
     pause: Option<(String, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     notification: Option<notification::NotificationPeer>,
 }
@@ -247,8 +248,9 @@ async fn answer(
         let path = request.uri().path();
         state.paths.push(path.into());
         let team_create = path == "/api/v1/orgs" && request.method() == http::Method::POST;
+        let team_lifecycle = path.starts_with("/api/v1/orgs/") && state.team_lifecycle.is_some();
         if request.headers().contains_key("cookie")
-            || request.headers().contains_key("idempotency-key") && !team_create
+            || request.headers().contains_key("idempotency-key") && !team_create && !team_lifecycle
         {
             return Err("unexpected credential transport".into());
         }
@@ -307,6 +309,7 @@ async fn answer(
                     }
                 } else if state.inventory.is_none()
                     && !team_create
+                    && !team_lifecycle
                     && !(path.starts_with("/api/v1/orgs/")
                         && request.method() == http::Method::PATCH)
                     && (request.method() != http::Method::GET || !body.is_empty())
@@ -332,6 +335,8 @@ async fn answer(
                     proofs,
                     origin,
                 )?
+            } else if path.starts_with("/api/v1/orgs") && state.team_lifecycle.is_some() {
+                state.team_lifecycle.as_mut().unwrap().answer(&request, &body)?
             } else if path.starts_with("/api/v1/orgs") && state.teams.is_some() {
                 state.teams.as_mut().unwrap().answer(&request, &body)?
             } else if state.inventory.is_some()
@@ -385,6 +390,7 @@ fn local(dir: &tempfile::TempDir) -> Arc<Store> {
 mod account;
 mod membership;
 mod revalidation;
+mod team_lifecycle;
 mod teams;
 mod trust;
 

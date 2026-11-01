@@ -9,6 +9,7 @@ use crate::{
 use super::*;
 
 mod isolation;
+mod team_membership;
 mod teams;
 
 const LOCAL_PASSPHRASE: &str = "Disposable local data passphrase";
