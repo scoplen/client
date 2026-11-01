@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use scoplen_client_core::{
     personal_server::{
-        PersonalServer, PersonalServerError, TeamCreationView, TeamError, TeamPageView,
-        TeamSettingsView,
+        PersonalServer, PersonalServerError, TeamCreationView, TeamError, TeamFailure,
+        TeamInvitationPageView, TeamInvitationView, TeamMemberPageView, TeamMemberView,
+        TeamOperationKind, TeamOperationView, TeamPageView, TeamSettingsView,
     },
     store::Store,
 };
@@ -16,6 +17,249 @@ use crate::profile_context::ProfileRequest;
 
 fn store(context: &ProfileRequest) -> Result<Arc<Store>, TeamError> {
     context.store().ok_or_else(|| PersonalServerError::Storage.into())
+}
+
+/// Read only safe local retained lifecycle state.
+#[tauri::command]
+#[specta::specta]
+pub async fn pending_team_operations(
+    app: tauri::AppHandle,
+    context: ProfileRequest,
+) -> Result<Vec<TeamOperationView>, TeamError> {
+    let store = store(&context)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<PersonalServer>().pending_team_operations(&store)
+    })
+    .await
+    .map_err(|_| PersonalServerError::Storage)?
+}
+
+/// Protect the generated separate invitation password before any creation request.
+#[tauri::command]
+#[specta::specta]
+pub async fn prepare_team_invitation(
+    app: tauri::AppHandle,
+    context: ProfileRequest,
+    organization_id: String,
+    recipient_username: String,
+    roles: Vec<String>,
+) -> Result<TeamOperationView, TeamError> {
+    let store = store(&context)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<PersonalServer>().prepare_team_invitation(
+            &store,
+            &organization_id,
+            recipient_username,
+            roles,
+        )
+    })
+    .await
+    .map_err(|_| PersonalServerError::Storage)?
+}
+
+/// Preview the exact named recipient's invitation without accepting it.
+#[tauri::command]
+#[specta::specta]
+pub async fn preview_team_invitation(
+    context: ProfileRequest,
+    personal: tauri::State<'_, PersonalServer>,
+    link: String,
+) -> Result<TeamInvitationView, TeamError> {
+    personal.preview_team_invitation(store(&context)?, &link).await
+}
+
+/// Transfer the uncontrolled password directly into its protected acceptance operation.
+#[tauri::command]
+#[specta::specta]
+pub async fn prepare_team_acceptance(
+    context: ProfileRequest,
+    personal: tauri::State<'_, PersonalServer>,
+    link: String,
+    preview_etag: String,
+    password: String,
+) -> Result<TeamOperationView, TeamError> {
+    let password = scoplen_crypto::SecretVec::new(password.into_bytes());
+    personal.prepare_team_acceptance(store(&context)?, &link, &preview_etag, password).await
+}
+
+/// Preserve the exact reviewed Organization precondition for explicit dissolution.
+#[tauri::command]
+#[specta::specta]
+pub async fn prepare_team_dissolution(
+    app: tauri::AppHandle,
+    context: ProfileRequest,
+    organization_id: String,
+    etag: String,
+) -> Result<TeamOperationView, TeamError> {
+    let store = store(&context)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<PersonalServer>().prepare_team_dissolution(&store, &organization_id, &etag)
+    })
+    .await
+    .map_err(|_| PersonalServerError::Storage)?
+}
+
+/// Send only a retained original lifecycle request with a fresh proof.
+#[tauri::command]
+#[specta::specta]
+pub async fn submit_team_operation(
+    context: ProfileRequest,
+    personal: tauri::State<'_, PersonalServer>,
+    kind: TeamOperationKind,
+    operation_id: String,
+) -> Result<TeamOperationView, TeamError> {
+    personal.submit_team_operation(store(&context)?, kind, &operation_id).await
+}
+
+/// Erase the local secret preparation or explicitly archive an expired unknown outcome.
+#[tauri::command]
+#[specta::specta]
+pub async fn discard_team_operation(
+    app: tauri::AppHandle,
+    context: ProfileRequest,
+    kind: TeamOperationKind,
+    operation_id: String,
+) -> Result<(), TeamError> {
+    let store = store(&context)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<PersonalServer>().discard_team_operation(&store, kind, &operation_id)
+    })
+    .await
+    .map_err(|_| PersonalServerError::Storage)?
+}
+
+/// Reveal only to the explicit transient invitation-password control.
+#[tauri::command]
+#[specta::specta]
+pub async fn reveal_team_invitation_password(
+    app: tauri::AppHandle,
+    context: ProfileRequest,
+    operation_id: String,
+) -> Result<String, TeamError> {
+    let store = store(&context)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let password =
+            app.state::<PersonalServer>().team_invitation_password(&store, &operation_id)?;
+        String::from_utf8(password.as_bytes().to_vec())
+            .map_err(|_| PersonalServerError::Storage.into())
+    })
+    .await
+    .map_err(|_| PersonalServerError::Storage)?
+}
+
+/// Copy the protected separate password through the native platform boundary.
+#[tauri::command]
+#[specta::specta]
+pub async fn copy_team_invitation_password(
+    app: tauri::AppHandle,
+    context: ProfileRequest,
+    operation_id: String,
+) -> Result<(), TeamError> {
+    let store = store(&context)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _context = context;
+        let password =
+            app.state::<PersonalServer>().team_invitation_password(&store, &operation_id)?;
+        let text =
+            std::str::from_utf8(password.as_bytes()).map_err(|_| PersonalServerError::Storage)?;
+        scoplen_client_platform::clipboard::write_text(text)
+            .map_err(|_| TeamFailure::ClipboardUnavailable.into())
+    })
+    .await
+    .map_err(|_| PersonalServerError::Storage)?
+}
+
+/// Copy only the confirmed public locator, never its separate password.
+#[tauri::command]
+#[specta::specta]
+pub async fn copy_team_invitation_link(
+    app: tauri::AppHandle,
+    context: ProfileRequest,
+    operation_id: String,
+) -> Result<(), TeamError> {
+    let store = store(&context)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _context = context;
+        let link = app.state::<PersonalServer>().team_invitation_link(&store, &operation_id)?;
+        scoplen_client_platform::clipboard::write_text(&link)
+            .map_err(|_| TeamFailure::ClipboardUnavailable.into())
+    })
+    .await
+    .map_err(|_| PersonalServerError::Storage)?
+}
+
+/// Read one current invitation page only on request.
+#[tauri::command]
+#[specta::specta]
+pub async fn team_invitations(
+    context: ProfileRequest,
+    personal: tauri::State<'_, PersonalServer>,
+    organization_id: String,
+    cursor: Option<String>,
+) -> Result<TeamInvitationPageView, TeamError> {
+    personal.team_invitations(store(&context)?, &organization_id, cursor.as_deref()).await
+}
+
+/// Read one current administrative member page only on request.
+#[tauri::command]
+#[specta::specta]
+pub async fn team_members(
+    context: ProfileRequest,
+    personal: tauri::State<'_, PersonalServer>,
+    organization_id: String,
+    cursor: Option<String>,
+) -> Result<TeamMemberPageView, TeamError> {
+    personal.team_members(store(&context)?, &organization_id, cursor.as_deref()).await
+}
+
+/// Revoke the captured invitation without a hidden refresh or replay.
+#[tauri::command]
+#[specta::specta]
+pub async fn revoke_team_invitation(
+    context: ProfileRequest,
+    personal: tauri::State<'_, PersonalServer>,
+    organization_id: String,
+    invitation_id: String,
+    etag: String,
+) -> Result<(), TeamError> {
+    personal.revoke_team_invitation(store(&context)?, &organization_id, &invitation_id, &etag).await
+}
+
+/// Apply exactly the reviewed role/status edit and precondition.
+#[tauri::command]
+#[specta::specta]
+pub async fn update_team_member(
+    context: ProfileRequest,
+    personal: tauri::State<'_, PersonalServer>,
+    organization_id: String,
+    membership_id: String,
+    etag: String,
+    roles: Vec<String>,
+    status: String,
+) -> Result<TeamMemberView, TeamError> {
+    personal
+        .update_team_member(
+            store(&context)?,
+            &organization_id,
+            &membership_id,
+            &etag,
+            roles,
+            &status,
+        )
+        .await
+}
+
+/// Remove a reviewed member or leave through the captured own-membership projection.
+#[tauri::command]
+#[specta::specta]
+pub async fn remove_team_member(
+    context: ProfileRequest,
+    personal: tauri::State<'_, PersonalServer>,
+    organization_id: String,
+    membership_id: String,
+    etag: String,
+) -> Result<(), TeamError> {
+    personal.remove_team_member(store(&context)?, &organization_id, &membership_id, &etag).await
 }
 
 /// Read one current membership page only after the user requests it.

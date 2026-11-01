@@ -82,6 +82,17 @@ fixtures are removed; failures retain the original encrypted stores and pending 
 This core integration check does not establish native desktop interaction, native picker or
 macOS feature acceptance.
 
+The same disposable HTTPS descriptor also supports the named-team lifecycle check. It registers
+two independent Accounts through public APIs, verifies invitation issue/recipient preview,
+acceptance, member role/suspension updates, active self-leave, revocation and Owner dissolution.
+Delivered responses are deliberately left unconfirmed locally to exercise original-request
+confirmation, including acceptance after removal and dissolution after membership withdrawal.
+Independent teams and Personal key state must remain intact.
+
+```powershell
+cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::team_membership::live_named_team_membership_lifecycle -- --exact --test-threads=1
+```
+
 ### Preconfirmed-profile integration
 
 The opt-in `live-server-integration` feature checks retained admitted-device authentication,
@@ -246,6 +257,28 @@ the editor. `team-settings-profile.test.tsx` uses the actual Account generation 
 generated commands to reject late reads and saves after profile replacement. The existing
 public HTTPS scenario covers two-Device conditional updates, stale edits, no-op updates,
 reopen and foreign-Account denial against each database backend.
+
+## Named team invitations and membership
+
+The core retains independent invitation, acceptance and dissolution operations in the encrypted
+Account store before dispatch. Explicit retries reuse their original key, bytes and precondition;
+uncertain operations cannot be replaced before the receipt window expires and current status is
+reviewed. A historical acceptance never supplies current membership authority. Invitation preview
+and acceptance bind the canonical server and designated Account; member edits, removal and active
+self-leave use the exact reviewed validator without automatic replay.
+
+```text
+cargo test -p scoplen-client-core --lib personal_server::sync::tests::team_lifecycle
+pnpm --filter @scoplen/app test -- team-membership
+```
+
+The TLS/DPoP peer checks durable dispatch, reopen and original receipts, unknown/rollback outcomes,
+failed local commits, current role/status changes, stale validators, removal before confirmation,
+expiry and older Device scopes. Frontend tests cover explicit review/retry, transient uncontrolled
+password fields, native copy intents, destructive confirmation and actual Account-generation
+replacement. The native invitation password and link copy commands use the platform text clipboard;
+only an explicit reveal returns a password to its transient control. Clipboard errors contain no
+platform diagnostics. Regenerate bindings after changing the lifecycle commands.
 
 ## Password registration preparation and HTTPS
 

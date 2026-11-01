@@ -351,6 +351,36 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	submitTeamCreation: (operationId: string) => typedError<TeamCreationView, TeamError>(__TAURI_INVOKE("submit_team_creation", { operationId })),
 	/**  Clear only a prepared, confirmed or explicitly reviewed expired operation. */
 	discardTeamCreation: (operationId: string) => typedError<null, TeamError>(__TAURI_INVOKE("discard_team_creation", { operationId })),
+	/**  Read only safe local retained lifecycle state. */
+	pendingTeamOperations: () => typedError<TeamOperationView[], TeamError>(__TAURI_INVOKE("pending_team_operations")),
+	/**  Protect the generated separate invitation password before any creation request. */
+	prepareTeamInvitation: (organizationId: string, recipientUsername: string, roles: string[]) => typedError<TeamOperationView, TeamError>(__TAURI_INVOKE("prepare_team_invitation", { organizationId, recipientUsername, roles })),
+	/**  Preview the exact named recipient's invitation without accepting it. */
+	previewTeamInvitation: (link: string) => typedError<TeamInvitationView, TeamError>(__TAURI_INVOKE("preview_team_invitation", { link })),
+	/**  Transfer the uncontrolled password directly into its protected acceptance operation. */
+	prepareTeamAcceptance: (link: string, previewEtag: string, password: string) => typedError<TeamOperationView, TeamError>(__TAURI_INVOKE("prepare_team_acceptance", { link, previewEtag, password })),
+	/**  Preserve the exact reviewed Organization precondition for explicit dissolution. */
+	prepareTeamDissolution: (organizationId: string, etag: string) => typedError<TeamOperationView, TeamError>(__TAURI_INVOKE("prepare_team_dissolution", { organizationId, etag })),
+	/**  Send only a retained original lifecycle request with a fresh proof. */
+	submitTeamOperation: (kind: TeamOperationKind, operationId: string) => typedError<TeamOperationView, TeamError>(__TAURI_INVOKE("submit_team_operation", { kind, operationId })),
+	/**  Erase the local secret preparation or explicitly archive an expired unknown outcome. */
+	discardTeamOperation: (kind: TeamOperationKind, operationId: string) => typedError<null, TeamError>(__TAURI_INVOKE("discard_team_operation", { kind, operationId })),
+	/**  Reveal only to the explicit transient invitation-password control. */
+	revealTeamInvitationPassword: (operationId: string) => typedError<string, TeamError>(__TAURI_INVOKE("reveal_team_invitation_password", { operationId })),
+	/**  Copy the protected separate password through the native platform boundary. */
+	copyTeamInvitationPassword: (operationId: string) => typedError<null, TeamError>(__TAURI_INVOKE("copy_team_invitation_password", { operationId })),
+	/**  Copy only the confirmed public locator, never its separate password. */
+	copyTeamInvitationLink: (operationId: string) => typedError<null, TeamError>(__TAURI_INVOKE("copy_team_invitation_link", { operationId })),
+	/**  Read one current invitation page only on request. */
+	teamInvitations: (organizationId: string, cursor: string | null) => typedError<TeamInvitationPageView, TeamError>(__TAURI_INVOKE("team_invitations", { organizationId, cursor })),
+	/**  Read one current administrative member page only on request. */
+	teamMembers: (organizationId: string, cursor: string | null) => typedError<TeamMemberPageView, TeamError>(__TAURI_INVOKE("team_members", { organizationId, cursor })),
+	/**  Revoke the captured invitation without a hidden refresh or replay. */
+	revokeTeamInvitation: (organizationId: string, invitationId: string, etag: string) => typedError<null, TeamError>(__TAURI_INVOKE("revoke_team_invitation", { organizationId, invitationId, etag })),
+	/**  Apply exactly the reviewed role/status edit and precondition. */
+	updateTeamMember: (organizationId: string, membershipId: string, etag: string, roles: string[], status: string) => typedError<TeamMemberView, TeamError>(__TAURI_INVOKE("update_team_member", { organizationId, membershipId, etag, roles, status })),
+	/**  Remove a reviewed member or leave through the captured own-membership projection. */
+	removeTeamMember: (organizationId: string, membershipId: string, etag: string) => typedError<null, TeamError>(__TAURI_INVOKE("remove_team_member", { organizationId, membershipId, etag })),
 	/**  Read public inventory metadata and durable sync progress without network access. */
 	personalInventoryStatus: () => typedError<PersonalInventoryStatus, PersonalInventoryError>(__TAURI_INVOKE("personal_inventory_status")),
 	/**  Preview exact ids and missing references; keys and object content remain in Rust. */
@@ -2630,7 +2660,108 @@ export type TeamFailure =
 /**  This session's fixed scope ceiling does not permit Organization updates. */
 "updateScopeRequired" |
 /**  Missing and unavailable membership share one non-disclosing outcome. */
-"teamNotFound";
+"teamNotFound" |
+/**  Invalid named-recipient, role set, password or invitation link. */
+"invalidInvitation" |
+/**  An invitation belongs to another deployment; switching Account is explicit. */
+"invitationOriginMismatch" |
+/**  Recipient eligibility and invitation failures intentionally share one outcome. */
+"invitationDenied" |
+/**  Protected original operation must be resolved or explicitly archived first. */
+"membershipPending" |
+/**  A nonreceipt mutation needs an explicit current-resource refresh before another edit. */
+"membershipUnknown" |
+/**  The displayed resource changed and the user must review a fresh projection. */
+"membershipConflict" |
+/**  The session predates the required team scopes. */
+"membershipScopeRequired" |
+/**  Native clipboard write was refused; no arbitrary platform diagnostic crosses IPC. */
+"clipboardUnavailable";
+
+/**  One explicitly requested invitation page. */
+export type TeamInvitationPageView = {
+	/**  Current authorized invitations. */
+	items: TeamInvitationView[],
+	/**  Ascending continuation, fetched only on request. */
+	nextCursor: string | null,
+};
+
+/**  Authorized invitation metadata, with no password or verifier. */
+export type TeamInvitationView = {
+	/**  Invitation identity. */
+	id: string,
+	/**  Captured exact precondition. */
+	etag: string,
+	/**  Owning team. */
+	organizationId: string,
+	/**  Current name authorized by the preview. */
+	organizationName: string,
+	/**  Fixed recipient username. */
+	recipientUsername: string,
+	/**  Intended built-in roles, without frontend authority. */
+	roles: string[],
+	/**  Current server invitation state. */
+	status: string,
+	/**  Fixed UTC expiry. */
+	expiresAt: string,
+};
+
+/**  One explicitly requested member page. */
+export type TeamMemberPageView = {
+	/**  Current authorized members. */
+	items: TeamMemberView[],
+	/**  Ascending continuation, fetched only on request. */
+	nextCursor: string | null,
+};
+
+/**  Current authorized member metadata; no Personal data or Device information. */
+export type TeamMemberView = {
+	/**  Membership identity, distinct from Account identity. */
+	id: string,
+	/**  Exact captured strong precondition. */
+	etag: string,
+	/**  Owning team. */
+	organizationId: string,
+	/**  Canonical current username. */
+	username: string,
+	/**  Complete current role set. */
+	roles: string[],
+	/**  Current active, suspended or removed state. */
+	status: string,
+	/**  Display distinction based on the captured Account. */
+	isSelf: boolean,
+};
+
+/**  The three receipt-backed operations retain independent original requests. */
+export type TeamOperationKind =
+/**  An administrator's named invitation. */
+"invitation" |
+/**  The designated Account's explicit acceptance. */
+"acceptance" |
+/**  An Owner's confirmed team dissolution. */
+"dissolution";
+
+/**  Safe retained status; original passwords, verifiers and request bytes stay in Rust. */
+export type TeamOperationView = {
+	/**  Original public operation key, not authority to perform it. */
+	operationId: string,
+	/**  Original operation class. */
+	kind: TeamOperationKind,
+	/**  Captured team identity. */
+	organizationId: string,
+	/**  Captured invitation, absent for dissolution. */
+	invitationId: string | null,
+	/**  Named recipient for an issuing operation. */
+	recipientUsername: string | null,
+	/**  Issued roles, for display only. */
+	roles: string[],
+	/**  Local outcome and permitted recovery action. */
+	phase: TeamCreationPhase,
+	/**  Original deadline as decimal milliseconds. */
+	retryUntil: string | null,
+	/**  Public link only; never contains its separate password. */
+	link: string | null,
+};
 
 /**  One explicit discovery request; the caller chooses whether to fetch another page. */
 export type TeamPageView = {
@@ -2646,6 +2777,8 @@ export type TeamSettingsView = {
 	team: TeamSummary,
 	/**  Exact strong Resource precondition; Save must not replace it silently. */
 	etag: string,
+	/**  Current caller's membership, used only with this captured projection for Leave team. */
+	membershipId: string,
 };
 
 /**  Current discovery metadata; role names are display values, never client authorization. */

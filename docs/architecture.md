@@ -19,10 +19,10 @@ web/app (React)  ── typed commands, binary channels ──  src-tauri  ─�
 - `scoplen-client-core` holds every behavior, so it is the same on both platforms and testable without a window.
 - `scoplen-client-platform` is the only crate that may contain `unsafe` code or FFI; it is denied by default there too and allowed per module with each block documented.
 
-The shared libraries and Pageant patch are pinned to published `proto@4576b7a`, including the
-D-134 conditional Organization name contract and `orgs:write` scope. Fresh Device authentication
-obtains that scope; refresh preserves or narrows the retained family's ceiling. This pin does
-not by itself expose Team name editing. It retains the D-127/D-128 password-account contracts,
+The shared libraries and Pageant patch are pinned to published `proto@96d2cdb`, including the
+D-136 named-account team lifecycle and D-134 conditional Organization name contracts. Fresh Device
+authentication obtains team scopes; refresh preserves or narrows the retained family's ceiling.
+It retains the D-127/D-128 password-account contracts,
 shared strict JSON problem reader, kind-8 descriptor validation and the D-121 asynchronous challenge API with
 zeroizing response custody. D-116 adds the object-safe
 `Signer::sign_async` hook, awaited by concrete SSH authentication. The built-in agent signer
@@ -34,6 +34,15 @@ The client lockfile retains HPKE and P-256 0.14, `crypto-bigint` 0.7.6 and `ctut
 RUSTSEC-2026-0387, without the former 0.5.5 bigint/P-256 0.13 dependency path. Updating the shared
 pin requires checking the client's own transitive lockfile; the shared repository's lockfile
 does not constrain consumer resolution.
+
+Native text clipboard access stays in the platform crate through `arboard` 3.6.1
+(`MIT OR Apache-2.0`), with default features disabled and only Windows/macOS targets enabled.
+Its Windows dependencies `clipboard-win` 5.4.3 and `error-code` 3.4.0 declare `BSL-1.0`.
+Their standard Boost Software License 1.0 texts were reviewed against the
+[Boost license](https://www.boost.org/LICENSE_1_0.txt): `error-code` includes its LICENSE,
+and `clipboard-win`'s exact published source revision supplies its
+[LICENSE](https://github.com/DoumanAsh/clipboard-win/blob/ed27008ae5d1f10cfbb266de039f0fb35fd05a56/LICENSE).
+`deny.toml` permits this license only for those exact crate versions; upgrades require review.
 
 ## IPC
 

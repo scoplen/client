@@ -113,7 +113,7 @@ impl PersonalServer {
         for operation in
             [DeviceAccessOperation::AccountProfileRead, DeviceAccessOperation::AccountDevicesRead]
         {
-            if !operation.required_scope().is_present_in(&claims.scope) {
+            if !operation.has_accepted_scope(&claims.scope) {
                 return Err(PersonalServerError::PermissionDenied);
             }
         }

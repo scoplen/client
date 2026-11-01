@@ -3,7 +3,7 @@
 
 use reqwest::{Method, header};
 use scoplen_api::organization::{MAX_ORGANIZATION_PROBLEM_BYTES, MAX_ORGANIZATION_RESOURCE_BYTES};
-use scoplen_crypto::{DpopProof, validate_server_origin};
+use scoplen_crypto::{DpopProof, SecretVec, validate_server_origin};
 use uuid::Uuid;
 
 use super::{Response, Transport, read_body};
@@ -67,7 +67,7 @@ impl Transport {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn team_exchange(
+    pub(in crate::personal_server) async fn team_exchange(
         &self,
         origin: &str,
         path: &str,
@@ -96,7 +96,9 @@ impl Transport {
             .header(header::ACCEPT, "application/json")
             .header(header::ACCEPT_ENCODING, "identity");
         if let Some(body) = body {
-            request = request.header(header::CONTENT_TYPE, "application/json").body(body.to_vec());
+            request = request
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(bytes::Bytes::from_owner(SecretVec::new(body.to_vec())));
         }
         if let Some(operation_id) = operation_id {
             request = request.header("Idempotency-Key", operation_id.to_string());
@@ -129,7 +131,13 @@ impl Transport {
             || single("cache-control") != Some("no-store")
             || single("pragma") != Some("no-cache")
             || single("x-request-id").is_none_or(str::is_empty)
-            || if response.status().is_success() {
+            || if response.status() == reqwest::StatusCode::NO_CONTENT {
+                response.headers().contains_key(header::CONTENT_TYPE)
+                    && !matches!(
+                        content_type,
+                        Some("application/json" | "application/json; charset=utf-8")
+                    )
+            } else if response.status().is_success() {
                 !matches!(
                     content_type,
                     Some("application/json" | "application/json; charset=utf-8")
@@ -147,6 +155,9 @@ impl Transport {
         let limit =
             if response.status().is_success() { limit } else { MAX_ORGANIZATION_PROBLEM_BYTES };
         let body = read_body(response, limit).await?;
+        if status == 204 && !body.as_bytes().is_empty() {
+            return Err(PersonalServerError::InvalidResponse);
+        }
         Ok(Response {
             status,
             body,

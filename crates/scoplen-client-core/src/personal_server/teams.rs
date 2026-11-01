@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Account-scoped team discovery, durable creation and conditional name updates.
 
+mod membership;
+pub use membership::{
+    TeamInvitationPageView, TeamInvitationView, TeamMemberPageView, TeamMemberView,
+    TeamOperationKind, TeamOperationView,
+};
+
 use std::{fmt, sync::Arc};
 
 use scoplen_api::{
@@ -64,6 +70,8 @@ pub struct TeamSettingsView {
     pub team: TeamSummary,
     /// Exact strong Resource precondition; Save must not replace it silently.
     pub etag: String,
+    /// Current caller's membership, used only with this captured projection for Leave team.
+    pub membership_id: String,
 }
 
 /// Local state of the one retained team-creation operation.
@@ -153,6 +161,38 @@ pub enum TeamFailure {
     /// Missing and unavailable membership share one non-disclosing outcome.
     #[error("This team is no longer available to this Account. Refresh your teams.")]
     TeamNotFound,
+    /// Invalid named-recipient, role set, password or invitation link.
+    #[error(
+        "Check the invitation link, canonical username, roles and separate eight-character password."
+    )]
+    InvalidInvitation,
+    /// An invitation belongs to another deployment; switching Account is explicit.
+    #[error("Switch to an Account on the invitation's server before joining.")]
+    InvitationOriginMismatch,
+    /// Recipient eligibility and invitation failures intentionally share one outcome.
+    #[error(
+        "The invitation could not be used. Check the username or invitation details with the administrator."
+    )]
+    InvitationDenied,
+    /// Protected original operation must be resolved or explicitly archived first.
+    #[error("Resolve the retained team operation before preparing another of the same kind.")]
+    MembershipPending,
+    /// A nonreceipt mutation needs an explicit current-resource refresh before another edit.
+    #[error(
+        "The result is unconfirmed. Refresh and review the current resource before another edit."
+    )]
+    MembershipUnknown,
+    /// The displayed resource changed and the user must review a fresh projection.
+    #[error("The resource changed. Refresh and review it before trying again.")]
+    MembershipConflict,
+    /// The session predates the required team scopes.
+    #[error("Authenticate this device again to obtain the required team permissions.")]
+    MembershipScopeRequired,
+    /// Native clipboard write was refused; no arbitrary platform diagnostic crosses IPC.
+    #[error(
+        "The clipboard is unavailable. Retry copying, or reveal the invitation password explicitly."
+    )]
+    ClipboardUnavailable,
 }
 
 /// Safe flattened IPC errors, without arbitrary server text or diagnostics.
@@ -509,11 +549,11 @@ impl PersonalServer {
         {
             return Err(PersonalServerError::AuthenticationRequired.into());
         }
-        if !operation.required_scope().is_present_in(&claims.scope) {
+        if !operation.has_accepted_scope(&claims.scope) {
             if operation == DeviceAccessOperation::OrganizationUpdate {
                 return Err(TeamFailure::UpdateScopeRequired.into());
             }
-            return Err(PersonalServerError::PermissionDenied.into());
+            return Err(TeamFailure::MembershipScopeRequired.into());
         }
         let session = TeamSession { identity, access, signing, expires_at: verified.expires_at() };
         session.current(store)?;
@@ -629,7 +669,11 @@ fn summary(resource: OrganizationResource) -> TeamSummary {
 }
 
 fn settings_view(resource: OrganizationResource) -> TeamSettingsView {
-    TeamSettingsView { etag: resource.etag.clone(), team: summary(resource) }
+    TeamSettingsView {
+        etag: resource.etag.clone(),
+        membership_id: resource.membership.id.to_string(),
+        team: summary(resource),
+    }
 }
 
 fn problem(response: &Response) -> Result<ProblemDetails, TeamError> {

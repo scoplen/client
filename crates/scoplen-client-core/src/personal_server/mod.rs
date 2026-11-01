@@ -32,8 +32,9 @@ pub use sync::{
     PersonalInventoryIntent, PersonalInventoryProgress, PersonalSyncBootstrap, PersonalSyncError,
 };
 pub use teams::{
-    TeamCreationPhase, TeamCreationView, TeamError, TeamFailure, TeamPageView, TeamSettingsView,
-    TeamSummary,
+    TeamCreationPhase, TeamCreationView, TeamError, TeamFailure, TeamInvitationPageView,
+    TeamInvitationView, TeamMemberPageView, TeamMemberView, TeamOperationKind, TeamOperationView,
+    TeamPageView, TeamSettingsView, TeamSummary,
 };
 
 use std::sync::Arc;

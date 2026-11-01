@@ -1279,7 +1279,94 @@ export const en = {
   "accounts.error.deviceQuota": "This account cannot admit another device. Contact the server operator.",
   "teams.title": "Teams",
   "teams.body":
-    "Create a team, view your memberships and edit team names. Invitations and shared inventory are not available yet.",
+    "Create or join teams and manage their memberships. Your Personal workspace stays independent. Shared inventory is not available yet.",
+  "teams.membership.join": "Join team",
+  "teams.membership.manage": "Invitations and members",
+  "teams.membership.close": "Close membership actions",
+  "teams.membership.roles": "Intended roles",
+  "teams.membership.password": "Separate invitation password",
+  "teams.membership.revealPassword": "Reveal password",
+  "teams.membership.hidePassword": "Hide password",
+  "teams.membership.copyPassword": "Copy password",
+  "teams.membership.passwordHint":
+    "Send this password separately from the public link. Dismissing this invitation erases its local password; the server cannot return it.",
+  "teams.membership.reviewTeam": "Review current team and permissions",
+  "teams.membership.invite": "Invite member",
+  "teams.membership.username": "Existing account username",
+  "teams.membership.refreshInvitations": "Refresh invitations",
+  "teams.membership.refreshMembers": "Refresh members",
+  "teams.membership.leave": "Leave team",
+  "teams.membership.dissolve": "Dissolve team",
+  "teams.membership.link": "Public invitation link",
+  "teams.membership.preview": "Review invitation",
+  "teams.membership.recipient": "For account: {username}",
+  "teams.membership.accept": "Accept invitation",
+  "teams.membership.kind.invitation": "Retained invitation",
+  "teams.membership.kind.acceptance": "Retained invitation acceptance",
+  "teams.membership.kind.dissolution": "Retained team dissolution",
+  "teams.membership.phase.prepared": "The original request is saved locally and ready to submit.",
+  "teams.membership.phase.unknown":
+    "The result is unconfirmed. Retry only this original request to confirm it. Its identity and payload have been kept.",
+  "teams.membership.phase.confirmed":
+    "This operation was confirmed. Refresh current teams or invitations to review today's access.",
+  "teams.membership.phase.expired":
+    "The original 24-hour confirmation window has ended. Review current status, then archive this operation before deciding on a separate new action. Archiving does not prove rollback.",
+  "teams.membership.copyLink": "Copy public link",
+  "teams.membership.retry": "Confirm original request",
+  "teams.membership.submit": "Submit original request",
+  "teams.membership.reviewStatus": "Review current status",
+  "teams.membership.archive": "Archive unresolved operation",
+  "teams.membership.dismiss": "Dismiss confirmed operation",
+  "teams.membership.invitations": "Current invitations",
+  "teams.membership.emptyInvitations": "No invitations were returned.",
+  "teams.membership.revoke": "Revoke invitation",
+  "teams.membership.moreInvitations": "Load more invitations",
+  "teams.membership.members": "Current members",
+  "teams.membership.emptyMembers": "No members were returned.",
+  "teams.membership.you": "you",
+  "teams.membership.editMember": "Edit member",
+  "teams.membership.remove": "Remove member",
+  "teams.membership.moreMembers": "Load more members",
+  "teams.membership.suspend": "Suspend team access",
+  "teams.membership.saveMember": "Save member roles and access",
+  "teams.membership.cancel": "Cancel",
+  "teams.membership.status.pending": "Pending",
+  "teams.membership.status.accepted": "Accepted",
+  "teams.membership.status.revoked": "Revoked",
+  "teams.membership.status.expired": "Expired",
+  "teams.membership.status.locked": "Locked",
+  "teams.membership.status.active": "Active",
+  "teams.membership.status.suspended": "Suspended",
+  "teams.membership.status.removed": "Removed",
+  "teams.membership.dissolveBody":
+    "Dissolve “{name}”? This withdraws its managed assets and removes team access. Personal data and other teams are retained. Remove installed host trust separately; existing direct SSH sessions and certificates are subject to their actual validity.",
+  "teams.membership.leaveBody":
+    "Leave “{name}” and lose its team access? Personal data and other teams are retained. An administrator must invite you again to return.",
+  "teams.membership.removeBody":
+    "Remove {username} from this team? Returning requires a fresh invitation. Their Personal account and other teams are retained.",
+  "teams.membership.revokeBody": "Revoke the invitation for {username}? This does not remove an existing member.",
+  "teams.membership.confirmed":
+    "Operation confirmed. Refresh the current team, members or invitations before another edit.",
+  "teams.membership.origin":
+    "This link belongs to a different server. Switch to a signed-in account on that server, then review the invitation again.",
+  "teams.membership.clipboard":
+    "The clipboard is unavailable. Retry copying, or explicitly reveal the password. The public link can also be selected and copied from its field.",
+  "teams.membership.notFound":
+    "This resource is unavailable to this account. Check the link with the administrator or switch account, then review it again.",
+  "teams.membership.denied":
+    "The invitation could not be used. Check the username or separate invitation password with the administrator; they may need to issue a new invitation.",
+  "teams.membership.invalid":
+    "Check the canonical username, invitation link, selected roles and exact eight-character invitation password.",
+  "teams.membership.permission":
+    "Your current membership cannot perform this action. Ask a team owner or administrator.",
+  "teams.membership.scope":
+    "Authenticate this device again to obtain the required team permissions, then explicitly retry the retained request or review current status.",
+  "teams.membership.conflict":
+    "This resource changed or the requested action is unavailable. Refresh and review it before another edit. No new request was sent automatically.",
+  "teams.membership.unknown":
+    "The result is unconfirmed. Use the retained original request when offered; otherwise refresh and review the resource before another edit.",
+  "teams.membership.failed":
+    "This team operation could not be completed or verified. Check your connection, review retained requests and explicitly refresh the current resource.",
   "teams.settings.title": "Team name settings",
   "teams.settings.edit": "Edit {name}",
   "teams.settings.name": "New team name",
