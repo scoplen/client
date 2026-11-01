@@ -776,7 +776,7 @@ pub enum SignIn {
         /// OpenSSH private-key text.
         key: String,
     },
-    /// Generate a key (reserved for the key-generation flow).
+    /// Generate a fresh software Ed25519 key in the encrypted local object.
     GenerateKey,
     /// Resolve a key from the system agent.
     Agent,
@@ -2614,10 +2614,12 @@ impl Inventory {
         }
         let name =
             input.name.filter(|name| !name.trim().is_empty()).unwrap_or_else(|| address.clone());
-        let (kind, binding, secret) = credential_input(input.sign_in)?;
+        let generated = matches!(input.sign_in, SignIn::GenerateKey);
+        let (kind, binding, secret, public_key) = credential_input(input.sign_in)?;
         let host_id = new_id().map_err(add_failed)?;
         let profile_id = new_id().map_err(add_failed)?;
-        let reusable = self.reusable_key(kind, binding, secret.as_deref())?;
+        let reusable =
+            if generated { None } else { self.reusable_key(kind, binding, secret.as_deref())? };
         let reused = reusable.is_some();
         let credential_id = match reusable {
             Some(credential) => credential.meta.id,
@@ -2650,6 +2652,9 @@ impl Inventory {
                     scoplen_model::FieldPath::Field(4),
                     scoplen_model::cbor::Value::Bytes(secret),
                 ));
+            }
+            if let Some(public_key) = public_key {
+                credential_fields.push((scoplen_model::FieldPath::Field(6), text(public_key)));
             }
             creates.push(NewObject {
                 id: credential_id,
@@ -2837,7 +2842,7 @@ impl Inventory {
                 .clone()
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or_else(|| address.clone());
-            let (kind, binding, secret) = credential_input(input.sign_in.clone())?;
+            let (kind, binding, secret, public_key) = credential_input(input.sign_in.clone())?;
             let reusable =
                 if kind == CredentialKind::PrivateKey && binding == CredentialBinding::Shared {
                     if let Some(secret) = secret.as_deref() {
@@ -2880,6 +2885,9 @@ impl Inventory {
                         scoplen_model::FieldPath::Field(4),
                         scoplen_model::cbor::Value::Bytes(secret),
                     ));
+                }
+                if let Some(public_key) = public_key {
+                    fields.push((scoplen_model::FieldPath::Field(6), text(public_key)));
                 }
                 creates.push(NewObject {
                     id: credential_id,
@@ -3431,20 +3439,25 @@ fn credential_label(credential: &Credential) -> CredentialLabel {
     }
 }
 
-fn credential_input(
-    sign_in: SignIn,
-) -> Result<(CredentialKind, CredentialBinding, Option<Vec<u8>>), AddHostError> {
+type PreparedHostCredential = (CredentialKind, CredentialBinding, Option<Vec<u8>>, Option<String>);
+
+fn credential_input(sign_in: SignIn) -> Result<PreparedHostCredential, AddHostError> {
     match sign_in {
         SignIn::Password { password } => {
             if password.is_empty() {
                 return Err(AddHostError::EmptyPassword);
             }
-            Ok((CredentialKind::Password, CredentialBinding::Shared, Some(password.into_bytes())))
+            Ok((
+                CredentialKind::Password,
+                CredentialBinding::Shared,
+                Some(password.into_bytes()),
+                None,
+            ))
         }
         SignIn::KeyFile { path } => {
             let bytes = read_private_key_file(&path)?;
             validate_private_key(&bytes)?;
-            Ok((CredentialKind::PrivateKey, CredentialBinding::Shared, Some(bytes)))
+            Ok((CredentialKind::PrivateKey, CredentialBinding::Shared, Some(bytes), None))
         }
         SignIn::KeyText { key } => {
             if key.len() as u64 > MAX_PRIVATE_KEY_BYTES {
@@ -3452,14 +3465,28 @@ fn credential_input(
             }
             let bytes = key.into_bytes();
             validate_private_key(&bytes)?;
-            Ok((CredentialKind::PrivateKey, CredentialBinding::Shared, Some(bytes)))
+            Ok((CredentialKind::PrivateKey, CredentialBinding::Shared, Some(bytes), None))
         }
-        SignIn::GenerateKey => Err(AddHostError::Failed {
-            reference: "key generation is not available in the inventory flow".into(),
-        }),
-        SignIn::Agent => Ok((CredentialKind::Agent, CredentialBinding::None, None)),
+        SignIn::GenerateKey => {
+            let mut seed = zeroize::Zeroizing::new([0; 32]);
+            scoplen_crypto::random_bytes(seed.as_mut()).map_err(add_failed)?;
+            let key = ssh_key::PrivateKey::new(
+                ssh_key::private::Ed25519Keypair::from_seed(&seed).into(),
+                "",
+            )
+            .map_err(add_failed)?;
+            let public_key = key.public_key().to_openssh().map_err(add_failed)?;
+            let private_key = key.to_openssh(ssh_key::LineEnding::LF).map_err(add_failed)?;
+            Ok((
+                CredentialKind::PrivateKey,
+                CredentialBinding::Shared,
+                Some(private_key.as_bytes().to_vec()),
+                Some(public_key),
+            ))
+        }
+        SignIn::Agent => Ok((CredentialKind::Agent, CredentialBinding::None, None, None)),
         SignIn::KeyboardInteractive => {
-            Ok((CredentialKind::KeyboardInteractive, CredentialBinding::None, None))
+            Ok((CredentialKind::KeyboardInteractive, CredentialBinding::None, None, None))
         }
     }
 }
@@ -3852,6 +3879,206 @@ mod tests {
             1
         );
         assert_eq!(inventory.store.list(scoplen_model::ObjectType::CREDENTIAL).unwrap().len(), 1);
+    }
+
+    fn generated_host(address: &str) -> NewHost {
+        NewHost {
+            name: None,
+            address: address.into(),
+            port: None,
+            username: "deploy".into(),
+            sign_in: SignIn::GenerateKey,
+        }
+    }
+
+    #[test]
+    fn generated_host_keys_match_the_public_projection_and_are_fresh() {
+        let inventory = inventory();
+        let first = inventory.add_host(generated_host("first.example")).unwrap();
+        let second = inventory.add_host(generated_host("second.example")).unwrap();
+        let mut public_keys = Vec::new();
+        for host in [&first, &second] {
+            let label = host.logins[0].credential.as_ref().unwrap();
+            assert_eq!(label.kind, CredentialLabelKind::Key);
+            let public_key = label.public_key.as_deref().unwrap();
+            assert!(public_key.starts_with("ssh-ed25519 "));
+            let credential_id = parse_id(&label.id).unwrap();
+            let stored = Repository::<Credential>::new(&inventory.store)
+                .get(credential_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(stored.kind, CredentialKind::PrivateKey);
+            assert_eq!(stored.binding, CredentialBinding::Shared);
+            assert!(stored.has_secret);
+            assert!(stored.devices.is_empty());
+            assert!(inventory.store.device_credential(credential_id).unwrap().is_none());
+            assert!(inventory.store.is_implicit(credential_id).unwrap());
+            let plan = inventory.connection_plan(host.logins[0].id.clone()).unwrap();
+            let crate::connection::CredentialMaterial::PrivateKey(secret) = plan.credential else {
+                panic!("generated Login did not resolve its private key")
+            };
+            let private = ssh_key::PrivateKey::from_openssh(secret.as_bytes()).unwrap();
+            assert_eq!(private.algorithm(), ssh_key::Algorithm::Ed25519);
+            assert!(!private.is_encrypted());
+            assert_eq!(private.public_key().to_openssh().unwrap(), public_key);
+            let summary = inventory.credential_object(label.id.clone()).unwrap().unwrap();
+            assert_eq!(summary.public_key.as_deref(), Some(public_key));
+            for json in
+                [serde_json::to_string(host).unwrap(), serde_json::to_string(&summary).unwrap()]
+            {
+                assert!(json.contains(public_key));
+                assert!(!json.contains("PRIVATE KEY"));
+                for line in std::str::from_utf8(secret.as_bytes()).unwrap().lines() {
+                    assert!(!json.contains(line));
+                }
+            }
+            public_keys.push(public_key);
+        }
+        assert_ne!(public_keys[0], public_keys[1]);
+        assert_ne!(
+            first.logins[0].credential.as_ref().unwrap().id,
+            second.logins[0].credential.as_ref().unwrap().id
+        );
+        assert_eq!(inventory.store.list(scoplen_model::ObjectType::HOST).unwrap().len(), 2);
+        assert_eq!(
+            inventory.store.list(scoplen_model::ObjectType::ACCESS_PROFILE).unwrap().len(),
+            2
+        );
+        assert_eq!(inventory.store.list(scoplen_model::ObjectType::CREDENTIAL).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn generated_host_key_survives_encrypted_store_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("generated.db");
+        let key = LocalDatabaseKey::new([7; 32]);
+        let created = {
+            let store = Store::open(&path, &key).unwrap();
+            Inventory::new(Arc::new(store)).add_host(generated_host("saved.example")).unwrap()
+        };
+        let unkeyed = rusqlite::Connection::open(&path).unwrap();
+        assert!(
+            unkeyed
+                .query_row("SELECT count(*) FROM objects", [], |row| row.get::<_, i64>(0))
+                .is_err()
+        );
+        drop(unkeyed);
+        assert!(matches!(
+            Store::open(&path, &LocalDatabaseKey::new([8; 32])),
+            Err(StoreError::WrongKey)
+        ));
+        let inventory = Inventory::new(Arc::new(Store::open(&path, &key).unwrap()));
+        let restored = inventory.host(created.summary.id.clone()).unwrap().unwrap();
+        assert_eq!(restored, created);
+        let plan = inventory.connection_plan(restored.logins[0].id.clone()).unwrap();
+        let crate::connection::CredentialMaterial::PrivateKey(secret) = plan.credential else {
+            panic!("reopened Login did not resolve its private key")
+        };
+        let private = ssh_key::PrivateKey::from_openssh(secret.as_bytes()).unwrap();
+        assert_eq!(
+            private.public_key().to_openssh().unwrap(),
+            restored.logins[0].credential.as_ref().unwrap().public_key.as_deref().unwrap()
+        );
+    }
+
+    #[test]
+    fn generated_host_rolls_back_every_object_when_a_later_write_fails() {
+        for rejected in ["credential", "login", "implicit"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("rollback.db");
+            let store = Arc::new(Store::open(&path, &LocalDatabaseKey::new([7; 32])).unwrap());
+            let inventory = Inventory::new(store.clone());
+            let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let _subscription = store.subscribe({
+                let writes = writes.clone();
+                move |_| {
+                    writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            });
+            let db = rusqlite::Connection::open(&path).unwrap();
+            db.pragma_update(None, "key", format!("x'{}'", "07".repeat(32))).unwrap();
+            let trigger = match rejected {
+                "credential" | "login" => {
+                    let kind = if rejected == "credential" {
+                        scoplen_model::ObjectType::CREDENTIAL
+                    } else {
+                        scoplen_model::ObjectType::ACCESS_PROFILE
+                    };
+                    format!("CREATE TRIGGER reject_write BEFORE INSERT ON objects WHEN NEW.type = {} BEGIN SELECT RAISE(ABORT, 'fixture'); END;", kind.to_wire())
+                }
+                _ => "CREATE TRIGGER reject_write BEFORE INSERT ON implicit_objects BEGIN SELECT RAISE(ABORT, 'fixture'); END;".into(),
+            };
+            db.execute_batch(&trigger).unwrap();
+            assert!(matches!(
+                inventory.add_host(generated_host("failed.example")),
+                Err(AddHostError::Failed { .. })
+            ));
+            assert!(store.live_ids().unwrap().is_empty());
+            let implicit: i64 = db
+                .query_row("SELECT count(*) FROM implicit_objects", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(implicit, 0);
+            assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0);
+            db.execute_batch("DROP TRIGGER reject_write").unwrap();
+            assert!(inventory.add_host(generated_host("retry.example")).is_ok());
+            assert_eq!(store.live_ids().unwrap().len(), 3);
+        }
+    }
+
+    #[test]
+    fn importing_a_generated_key_reuses_its_credential_and_preserves_the_public_key() {
+        let inventory = inventory();
+        let generated = inventory.add_host(generated_host("generated.example")).unwrap();
+        let label = generated.logins[0].credential.as_ref().unwrap();
+        let plan = inventory.connection_plan(generated.logins[0].id.clone()).unwrap();
+        let crate::connection::CredentialMaterial::PrivateKey(secret) = plan.credential else {
+            panic!("generated Login did not resolve its private key")
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("import-key");
+        std::fs::write(&path, secret.as_bytes()).unwrap();
+        for sign_in in [
+            SignIn::KeyText { key: std::str::from_utf8(secret.as_bytes()).unwrap().into() },
+            SignIn::KeyFile { path: path.to_string_lossy().into() },
+        ] {
+            let imported = inventory
+                .add_host(NewHost { sign_in, ..generated_host("imported.example") })
+                .unwrap();
+            let imported_label = imported.logins[0].credential.as_ref().unwrap();
+            assert_eq!(imported_label.id, label.id);
+            assert_eq!(imported_label.public_key, label.public_key);
+        }
+        assert_eq!(inventory.store.list(scoplen_model::ObjectType::CREDENTIAL).unwrap().len(), 1);
+        assert!(!inventory.store.is_implicit(parse_id(&label.id).unwrap()).unwrap());
+    }
+
+    #[test]
+    fn explicit_key_generation_does_not_scan_existing_credentials_for_reuse() {
+        let inventory = inventory();
+        let creates = (0..=MAX_PRIVATE_KEY_REUSE_SCAN)
+            .map(|_| NewObject {
+                id: new_id().unwrap(),
+                object_type: scoplen_model::ObjectType::CREDENTIAL,
+                fields: vec![
+                    (FieldPath::Field(2), uint(CredentialKind::PrivateKey as u64)),
+                    (FieldPath::Field(3), uint(CredentialBinding::Shared as u64)),
+                    (
+                        FieldPath::Field(4),
+                        scoplen_model::cbor::Value::Bytes(b"existing key".to_vec()),
+                    ),
+                ],
+            })
+            .collect();
+        inventory.store.create_batch(creates).unwrap();
+        let generated = inventory.add_host(generated_host("fresh.example")).unwrap();
+        assert!(generated.logins[0].credential.as_ref().unwrap().public_key.is_some());
+        let (_, _, private, _) = credential_input(SignIn::GenerateKey).unwrap();
+        let imported = inventory.add_host(NewHost {
+            sign_in: SignIn::KeyText { key: String::from_utf8(private.unwrap()).unwrap() },
+            ..generated_host("import.example")
+        });
+        assert_eq!(imported, Err(AddHostError::KeyReuseLimit));
+        assert_eq!(inventory.hosts(HostSource::All, String::new()).unwrap().len(), 1);
     }
 
     #[test]

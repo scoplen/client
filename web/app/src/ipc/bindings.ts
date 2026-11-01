@@ -2410,7 +2410,7 @@ path: string } |
 { kind: "keyText";
 /**  OpenSSH private-key text. */
 key: string } |
-/**  Generate a key (reserved for the key-generation flow). */
+/**  Generate a fresh software Ed25519 key in the encrypted local object. */
 { kind: "generateKey" } |
 /**  Resolve a key from the system agent. */
 { kind: "agent" };

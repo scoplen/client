@@ -88,6 +88,20 @@ try {
                 throw 'OpenSSH fixture did not become ready'
             }
 
+            if ($entry.Name -eq 'ed25519') {
+                $generatedStore = Join-Path $scratch 'generated-key.db'
+                $generatedPublicKey = & $smoke generate 127.0.0.1 $port smoke $generatedStore
+                Check-LastExit 'generate a software key through Add Host'
+                if ($generatedPublicKey -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+$') {
+                    throw 'Add Host did not return one Ed25519 public key'
+                }
+                $installPublicKey = 'set -eu; home=$(getent passwd smoke | cut -d: -f6); test -f "$home/.ssh/authorized_keys"; printf "%s\n" "$1" >> "$home/.ssh/authorized_keys"'
+                & docker exec $container sh -c $installPublicKey sh $generatedPublicKey
+                Check-LastExit 'install the generated public key'
+                & $smoke generated 127.0.0.1 $port smoke $generatedStore
+                Check-LastExit 'reopen encrypted inventory and authenticate with the generated key'
+            }
+
             & $smoke success 127.0.0.1 $port smoke $keyPath
             Check-LastExit "$($entry.Name) authentication"
             & $smoke success 127.0.0.1 $port smoke $encryptedKey $passphraseFile
