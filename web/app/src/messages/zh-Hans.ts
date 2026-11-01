@@ -639,6 +639,7 @@ export const zhHans: Messages = {
   "host.publicKey.hint": "把它加到主机上的 ~/.ssh/authorized_keys 里。",
   "host.publicKey.copy": "复制公钥",
   "host.publicKey.copied": "已复制",
+  "host.publicKey.copyFailed": "未能复制公钥，请重试。",
   "host.tags": "标签",
   "host.groups": "分组",
   "host.notes": "备注",

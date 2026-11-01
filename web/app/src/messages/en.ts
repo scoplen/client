@@ -716,6 +716,7 @@ export const en = {
   "host.publicKey.hint": "Add it to ~/.ssh/authorized_keys on the host.",
   "host.publicKey.copy": "Copy public key",
   "host.publicKey.copied": "Copied",
+  "host.publicKey.copyFailed": "Could not copy the public key. Try again.",
   "host.tags": "Tags",
   "host.groups": "Groups",
   "host.notes": "Notes",

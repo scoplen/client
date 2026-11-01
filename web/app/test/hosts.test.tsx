@@ -357,6 +357,69 @@ describe("deleting a host", () => {
 });
 
 describe("adding a host", () => {
+  it("sends only a generation intent, copies the returned public key and can retry a failed copy", async () => {
+    const user = userEvent.setup();
+    const copy = vi.spyOn(navigator.clipboard, "writeText");
+    const api = sampleInventory(sampleHosts());
+    const add = vi.spyOn(api, "addHost");
+    const onConnect = vi.fn();
+    show(api, "en", onConnect);
+    await screen.findByText("7 hosts");
+    await user.click(screen.getByRole("button", { name: "Add host" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add host" });
+    await user.type(within(dialog).getByLabelText("Address"), "new-key.example");
+    await user.type(within(dialog).getByLabelText("Username"), "ops");
+    await user.click(within(dialog).getByRole("radio", { name: "Key" }));
+    await user.click(within(dialog).getByRole("radio", { name: /Create a new key/ }));
+    expect(within(dialog).getByText(/Scoplen creates an Ed25519 key/)).toBeTruthy();
+    expect(add).not.toHaveBeenCalled();
+    expect(within(dialog).queryByLabelText("Private key")).toBeNull();
+    expect(await violations(dialog)).toEqual([]);
+    await user.click(within(dialog).getByRole("button", { name: "Add host" }));
+    expect(add).toHaveBeenCalledExactlyOnceWith({
+      name: null,
+      address: "new-key.example",
+      port: null,
+      username: "ops",
+      signIn: { kind: "generateKey" },
+    });
+    await screen.findByRole("heading", { level: 2, name: "new-key.example" });
+    const added = await add.mock.results[0]!.value;
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") throw new Error("Host creation failed");
+    const publicKey = added.data.logins[0]!.credential!.publicKey;
+    expect(publicKey).toMatch(/^ssh-ed25519 /);
+    expect(copy).not.toHaveBeenCalled();
+    expect(onConnect).not.toHaveBeenCalled();
+    copy.mockRejectedValueOnce(new Error("Clipboard unavailable"));
+    await user.click(screen.getByRole("button", { name: "Copy public key" }));
+    expect(await screen.findByText("Could not copy the public key. Try again.")).toBeTruthy();
+    expect(screen.queryByText("Copied")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Copy public key" }));
+    expect(await screen.findByText("Copied")).toBeTruthy();
+    expect(copy).toHaveBeenCalledTimes(2);
+    expect(copy).toHaveBeenNthCalledWith(1, publicKey);
+    expect(copy).toHaveBeenNthCalledWith(2, publicKey);
+    expect(screen.queryByText("Could not copy the public key. Try again.")).toBeNull();
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(onConnect).not.toHaveBeenCalled();
+  });
+
+  it("does not request a new key when adding a host is cancelled", async () => {
+    const api = sampleInventory(sampleHosts());
+    const add = vi.spyOn(api, "addHost");
+    show(api);
+    await screen.findByText("7 hosts");
+    await userEvent.click(screen.getByRole("button", { name: "Add host" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add host" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Key" }));
+    await userEvent.click(within(dialog).getByRole("radio", { name: /Create a new key/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add host" })).toBeNull());
+    expect(add).not.toHaveBeenCalled();
+    expect(screen.getByText("7 hosts")).toBeTruthy();
+  });
+
   it("saves an explicit Interactive login without requiring a password or key", async () => {
     const api = sampleInventory(sampleHosts());
     const add = vi.spyOn(api, "addHost");

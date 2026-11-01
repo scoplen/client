@@ -12,6 +12,14 @@ Maturity: Exploration. Maintenance: Active.
 
 The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly, through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, through an explicit saved Jump chain, or through a saved local ProxyCommand. Each SSH host uses its saved password, OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA software key, or an explicitly selected key in the system SSH agent, after independent host-key review. The target opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after that host's review. New or changed keys require explicit acceptance; wildcard-only and CA records do not authorize raw host keys. Other credential kinds and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
 
+When adding a host, choose Key and Create a new key to generate an Ed25519 key
+in the Rust core. The private key stays in the encrypted store; the host, Login
+and shared-binding Credential are saved together. The new host opens in the
+details panel, where Copy public key copies only its OpenSSH public key. Install
+that public key in the remote user's `~/.ssh/authorized_keys` before connecting.
+Creating the key does not connect to or change the remote host. A failed clipboard
+write shows an error and can be retried without creating another key.
+
 To use Jump, create a Jump route containing the ordered Logins for the jump
 hosts, then assign that route to the target Login. Every jump Login must select
 Direct. The client rejects nested Jump, proxy, or command routes on a jump
@@ -581,6 +589,9 @@ starts disposable OpenSSH servers and verifies Ed25519, P-256/P-384/P-521, and R
 authentication, encrypted-key passphrases, constrained RSA-SHA2-256/512
 selection, SHA-1-only refusal, wrong-key rejection, invalid-key errors, and
 fail-closed host-key trust.
+It also generates an Ed25519 key through Add Host, installs only its returned
+public key, then reopens the encrypted store in another process and authenticates
+through the saved Login's ordinary connection plan.
 It removes its containers and temporary keys when finished.
 CI runs this fixture on Linux in addition to the macOS and Windows Rust checks.
 
