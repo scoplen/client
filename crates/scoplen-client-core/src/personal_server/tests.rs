@@ -361,6 +361,7 @@ pub(crate) fn fixture_profile(local: &Store, origin: &str, admitted: bool) -> Fi
                 seq: 7,
                 key_epoch: 1,
                 rotation_pending: false,
+                organization: None,
             },
             SessionVault {
                 id: scoplen_model::new_uuid_v7().unwrap(),
@@ -368,6 +369,7 @@ pub(crate) fn fixture_profile(local: &Store, origin: &str, admitted: bool) -> Fi
                 seq: 3,
                 key_epoch: 4,
                 rotation_pending: true,
+                organization: None,
             },
         ],
     };

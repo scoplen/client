@@ -19,9 +19,10 @@ web/app (React)  ── typed commands, binary channels ──  src-tauri  ─�
 - `scoplen-client-core` holds every behavior, so it is the same on both platforms and testable without a window.
 - `scoplen-client-platform` is the only crate that may contain `unsafe` code or FFI; it is denied by default there too and allowed per module with each block documented.
 
-The shared libraries and Pageant patch are pinned to published `proto@96d2cdb`, including the
-D-136 named-account team lifecycle and D-134 conditional Organization name contracts. Fresh Device
-authentication obtains team scopes; refresh preserves or narrows the retained family's ceiling.
+The shared libraries, Pageant and ssh-key patches are pinned to published `proto@328f16d`,
+including D-137 Organization inventory/view, group/policy and user-CA contracts, and the
+P-256 short-scalar import correction. Fresh Device authentication obtains team scopes; refresh preserves
+or narrows the retained family's ceiling.
 It retains the D-127/D-128 password-account contracts,
 shared strict JSON problem reader, kind-8 descriptor validation and the D-121 asynchronous challenge API with
 zeroizing response custody. D-116 adds the object-safe
@@ -29,6 +30,12 @@ zeroizing response custody. D-116 adds the object-safe
 runs each serialized signing exchange on Tokio's blocking pool. Existing synchronous signers
 retain the default hook; other blocking providers need their own override. SSH and agent wire
 bytes remain unchanged.
+
+Organization session descriptors retain their exact owning Organization and positive view
+revision through Personal bootstrap and offline restoration. They are metadata only here:
+Personal sync still selects its own vault and keys, and team notifications do not schedule
+Personal inventory work. Organization complete-view staging/publication, revision-bound ACKs,
+membership rediscovery and team notification scheduling remain separate implementation work.
 
 The client lockfile retains HPKE and P-256 0.14, `crypto-bigint` 0.7.6 and `ctutils` 0.4.5 for
 RUSTSEC-2026-0387, without the former 0.5.5 bigint/P-256 0.13 dependency path. Updating the shared

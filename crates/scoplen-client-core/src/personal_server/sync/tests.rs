@@ -7,7 +7,10 @@ use std::{
 };
 
 use bytes::Bytes;
-use scoplen_api::auth::{AuthJwk, AuthJwks};
+use scoplen_api::{
+    auth::{AuthJwk, AuthJwks},
+    sync::{OrganizationVaultContext, SessionVault},
+};
 use scoplen_crypto::{
     DeviceAccessTokenClaims, Ed25519SigningKey, SecretVec, TrustedDeviceAccessTokenKeys,
 };
@@ -401,10 +404,30 @@ async fn tls13_h2_bootstrap_verifies_real_proofs_and_restores_offline() {
     let store = local(&dir);
     let manager = peer.prepare(&store).await;
     assert!(manager.load_sync_bootstrap(&store).unwrap().is_none());
+    let organization = OrganizationVaultContext {
+        organization: scoplen_model::new_uuid_v7().unwrap(),
+        view_revision: 19,
+    };
+    let organization_vault = scoplen_model::new_uuid_v7().unwrap();
+    let mut session = SyncSessionResponse::from_cbor(
+        &peer.state.lock().unwrap().replies["/sync/v1/session"].body,
+    )
+    .unwrap();
+    session.vaults.push(SessionVault {
+        id: organization_vault,
+        kind: VaultKind::Organization,
+        seq: 11,
+        key_epoch: 1,
+        rotation_pending: false,
+        organization: Some(organization),
+    });
+    peer.reply("/sync/v1/session", Reply::cbor(session.to_cbor().unwrap()));
     let result = manager.bootstrap_sync(store.clone()).await.unwrap();
-    assert_eq!(result.session().vaults.len(), 2);
+    assert_eq!(result.session().vaults.len(), 3);
     assert_eq!(result.session().vaults[0].seq, 7);
     assert_eq!(result.session().vaults[1].kind, VaultKind::Unknown("future".into()));
+    assert_eq!(result.session().vaults[2].id, organization_vault);
+    assert_eq!(result.session().vaults[2].organization, Some(organization));
     let key = SecretVec::new(result.personal_vault_key().as_bytes().to_vec());
     assert_eq!(peer.state.lock().unwrap().proofs.len(), 3);
     assert_eq!(peer.state.lock().unwrap().paths.len(), 4);
