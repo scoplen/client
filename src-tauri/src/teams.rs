@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use scoplen_client_core::{
     personal_server::{
-        PersonalServer, PersonalServerError, TeamCreationView, TeamError, TeamFailure,
-        TeamInvitationPageView, TeamInvitationView, TeamMemberPageView, TeamMemberView,
-        TeamOperationKind, TeamOperationView, TeamPageView, TeamSettingsView,
+        PersonalServer, PersonalServerError, TeamAssetsView, TeamCreationView, TeamError,
+        TeamFailure, TeamInvitationPageView, TeamInvitationView, TeamMemberPageView,
+        TeamMemberView, TeamOperationKind, TeamOperationView, TeamPageView, TeamSettingsView,
     },
     store::Store,
 };
@@ -17,6 +17,34 @@ use crate::profile_context::ProfileRequest;
 
 fn store(context: &ProfileRequest) -> Result<Arc<Store>, TeamError> {
     context.store().ok_or_else(|| PersonalServerError::Storage.into())
+}
+
+/// Read this team's complete current projection without starting a request.
+#[tauri::command]
+#[specta::specta]
+pub async fn team_assets(
+    app: tauri::AppHandle,
+    context: ProfileRequest,
+    organization_id: String,
+) -> Result<TeamAssetsView, TeamError> {
+    let store = store(&context)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _context = context;
+        app.state::<PersonalServer>().team_assets(&store, &organization_id)
+    })
+    .await
+    .map_err(|_| PersonalServerError::Storage)?
+}
+
+/// Publish every permitted asset in one source-bound view, then acknowledge that revision.
+#[tauri::command]
+#[specta::specta]
+pub async fn refresh_team_assets(
+    context: ProfileRequest,
+    personal: tauri::State<'_, PersonalServer>,
+    organization_id: String,
+) -> Result<TeamAssetsView, TeamError> {
+    personal.refresh_team_assets(store(&context)?, &organization_id).await
 }
 
 /// Read only safe local retained lifecycle state.

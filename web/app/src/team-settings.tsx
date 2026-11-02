@@ -5,6 +5,7 @@ import { useProfileCommands } from "./account-profiles";
 import { useI18n } from "./i18n";
 import type { TeamCreationView, TeamPageView, TeamSettingsView, TeamSummary } from "./ipc/bindings";
 import { TeamMembership } from "./team-membership";
+import { TeamAssets } from "./team-assets";
 
 export function TeamSettings({
   authenticated,
@@ -31,6 +32,8 @@ export function TeamSettings({
   const [reviewRequired, setReviewRequired] = useState(false);
   const [nameSaved, setNameSaved] = useState(false);
   const [membership, setMembership] = useState<{ teamId: string | null } | null>(null);
+  const [assets, setAssets] = useState<TeamSummary | null>(null);
+  const assetsOpener = useRef<HTMLButtonElement | null>(null);
   const editRevision = useRef(0);
   const editField = useRef<HTMLInputElement>(null);
   const editOpener = useRef<HTMLButtonElement | null>(null);
@@ -309,6 +312,17 @@ export function TeamSettings({
               <li key={team.id} className="py-3">
                 {summary(team)}
                 <Button
+                  className="mt-3 mr-2"
+                  variant="secondary"
+                  disabled={locked || !authenticated}
+                  onClick={(event) => {
+                    assetsOpener.current = event.currentTarget;
+                    setAssets(team);
+                  }}
+                >
+                  {t("teams.assets.open")}
+                </Button>
+                <Button
                   className="mt-3"
                   variant="secondary"
                   disabled={locked || !authenticated}
@@ -345,6 +359,16 @@ export function TeamSettings({
         <Button variant="secondary" disabled={locked || !authenticated} onClick={() => query(page.nextCursor)}>
           {t("teams.more")}
         </Button>
+      ) : null}
+      {assets ? (
+        <TeamAssets
+          key={assets.id}
+          team={assets}
+          onClose={() => {
+            setAssets(null);
+            assetsOpener.current?.focus();
+          }}
+        />
       ) : null}
       {editingId ? (
         <form

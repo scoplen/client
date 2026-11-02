@@ -306,8 +306,8 @@ preserve the name and show localized recovery guidance.
 
 An unconfirmed creation offers Retry original creation and keeps the new-creation form hidden.
 After expiry, Clear this preparation remains disabled until Refresh teams succeeds. Confirmed
-creation offers Done. The panel explains that invitations and shared inventory are not yet
-available. Keyboard controls, English and Simplified Chinese use the existing design system.
+creation offers Done. Keyboard controls, English and Simplified Chinese use the existing
+design system.
 
 Each listed team offers Edit. It explicitly reads the current Resource before focusing the
 name field. Save team name uses that captured version once; successful verification replaces
@@ -335,6 +335,18 @@ be explicitly dismissed. An expired operation requires refreshed discovery befor
 decides to clear it or create another team. `discard_team_creation` rejects a still-retryable
 unknown operation. These intents do not change the selected Personal profile or its inventory,
 and role labels never grant client-side asset permissions.
+
+View assets opens the selected team's inventory dialog and explicitly requests its complete
+current view. A successful read shows the source server alongside the team name. Updating, a complete
+empty result, unavailable membership, a failed refresh and an unconfirmed server acknowledgement
+have distinct messages. Only Rust's complete current projection renders rows; a stale or partial
+view hides them. The dialog reads local state every two seconds while open; its independent
+native owner refreshes previously viewed teams at least every 60 seconds and on relevant hints.
+Refresh assets starts a new complete pull; Close returns focus to its original button. This
+read-only view has no Connect action until the team certificate and SSH path is implemented.
+`team_assets` performs only a local read; `refresh_team_assets` collects and verifies every page,
+atomically publishes and withdraws that team's rows, then acknowledges its exact revision.
+Personal inventory, keys and progress remain separate.
 
 ## Inventory (roadmap C3)
 

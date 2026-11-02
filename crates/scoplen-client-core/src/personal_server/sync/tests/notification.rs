@@ -216,8 +216,8 @@ pub(super) async fn answer(
     }
 }
 
-struct Running {
-    runtime: Arc<PersonalSyncRuntime>,
+pub(super) struct Running {
+    pub(super) runtime: Arc<PersonalSyncRuntime>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -232,7 +232,7 @@ fn start(manager: PersonalServer, store: Arc<Store>) -> Running {
     start_shared(Arc::new(manager), store)
 }
 
-fn start_shared(manager: Arc<PersonalServer>, store: Arc<Store>) -> Running {
+pub(super) fn start_shared(manager: Arc<PersonalServer>, store: Arc<Store>) -> Running {
     let runtime = Arc::new(PersonalSyncRuntime::default());
     runtime.set_store(Some(store));
     let owner = runtime.clone();
@@ -240,7 +240,7 @@ fn start_shared(manager: Arc<PersonalServer>, store: Arc<Store>) -> Running {
     Running { runtime, task }
 }
 
-async fn wait(mut condition: impl FnMut() -> bool) {
+pub(super) async fn wait(mut condition: impl FnMut() -> bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
         while !condition() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -252,6 +252,10 @@ async fn wait(mut condition: impl FnMut() -> bool) {
 
 fn send(peer: &Peer, action: Action) {
     peer.state.lock().unwrap().notification.as_ref().unwrap().actions.send(action).unwrap();
+}
+
+pub(super) fn team_hint(peer: &Peer, notification: SyncNotification) {
+    send(peer, Action::Event(notification));
 }
 fn count(peer: &Peer) -> usize {
     peer.state.lock().unwrap().inventory.as_ref().unwrap().queries.len()
@@ -303,8 +307,22 @@ async fn runtime_starts_without_settings_catches_up_and_syncs_only_adopted_edits
             seq: 100,
         }),
     );
+    send(
+        &peer,
+        Action::Event(SyncNotification::OrganizationViewChanged {
+            organization: scoplen_model::new_uuid_v7().unwrap(),
+            vault: scoplen_model::new_uuid_v7().unwrap(),
+            view_revision: 19,
+        }),
+    );
+    send(&peer, Action::Event(SyncNotification::MembershipsChanged));
     tokio::time::sleep(Duration::from_millis(350)).await;
-    assert_eq!(count(&peer), baseline, "foreign vault hints do not schedule work");
+    assert_eq!(
+        count(&peer),
+        baseline,
+        "foreign vault and team hints do not schedule Personal work"
+    );
+    assert_eq!(peer.state.lock().unwrap().notification.as_ref().unwrap().connections, 1);
     let mut remote = host.clone();
     remote.id = scoplen_model::new_uuid_v7().unwrap();
     let change = inventory::change(&store, &remote, 9);

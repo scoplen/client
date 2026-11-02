@@ -328,6 +328,10 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	personalSyncBackgroundStatus: () => __TAURI_INVOKE<PersonalBackgroundStatus>("personal_sync_background_status"),
 	/**  Read one current membership page only after the user requests it. */
 	teamsPage: (cursor: string | null) => typedError<TeamPageView, TeamError>(__TAURI_INVOKE("teams_page", { cursor })),
+	/**  Read this team's complete current projection without starting a request. */
+	teamAssets: (organizationId: string) => typedError<TeamAssetsView, TeamError>(__TAURI_INVOKE("team_assets", { organizationId })),
+	/**  Publish every permitted asset in one source-bound view, then acknowledge that revision. */
+	refreshTeamAssets: (organizationId: string) => typedError<TeamAssetsView, TeamError>(__TAURI_INVOKE("refresh_team_assets", { organizationId })),
 	/**  Capture one current team's metadata and exact precondition for an explicit edit. */
 	teamSettings: (organizationId: string) => typedError<TeamSettingsView, TeamError>(__TAURI_INVOKE("team_settings", { organizationId })),
 	/**  Send one name update without changing or refreshing its captured precondition. */
@@ -2601,6 +2605,53 @@ export type StoreChanged = {
 	ids: string[],
 };
 
+/**  Safe inventory metadata from this exact Organization, without secret fields or references. */
+export type TeamAssetSummary = {
+	/**  Opaque id usable only with this view's source. */
+	id: string,
+	/**  Existing K-1 registry name. */
+	kind: string,
+	/**  Existing asset name; absent names use the id in the renderer. */
+	name: string | null,
+	/**  A Host's server-readable endpoint, not another referenced asset's metadata. */
+	address: string | null,
+};
+
+/**  Only a fully published, still-current projection exposes its assets. */
+export type TeamAssetsPhase =
+/**  The user has not requested this team's assets. */
+"notLoaded" |
+/**  A complete view is being collected; partial rows remain hidden. */
+"updating" |
+/**  The complete current view was published atomically. */
+"ready" |
+/**  A content, membership or permission hint invalidated the previous view. */
+"stale" |
+/**  The current Account no longer has this team's inventory descriptor. */
+"unavailable" |
+/**  A bounded read failed; a new complete refresh is required. */
+"failed";
+
+/**  Source-bound current-view status; no raw K-1 object crosses IPC. */
+export type TeamAssetsView = {
+	/**  Canonical deployment used for every request. */
+	origin: string,
+	/**  Account owning this independent encrypted store. */
+	accountId: string,
+	/**  Selected team, never inferred from a bare vault id. */
+	organizationId: string,
+	/**  Durable Organization inventory vault, once discovered. */
+	vaultId: string | null,
+	/**  Exact positive uint64 equality fence, represented without JavaScript precision loss. */
+	revision: string | null,
+	/**  Current publication state. */
+	phase: TeamAssetsPhase,
+	/**  The current complete publication's server progress is confirmed. */
+	acknowledged: boolean,
+	/**  Present only for Ready, including a valid empty current view. */
+	assets: TeamAssetSummary[],
+};
+
 /**  Local state of the one retained team-creation operation. */
 export type TeamCreationPhase =
 /**  No request was sent, or the first-party server confirmed no creation. */
@@ -2676,7 +2727,13 @@ export type TeamFailure =
 /**  The session predates the required team scopes. */
 "membershipScopeRequired" |
 /**  Native clipboard write was refused; no arbitrary platform diagnostic crosses IPC. */
-"clipboardUnavailable";
+"clipboardUnavailable" |
+/**  The Organization changed while the complete view was being collected. */
+"assetsChanged" |
+/**  The complete view did not fit the client's bounded read budget. */
+"assetsLimit" |
+/**  A complete view is saved, but its revision-bound acknowledgement is unconfirmed. */
+"assetsAcknowledgementUnknown";
 
 /**  One explicitly requested invitation page. */
 export type TeamInvitationPageView = {

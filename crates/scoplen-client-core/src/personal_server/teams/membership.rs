@@ -304,6 +304,11 @@ impl PersonalServer {
                 MAX_ORGANIZATION_RESOURCE_BYTES,
             )
             .await;
+        if kind != TeamOperationKind::Invitation {
+            store
+                .invalidate_team_assets(&session.identity, pending.organization_id, None)
+                .map_err(storage)?;
+        }
         let response = match response {
             Ok(response) => response,
             Err(PersonalServerError::ConnectionBeforeRequest) if pending.phase == 0 => {
@@ -516,7 +521,9 @@ impl PersonalServer {
         let session = self.team_session(&store, DeviceAccessOperation::TeamMemberUpdate).await?;
         let response = self
             .team_mutation(&store, &session, &path, Method::PATCH, Some(&body), etag, 200)
-            .await?;
+            .await;
+        store.invalidate_team_assets(&session.identity, organization, None).map_err(storage)?;
+        let response = response?;
         let item = TeamMemberResource::from_http_json(
             response.body.as_bytes(),
             response.etag.as_deref(),
@@ -542,13 +549,13 @@ impl PersonalServer {
         etag: &str,
     ) -> Result<(), TeamError> {
         let _operation = self.operation.try_lock().map_err(|_| PersonalServerError::Busy)?;
-        let path = format!(
-            "/api/v1/orgs/{}/members/{}",
-            parse_id(organization_id)?,
-            parse_id(membership_id)?
-        );
+        let organization = parse_id(organization_id)?;
+        let path = format!("/api/v1/orgs/{organization}/members/{}", parse_id(membership_id)?);
         let session = self.team_session(&store, DeviceAccessOperation::TeamMemberRemove).await?;
-        self.team_mutation(&store, &session, &path, Method::DELETE, None, etag, 204).await?;
+        let result =
+            self.team_mutation(&store, &session, &path, Method::DELETE, None, etag, 204).await;
+        store.invalidate_team_assets(&session.identity, organization, None).map_err(storage)?;
+        result?;
         Ok(())
     }
 

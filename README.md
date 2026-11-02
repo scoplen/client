@@ -400,7 +400,17 @@ erases the local password; a lost password requires revoking and replacing the i
 Conditional member changes, invitation revocation and Leave team never replay automatically.
 Conflict or unknown outcome requires an explicit refresh and review. Personal data and other
 teams remain independent; installed host trust needs separate removal after dissolution.
-The panel does not switch inventory or grant access to shared assets.
+
+Each team offers View assets. It fetches the complete currently permitted inventory before
+showing any rows, labels the selected team and server, and distinguishes an empty inventory
+from lost membership or a failed refresh. Rust stores that projection separately from Personal
+objects, withdraws assets absent from the next complete view, and refreshes viewed teams in
+the background at least every 60 seconds. Permission and membership notifications trigger a
+fresh complete read. Reopening an Account requires online revalidation before showing saved
+team rows. Refresh assets retries explicitly; an unconfirmed server acknowledgement keeps
+the complete local projection and shows its unconfirmed state. Asset editing, access-rule
+administration, CA setup and connecting to team Hosts remain separate work.
+Viewing team assets does not switch the active Personal inventory or grant Connect permission.
 Older saved sessions need fresh Device authentication to obtain the team scopes; refresh never
 expands an existing family's permission ceiling.
 
