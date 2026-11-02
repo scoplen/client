@@ -32,10 +32,24 @@ retain the default hook; other blocking providers need their own override. SSH a
 bytes remain unchanged.
 
 Organization session descriptors retain their exact owning Organization and positive view
-revision through Personal bootstrap and offline restoration. They are metadata only here:
-Personal sync still selects its own vault and keys, and team notifications do not schedule
-Personal inventory work. Organization complete-view staging/publication, revision-bound ACKs,
-membership rediscovery and team notification scheduling remain separate implementation work.
+revision through Personal bootstrap and offline restoration. Personal sync still selects its
+own vault and keys. The separate team assets path captures canonical origin, Account, selected
+Organization, its inventory vault, revision and a fresh pull generation. It fetches only the
+complete `/view`, stages at most 32 MiB of encoded objects with a 4 MiB per-response limit, then
+atomically replaces that team's projection in dedicated SQLCipher tables. An absent former
+object is withdrawn locally, without a Personal object write or server tombstone. The
+revision-bound ACK is sent only after publication; an uncertain ACK preserves the complete
+publication with unconfirmed progress. Partial, foreign or invalid responses never publish.
+
+The open-store background owner repeats a complete pull for each explicitly viewed team at
+least every 60 seconds, even when its revision is unchanged. Team hints invalidate only the
+captured team's projection and accelerate its pull; membership hints invalidate tracked team
+projections before fresh descriptor discovery. Store replacement cancels the owner, and each
+pull generation fences late responses. Reopening the encrypted store retains the cache but
+requires online current-view revalidation before exposing its rows. Personal notifications
+and object progress remain separate. Settings offers View assets with explicit complete-empty,
+updating, failure, lost-membership and unconfirmed-ACK states. Asset authoring, group/policy UI,
+CA setup and team SSH remain separate outcomes.
 
 The client lockfile retains HPKE and P-256 0.14, `crypto-bigint` 0.7.6 and `ctutils` 0.4.5 for
 RUSTSEC-2026-0387, without the former 0.5.5 bigint/P-256 0.13 dependency path. Updating the shared

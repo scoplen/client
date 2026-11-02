@@ -46,6 +46,7 @@ struct Expected {
 #[derive(Default)]
 struct PeerState {
     replies: BTreeMap<String, Reply>,
+    view_pages: BTreeMap<String, std::collections::VecDeque<Reply>>,
     expected: Option<Expected>,
     paths: Vec<String>,
     proofs: HashSet<String>,
@@ -310,7 +311,22 @@ async fn answer(
                     {
                         return Err("wrong session identity".into());
                     }
+                } else if path.ends_with("/view") {
+                    scoplen_api::sync::SyncOrganizationViewQuery::from_query(
+                        request.uri().query().ok_or("missing view query")?,
+                    )
+                    .map_err(|_| "invalid view query")?;
+                    if request.method() != http::Method::GET || !body.is_empty() {
+                        return Err("invalid view method".into());
+                    }
+                } else if path.ends_with("/ack") && state.replies.contains_key(path) {
+                    scoplen_api::sync::SyncOrganizationAckRequest::from_cbor(&body)
+                        .map_err(|_| "invalid team ack")?;
+                    if request.method() != http::Method::POST || request.uri().query().is_some() {
+                        return Err("invalid team ack method".into());
+                    }
                 } else if state.inventory.is_none()
+                    && !(path.ends_with("/ack") && state.replies.contains_key(path))
                     && !team_create
                     && !team_lifecycle
                     && !(path.starts_with("/api/v1/orgs/")
@@ -342,6 +358,8 @@ async fn answer(
                 state.team_lifecycle.as_mut().unwrap().answer(&request, &body)?
             } else if path.starts_with("/api/v1/orgs") && state.teams.is_some() {
                 state.teams.as_mut().unwrap().answer(&request, &body)?
+            } else if path.ends_with("/ack") && state.replies.contains_key(path) {
+                state.replies.get(path).cloned().ok_or("missing team acknowledgement")?
             } else if state.inventory.is_some()
                 && matches!(
                     path.rsplit('/').next(),
@@ -352,6 +370,10 @@ async fn answer(
                 let signing = expected.signing_public.clone();
                 let device = expected.device;
                 state.inventory.as_mut().unwrap().answer(&request, &body, &signing, device)?
+            } else if let Some(reply) =
+                state.view_pages.get_mut(path).and_then(std::collections::VecDeque::pop_front)
+            {
+                reply
             } else {
                 state.replies.get(path).cloned().ok_or("unknown path")?
             }
@@ -359,7 +381,10 @@ async fn answer(
     };
     let pause = {
         let mut state = state.lock().unwrap();
-        if state.pause.as_ref().is_some_and(|(path, ..)| path == request.uri().path()) {
+        if state.pause.as_ref().is_some_and(|(path, ..)| {
+            path == request.uri().path()
+                || request.uri().path_and_query().is_some_and(|target| path == target.as_str())
+        }) {
             state.pause.take()
         } else {
             None
@@ -393,6 +418,7 @@ fn local(dir: &tempfile::TempDir) -> Arc<Store> {
 mod account;
 mod membership;
 mod revalidation;
+mod team_assets;
 mod team_lifecycle;
 mod teams;
 mod trust;

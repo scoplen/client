@@ -165,7 +165,12 @@ impl PersonalSyncRuntime {
                 tokio::select! {
                     biased;
                     _ = control.changed() => {},
-                    _ = self.run_store(server, store, run) => {},
+                    _ = async {
+                        tokio::join!(
+                            self.run_store(server, store.clone(), run.clone()),
+                            server.run_team_assets(store, run),
+                        );
+                    } => {},
                 }
             } else if control.changed().await.is_err() {
                 return;

@@ -700,4 +700,30 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         CHECK(phase=0 OR first_attempt_ms IS NOT NULL)
     ) STRICT;
     "#,
+    // 19: team projections retain their complete source and never enter Personal objects.
+    r#"
+    CREATE TABLE team_asset_views (
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK(length(account_id)=16),
+        organization_id BLOB NOT NULL CHECK(length(organization_id)=16),
+        generation BLOB NOT NULL CHECK(length(generation)=16),
+        vault_id BLOB CHECK(vault_id IS NULL OR length(vault_id)=16),
+        revision BLOB CHECK(revision IS NULL OR length(revision)=8),
+        cursor BLOB NOT NULL CHECK(length(cursor)=8),
+        phase INTEGER NOT NULL CHECK(phase BETWEEN 0 AND 4),
+        acknowledged INTEGER NOT NULL CHECK(acknowledged IN (0,1)),
+        PRIMARY KEY(origin,account_id,organization_id),
+        CHECK(phase!=1 OR (vault_id IS NOT NULL AND revision IS NOT NULL))
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE team_asset_objects (
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK(length(account_id)=16),
+        organization_id BLOB NOT NULL CHECK(length(organization_id)=16),
+        object_id BLOB NOT NULL CHECK(length(object_id)=16),
+        payload BLOB NOT NULL CHECK(length(payload) BETWEEN 1 AND 262144),
+        PRIMARY KEY(origin,account_id,organization_id,object_id),
+        FOREIGN KEY(origin,account_id,organization_id)
+            REFERENCES team_asset_views(origin,account_id,organization_id) ON DELETE CASCADE
+    ) STRICT, WITHOUT ROWID;
+    "#,
 ];

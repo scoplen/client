@@ -13,6 +13,7 @@ mod migrations;
 pub(crate) mod personal;
 pub(crate) mod profiles;
 pub(crate) mod sync;
+pub(crate) mod team_assets;
 pub(crate) mod teams;
 
 use std::collections::HashSet;
@@ -170,6 +171,7 @@ pub struct Store {
     listeners: Mutex<Vec<(u64, Listener)>>,
     next_listener: Mutex<u64>,
     personal_changes: tokio::sync::watch::Sender<u64>,
+    team_changes: tokio::sync::watch::Sender<u64>,
     personal_rotation: std::sync::atomic::AtomicU64,
 }
 
@@ -215,6 +217,7 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "secure_delete", "ON")?;
         migrate(&mut conn)?;
+        conn.execute("UPDATE team_asset_views SET phase=2,acknowledged=0 WHERE phase IN(0,1)", [])?;
         let device_id = ensure_device(&conn, profile.map(|p| p.profile.device_id))?;
         Ok(Store {
             conn: Mutex::new(conn),
@@ -223,6 +226,7 @@ impl Store {
             listeners: Mutex::new(Vec::new()),
             next_listener: Mutex::new(0),
             personal_changes: tokio::sync::watch::channel(0).0,
+            team_changes: tokio::sync::watch::channel(0).0,
             personal_rotation: std::sync::atomic::AtomicU64::new(0),
         })
     }

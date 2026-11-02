@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Account-scoped team discovery, durable creation and conditional name updates.
 
+pub(super) mod assets;
 mod membership;
+pub use assets::{TeamAssetSummary, TeamAssetsPhase, TeamAssetsView};
 pub use membership::{
     TeamInvitationPageView, TeamInvitationView, TeamMemberPageView, TeamMemberView,
     TeamOperationKind, TeamOperationView,
@@ -193,6 +195,15 @@ pub enum TeamFailure {
         "The clipboard is unavailable. Retry copying, or reveal the invitation password explicitly."
     )]
     ClipboardUnavailable,
+    /// The Organization changed while the complete view was being collected.
+    #[error("Team assets changed. Refresh to load the complete current view.")]
+    AssetsChanged,
+    /// The complete view did not fit the client's bounded read budget.
+    #[error("The team inventory exceeds this client's read limits. No partial view was published.")]
+    AssetsLimit,
+    /// A complete view is saved, but its revision-bound acknowledgement is unconfirmed.
+    #[error("Team assets are saved. Refresh to confirm their server acknowledgement.")]
+    AssetsAcknowledgementUnknown,
 }
 
 /// Safe flattened IPC errors, without arbitrary server text or diagnostics.
@@ -446,6 +457,7 @@ impl PersonalServer {
             .await?;
         session.current(&store)?;
         if response.status != 200 {
+            store.invalidate_team_assets(&session.identity, id, None).map_err(storage)?;
             return Err(read_error(&store, &session, &response)?);
         }
         let resource = resource(&response, session.identity.account_id)?;
@@ -477,6 +489,7 @@ impl PersonalServer {
             .map_err(|error| *error)?
             .team_update(&session.identity.origin, &path, &body, etag, session.token()?, &proof)
             .await;
+        store.invalidate_team_assets(&session.identity, id, None).map_err(storage)?;
         let response = match response {
             Ok(response) => response,
             Err(PersonalServerError::ConnectionBeforeRequest) => {

@@ -1279,7 +1279,7 @@ export const en = {
   "accounts.error.deviceQuota": "This account cannot admit another device. Contact the server operator.",
   "teams.title": "Teams",
   "teams.body":
-    "Create or join teams and manage their memberships. Your Personal workspace stays independent. Shared inventory is not available yet.",
+    "Create or join teams, manage members and view permitted assets. Your Personal workspace stays independent.",
   "teams.membership.join": "Join team",
   "teams.membership.manage": "Invitations and members",
   "teams.membership.close": "Close membership actions",
@@ -1562,6 +1562,31 @@ export const en = {
   "workspaces.issue.definitionTooLarge":
     "The workspace exceeds the saved layout or object limits. Save fewer tabs or a shorter name.",
   "workspaces.issue.storage": "The local operation could not be confirmed. Refresh the workspaces before retrying.",
+  "teams.assets.open": "View assets",
+  "teams.assets.title": "Assets · {name}",
+  "teams.assets.body":
+    "This team's inventory is readable by its server and shown according to your current permissions.",
+  "teams.assets.loading": "Loading the complete team inventory…",
+  "teams.assets.list": "Team assets",
+  "teams.assets.empty":
+    "There are no assets you can view in this team. Ask an administrator to add assets or update your access.",
+  "teams.assets.stale":
+    "The team or your permissions changed. Updating the complete inventory; previous assets are unavailable until it finishes.",
+  "teams.assets.unavailable":
+    "This team's inventory is no longer available to your account. Refresh your teams to check your membership.",
+  "teams.assets.failed": "The complete inventory could not be verified. Check your connection and refresh the assets.",
+  "teams.assets.limit": "This inventory exceeds the client's read limit. No partial inventory was shown.",
+  "teams.assets.acknowledgement":
+    "The complete inventory is saved, but the server acknowledgement is unconfirmed. Refresh to try again.",
+  "teams.assets.refresh": "Refresh assets",
+  "teams.assets.close": "Close assets",
+  "teams.assets.kind.host": "Host",
+  "teams.assets.kind.login": "Login",
+  "teams.assets.kind.group": "Host group",
+  "teams.assets.kind.route": "Route",
+  "teams.assets.kind.trust": "Host trust",
+  "teams.assets.kind.snippet": "Snippet",
+  "teams.assets.kind.gateway": "Gateway network",
 } as const;
 
 export type Messages = { [K in keyof typeof en]: string };

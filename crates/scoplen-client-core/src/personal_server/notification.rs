@@ -239,6 +239,17 @@ async fn connection(
                             SyncNotification::RotationPending { vault } if vault == session.identity.personal_vault_id => store.require_personal_keys(),
                             SyncNotification::DeviceRevoked => {
                                 store.invalidate_personal_session(&session.identity, &session.access).map_err(storage)?;
+                                for organization in store.tracked_team_assets(&session.identity).map_err(storage)? {
+                                    store.invalidate_team_assets(&session.identity, organization, None).map_err(storage)?;
+                                }
+                            }
+                            SyncNotification::OrganizationViewChanged { organization, vault, .. } => {
+                                store.invalidate_team_assets(&session.identity, organization, Some(vault)).map_err(storage)?;
+                            }
+                            SyncNotification::MembershipsChanged => {
+                                for organization in store.tracked_team_assets(&session.identity).map_err(storage)? {
+                                    store.invalidate_team_assets(&session.identity, organization, None).map_err(storage)?;
+                                }
                             }
                             _ => {}
                         }

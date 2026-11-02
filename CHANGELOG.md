@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added View assets for each discovered team, with a Rust-owned complete current-view pull,
+  independent encrypted cache, background refresh and permission/membership withdrawal.
+  Partial or mismatched pages never publish; server acknowledgement follows complete local
+  publication. The dialog distinguishes empty, updating, unavailable and unconfirmed states.
+  Team asset editing, access rules, CA setup and team SSH remain separate work.
+
 - Added software Ed25519 key generation when adding a host. The host, Login and
   private-key Credential save together in the encrypted store. Copy public key
   provides the public half for manual installation on the remote host and reports
