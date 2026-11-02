@@ -332,6 +332,7 @@ impl CurrentPeer {
                 seq: 0,
                 key_epoch: if self.fault == Fault::Epoch { 2 } else { 1 },
                 rotation_pending: self.fault == Fault::Rotation,
+                organization: None,
             }],
         }
     }

@@ -303,8 +303,22 @@ async fn runtime_starts_without_settings_catches_up_and_syncs_only_adopted_edits
             seq: 100,
         }),
     );
+    send(
+        &peer,
+        Action::Event(SyncNotification::OrganizationViewChanged {
+            organization: scoplen_model::new_uuid_v7().unwrap(),
+            vault: scoplen_model::new_uuid_v7().unwrap(),
+            view_revision: 19,
+        }),
+    );
+    send(&peer, Action::Event(SyncNotification::MembershipsChanged));
     tokio::time::sleep(Duration::from_millis(350)).await;
-    assert_eq!(count(&peer), baseline, "foreign vault hints do not schedule work");
+    assert_eq!(
+        count(&peer),
+        baseline,
+        "foreign vault and team hints do not schedule Personal work"
+    );
+    assert_eq!(peer.state.lock().unwrap().notification.as_ref().unwrap().connections, 1);
     let mut remote = host.clone();
     remote.id = scoplen_model::new_uuid_v7().unwrap();
     let change = inventory::change(&store, &remote, 9);
