@@ -175,9 +175,14 @@ Hosts, creates teams and accepts a named invitation. The owner authors Hosts, a 
 Group and independent view/connect policies. The member receives only the permitted complete
 view and cannot edit assets; foreign-team reads and stale ETag updates are refused. Removing
 and restoring Group membership withdraws and restores visibility. Deleting the view policy
-removes the assets without deleting the independent connect policy. Personal inventory,
-sync state and keys remain separate. Run against fresh SQLite and PostgreSQL deployments;
-this core check does not establish rendered or native desktop interaction.
+removes the assets without deleting the independent connect policy. The same member owns an
+independent team with an enabled permit-all custom policy; its Owner role and policy cannot
+expand the other team's view, reveal a hidden Host, permit asset edits or resolve foreign ids.
+Administrator removal withdraws a previously populated team cache and denies subsequent reads.
+The remaining owned team still supports a complete view and actual Host reads and updates,
+and an ordinary Personal edit still uploads successfully. Personal inventory, sync state and
+keys remain separate. Run against fresh SQLite and PostgreSQL deployments; this core check
+does not establish cross-team certificate authorization or rendered/native desktop interaction.
 
 ### Team certificate SSH and terminal-owned SFTP
 

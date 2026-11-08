@@ -3,12 +3,15 @@
 
 use std::collections::BTreeSet;
 
-use crate::personal_server::{
-    TeamAssetsPhase, TeamAssetsView, TeamAuthoringCollection as Collection,
-    TeamAuthoringCreatePhase, TeamAuthoringData as Data, TeamAuthoringResourceView, TeamError,
-    TeamFailure, TeamGroupFields, TeamHostFields, TeamLoginFields, TeamOperationKind,
-    TeamPolicyFields, TeamRouteReference, TeamSimplePermission, TeamSimpleRuleInput,
-    TeamSimpleRuleResource,
+use crate::{
+    inventory::Inventory,
+    personal_server::{
+        TeamAssetsPhase, TeamAssetsView, TeamAuthoringCollection as Collection,
+        TeamAuthoringCreatePhase, TeamAuthoringData as Data, TeamAuthoringResourceView, TeamError,
+        TeamFailure, TeamGroupFields, TeamHostFields, TeamLoginFields, TeamOperationKind,
+        TeamPolicyFields, TeamRouteReference, TeamSimplePermission, TeamSimpleRuleInput,
+        TeamSimpleRuleResource,
+    },
 };
 
 use super::*;
@@ -230,6 +233,27 @@ async fn roundtrip(deployment: PasswordDeployment, directory: &Path) {
 
     let team = create_team(&owner, &owner_store, "Inventory acceptance").await;
     let foreign = create_team(&owner, &owner_store, "Independent inventory boundary").await;
+    let owned_team = create_team(&member, &member_store, "Member-owned independent team").await;
+    let owned_host = create_resource(
+        &member,
+        &member_store,
+        &owned_team.id,
+        host_fields("Independent owned Host"),
+    )
+    .await;
+    create_resource(
+        &member,
+        &member_store,
+        &owned_team.id,
+        Data::Policy(TeamPolicyFields {
+            name: "Permit all within the independent team".into(),
+            source: "permit(principal, action, resource);".into(),
+            enabled: true,
+        }),
+    )
+    .await;
+    let owned_visible = [(owned_host.id.as_str(), "Host")];
+    member_view(&member, &member_store, &owned_team.id, &owned_visible).await;
     join_team(&owner, &owner_store, &member, &member_store, &team.id, &member_name).await;
     let membership =
         member.team_settings(member_store.clone(), &team.id).await.expect("current own membership");
@@ -304,6 +328,23 @@ async fn roundtrip(deployment: PasswordDeployment, directory: &Path) {
             .any(|asset| asset.id == destination.id
                 && asset.name.as_deref() == Some("Permitted Host"))
     );
+    assert!(matches!(
+        member
+            .team_authoring_resource(member_store.clone(), &team.id, Collection::Host, &hidden.id)
+            .await,
+        Err(TeamError::Team(TeamFailure::TeamNotFound)),
+    ));
+    assert!(matches!(
+        member
+            .team_authoring_resource(
+                member_store.clone(),
+                &owned_team.id,
+                Collection::Host,
+                &destination.id
+            )
+            .await,
+        Err(TeamError::Team(TeamFailure::TeamNotFound)),
+    ));
     assert!(matches!(
         member
             .update_team_authoring(
@@ -413,6 +454,71 @@ async fn roundtrip(deployment: PasswordDeployment, directory: &Path) {
         .expect("the independent connect rule remains persisted");
     assert!(matches!(retained.data, Data::Policy(TeamPolicyFields { enabled: true, .. })));
 
+    // Populate the real cache again so membership removal must withdraw a nonempty view.
+    create_resource(&owner, &owner_store, &team.id, view_policy.data).await;
+    member_view(&member, &member_store, &team.id, &visible).await;
+    let current_membership = owner
+        .team_members(owner_store.clone(), &team.id, None)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|member| member.username == member_name)
+        .expect("capture the target Member Resource and its administrative ETag");
+    owner
+        .remove_team_member(
+            owner_store.clone(),
+            &team.id,
+            &current_membership.id,
+            &current_membership.etag,
+        )
+        .await
+        .expect("remove the Member without changing its independent Owner or Account roles");
+    assert!(matches!(
+        member.refresh_team_assets(member_store.clone(), &team.id).await,
+        Err(TeamError::Team(TeamFailure::TeamNotFound)),
+    ));
+    let unavailable = member.team_assets(&member_store, &team.id).unwrap();
+    assert_eq!(unavailable.phase, TeamAssetsPhase::Unavailable);
+    assert!(unavailable.assets.is_empty());
+    assert!(matches!(
+        member
+            .team_authoring_resource(
+                member_store.clone(),
+                &team.id,
+                Collection::Host,
+                &destination.id
+            )
+            .await,
+        Err(TeamError::Team(TeamFailure::TeamNotFound)),
+    ));
+    member_view(&member, &member_store, &owned_team.id, &owned_visible).await;
+    let owned_current = member
+        .team_authoring_resource(
+            member_store.clone(),
+            &owned_team.id,
+            Collection::Host,
+            &owned_host.id,
+        )
+        .await
+        .expect("the independent Owner can still read its actual Host through HTTPS");
+    let updated_owned = member
+        .update_team_authoring(
+            member_store.clone(),
+            &owned_team.id,
+            &owned_host.id,
+            &owned_current.etag,
+            host_fields("Independent Host after membership removal"),
+        )
+        .await
+        .expect("the independent Owner can still update its actual Host through HTTPS");
+    assert_ne!(updated_owned.etag, owned_current.etag);
+    let owned_view = member_view(&member, &member_store, &owned_team.id, &owned_visible).await;
+    assert_eq!(
+        owned_view.assets[0].name.as_deref(),
+        Some("Independent Host after membership removal")
+    );
+
     for (manager, store, original, before) in [
         (&owner, &owner_store, &owner_host, &owner_personal),
         (&member, &member_store, &member_host, &member_personal),
@@ -427,6 +533,24 @@ async fn roundtrip(deployment: PasswordDeployment, directory: &Path) {
         );
         assert!(manager.load_sync_bootstrap(store).unwrap().is_some());
     }
+    Inventory::new(member_store.clone())
+        .set_favorite(member_host.id.to_string(), true)
+        .expect("ordinary Personal editing remains available after team membership removal");
+    assert_eq!(personal.status(&member_store).unwrap().pending, 1);
+    let synchronized = personal
+        .synchronize(&member, member_store.clone(), None)
+        .await
+        .expect("the Account still uploads its independent Personal edit through HTTPS");
+    assert_eq!(synchronized.uploaded, 1);
+    assert_eq!(personal.status(&member_store).unwrap().pending, 0);
+    assert!(
+        Inventory::new(member_store)
+            .host(member_host.id.to_string())
+            .unwrap()
+            .unwrap()
+            .summary
+            .favorite
+    );
 }
 
 #[tokio::test]

@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Extend public-client team inventory acceptance with mixed Owner/Member roles, an independent
+  permit-all policy and tenant-scoped membership removal. Existing authorized views and writes
+  stay bounded to their team; the remaining owned team and Personal sync remain usable.
+
 - Add an opt-in public-client journey for password sign-in, synchronized generated Ed25519
   credentials and real Personal SSH/SFTP, including explicit upload consent, automatic
   second-Device download, ordinary trust replication and offline Account reopen.
