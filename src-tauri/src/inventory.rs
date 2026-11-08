@@ -10,9 +10,9 @@ use scoplen_client_core::inventory::{
     AccessProfileInput, AccessProfileSummary, AddHostError, Areas, CredentialInput,
     CredentialSummary, Deletion, DeletionStore, EditHost, EditHostError, Failure, ForwardInput,
     ForwardSummary, GroupError, GroupInput, GroupSummary, HostDetails, HostSource, HostSummary,
-    Inventory, NewHost, ObjectEditError, OpenSshImportError, OpenSshImportPreview,
-    OpenSshImportResult, RecentSession, RecentSessionKind, RecentSessionOutcome, ReconnectTarget,
-    RouteInput, RouteSummary, SessionError,
+    Inventory, NewHost, ObjectEditError, OpenSshImportChoice, OpenSshImportError,
+    OpenSshImportPreview, OpenSshImportResult, RecentSession, RecentSessionKind,
+    RecentSessionOutcome, ReconnectTarget, RouteInput, RouteSummary, SessionError,
 };
 use tauri_specta::Event as _;
 
@@ -645,7 +645,7 @@ pub async fn inventory_undo_delete(
     blocking(move || inventory.undo_delete(token)).await
 }
 
-/// Reads an OpenSSH config for the empty-inventory preview without modifying
+/// Reads an OpenSSH config and explicit identity choices without modifying
 /// the source file or local store.
 #[tauri::command]
 #[specta::specta]
@@ -653,17 +653,20 @@ pub async fn inventory_preview_open_ssh_config(
     local: LocalDataState,
     state: tauri::State<'_, InventoryState>,
     path: String,
+    choices: Option<Vec<OpenSshImportChoice>>,
 ) -> Result<OpenSshImportPreview, OpenSshImportError> {
     let store = local
         .store()
         .ok_or_else(|| OpenSshImportError::Failed { reference: "local data is locked".into() })?;
     let inventory = Inventory::with_deletions(store, state.deletions(local.generation()));
-    tauri::async_runtime::spawn_blocking(move || inventory.preview_open_ssh_config(path))
-        .await
-        .map_err(|error| OpenSshImportError::Failed { reference: error.to_string() })?
+    tauri::async_runtime::spawn_blocking(move || {
+        inventory.preview_open_ssh_config_with_choices(path, choices.unwrap_or_default())
+    })
+    .await
+    .map_err(|error| OpenSshImportError::Failed { reference: error.to_string() })?
 }
 
-/// Imports a previously previewed OpenSSH config into an empty inventory.
+/// Atomically creates or updates the reviewed source inventory.
 #[tauri::command]
 #[specta::specta]
 pub async fn inventory_import_open_ssh_config(
@@ -680,8 +683,7 @@ pub async fn inventory_import_open_ssh_config(
         .map_err(|error| OpenSshImportError::Failed { reference: error.to_string() })?
 }
 
-/// Opens the conventional `~/.ssh/config` picker used by the empty-list
-/// onboarding flow. Cancellation returns `null`.
+/// Opens the conventional `~/.ssh/config` import picker. Cancellation returns `null`.
 #[tauri::command]
 #[specta::specta]
 pub async fn choose_open_ssh_config(

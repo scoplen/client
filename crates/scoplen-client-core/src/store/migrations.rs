@@ -816,4 +816,14 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         CHECK(phase=0 OR first_attempt IS NOT NULL)
     ) STRICT, WITHOUT ROWID;
     "#,
+    // 22: device-local OpenSSH source identities make explicit re-import idempotent.
+    r#"
+    CREATE TABLE openssh_import_sources (
+        source TEXT NOT NULL,
+        source_key TEXT NOT NULL,
+        source_file TEXT NOT NULL,
+        object_id BLOB NOT NULL REFERENCES objects(id) CHECK(length(object_id)=16),
+        PRIMARY KEY(source,source_key)
+    ) STRICT, WITHOUT ROWID;
+    "#,
 ];

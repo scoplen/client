@@ -8,7 +8,7 @@ use scoplen_ssh::{
 
 use super::SshConnectionError;
 
-pub(super) fn resolve(
+pub(crate) fn resolve(
     command: &str,
     host: &str,
     port: u16,
