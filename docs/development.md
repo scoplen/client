@@ -133,6 +133,34 @@ Independent teams and Personal key state must remain intact.
 cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::team_membership::live_named_team_membership_lifecycle -- --exact --test-threads=1
 ```
 
+### Personal generated-key synchronization and real SSH
+
+Use the three-field disposable HTTPS descriptor above and an owned OpenSSH descriptor in the
+same format as the browser-team check below. Its ownership label and exact loopback port must
+match. This test replaces only that owned sshd's authentication configuration with one generated
+public key; do not point it at a user-managed SSH server or run it concurrently with another
+consumer of that fixture. Password, keyboard-interactive and user-CA authentication are disabled.
+
+```powershell
+$env:SCOPLEN_LIVE_ACCOUNT_DEPLOYMENT = '<absolute disposable HTTPS descriptor path>'
+$env:SCOPLEN_LIVE_TEAM_SSH_FIXTURE = '<absolute owned OpenSSH descriptor path>'
+cargo test --locked -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::personal_inventory_ssh::live_password_device_generated_key_sync_ssh_and_sftp -- --exact --test-threads=1
+```
+
+The first Device registers through public APIs and uses ordinary Add Host to generate and save
+an Ed25519 Credential. Only its returned public key is installed in the owned sshd. A real first
+connection confirms the ordinary host key. Explicit review then selects exactly that Host,
+Login, Credential and trust record, discloses the shared private-key content and grants upload
+consent. The first Device closes before the second independently signs in with its password.
+The production background owner downloads and acknowledges the same encrypted objects without
+a foreground Sync now or Verify keys action. The second Device uses the synchronized key and
+verified same-Account trust for a real shell, resize and 4,096-byte binary SFTP upload/download.
+Account close/reopen repeats SSH and SFTP from retained keys and objects without control-plane
+requests or another trust prompt. Each uploaded file has a unique name and is removed after its
+roundtrip. Successful owned client stores are removed; failures retain private evidence.
+Run separately on SQLite and PostgreSQL. This is public-core acceptance with test-passphrase
+store protection; it does not establish native GUI, picker or platform-keystore interaction.
+
 ### Team inventory and permissions
 
 Use a separate fresh deployment descriptor with the Organization inventory routes enabled:

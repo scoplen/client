@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Add an opt-in public-client journey for password sign-in, synchronized generated Ed25519
+  credentials and real Personal SSH/SFTP, including explicit upload consent, automatic
+  second-Device download, ordinary trust replication and offline Account reopen.
+
 - Add an opt-in public-client acceptance path for existing browser-authored team assets.
   Independent Device sign-in reads the saved Host/Login and permissions, then exercises
   real certificate SSH and terminal-owned binary SFTP without recreating those assets.
