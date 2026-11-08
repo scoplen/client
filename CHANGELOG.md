@@ -11,6 +11,18 @@ All notable changes to the Scoplen desktop client are recorded here.
   the Hosts toolbar focused on search and adding hosts. Existing migration previews,
   confirmations, reports and native file/folder pickers are preserved.
 
+- Extend public-client team inventory acceptance with mixed Owner/Member roles, an independent
+  permit-all policy and tenant-scoped membership removal. Existing authorized views and writes
+  stay bounded to their team; the remaining owned team and Personal sync remain usable.
+
+- Add an opt-in public-client journey for password sign-in, synchronized generated Ed25519
+  credentials and real Personal SSH/SFTP, including explicit upload consent, automatic
+  second-Device download, ordinary trust replication and offline Account reopen.
+
+- Add an opt-in public-client acceptance path for existing browser-authored team assets.
+  Independent Device sign-in reads the saved Host/Login and permissions, then exercises
+  real certificate SSH and terminal-owned binary SFTP without recreating those assets.
+
 - Replaced the Windows native title bar with themed controls in the tab strip. Dragging,
   double-click maximize, minimize, restore and ordinary close remain available; startup and
   local unlock also retain window controls. macOS keeps its native traffic lights.

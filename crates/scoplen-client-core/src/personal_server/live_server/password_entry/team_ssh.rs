@@ -8,7 +8,7 @@ use tokio::{process::Command, sync::mpsc};
 use crate::{
     connection::{
         SessionTarget,
-        preparation::{PreparationEvent, PreparationResponse},
+        preparation::{PreparationContext, PreparationEvent, PreparationResponse},
     },
     inventory::Inventory,
     personal_server::{
@@ -17,7 +17,9 @@ use crate::{
         TeamSimpleRuleInput, TeamSimpleRuleResource, TeamSshError, TeamSshOperationKind,
         TeamSshSource,
     },
-    session_files::{SessionDownloadStatus, SessionUploadStatus},
+    session_files::{
+        RemoteFileKind, SessionDownloadStatus, SessionFileMutationStatus, SessionUploadStatus,
+    },
     session_manager::{SessionEvent, SessionManager},
 };
 
@@ -28,15 +30,15 @@ use super::{
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SshFixture {
+pub(super) struct SshFixture {
     disposable: bool,
-    container: String,
+    pub(super) container: String,
     owner: String,
-    port: u16,
+    pub(super) port: u16,
 }
 
 impl SshFixture {
-    async fn docker(&self, arguments: &[&str]) -> Vec<u8> {
+    pub(super) async fn docker(&self, arguments: &[&str]) -> Vec<u8> {
         let output = tokio::time::timeout(
             Duration::from_secs(20),
             Command::new("docker").args(arguments).kill_on_drop(true).output(),
@@ -48,7 +50,7 @@ impl SshFixture {
         output.stdout
     }
 
-    async fn install(&self, ca: &str, principal: &str) {
+    pub(super) async fn verify(&self) {
         assert!(self.disposable && self.port != 0);
         assert!(self.container.starts_with("scoplen-team-ssh-"));
         assert!(uuid::Uuid::parse_str(&self.owner).is_ok());
@@ -61,6 +63,12 @@ impl SshFixture {
             ])
             .await;
         assert_eq!(String::from_utf8(label).unwrap().trim(), self.owner);
+        let binding = self.docker(&["port", &self.container, "2222/tcp"]).await;
+        assert_eq!(String::from_utf8(binding).unwrap().trim(), format!("127.0.0.1:{}", self.port));
+    }
+
+    pub(super) async fn install(&self, ca: &str, principal: &str) {
+        self.verify().await;
         let setup = r#"set -eu
 home=$(getent passwd smoke | cut -d: -f6)
 test -n "$home"
@@ -99,18 +107,44 @@ async fn wait_for_output(output: &mut mpsc::UnboundedReceiver<Vec<u8>>, marker: 
     }
 }
 
-async fn terminal_and_files(
+pub(super) async fn terminal_and_files(
     personal: &PersonalServer,
     store: Arc<Store>,
     target: &SessionTarget,
     directory: &Path,
 ) {
+    terminal_and_files_with_trust(personal, store, target, directory, 1).await;
+}
+
+pub(super) async fn terminal_and_files_with_trust(
+    personal: &PersonalServer,
+    store: Arc<Store>,
+    target: &SessionTarget,
+    directory: &Path,
+    expected_trust_prompts: usize,
+) {
+    let account = record(&store).unwrap().account_id;
+    let device = store.device_id();
+    let recent_before = Inventory::new(store.clone()).recent_sessions().unwrap().len();
     let sessions = SessionManager::default();
     let id = "team-ssh-acceptance";
     sessions.reserve(id, true).unwrap();
     let (ready_tx, mut ready_rx) = mpsc::unbounded_channel();
     let (output_tx, mut output_rx) = mpsc::unbounded_channel();
     let trusts = AtomicUsize::new(0);
+    let validate = |context: &PreparationContext| {
+        match target {
+            SessionTarget::Organization { source, .. } => {
+                assert_eq!(context.source.as_ref(), Some(source));
+            }
+            SessionTarget::Personal { .. } => {
+                assert!(context.source.is_none());
+                assert_eq!(record(&store).unwrap().account_id, account);
+                assert_eq!(store.device_id(), device);
+            }
+        }
+        assert_eq!(context.profile_id, target.profile_id());
+    };
     let terminal = sessions.run_target(
         id,
         target,
@@ -120,14 +154,11 @@ async fn terminal_and_files(
         store.clone(),
         |event| {
             match event {
-                SessionEvent::Preparation { transport_id, event } => {
-                    if let PreparationEvent::Trust { prompt_id, context, .. } = *event {
-                        let SessionTarget::Organization { source, profile_id } = target else {
-                            panic!("expected an Organization target");
-                        };
-                        assert_eq!(context.source.as_ref(), Some(source));
-                        assert_eq!(&context.profile_id, profile_id);
+                SessionEvent::Preparation { transport_id, event } => match *event {
+                    PreparationEvent::Trust { prompt_id, context, .. } => {
+                        validate(&context);
                         trusts.fetch_add(1, Ordering::SeqCst);
+                        assert!(trusts.load(Ordering::SeqCst) <= expected_trust_prompts);
                         sessions.respond(
                             id,
                             &transport_id,
@@ -135,7 +166,9 @@ async fn terminal_and_files(
                             PreparationResponse::AcceptHostKey,
                         )?;
                     }
-                }
+                    PreparationEvent::Verified { context, .. } => validate(&context),
+                    _ => {}
+                },
                 SessionEvent::Ready { transport_id } => {
                     ready_tx.send(transport_id).map_err(|_| "readiness receiver closed")?;
                 }
@@ -153,7 +186,8 @@ async fn terminal_and_files(
         wait_for_output(&mut output_rx, b"SCOPLEN-TEAM-READY").await;
         sessions.resize(id, &transport, 100, 30).unwrap();
         let original: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
-        let source = directory.join("team-upload.bin");
+        let filename = format!("team-upload-{}.bin", uuid::Uuid::now_v7());
+        let source = directory.join(&filename);
         std::fs::write(&source, &original).unwrap();
         let uploaded = sessions
             .upload_file_with_picker(
@@ -173,9 +207,9 @@ async fn terminal_and_files(
             .list_files(id, &transport, &uuid::Uuid::now_v7().to_string(), b".".to_vec())
             .await
             .expect("browse the same certificate-authenticated SFTP session");
-        let remote = listing.entries.iter().find(|entry| entry.name == "team-upload.bin").unwrap();
+        let remote = listing.entries.iter().find(|entry| entry.name == filename).unwrap();
         assert_eq!(remote.size_bytes.as_deref(), Some("4096"));
-        let destination = directory.join("team-downloaded.bin");
+        let destination = directory.join(format!("downloaded-{filename}"));
         let downloaded = sessions
             .download_file_with_picker(
                 id,
@@ -189,6 +223,22 @@ async fn terminal_and_files(
             .expect("download the actual uploaded binary");
         assert_eq!(downloaded.status, SessionDownloadStatus::Saved);
         assert_eq!(std::fs::read(destination).unwrap(), original);
+        let removed = sessions
+            .delete_remote_entry_with_confirmation(
+                id,
+                &transport,
+                &uuid::Uuid::now_v7().to_string(),
+                b".".to_vec(),
+                remote.path.clone(),
+                |kind, name| async move {
+                    assert_eq!(kind, RemoteFileKind::File);
+                    assert_eq!(name, filename);
+                    Ok(true)
+                },
+            )
+            .await
+            .expect("remove only the captured disposable upload");
+        assert_eq!(removed.status, SessionFileMutationStatus::Saved);
         sessions.close(id).unwrap();
     };
     let (terminal, ()) =
@@ -196,9 +246,9 @@ async fn terminal_and_files(
             .await
             .expect("bounded real team terminal and SFTP journey");
     terminal.expect("close the real team terminal");
-    assert_eq!(trusts.load(Ordering::SeqCst), 1);
+    assert_eq!(trusts.load(Ordering::SeqCst), expected_trust_prompts);
     let recent = Inventory::new(store).recent_sessions().unwrap();
-    assert_eq!(recent.len(), 1);
+    assert_eq!(recent.len(), recent_before + 1);
     assert_eq!(&recent[0].target, target);
     assert!(recent[0].ended_at.is_some());
 }
