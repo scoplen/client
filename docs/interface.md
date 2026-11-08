@@ -473,7 +473,8 @@ closing or reconnecting releases the previous helper before preparing a new atte
 
 Every operation that can fail returns `Outcome`; a `Failure` carries a reference for support, free of secrets.
 
-The OpenSSH import review is available from both empty and existing host lists.
+OpenSSH import is available in Settings > Data > Import and export for both empty and
+existing inventories. Migration actions are absent from the host-list toolbar and empty state.
 Every entry shows its effective endpoint, source location, planned action, route,
 identity, and trusted-key count. The user can select a discovered identity file
 or a credential admitted by the Rust connection preflight. Unresolved identities
@@ -490,8 +491,8 @@ imported trust records and removes records absent, conflicting, or revoked in th
 current source. Manually added trust is retained. Removing an entire alias from
 the source does not delete its previously imported Host, identity, or trust.
 
-The standard OpenSSH export is offered from Hosts, including filtered and empty
-lists. Its review states the full-profile scope and lists every included Login
+Standard OpenSSH export is offered in the same Settings section, independent of the
+current host filter. Its review states the full-profile scope and lists every included Login
 and every skipped entry. A software-key Login needs an existing matching source
 file selected through the native picker; Rust validates it and returns a fresh
 preview. This path is referenced rather than copied. Password Logins prompt in

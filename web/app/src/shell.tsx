@@ -310,13 +310,15 @@ export function Shell({
         </p>
       ) : null}
       {view === "settings" ? (
-        <SettingsView
-          key={settingsSection}
-          status={status}
-          onStatus={onStatus}
-          section={settingsSection}
-          onConnect={(target) => openSession(target, target.profileId)}
-        />
+        <InventoryContext.Provider value={inventory}>
+          <SettingsView
+            key={settingsSection}
+            status={status}
+            onStatus={onStatus}
+            section={settingsSection}
+            onConnect={(target) => openSession(target, target.profileId)}
+          />
+        </InventoryContext.Provider>
       ) : activeTab !== "hosts" ? null : (
         <InventoryContext.Provider value={inventory}>
           <ForwardsContext.Provider value={forwards}>

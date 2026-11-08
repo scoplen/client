@@ -16,19 +16,8 @@ import { Copy, Plug, Plus, RotateCcw, Star, Trash2 } from "lucide-react";
 import { useContext, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useI18n } from "../i18n";
 import { AddHostDialog } from "./add-host";
-import {
-  useInventory,
-  type GroupSummary,
-  type HostSource,
-  type HostSummary,
-  type Id,
-  type OpenSshImportPreview,
-  type OpenSshExportPreview,
-  type RecentSession,
-} from "./api";
+import { useInventory, type GroupSummary, type HostSource, type HostSummary, type Id, type RecentSession } from "./api";
 import { HostDetailsPanel } from "./host-details";
-import { OpenSshImportDialog, openSshImportErrorText } from "./openssh-import";
-import { OpenSshExportDialog, openSshExportErrorText } from "./openssh-export";
 import { InventoryObjects } from "./objects";
 import { routeText } from "./labels";
 import type { ObjectSection } from "./objects";
@@ -67,10 +56,6 @@ export function HostsHome({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
   const [reconnectBusy, setReconnectBusy] = useState<Id | null>(null);
-  const [importPreview, setImportPreview] = useState<OpenSshImportPreview | null>(null);
-  const [importBusy, setImportBusy] = useState(false);
-  const [exportPreview, setExportPreview] = useState<OpenSshExportPreview | null>(null);
-  const [exportBusy, setExportBusy] = useState(false);
   const search = useRef<HTMLInputElement>(null);
 
   const sourceKey = source.kind === "group" ? `group:${source.id}` : source.kind;
@@ -155,39 +140,6 @@ export function HostsHome({
     }
   };
 
-  const chooseOpenSshConfig = async () => {
-    if (importBusy) return;
-    setImportBusy(true);
-    try {
-      const path = await api.chooseOpenSshConfig();
-      if (!path) return;
-      const preview = await api.previewOpenSshConfig(path);
-      if (preview.status === "ok") {
-        setImportPreview(preview.data);
-      } else {
-        setToast({ message: `${t("import.previewError")} ${openSshImportErrorText(t, preview.error)}` });
-      }
-    } catch {
-      setToast({ message: t("import.error.picker") });
-    } finally {
-      setImportBusy(false);
-    }
-  };
-
-  const previewOpenSshExport = async () => {
-    if (exportBusy) return;
-    setExportBusy(true);
-    try {
-      const result = await api.previewOpenSshExport();
-      if (result.status === "ok") setExportPreview(result.data);
-      else setToast({ message: openSshExportErrorText(t, result.error) });
-    } catch {
-      setToast({ message: t("export.error.preview") });
-    } finally {
-      setExportBusy(false);
-    }
-  };
-
   return (
     <div className="flex h-full min-h-0 flex-col md:flex-row" onKeyDown={onListKeyDown}>
       <Sidebar
@@ -237,14 +189,6 @@ export function HostsHome({
                 onChange={setQuery}
                 className="min-w-40 flex-1 basis-40 @2xl:max-w-64"
               />
-              {hosts.state === "ready" && hosts.data.length > 0 ? (
-                <Button variant="ghost" busy={importBusy} onClick={() => void chooseOpenSshConfig()}>
-                  {t("hosts.importOpenSsh")}
-                </Button>
-              ) : null}
-              <Button variant="ghost" busy={exportBusy} onClick={() => void previewOpenSshExport()}>
-                {t("hosts.exportOpenSsh")}
-              </Button>
               <Button variant="primary" onClick={() => setAdding(true)} className="gap-1.5 pl-3">
                 <Plus aria-hidden="true" className="size-4" />
                 {t("hosts.add")}
@@ -296,9 +240,6 @@ export function HostsHome({
                         <div className="mt-5 flex flex-wrap justify-center gap-2">
                           <Button variant="primary" onClick={() => setAdding(true)}>
                             {t("hosts.add")}
-                          </Button>
-                          <Button variant="ghost" busy={importBusy} onClick={() => void chooseOpenSshConfig()}>
-                            {t("hosts.importOpenSsh")}
                           </Button>
                         </div>
                       </Empty>
@@ -353,28 +294,6 @@ export function HostsHome({
         busy={deleteBusy}
         destructive
       />
-
-      {importPreview ? (
-        <OpenSshImportDialog
-          initial={importPreview}
-          onClose={() => setImportPreview(null)}
-          onImported={(result) => {
-            setImportPreview(null);
-            setSelected(result.hosts[0]?.id ?? null);
-            setToast({
-              message: t("import.done", {
-                created: result.created,
-                updated: result.updated,
-                unchanged: result.unchanged,
-                skipped: result.skippedHosts.length,
-                trust: result.trustRecords,
-              }),
-            });
-          }}
-        />
-      ) : null}
-
-      {exportPreview ? <OpenSshExportDialog initial={exportPreview} onClose={() => setExportPreview(null)} /> : null}
 
       {toast ? (
         <Notice

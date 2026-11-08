@@ -16,6 +16,7 @@ import type { SessionTarget, Status } from "./ipc/bindings";
 import { PassphraseSettings } from "./local-data";
 import { PersonalSettings } from "./personal-settings";
 import { TerminalSettings } from "./terminal-settings";
+import { InventoryTransferSettings } from "./inventory-transfer-settings";
 
 export type SettingsSection = "appearance" | "terminal" | "data" | "personal";
 const sections: SettingsSection[] = ["appearance", "terminal", "data", "personal"];
@@ -88,7 +89,12 @@ export function SettingsView({
         >
           {section === "appearance" ? <Appearance /> : null}
           {section === "terminal" ? <TerminalSettings /> : null}
-          {section === "data" ? <PassphraseSettings status={status} onStatus={onStatus} /> : null}
+          {section === "data" ? (
+            <>
+              <PassphraseSettings status={status} onStatus={onStatus} />
+              <InventoryTransferSettings />
+            </>
+          ) : null}
           {section === "personal" ? <PersonalSettings onConnect={onConnect} /> : null}
         </div>
       </div>

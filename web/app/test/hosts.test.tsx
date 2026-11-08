@@ -5,6 +5,7 @@ import { sampleHosts, sampleInventory } from "../src/gallery/sample-inventory";
 import { I18nProvider } from "../src/i18n";
 import { InventoryContext, type InventoryApi } from "../src/inventory/api";
 import { HostsHome } from "../src/inventory/home";
+import { SettingsView } from "../src/settings";
 import { violations } from "../../ui/test/axe";
 import type { SessionTarget } from "../src/ipc/bindings";
 
@@ -64,6 +65,8 @@ describe("the host list", () => {
   it("lists hosts with favorites first and shows the count", async () => {
     const { container } = show(sampleInventory(sampleHosts()));
     expect(await screen.findByText("7 hosts")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Import OpenSSH config" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export OpenSSH" })).toBeNull();
     const rows = names();
     expect(rows[0]).toContain("prod-api-01");
     expect(rows[1]).toContain("prod-db-01");
@@ -227,7 +230,8 @@ describe("the host list", () => {
     const { container, unmount } = show(sampleInventory([]));
     expect(await screen.findByRole("heading", { name: "No hosts yet" })).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Add host" })).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Import OpenSSH config" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Import OpenSSH config" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export OpenSSH" })).toBeNull();
     expect(await violations(container)).toEqual([]);
     unmount();
 
@@ -241,10 +245,17 @@ describe("the host list", () => {
 describe("importing an OpenSSH config", () => {
   const source = "/Users/mia/.ssh/config";
   const done = "Import complete: 1 created, 0 updated, 0 unchanged. 1 trust record; 1 host skipped.";
-  async function open(api: InventoryApi, populated = false) {
+  function show(api: InventoryApi) {
+    return render(
+      <I18nProvider locale="en">
+        <InventoryContext.Provider value={api}>
+          <SettingsView section="data" status={{ state: "open", protection: "keystore" }} onStatus={() => {}} />
+        </InventoryContext.Provider>
+      </I18nProvider>,
+    );
+  }
+  async function open(api: InventoryApi) {
     show(api);
-    if (populated) await screen.findByText("7 hosts");
-    else await screen.findByRole("heading", { name: "No hosts yet" });
     await userEvent.click(screen.getByRole("button", { name: "Import OpenSSH config" }));
     return screen.findByRole("dialog", { name: "Review OpenSSH import" });
   }
@@ -253,7 +264,6 @@ describe("importing an OpenSSH config", () => {
     const api = sampleInventory([]);
     const preview = vi.spyOn(api, "previewOpenSshConfig");
     const { container } = show(api);
-    await screen.findByRole("heading", { name: "No hosts yet" });
     await userEvent.click(screen.getByRole("button", { name: "Import OpenSSH config" }));
     const dialog = await screen.findByRole("dialog", { name: "Review OpenSSH import" });
     expect(preview).toHaveBeenCalledWith(source);
@@ -281,16 +291,19 @@ describe("importing an OpenSSH config", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(importHosts).not.toHaveBeenCalled();
-    expect(screen.getByText("0 hosts")).toBeTruthy();
+    expect(await api.hosts({ kind: "all" }, "")).toMatchObject({ status: "ok", data: [] });
   });
 
   it("imports into an existing inventory and reimports without duplicate hosts", async () => {
     const api = sampleInventory(sampleHosts());
     const importHosts = vi.spyOn(api, "importOpenSshConfig");
-    let dialog = await open(api, true);
+    let dialog = await open(api);
     await userEvent.click(within(dialog).getByRole("button", { name: "Import hosts" }));
     expect(await screen.findByText(done)).toBeTruthy();
-    expect(await screen.findByText("8 hosts")).toBeTruthy();
+    expect(await api.hosts({ kind: "all" }, "")).toMatchObject({
+      status: "ok",
+      data: expect.objectContaining({ length: 8 }),
+    });
     expect(importHosts).toHaveBeenCalledWith(
       expect.objectContaining({
         path: source,
@@ -307,7 +320,10 @@ describe("importing an OpenSSH config", () => {
     expect(
       await screen.findByText("Import complete: 0 created, 0 updated, 1 unchanged. 1 trust record; 1 host skipped."),
     ).toBeTruthy();
-    expect(screen.getByText("8 hosts")).toBeTruthy();
+    expect(await api.hosts({ kind: "all" }, "")).toMatchObject({
+      status: "ok",
+      data: expect.objectContaining({ length: 8 }),
+    });
   });
 
   it("requires an explicit identity choice and confirms the recomputed native preview", async () => {
@@ -463,7 +479,6 @@ describe("importing an OpenSSH config", () => {
     api.previewOpenSshConfig = vi.fn(async () => ({ status: "error" as const, error: { kind: "tooLarge" as const } }));
     const importHosts = vi.spyOn(api, "importOpenSshConfig");
     show(api);
-    await screen.findByRole("heading", { name: "No hosts yet" });
     await userEvent.click(screen.getByRole("button", { name: "Import OpenSSH config" }));
     expect(await screen.findByText(/The preview could not be prepared.*exceed the import size limit/)).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();

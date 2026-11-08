@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Move OpenSSH import and export to Settings > Data > Import and export, keeping
+  the Hosts toolbar focused on search and adding hosts. Existing migration previews,
+  confirmations, reports and native file/folder pickers are preserved.
+
 - Replaced the Windows native title bar with themed controls in the tab strip. Dragging,
   double-click maximize, minimize, restore and ordinary close remain available; startup and
   local unlock also retain window controls. macOS keeps its native traffic lights.
