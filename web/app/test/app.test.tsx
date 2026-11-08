@@ -167,6 +167,22 @@ describe("unreadable local data", () => {
 });
 
 describe("settings", () => {
+  it("keeps migration actions in Data settings and out of Hosts and Appearance", async () => {
+    core({ state: "open", protection: "keystore" });
+    render(<App />);
+    await screen.findByRole("heading", { name: "No hosts yet" });
+    expect(screen.queryByRole("button", { name: "Import OpenSSH config" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export OpenSSH" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.queryByRole("button", { name: "Import OpenSSH config" })).toBeNull();
+    await userEvent.click(screen.getByRole("tab", { name: "Data" }));
+    expect(screen.getByRole("heading", { name: "Import and export" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Import OpenSSH config" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Export OpenSSH" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("tab", { name: "Appearance" }));
+    expect(screen.queryByRole("button", { name: "Import OpenSSH config" })).toBeNull();
+  });
+
   it("sets and removes the local passphrase", async () => {
     const calls = core({ state: "open", protection: "keystore" }, (cmd) => {
       if (cmd === "set_local_passphrase") return { state: "open", protection: "keystoreAndPassphrase" };
@@ -174,7 +190,7 @@ describe("settings", () => {
     });
     const { container } = render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    await userEvent.click(screen.getByRole("tab", { name: "Local data" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Data" }));
     expect(screen.getByRole("button", { name: "Settings" }).getAttribute("aria-pressed")).toBe("true");
     await userEvent.click(screen.getByRole("button", { name: "Set passphrase" }));
     expect(await violations(container)).toEqual([]);
@@ -195,7 +211,7 @@ describe("settings", () => {
     core({ state: "open", protection: "passphraseOnly" });
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    await userEvent.click(screen.getByRole("tab", { name: "Local data" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Data" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Change passphrase" })).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Remove passphrase" })).toBeNull();
   });

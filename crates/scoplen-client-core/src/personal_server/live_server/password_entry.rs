@@ -8,7 +8,9 @@ use crate::{
 
 use super::*;
 
+mod browser_team_ssh;
 mod isolation;
+mod personal_inventory_ssh;
 mod team_inventory;
 mod team_membership;
 mod team_ssh;
@@ -61,19 +63,18 @@ impl Drop for OwnedDirectory {
 struct Device {
     local: Arc<LocalData>,
     profiles: AccountProfiles,
+    runtime: Arc<PersonalSyncRuntime>,
 }
 
 impl Device {
     fn new(directory: &Path) -> Self {
         let local = Arc::new(LocalData::start(directory, None).expect("independent Local store"));
         assert!(matches!(local.create(LOCAL_PASSPHRASE), Ok(Status::Open { .. })));
-        let profiles = AccountProfiles::with_keystores(
-            local.clone(),
-            Arc::new(PersonalSyncRuntime::default()),
-            Arc::new(|_| None),
-        )
-        .expect("independent passphrase-protected Account catalog");
-        Self { local, profiles }
+        let runtime = Arc::new(PersonalSyncRuntime::default());
+        let profiles =
+            AccountProfiles::with_keystores(local.clone(), runtime.clone(), Arc::new(|_| None))
+                .expect("independent passphrase-protected Account catalog");
+        Self { local, profiles, runtime }
     }
 
     fn store(&self, lease: &ProfileLease) -> Arc<Store> {

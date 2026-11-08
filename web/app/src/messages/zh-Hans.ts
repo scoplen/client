@@ -95,7 +95,9 @@ export const zhHans: Messages = {
   "settings.language.system": "跟随系统",
   "settings.section.appearance": "外观",
   "settings.section.terminal": "终端",
-  "settings.section.data": "本地数据",
+  "settings.section.data": "数据",
+  "settings.transfer.title": "导入与导出",
+  "settings.transfer.body": "在当前配置与 OpenSSH 之间迁移主机和登录配置。导入或导出前，请先检查预览。",
   "settings.section.personal": "个人账号",
   "settings.personal.title": "连接个人账号",
   "settings.personal.error.retiredEntry":

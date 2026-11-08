@@ -12,7 +12,8 @@ Maturity: Exploration. Maintenance: Active.
 
 The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. OpenSSH migration previews new and previously imported aliases alongside existing inventory, including their usable identity, route and ordinary known host keys. SSH connects directly, through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, through an explicit saved Jump chain, or through a saved local ProxyCommand. Each SSH host uses its saved password, OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA software key, or an explicitly selected key in the system SSH agent, after independent host-key review. The target opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after that host's review. New or changed keys require explicit acceptance; wildcard-only and CA records do not authorize raw host keys. Other credential kinds and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
 
-Use Import OpenSSH in Hosts to select a configuration and review Create, Update and
+In Settings > Data > Import and export, choose Import OpenSSH config to select a
+configuration and review Create, Update and
 Unchanged rows before confirming. Literal aliases receive applicable global and wildcard
 `Host` rules in source order, including lexically ordered `Include` files. Relative Includes
 use `~/.ssh`; relative identity and known-host paths use the client's working directory.
@@ -39,7 +40,7 @@ or `publickey`, `IdentitiesOnly yes`, `IdentityAgent none` and literal `HostKeyA
 also understood. Password blocks require an explicit saved password Credential; key and
 public Agent sidecars retain their ordinary import behavior.
 
-Use Export OpenSSH in Hosts to review all Logins in the current Local or Personal profile,
+In Settings > Data > Import and export, choose Export OpenSSH to review all Logins in the current Local or Personal profile,
 including rows outside the active search or group filter. Compatible Direct and explicit
 Direct-hop Jump Logins produce standard `config` and `known_hosts` files in a fresh
 `scoplen-openssh-<timestamp>` child of the selected folder. Use `ssh -F <export>/config <alias>`.

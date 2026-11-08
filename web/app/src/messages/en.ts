@@ -107,7 +107,10 @@ export const en = {
   "settings.language.system": "Same as system",
   "settings.section.appearance": "Appearance",
   "settings.section.terminal": "Terminal",
-  "settings.section.data": "Local data",
+  "settings.section.data": "Data",
+  "settings.transfer.title": "Import and export",
+  "settings.transfer.body":
+    "Move hosts and logins between this profile and OpenSSH. Review changes before importing or exporting.",
   "settings.section.personal": "Personal account",
   "settings.personal.title": "Personal account",
   "settings.personal.error.retiredEntry":

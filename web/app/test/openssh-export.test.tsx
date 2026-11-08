@@ -9,7 +9,7 @@ import {
   type OpenSshExportEntry,
   type OpenSshExportPreview,
 } from "../src/inventory/api";
-import { HostsHome } from "../src/inventory/home";
+import { SettingsView } from "../src/settings";
 import { violations } from "../../ui/test/axe";
 
 const folder = "/home/fixture/Exports/scoplen-openssh-1730000000000";
@@ -91,7 +91,7 @@ function show(api: InventoryApi, locale: "en" | "zh-Hans" = "en") {
   return render(
     <I18nProvider locale={locale}>
       <InventoryContext.Provider value={api}>
-        <HostsHome manage />
+        <SettingsView section="data" status={{ state: "open", protection: "keystore" }} onStatus={() => {}} />
       </InventoryContext.Provider>
     </I18nProvider>,
   );
@@ -99,7 +99,6 @@ function show(api: InventoryApi, locale: "en" | "zh-Hans" = "en") {
 
 async function open(api: InventoryApi, locale: "en" | "zh-Hans" = "en") {
   show(api, locale);
-  await screen.findByText(locale === "en" ? "7 hosts" : "7 台主机");
   await userEvent.click(screen.getByRole("button", { name: locale === "en" ? "Export OpenSSH" : "导出 OpenSSH" }));
   return screen.findByRole("dialog", { name: locale === "en" ? "Review OpenSSH export" : "检查 OpenSSH 导出" });
 }
@@ -125,16 +124,16 @@ describe("OpenSSH export", () => {
     expect(await violations(document.body)).toEqual([]);
   });
 
-  it("offers full-inventory export even when the current search is empty", async () => {
+  it("offers full-inventory export from Data settings without loading or filtering Hosts", async () => {
     const api = setup();
+    const hosts = vi.spyOn(api, "hosts");
     show(api);
-    await screen.findByText("7 hosts");
-    await userEvent.type(screen.getByRole("searchbox", { name: "Search hosts" }), "not-a-host");
-    await screen.findByText("No hosts match “not-a-host”.");
+    expect(screen.getByRole("tab", { name: "Data" }).getAttribute("aria-selected")).toBe("true");
     await userEvent.click(screen.getByRole("button", { name: "Export OpenSSH" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("SSH entries: 3 · Skipped: 3 · Trust records: 2")).toBeTruthy();
     expect(api.previewOpenSshExport).toHaveBeenCalledWith();
+    expect(hosts).not.toHaveBeenCalled();
   });
 
   it("cancels the review without opening a destination or writing", async () => {

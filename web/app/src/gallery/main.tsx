@@ -8,10 +8,10 @@ import "@scoplen/ui/styles.css";
 import {
   AppearanceProvider,
   applyStoredAppearance,
+  Select,
   themes,
   useAppearance,
   type SchemeChoice,
-  type ThemeId,
 } from "@scoplen/ui";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { StrictMode, useMemo, useState } from "react";
@@ -290,11 +290,10 @@ function Gallery() {
           aria-label="Gallery controls"
           className="fixed right-3 bottom-3 z-50 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-raised p-2 text-xs shadow-lg"
         >
-          <select
-            aria-label="Screen"
+          <Select
+            label="Screen"
             value={screen}
-            onChange={(e) => {
-              const next = e.target.value as Screen;
+            onValueChange={(next) => {
               signInPreview =
                 next === "accountAdmissionUnknown"
                   ? { ...signInFixture, phase: "outcomeUnknown" }
@@ -311,33 +310,27 @@ function Gallery() {
                       : { ...registrationFixture };
               setScreen(next);
             }}
-            className="rounded border border-border bg-inset px-1 py-0.5"
-          >
-            {Object.entries(screens).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-          <select
-            aria-label="Language"
+            options={Object.entries(screens).map(([value, label]) => ({ value: value as Screen, label }))}
+          />
+          <Select
+            label="Language"
             value={locale}
-            onChange={(e) => setLocale(e.target.value as Locale)}
-            className="rounded border border-border bg-inset px-1 py-0.5"
-          >
-            <option value="en">English</option>
-            <option value="zh-Hans">简体中文</option>
-          </select>
+            onValueChange={setLocale}
+            options={[
+              { value: "en", label: "English" },
+              { value: "zh-Hans", label: "简体中文" },
+            ]}
+          />
           <ThemeControls />
-          <select
-            aria-label="Platform"
+          <Select
+            label="Platform"
             value={platform}
-            onChange={(e) => setPlatform(e.target.value as Platform)}
-            className="rounded border border-border bg-inset px-1 py-0.5"
-          >
-            <option value="macos">macOS</option>
-            <option value="windows">Windows</option>
-          </select>
+            onValueChange={setPlatform}
+            options={[
+              { value: "macos", label: "macOS" },
+              { value: "windows", label: "Windows" },
+            ]}
+          />
         </aside>
       </Menus>
     </I18nProvider>
@@ -348,28 +341,22 @@ function ThemeControls() {
   const { appearance, setAppearance } = useAppearance();
   return (
     <>
-      <select
-        aria-label="Theme"
+      <Select
+        label="Theme"
         value={appearance.theme}
-        onChange={(e) => setAppearance({ ...appearance, theme: e.target.value as ThemeId })}
-        className="rounded border border-border bg-inset px-1 py-0.5"
-      >
-        {themes.map((theme) => (
-          <option key={theme.id} value={theme.id}>
-            {theme.id}
-          </option>
-        ))}
-      </select>
-      <select
-        aria-label="Scheme"
+        onValueChange={(theme) => setAppearance({ ...appearance, theme })}
+        options={themes.map((theme) => ({ value: theme.id, label: theme.id }))}
+      />
+      <Select<SchemeChoice>
+        label="Scheme"
         value={appearance.scheme}
-        onChange={(e) => setAppearance({ ...appearance, scheme: e.target.value as SchemeChoice })}
-        className="rounded border border-border bg-inset px-1 py-0.5"
-      >
-        <option value="system">system</option>
-        <option value="light">light</option>
-        <option value="dark">dark</option>
-      </select>
+        onValueChange={(scheme) => setAppearance({ ...appearance, scheme })}
+        options={[
+          { value: "system", label: "system" },
+          { value: "light", label: "light" },
+          { value: "dark", label: "dark" },
+        ]}
+      />
     </>
   );
 }
