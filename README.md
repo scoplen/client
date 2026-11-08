@@ -408,11 +408,46 @@ objects, withdraws assets absent from the next complete view, and refreshes view
 the background at least every 60 seconds. Permission and membership notifications trigger a
 fresh complete read. Reopening an Account requires online revalidation before showing saved
 team rows. Refresh assets retries explicitly; an unconfirmed server acknowledgement keeps
-the complete local projection and shows its unconfirmed state. Asset editing, access-rule
-administration, CA setup and connecting to team Hosts remain separate work.
+the complete local projection and shows its unconfirmed state.
 Viewing team assets does not switch the active Personal inventory or grant Connect permission.
 Older saved sessions need fresh Device authentication to obtain the team scopes; refresh never
 expands an existing family's permission ceiling.
+
+Manage assets opens named forms for the team's Hosts, Logins, Host groups, Routes, host trust,
+Snippets and gateway networks. These are server-readable Organization resources. Referenced
+assets require their own read permission; an unavailable reference stays an opaque identifier.
+Team Logins use their independent device-local certificate signer. They never select a Personal
+credential. A create is saved in the encrypted store before its original request is sent.
+An uncertain result offers Confirm original request, and no replacement creation can begin for
+that team until the retained request is resolved. Editing and deleting first reads the actual
+resource and uses its captured version. A conflict or uncertain change requires Refresh and review.
+
+Access rules manages local member groups and policies. Group members are current team memberships;
+identity-provider groups are read-only. Create access rule selects one member or local group and
+either May view assets or May connect. Connecting names an exact SSH username and selected Hosts
+or Host groups. Preview uses the shared Cedar generator and never grants dependent assets
+automatically. Advanced Cedar policy offers the supported single-policy source editor.
+
+SSH CA setup shows the team's authenticated public user CA and retained setup/certificate requests.
+An administrator can explicitly create the CA. Select a visible Login to inspect its exact Host,
+local SSH user, scoped principal, CA file and principals file. Install the shown public CA and
+principal mapping manually, review the displayed sshd settings, and validate with `sshd -t` before
+reloading sshd. The client never changes remote configuration. An unknown request can only be
+confirmed with its original identity; confirming an old certificate does not renew it or connect.
+
+Connect on a visible team Login carries its exact deployment, Account, Organization and Device
+through Direct, Jump, credential-free proxy or explicitly reviewed local Command preparation.
+Each Command shows its expanded program and every argument for approval before starting a local
+helper. Host-key review precedes certificate issuance and SSH authentication. A successful team
+session uses the ordinary terminal and Files/SFTP, including duplicate, split and reconnect.
+Recent and saved output preserve the same team source. Team terminals cannot be saved in a
+Personal Workspace, and the standalone Tunnels Login selector is not yet connected to teams.
+An eligible unexpired certificate can survive a control-plane outage until that team's authority
+is invalidated locally. Observed membership loss cancels that team's preparation and withdraws
+its certificate cache; an established unmanaged SSH connection is not forcibly terminated.
+Client-core team inventory and certificate-authenticated SSH/SFTP pass against fresh SQLite and
+PostgreSQL HTTPS deployments. Native Windows/macOS desktop interaction for these workflows
+remains unverified.
 
 When a historical profile retains its original device keys, ARK and both private Account roots,
 Revalidate this device explicitly proves its current server authority through ordinary device
@@ -680,7 +715,7 @@ and bounds exchanges and response bodies. Device signing/KEM keys currently use 
 implementations protected by SQLCipher; hardware device signing is not implemented.
 Registration exports its recovery key as a plaintext file through the native Save dialog and
 requires a separate safe-storage confirmation. Keep that file private and offline. Retained
-recovery keys and ceremony artifacts remain encrypted in SQLCipher. Invitation/pairing controls
+recovery keys and ceremony artifacts remain encrypted in SQLCipher. Personal invitation/pairing controls
 are retired. Access/refresh tokens and secret keys never cross IPC into the frontend.
 After a successful sync bootstrap, Rust maintains a TLS 1.3/HTTP/2 notification connection and
 synchronizes already adopted Personal objects in the background. Reopening locally verified

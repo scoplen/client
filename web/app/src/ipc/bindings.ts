@@ -98,7 +98,7 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	/**  Reserve a logical session before starting its cancellable manager task. */
 	sessionReserveTransport: (sessionId: string, pty: boolean) => typedError<null, string>(__TAURI_INVOKE("session_reserve_transport", { sessionId, pty })),
 	/**  Own one logical terminal until tab closure. Ended terminals await manual retry. */
-	sessionConnect: (profileId: string, command: string | null, pty: boolean, sessionId: string, messages: Channel<SessionEvent | ArrayBuffer>) => typedError<null, string>(__TAURI_INVOKE("session_connect", { profileId, command, pty, sessionId, messages })),
+	sessionConnect: (target: SessionTarget, command: string | null, pty: boolean, sessionId: string, messages: Channel<SessionEvent | ArrayBuffer>) => typedError<null, string>(__TAURI_INVOKE("session_connect", { target, command, pty, sessionId, messages })),
 	/**  Route one bounded input frame to the exact ready transport. */
 	sessionInput: (sessionId: string, transportId: string, data: number[]) => typedError<null, string>(__TAURI_INVOKE("session_input", { sessionId, transportId, data })),
 	/**  List retained safe definitions in the captured local store. */
@@ -332,6 +332,60 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	teamAssets: (organizationId: string) => typedError<TeamAssetsView, TeamError>(__TAURI_INVOKE("team_assets", { organizationId })),
 	/**  Publish every permitted asset in one source-bound view, then acknowledge that revision. */
 	refreshTeamAssets: (organizationId: string) => typedError<TeamAssetsView, TeamError>(__TAURI_INVOKE("refresh_team_assets", { organizationId })),
+	/**  Read one live, independently authorized administration page. */
+	teamAuthoringPage: (organizationId: string, collection: TeamAuthoringCollection, cursor: string | null) => typedError<TeamAuthoringPageView_Serialize, TeamError>(__TAURI_INVOKE("team_authoring_page", { organizationId, collection, cursor })),
+	/**  Capture this resource's complete fields and original strong ETag before editing. */
+	teamAuthoringResource: (organizationId: string, collection: TeamAuthoringCollection, resourceId: string) => typedError<TeamAuthoringResourceView_Serialize, TeamError>(__TAURI_INVOKE("team_authoring_resource", { organizationId, collection, resourceId })),
+	/**  Read this team's exact retained create without making a request. */
+	pendingTeamAuthoring: (organizationId: string) => typedError<{
+	/**  Canonical deployment owning this retained request. */
+	origin: string,
+	/**  Account owning this retained request. */
+	accountId: string,
+	/**  Organization owning the resource. */
+	organizationId: string,
+	/**  Original immutable idempotency key. */
+	operationId: string,
+	/**  Original immutable resource id. */
+	resourceId: string,
+	/**  Explicitly permitted recovery action. */
+	phase: TeamAuthoringCreatePhase,
+	/**  Exact original mutable fields for review. */
+	data: TeamAuthoringData_Serialize,
+} | null, TeamError>(__TAURI_INVOKE("pending_team_authoring", { organizationId })),
+	/**  Validate shared typed fields and retain one canonical original create before dispatch. */
+	prepareTeamAuthoring: (organizationId: string, data: TeamAuthoringData_Deserialize) => typedError<TeamAuthoringCreateView_Serialize, TeamError>(__TAURI_INVOKE("prepare_team_authoring", { organizationId, data })),
+	/**  Dispatch or explicitly confirm the retained original key and payload. */
+	submitTeamAuthoring: (organizationId: string, operationId: string) => typedError<TeamAuthoringCreateView_Serialize, TeamError>(__TAURI_INVOKE("submit_team_authoring", { organizationId, operationId })),
+	/**  Complete prepared/confirmed state, or archive expired uncertainty after explicit review. */
+	discardTeamAuthoring: (organizationId: string, operationId: string) => typedError<null, TeamError>(__TAURI_INVOKE("discard_team_authoring", { organizationId, operationId })),
+	/**  Replace complete typed fields using only the form's captured original ETag. */
+	updateTeamAuthoring: (organizationId: string, resourceId: string, etag: string, data: TeamAuthoringData_Deserialize) => typedError<TeamAuthoringResourceView_Serialize, TeamError>(__TAURI_INVOKE("update_team_authoring", { organizationId, resourceId, etag, data })),
+	/**  Delete the reviewed team resource using its captured original ETag. */
+	deleteTeamAuthoring: (organizationId: string, collection: TeamAuthoringCollection, resourceId: string, etag: string) => typedError<null, TeamError>(__TAURI_INVOKE("delete_team_authoring", { organizationId, collection, resourceId, etag })),
+	/**  Preview one shared-generated independent view/connect rule without granting access. */
+	previewTeamSimpleRule: (organizationId: string, input: TeamSimpleRuleInput) => typedError<TeamSimpleRulePreview, TeamError>(__TAURI_INVOKE("preview_team_simple_rule", { organizationId, input })),
+	/**  Read safe local recovery state without starting or retrying a server request. */
+	teamSshOperations: (source: TeamSshSource) => typedError<TeamSshOperationView[], TeamSshError>(__TAURI_INVOKE("team_ssh_operations", { source })),
+	/**  Fetch only this team's current authenticated public user CA. */
+	teamUserCa: (source: TeamSshSource) => typedError<{
+	/**  Captured origin/Account/Organization/Device that authenticated this read. */
+	source: TeamSshSource,
+	/**  Exact immutable CA id. */
+	id: string,
+	/**  Canonical public Ed25519 key for explicit sshd configuration. */
+	publicKey: string,
+	/**  SHA256 fingerprint of that public key. */
+	fingerprint: string,
+	/**  Exact per-Login configuration derived only from the complete current readable view. */
+	setups: TeamSshHostSetup[],
+} | null, TeamSshError>(__TAURI_INVOKE("team_user_ca", { source })),
+	/**  Persist the original setup operation before the administrator submits it. */
+	prepareTeamUserCa: (source: TeamSshSource) => typedError<TeamSshOperationView, TeamSshError>(__TAURI_INVOKE("prepare_team_user_ca", { source })),
+	/**  Explicitly confirm the original key/body, never silently minting a replacement request. */
+	confirmTeamSshOperation: (source: TeamSshSource, kind: TeamSshOperationKind, operationId: string) => typedError<TeamSshOperationView, TeamSshError>(__TAURI_INVOKE("confirm_team_ssh_operation", { source, kind, operationId })),
+	/**  Clear known setup state or explicitly archive an expired unknown operation. */
+	discardTeamSshOperation: (source: TeamSshSource, kind: TeamSshOperationKind, operationId: string) => typedError<null, TeamSshError>(__TAURI_INVOKE("discard_team_ssh_operation", { source, kind, operationId })),
 	/**  Capture one current team's metadata and exact precondition for an explicit edit. */
 	teamSettings: (organizationId: string) => typedError<TeamSettingsView, TeamError>(__TAURI_INVOKE("team_settings", { organizationId })),
 	/**  Send one name update without changing or refreshing its captured precondition. */
@@ -1583,6 +1637,8 @@ export type Platform =
 
 /**  Safe identity shown on every progress event and prompt. */
 export type PreparationContext = {
+	/**  Explicit Organization source; absent only for Local or Personal inventory. */
+	source: TeamSshSource | null,
 	/**  Login identifier. */
 	profileId: string,
 	/**  Host identifier. */
@@ -1607,6 +1663,16 @@ export type PreparationContext = {
 
 /**  Typed progress and current user intent requested by Rust. */
 export type PreparationEvent =
+/**  Review an Organization-authored program before creating any local process. */
+{ kind: "commandExecution";
+/**  Exact source and target selected by this preparation. */
+context: PreparationContext;
+/**  One-use approval token, never retained across reconnect. */
+promptId: string;
+/**  Parsed and expanded literal executable. */
+program: string;
+/**  Parsed and expanded literal arguments, including empty values. */
+arguments: string[] } |
 /**  One complete ordered challenge round on the retained connection. */
 { kind: "keyboardInteractive";
 /**  Trusted identity of this hop. */
@@ -1717,6 +1783,8 @@ export type Protection =
  *  the connection and session managers.
  */
 export type RecentSession = {
+	/**  Explicit source for reconnect and saved-output navigation. */
+	target: SessionTarget,
 	/**  The device-local session identifier. */
 	id: string,
 	/**  The live Host this session used. */
@@ -1756,7 +1824,7 @@ export type RecentSessionOutcome = "closed" | "failed";
  */
 export type ReconnectTarget = {
 	/**  The current AccessProfile to pass to the normal connection entry point. */
-	profileId: string,
+	target: SessionTarget,
 	/**  Current Host display name. */
 	hostName: string,
 	/**  Current login name, or username when unnamed. */
@@ -2273,6 +2341,8 @@ export type SessionFileMutationStatus =
 
 /**  A one-time response to the current attempt's preparation prompt. */
 export type SessionPreparationIntent =
+/**  Approve only the exact local team connection command retained by Rust. */
+{ kind: "acceptCommand" } |
 /**  Ordered one-time answers to the exact current server challenge. */
 { kind: "keyboardInteractive";
 /**  Answers are consumed and never returned to the renderer. */
@@ -2283,6 +2353,19 @@ answers: string[] } |
 { kind: "passphrase";
 /**  One-time secret input. */
 value: string };
+
+/**  An immutable inventory source selected by an explicit connection intent. */
+export type SessionTarget =
+/**  A Login in the current Personal or Local namespace. */
+{ kind: "personal";
+/**  Login identifier. */
+profileId: string } |
+/**  A Login in one complete, source-bound Organization view. */
+{ kind: "organization";
+/**  Captured deployment, Account, Organization and Device. */
+source: TeamSshSource;
+/**  Login identifier in that Organization alone. */
+profileId: string };
 
 /**  The direction of a terminal-owned transfer. */
 export type SessionTransferDirection =
@@ -2640,6 +2723,8 @@ export type TeamAssetsView = {
 	accountId: string,
 	/**  Selected team, never inferred from a bare vault id. */
 	organizationId: string,
+	/**  Current source-bound installation, never inferred by the renderer. */
+	deviceId: string,
 	/**  Durable Organization inventory vault, once discovered. */
 	vaultId: string | null,
 	/**  Exact positive uint64 equality fence, represented without JavaScript precision loss. */
@@ -2650,6 +2735,208 @@ export type TeamAssetsView = {
 	acknowledged: boolean,
 	/**  Present only for Ready, including a valid empty current view. */
 	assets: TeamAssetSummary[],
+};
+
+/**  One server-readable team collection, distinct from the Personal repository. */
+export type TeamAuthoringCollection =
+/**  SSH destination and metadata. */
+"host" |
+/**  Same-team Host-bound SSH Login. */
+"login" |
+/**  Explicit same-team connection route. */
+"route" |
+/**  Named inventory Host grouping. */
+"hostGroup" |
+/**  Host public key or host-CA trust. */
+"trustRecord" |
+/**  Command template and variable definitions. */
+"snippet" |
+/**  Managed gateway metadata. */
+"gatewayNetwork" |
+/**  Local or identity-provider Membership group. */
+"group" |
+/**  Persisted supported Cedar policy. */
+"policy";
+
+/**  Permitted next action for the retained original create. */
+export type TeamAuthoringCreatePhase =
+/**  Saved locally and safe to send or discard. */
+"prepared" |
+/**  Dispatched with no confirmed original result. */
+"unknown" |
+/**  Original response validated and durably retained. */
+"confirmed" |
+/**  The fixed original confirmation window ended. */
+"expired";
+
+/**  One retained original create, with its own immutable identity and source. */
+export type TeamAuthoringCreateView = TeamAuthoringCreateView_Serialize | TeamAuthoringCreateView_Deserialize;
+
+/**  One retained original create, with its own immutable identity and source. */
+export type TeamAuthoringCreateView_Deserialize = {
+	/**  Canonical deployment owning this retained request. */
+	origin: string,
+	/**  Account owning this retained request. */
+	accountId: string,
+	/**  Organization owning the resource. */
+	organizationId: string,
+	/**  Original immutable idempotency key. */
+	operationId: string,
+	/**  Original immutable resource id. */
+	resourceId: string,
+	/**  Explicitly permitted recovery action. */
+	phase: TeamAuthoringCreatePhase,
+	/**  Exact original mutable fields for review. */
+	data: TeamAuthoringData_Deserialize,
+};
+
+/**  One retained original create, with its own immutable identity and source. */
+export type TeamAuthoringCreateView_Serialize = {
+	/**  Canonical deployment owning this retained request. */
+	origin: string,
+	/**  Account owning this retained request. */
+	accountId: string,
+	/**  Organization owning the resource. */
+	organizationId: string,
+	/**  Original immutable idempotency key. */
+	operationId: string,
+	/**  Original immutable resource id. */
+	resourceId: string,
+	/**  Explicitly permitted recovery action. */
+	phase: TeamAuthoringCreatePhase,
+	/**  Exact original mutable fields for review. */
+	data: TeamAuthoringData_Serialize,
+};
+
+/**  Named ordinary form values. Rust validates and encodes the shared typed wire request. */
+export type TeamAuthoringData = TeamAuthoringData_Serialize | TeamAuthoringData_Deserialize;
+
+/**  Named ordinary form values. Rust validates and encodes the shared typed wire request. */
+export type TeamAuthoringData_Deserialize =
+/**  Complete Host form. */
+{ kind: "host"; fields: TeamHostFields_Deserialize } |
+/**  Complete Login form. */
+{ kind: "login"; fields: TeamLoginFields_Deserialize } |
+/**  Complete Route form. */
+{ kind: "route"; fields: TeamRouteFields_Deserialize } |
+/**  Complete inventory Host group form. */
+{ kind: "hostGroup"; fields: TeamHostGroupFields_Deserialize } |
+/**  Writable public trust form. */
+{ kind: "trustRecord"; fields: TeamTrustFields_Deserialize } |
+/**  Complete Snippet form. */
+{ kind: "snippet"; fields: TeamSnippetFields_Deserialize } |
+/**  Complete gateway metadata form. */
+{ kind: "gatewayNetwork"; fields: TeamGatewayNetworkFields_Deserialize } |
+/**  Complete local Membership group form. */
+{ kind: "group"; fields: TeamGroupFields } |
+/**  Complete persisted-policy form. */
+{ kind: "policy"; fields: TeamPolicyFields };
+
+/**  Named ordinary form values. Rust validates and encodes the shared typed wire request. */
+export type TeamAuthoringData_Serialize =
+/**  Complete Host form. */
+{ kind: "host"; fields: TeamHostFields_Serialize } |
+/**  Complete Login form. */
+{ kind: "login"; fields: TeamLoginFields_Serialize } |
+/**  Complete Route form. */
+{ kind: "route"; fields: TeamRouteFields_Serialize } |
+/**  Complete inventory Host group form. */
+{ kind: "hostGroup"; fields: TeamHostGroupFields_Serialize } |
+/**  Writable public trust form. */
+{ kind: "trustRecord"; fields: TeamTrustFields_Serialize } |
+/**  Complete Snippet form. */
+{ kind: "snippet"; fields: TeamSnippetFields_Serialize } |
+/**  Complete gateway metadata form. */
+{ kind: "gatewayNetwork"; fields: TeamGatewayNetworkFields_Serialize } |
+/**  Complete local Membership group form. */
+{ kind: "group"; fields: TeamGroupFields } |
+/**  Complete persisted-policy form. */
+{ kind: "policy"; fields: TeamPolicyFields };
+
+/**  A bounded independently authorized administration directory page. */
+export type TeamAuthoringPageView = TeamAuthoringPageView_Serialize | TeamAuthoringPageView_Deserialize;
+
+/**  A bounded independently authorized administration directory page. */
+export type TeamAuthoringPageView_Deserialize = {
+	/**  Canonical authenticated deployment origin. */
+	origin: string,
+	/**  Captured enrolled Account. */
+	accountId: string,
+	/**  Exact selected Organization. */
+	organizationId: string,
+	/**  The requested collection. */
+	collection: TeamAuthoringCollection,
+	/**  Complete readable resource projections in page order. */
+	items: TeamAuthoringResourceView_Deserialize[],
+	/**  Opaque next UUIDv7 continuation, when present. */
+	nextCursor: string | null,
+};
+
+/**  A bounded independently authorized administration directory page. */
+export type TeamAuthoringPageView_Serialize = {
+	/**  Canonical authenticated deployment origin. */
+	origin: string,
+	/**  Captured enrolled Account. */
+	accountId: string,
+	/**  Exact selected Organization. */
+	organizationId: string,
+	/**  The requested collection. */
+	collection: TeamAuthoringCollection,
+	/**  Complete readable resource projections in page order. */
+	items: TeamAuthoringResourceView_Serialize[],
+	/**  Opaque next UUIDv7 continuation, when present. */
+	nextCursor: string | null,
+};
+
+/**  One complete current resource captured for an explicit administration intent. */
+export type TeamAuthoringResourceView = TeamAuthoringResourceView_Serialize | TeamAuthoringResourceView_Deserialize;
+
+/**  One complete current resource captured for an explicit administration intent. */
+export type TeamAuthoringResourceView_Deserialize = {
+	/**  Canonical authenticated deployment origin. */
+	origin: string,
+	/**  Captured enrolled Account. */
+	accountId: string,
+	/**  Exact selected Organization. */
+	organizationId: string,
+	/**  Immutable resource id. */
+	id: string,
+	/**  Exact strong ETag captured by this read. */
+	etag: string,
+	/**  Server UTC creation timestamp. */
+	createdAt: string,
+	/**  Server UTC last content-change timestamp. */
+	updatedAt: string,
+	/**  Complete writable typed fields. */
+	data: TeamAuthoringData_Deserialize,
+	/**  Identity-provider groups can be read, but not edited through local-group routes. */
+	readOnly: boolean,
+	/**  Trust acceptance metadata, separate from writable fields. */
+	trustAttribution: TeamTrustAttribution | null,
+};
+
+/**  One complete current resource captured for an explicit administration intent. */
+export type TeamAuthoringResourceView_Serialize = {
+	/**  Canonical authenticated deployment origin. */
+	origin: string,
+	/**  Captured enrolled Account. */
+	accountId: string,
+	/**  Exact selected Organization. */
+	organizationId: string,
+	/**  Immutable resource id. */
+	id: string,
+	/**  Exact strong ETag captured by this read. */
+	etag: string,
+	/**  Server UTC creation timestamp. */
+	createdAt: string,
+	/**  Server UTC last content-change timestamp. */
+	updatedAt: string,
+	/**  Complete writable typed fields. */
+	data: TeamAuthoringData_Serialize,
+	/**  Identity-provider groups can be read, but not edited through local-group routes. */
+	readOnly: boolean,
+	/**  Trust acceptance metadata, separate from writable fields. */
+	trustAttribution: TeamTrustAttribution | null,
 };
 
 /**  Local state of the one retained team-creation operation. */
@@ -2733,7 +3020,120 @@ export type TeamFailure =
 /**  The complete view did not fit the client's bounded read budget. */
 "assetsLimit" |
 /**  A complete view is saved, but its revision-bound acknowledgement is unconfirmed. */
-"assetsAcknowledgementUnknown";
+"assetsAcknowledgementUnknown" |
+/**  The shared typed authoring codec rejected the visible form values. */
+"invalidAuthoringData" |
+/**  A source-bound original create still needs confirmation or explicit completion. */
+"authoringPending" |
+/**  The original precondition or dependency changed and needs explicit review. */
+"authoringConflict" |
+/**  The mutation result cannot be confirmed; never silently substitute a new request. */
+"authoringUnknown";
+
+/**  Organization-managed gateway metadata. */
+export type TeamGatewayNetworkFields = TeamGatewayNetworkFields_Serialize | TeamGatewayNetworkFields_Deserialize;
+
+/**  Organization-managed gateway metadata. */
+export type TeamGatewayNetworkFields_Deserialize = {
+	/**  Gateway network display name. */
+	name: string,
+	/**  Optional ordinary description. */
+	description?: string | null,
+};
+
+/**  Organization-managed gateway metadata. */
+export type TeamGatewayNetworkFields_Serialize = {
+	/**  Gateway network display name. */
+	name: string,
+	/**  Optional ordinary description. */
+	description?: string | null,
+};
+
+/**  Writable local Group values. */
+export type TeamGroupFields = {
+	/**  Group display name. */
+	name: string,
+	/**  Current Organization Membership ids, never global Account ids. */
+	members: string[],
+};
+
+/**  Host fields; no credential or Personal source is accepted. */
+export type TeamHostFields = TeamHostFields_Serialize | TeamHostFields_Deserialize;
+
+/**  Host fields; no credential or Personal source is accepted. */
+export type TeamHostFields_Deserialize = {
+	/**  Optional display name, preserving permitted text. */
+	name?: string | null,
+	/**  DNS name or IP address. */
+	address: string,
+	/**  Explicit SSH port, otherwise the model default. */
+	port?: number | null,
+	/**  Display tag keys and values. */
+	tags?: { [key in string]: string } | null,
+	/**  Selected same-team Host group ids. */
+	groups?: { [key in string]: boolean } | null,
+	/**  Favorite display state. */
+	favorite?: boolean | null,
+	/**  Optional ordinary notes. */
+	notes?: string | null,
+	/**  Same-team default Login id. */
+	default_profile?: string | null,
+	/**  Named SSH option values. */
+	ssh_options?: { [key in string]: string } | null,
+	/**  Named Mosh option values. */
+	mosh?: { [key in string]: string } | null,
+};
+
+/**  Host fields; no credential or Personal source is accepted. */
+export type TeamHostFields_Serialize = {
+	/**  Optional display name, preserving permitted text. */
+	name?: string | null,
+	/**  DNS name or IP address. */
+	address: string,
+	/**  Explicit SSH port, otherwise the model default. */
+	port?: number | null,
+	/**  Display tag keys and values. */
+	tags?: { [key in string]: string } | null,
+	/**  Selected same-team Host group ids. */
+	groups?: { [key in string]: boolean } | null,
+	/**  Favorite display state. */
+	favorite?: boolean | null,
+	/**  Optional ordinary notes. */
+	notes?: string | null,
+	/**  Same-team default Login id. */
+	default_profile?: string | null,
+	/**  Named SSH option values. */
+	ssh_options?: { [key in string]: string } | null,
+	/**  Named Mosh option values. */
+	mosh?: { [key in string]: string } | null,
+};
+
+/**  Inventory grouping and named inherited Host defaults. */
+export type TeamHostGroupFields = TeamHostGroupFields_Serialize | TeamHostGroupFields_Deserialize;
+
+/**  Inventory grouping and named inherited Host defaults. */
+export type TeamHostGroupFields_Deserialize = {
+	/**  Group display name. */
+	name: string,
+	/**  Optional same-team parent Host group id. */
+	parent?: string | null,
+	/**  Optional display color. */
+	color?: string | null,
+	/**  Shared supported defaults, without Personal credentials. */
+	defaults?: { [key in string]: string } | null,
+};
+
+/**  Inventory grouping and named inherited Host defaults. */
+export type TeamHostGroupFields_Serialize = {
+	/**  Group display name. */
+	name: string,
+	/**  Optional same-team parent Host group id. */
+	parent?: string | null,
+	/**  Optional display color. */
+	color?: string | null,
+	/**  Shared supported defaults, without Personal credentials. */
+	defaults?: { [key in string]: string } | null,
+};
 
 /**  One explicitly requested invitation page. */
 export type TeamInvitationPageView = {
@@ -2761,6 +3161,45 @@ export type TeamInvitationView = {
 	status: string,
 	/**  Fixed UTC expiry. */
 	expiresAt: string,
+};
+
+/**  An Organization Login without any Personal credential field. */
+export type TeamLoginFields = TeamLoginFields_Serialize | TeamLoginFields_Deserialize;
+
+/**  An Organization Login without any Personal credential field. */
+export type TeamLoginFields_Deserialize = {
+	/**  Independently readable same-team Host id. */
+	host: string,
+	/**  Optional Login label. */
+	name?: string | null,
+	/**  Exact remote SSH username. */
+	username: string,
+	/**  Explicit Direct or same-team Route reference. */
+	route?: TeamRouteReference | null,
+	/**  Optional terminal profile name. */
+	terminal_profile?: string | null,
+	/**  Optional ordinary startup command. */
+	startup_command?: string | null,
+	/**  Whether this Login permits agent forwarding. */
+	agent_forwarding?: boolean | null,
+};
+
+/**  An Organization Login without any Personal credential field. */
+export type TeamLoginFields_Serialize = {
+	/**  Independently readable same-team Host id. */
+	host: string,
+	/**  Optional Login label. */
+	name?: string | null,
+	/**  Exact remote SSH username. */
+	username: string,
+	/**  Explicit Direct or same-team Route reference. */
+	route?: TeamRouteReference | null,
+	/**  Optional terminal profile name. */
+	terminal_profile?: string | null,
+	/**  Optional ordinary startup command. */
+	startup_command?: string | null,
+	/**  Whether this Login permits agent forwarding. */
+	agent_forwarding?: boolean | null,
 };
 
 /**  One explicitly requested member page. */
@@ -2828,6 +3267,62 @@ export type TeamPageView = {
 	nextCursor: string | null,
 };
 
+/**  Complete desired persisted-policy state. */
+export type TeamPolicyFields = {
+	/**  Policy display name. */
+	name: string,
+	/**  One policy in the supported Cedar profile. */
+	source: string,
+	/**  Whether the persisted policy is active. */
+	enabled: boolean,
+};
+
+/**  Explicit route fields, excluding proxy credentials. */
+export type TeamRouteFields = TeamRouteFields_Serialize | TeamRouteFields_Deserialize;
+
+/**  Explicit route fields, excluding proxy credentials. */
+export type TeamRouteFields_Deserialize = {
+	/**  Optional route label. */
+	name?: string | null,
+	/**  Shared route-kind number from one through five. */
+	kind: number,
+	/**  Ordered same-team Login ids for Jump. */
+	hops?: string[] | null,
+	/**  SOCKS5 or HTTP CONNECT endpoint. */
+	proxy?: string | null,
+	/**  Explicit local helper program and arguments. */
+	command?: string | null,
+	/**  Same-team managed gateway id. */
+	gateway_network?: string | null,
+	/**  Optional ordinary proxy username, without a password. */
+	proxy_username?: string | null,
+};
+
+/**  Explicit route fields, excluding proxy credentials. */
+export type TeamRouteFields_Serialize = {
+	/**  Optional route label. */
+	name?: string | null,
+	/**  Shared route-kind number from one through five. */
+	kind: number,
+	/**  Ordered same-team Login ids for Jump. */
+	hops?: string[] | null,
+	/**  SOCKS5 or HTTP CONNECT endpoint. */
+	proxy?: string | null,
+	/**  Explicit local helper program and arguments. */
+	command?: string | null,
+	/**  Same-team managed gateway id. */
+	gateway_network?: string | null,
+	/**  Optional ordinary proxy username, without a password. */
+	proxy_username?: string | null,
+};
+
+/**  Direct is integer zero; every other route value is a same-team Route id. */
+export type TeamRouteReference =
+/**  Shared codec accepts only integer zero. */
+number |
+/**  Opaque same-team Route id. */
+string;
+
 /**  One verified current Resource captured for an explicit name edit. */
 export type TeamSettingsView = {
 	/**  Current caller-specific team metadata; roles grant no frontend authority. */
@@ -2838,6 +3333,184 @@ export type TeamSettingsView = {
 	membershipId: string,
 };
 
+/**  Independent access-rule permission. */
+export type TeamSimplePermission =
+/**  View selected typed assets without implicit dependencies. */
+"view" |
+/**  Connect to selected Hosts/groups as one exact SSH user. */
+"connect";
+
+/**  Input for the shared generator; one subject and one independent permission. */
+export type TeamSimpleRuleInput = {
+	/**  One current Membership subject, exclusive with group_id. */
+	membershipId: string | null,
+	/**  One local Group subject, exclusive with membership_id. */
+	groupId: string | null,
+	/**  Exactly one independent view or connect grant. */
+	permission: TeamSimplePermission,
+	/**  Explicit typed resources selected for this rule. */
+	resources: TeamSimpleRuleResource[],
+	/**  Exact remote SSH user, required only for connect. */
+	remoteUser: string | null,
+};
+
+/**  The source is an inspectable preview only; saving uses the normal policy operation. */
+export type TeamSimpleRulePreview = {
+	/**  Shared generated Cedar source for explicit review. */
+	source: string,
+	/**  Explicit locators not selected for view; this never automatically grants dependencies. */
+	dependencies: TeamSimpleRuleResource[],
+};
+
+/**  One exact typed inventory selector. */
+export type TeamSimpleRuleResource = {
+	/**  Expected inventory type; Group and Policy are rejected. */
+	collection: TeamAuthoringCollection,
+	/**  Selected same-team resource id. */
+	id: string,
+};
+
+/**  Ordinary named command template and non-secret variable definitions. */
+export type TeamSnippetFields = TeamSnippetFields_Serialize | TeamSnippetFields_Deserialize;
+
+/**  Ordinary named command template and non-secret variable definitions. */
+export type TeamSnippetFields_Deserialize = {
+	/**  Snippet display name. */
+	name: string,
+	/**  Saved command template. */
+	template: string,
+	/**  Definitions keyed by exact variable name. */
+	variables?: { [key in string]: TeamSnippetVariable_Deserialize } | null,
+	/**  Selected ordinary tag names. */
+	tags?: { [key in string]: boolean } | null,
+	/**  Optional display folder. */
+	folder?: string | null,
+};
+
+/**  Ordinary named command template and non-secret variable definitions. */
+export type TeamSnippetFields_Serialize = {
+	/**  Snippet display name. */
+	name: string,
+	/**  Saved command template. */
+	template: string,
+	/**  Definitions keyed by exact variable name. */
+	variables?: { [key in string]: TeamSnippetVariable_Serialize } | null,
+	/**  Selected ordinary tag names. */
+	tags?: { [key in string]: boolean } | null,
+	/**  Optional display folder. */
+	folder?: string | null,
+};
+
+/**  Shared Snippet variable definition without a stored secret value. */
+export type TeamSnippetVariable = TeamSnippetVariable_Serialize | TeamSnippetVariable_Deserialize;
+
+/**  Shared Snippet variable definition without a stored secret value. */
+export type TeamSnippetVariable_Deserialize = {
+	/**  Shared text, integer, choice or secret kind number. */
+	kind: number,
+	/**  Optional ordinary default; forbidden for secret input. */
+	default?: string | null,
+	/**  Exact allowed values for a choice variable. */
+	choices?: string[] | null,
+};
+
+/**  Shared Snippet variable definition without a stored secret value. */
+export type TeamSnippetVariable_Serialize = {
+	/**  Shared text, integer, choice or secret kind number. */
+	kind: number,
+	/**  Optional ordinary default; forbidden for secret input. */
+	default?: string | null,
+	/**  Exact allowed values for a choice variable. */
+	choices?: string[] | null,
+};
+
+/**  Existing Account/team failures and safe Organization SSH failure codes. */
+export type TeamSshError =
+/**  Authenticated Account or local-store failure. */
+PersonalServerError |
+/**  Current team authority or resource failure. */
+TeamFailure |
+/**  Certificate or source-specific failure. */
+TeamSshFailure;
+
+/**  Fixed, content-free errors for Organization SSH preparation. */
+export type TeamSshFailure =
+/**  The source differs from the captured active Account or Device. */
+"invalidSource" |
+/**  No current view or eligible previously authorized certificate is available. */
+"viewRequired" |
+/**  Membership or visibility was invalidated after this preparation started. */
+"authorityChanged" |
+/**  An administrator has not provisioned the team's user CA. */
+"caMissing" |
+/**  The response could not establish the exact issuing CA, subject, source or principal. */
+"invalidCertificate" |
+/**  A dispatched issuance needs explicit confirmation using its original request. */
+"issuanceUnknown" |
+/**  A dispatched CA provisioning operation needs explicit original-request confirmation. */
+"caUnknown" |
+/**  Another original request must be resolved before preparing its replacement. */
+"preparationPending" |
+/**  Original-request confirmation no longer fits its fixed receipt lifetime. */
+"operationExpired" |
+/**  The selected original operation is no longer retained. */
+"operationMissing";
+
+/**  Manual sshd setup for one visible Login and its independently visible same-team Host. */
+export type TeamSshHostSetup = {
+	/**  Login identifying this setup row. */
+	profileId: string,
+	/**  Immutable Host scope; a matching username on another Host is insufficient. */
+	hostId: string,
+	/**  Ordinary local SSH username whose home holds the principals file. */
+	remoteUser: string,
+	/**  Exact authorized principal to add on this Host for this local user. */
+	principal: string,
+	/**  System file to which the administrator adds the displayed public CA. */
+	caFile: string,
+	/**  File relative to this local user's home directory. */
+	principalsFile: string,
+	/**  sshd settings to review against the existing configuration before sshd -t and reload. */
+	sshdConfig: string,
+};
+
+/**  One of the two retained native SSH setup requests. */
+export type TeamSshOperationKind =
+/**  Provision the initial Organization-owned local user CA. */
+"userCa" |
+/**  Confirm an original certificate request without extending its validity. */
+"certificate";
+
+/**  Durable safe recovery state, without keys, raw request bodies, tokens or certificates. */
+export type TeamSshOperationView = {
+	/**  Exact source owning this original operation. */
+	source: TeamSshSource,
+	/**  Local original idempotency key; this id grants no server authority. */
+	operationId: string,
+	/**  CA provisioning or certificate confirmation. */
+	kind: TeamSshOperationKind,
+	/**  Explicitly permitted recovery action. */
+	phase: TeamCreationPhase,
+	/**  Receipt deadline, as Unix seconds without JavaScript precision loss. */
+	retryUntil: string | null,
+	/**  Exact Host of a retained issuance; absent for CA setup. */
+	hostId: string | null,
+	/**  Ordinary SSH username; absent for CA setup. */
+	remoteUser: string | null,
+};
+
+/**  Immutable source of a team SSH intent, verified against the captured Account store. */
+export type TeamSshSource = {
+	/**  Canonical HTTPS deployment origin. */
+	origin: string,
+	/**  Account whose encrypted local store owns this intent. */
+	accountId: string,
+	/**  Organization owning every resolved inventory object. */
+	organizationId: string,
+	/**  Enrolled installation whose local signer is selected. */
+	deviceId: string,
+};
+
 /**  Current discovery metadata; role names are display values, never client authorization. */
 export type TeamSummary = {
 	/**  Organization identity within this Account's canonical deployment. */
@@ -2846,6 +3519,69 @@ export type TeamSummary = {
 	name: string,
 	/**  This Account's current membership role identifiers, including unknown values. */
 	roles: string[],
+};
+
+/**  Attribution belongs to the server and cannot be submitted as editable fields. */
+export type TeamTrustAttribution = {
+	/**  Server acceptance time as exact decimal Unix milliseconds. */
+	acceptedAt: string,
+	/**  Enrolled Device recorded by the server. */
+	acceptedByDevice: string,
+	/**  Account recorded by the server. */
+	acceptedByAccount: string,
+};
+
+/**  Writable public Host trust fields; acceptance attribution is server-owned. */
+export type TeamTrustFields = TeamTrustFields_Serialize | TeamTrustFields_Deserialize;
+
+/**  Writable public Host trust fields; acceptance attribution is server-owned. */
+export type TeamTrustFields_Deserialize = {
+	/**  Optional exact same-team Host id. */
+	host?: string | null,
+	/**  Optional Host matching pattern. */
+	pattern?: string | null,
+	/**  Canonical OpenSSH public key. */
+	key: string,
+	/**  Exact SHA-256 fingerprint of the public key. */
+	fingerprint: string,
+	/**  Shared trust-provenance number from one through four. */
+	provenance: number,
+	/**  Explicit revocation state. */
+	revoked?: boolean | null,
+	/**  Whether this public key is a Host CA. */
+	ca?: boolean | null,
+};
+
+/**  Writable public Host trust fields; acceptance attribution is server-owned. */
+export type TeamTrustFields_Serialize = {
+	/**  Optional exact same-team Host id. */
+	host?: string | null,
+	/**  Optional Host matching pattern. */
+	pattern?: string | null,
+	/**  Canonical OpenSSH public key. */
+	key: string,
+	/**  Exact SHA-256 fingerprint of the public key. */
+	fingerprint: string,
+	/**  Shared trust-provenance number from one through four. */
+	provenance: number,
+	/**  Explicit revocation state. */
+	revoked?: boolean | null,
+	/**  Whether this public key is a Host CA. */
+	ca?: boolean | null,
+};
+
+/**  Public trust material from the authenticated selected team; never a private CA key. */
+export type TeamUserCaView = {
+	/**  Captured origin/Account/Organization/Device that authenticated this read. */
+	source: TeamSshSource,
+	/**  Exact immutable CA id. */
+	id: string,
+	/**  Canonical public Ed25519 key for explicit sshd configuration. */
+	publicKey: string,
+	/**  SHA256 fingerprint of that public key. */
+	fingerprint: string,
+	/**  Exact per-Login configuration derived only from the complete current readable view. */
+	setups: TeamSshHostSetup[],
 };
 
 /**  Rendered terminal state, rather than an unbounded SSH transport log. */

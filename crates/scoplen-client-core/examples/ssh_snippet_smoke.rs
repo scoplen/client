@@ -85,7 +85,8 @@ impl Terminal {
                             &prompt_id,
                             PreparationResponse::AcceptHostKey,
                         )?,
-                        PreparationEvent::Passphrase { .. }
+                        PreparationEvent::CommandExecution { .. }
+                        | PreparationEvent::Passphrase { .. }
                         | PreparationEvent::KeyboardInteractive { .. } => {
                             return Err("password fixture requested unexpected input".to_owned());
                         }
@@ -211,7 +212,8 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                             &prompt_id,
                             PreparationResponse::AcceptHostKey,
                         )?,
-                        PreparationEvent::Passphrase { .. }
+                        PreparationEvent::CommandExecution { .. }
+                        | PreparationEvent::Passphrase { .. }
                         | PreparationEvent::KeyboardInteractive { .. } => {
                             return Err("password fixture requested an unexpected input".into());
                         }

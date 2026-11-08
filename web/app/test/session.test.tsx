@@ -14,6 +14,7 @@ import type {
   SessionEvent,
   SessionTransferQueueSnapshot,
   SessionTransferItem,
+  SessionTarget,
 } from "../src/ipc/bindings";
 import type { ScoplenTerminalElement } from "@scoplen/terminal";
 
@@ -96,7 +97,7 @@ function sessionView(
       <TerminalColorsProvider>
         <I18nProvider locale={locale}>
           <SessionTerminal
-            profileId="profile-1"
+            target={{ kind: "personal", profileId: "profile-1" }}
             label="Silent server"
             active={active}
             onClose={onClose}
@@ -166,7 +167,7 @@ it("uses an explicit Workspace runtime identity with the ordinary interactive sh
   expect(f.matching("session_reserve_transport")[0]?.args.sessionId).toBe(identity);
   expect(f.matching("session_connect")[0]?.args).toMatchObject({
     sessionId: identity,
-    profileId: "profile-1",
+    target: { kind: "personal", profileId: "profile-1" },
     command: null,
     pty: true,
   });
@@ -174,6 +175,48 @@ it("uses an explicit Workspace runtime identity with the ordinary interactive sh
   expect(screen.getByRole("dialog", { name: "Answer this server's request" })).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "Continue" }));
   expect(f.matching("session_respond").at(-1)?.args.sessionId).toBe(identity);
+});
+
+it("keeps the complete team source across IPC and requires a separate exact command approval", async () => {
+  const f = fixture();
+  const target: SessionTarget = {
+    kind: "organization",
+    profileId: "team-login",
+    source: {
+      origin: "https://team.example.test",
+      accountId: "account-one",
+      organizationId: "team-one",
+      deviceId: "device-one",
+    },
+  };
+  const view = render(sessionView("en", true, undefined, undefined, { target }));
+  const connection = await connect(f);
+  expect(f.matching("session_connect")[0]?.args.target).toEqual(target);
+  await connection.prepare({
+    kind: "commandExecution",
+    context: { ...context(), source: target.source },
+    promptId: "command-one",
+    program: "<script>local-helper</script>",
+    arguments: ["--host=team.example.test", ""],
+  });
+  const dialog = screen.getByRole("dialog", { name: "Run this team's local connection command?" });
+  expect(within(dialog).getByText("https://team.example.test", { exact: false })).toBeTruthy();
+  expect(within(dialog).getByText("<script>local-helper</script>")).toBeTruthy();
+  expect(dialog.querySelector("script")).toBeNull();
+  expect(f.matching("session_respond")).toHaveLength(0);
+  view.rerender(
+    sessionView("en", false, undefined, undefined, { target: { ...target, source: { ...target.source } } }),
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(f.connections).toHaveLength(1);
+  view.rerender(sessionView("en", true, undefined, undefined, { target }));
+  await userEvent.click(screen.getByRole("button", { name: "Run and connect" }));
+  expect(f.matching("session_respond").at(-1)?.args).toEqual({
+    sessionId: connection.sessionId,
+    transportId: connection.transportId,
+    promptId: "command-one",
+    intent: { kind: "acceptCommand" },
+  });
 });
 
 it("reports the current target Login label without replacing its ordinary session for a label update", async () => {
@@ -292,6 +335,7 @@ it("clears both echo policies on hide, replacement and cancellation, including C
 
 function context(position = 1): PreparationContext {
   return {
+    source: null,
     profileId: `profile-${position}`,
     hostId: `host-${position}`,
     login: `Login ${position}`,
@@ -1189,13 +1233,25 @@ it("fences delayed prompt responses and duplicate trust intents", async () => {
   expect(screen.getByRole("status").textContent).toContain("closed");
 });
 
-it.each(["trust", "passphrase"])(
+it.each(["trust", "passphrase", "command"])(
   "cancels a %s prompt and waits for cleanup without destroying its logical session",
   async (kind) => {
     const f = fixture();
     render(sessionView());
     const c = await connect(f);
-    await c.prepare(kind === "trust" ? trust() : passphrase());
+    await c.prepare(
+      kind === "command"
+        ? {
+            kind: "commandExecution",
+            context: context(),
+            promptId: "command-one",
+            program: "local-helper",
+            arguments: ["--host=team.example.test"],
+          }
+        : kind === "trust"
+          ? trust()
+          : passphrase(),
+    );
     await userEvent.click(screen.getAllByRole("button", { name: "Cancel" }).at(-1)!);
     expect(f.matching("session_stop_reconnecting").at(-1)?.args.sessionId).toBe(c.sessionId);
     expect(f.matching("session_close_transport")).toHaveLength(0);
@@ -1206,6 +1262,10 @@ it.each(["trust", "passphrase"])(
     await c.emit({ kind: "closed" });
     expect(screen.getByRole("button", { name: "Reconnect" })).toHaveProperty("disabled", false);
     expect(screen.getByRole("alert").textContent).toContain("cancelled");
+    if (kind === "command") {
+      expect(screen.getByRole("alert").textContent).toBe("Connection cancelled before the local command was approved.");
+      expect(f.matching("session_respond")).toHaveLength(0);
+    }
     await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
     expect(f.matching("session_retry_transport").at(-1)?.args.sessionId).toBe(c.sessionId);
     const second = await c.start();

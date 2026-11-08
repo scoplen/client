@@ -12,6 +12,7 @@ const ready = {
   origin: "https://sync.example",
   accountId: "0199a653-8392-7355-8b91-70ab85182e31",
   organizationId: team.id,
+  deviceId: "0199a653-8392-7355-8b91-70ab85182e35",
   vaultId: "0199a653-8392-7355-8b91-70ab85182e32",
   revision: "18446744073709551615",
   phase: "ready",
@@ -29,11 +30,11 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
 });
-function fixture() {
+function fixture(onConnect?: (target: unknown) => void) {
   const close = vi.fn();
   const rendered = render(
     <I18nProvider locale="en">
-      <TeamAssets team={team} onClose={close} />
+      <TeamAssets team={team} onClose={close} onConnect={onConnect} />
     </I18nProvider>,
   );
   return { ...rendered, close };
@@ -47,6 +48,32 @@ it("shows the selected team's actual source and permitted assets without a fake 
   expect(screen.getByText("host.example")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /connect/i })).toBeNull();
   expect(await violations(document.body)).toEqual([]);
+});
+
+it("connects only a currently visible Login with its exact team and device source", async () => {
+  const connect = vi.fn();
+  const login = {
+    id: "0199a653-8392-7355-8b91-70ab85182e36",
+    kind: "AccessProfile",
+    name: "deploy@production",
+    address: null,
+  };
+  commands.refreshTeamAssets.mockResolvedValue({ status: "ok", data: { ...ready, assets: [...ready.assets, login] } });
+  const { close } = fixture(connect);
+  await screen.findByText(login.name);
+  expect(screen.getAllByRole("button", { name: "Connect" })).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: "Connect" }));
+  expect(connect).toHaveBeenCalledExactlyOnceWith({
+    kind: "organization",
+    profileId: login.id,
+    source: {
+      origin: ready.origin,
+      accountId: ready.accountId,
+      organizationId: ready.organizationId,
+      deviceId: ready.deviceId,
+    },
+  });
+  expect(close).toHaveBeenCalledTimes(1);
 });
 
 it("distinguishes a complete empty view from unavailable membership and permits explicit retry", async () => {

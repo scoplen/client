@@ -32,6 +32,7 @@ use sha2::{Digest as _, Sha256};
 use ssh_key::{Kdf, PrivateKey};
 use uuid::Uuid;
 
+use crate::personal_server::TeamSshSource;
 use crate::repository::{
     AccessProfile, Credential, CredentialBinding, CredentialKind, Repository, Route, RouteChoice,
     RouteKind, TrustRecord,
@@ -41,10 +42,38 @@ use crate::store::Store;
 mod agent;
 pub mod preparation;
 mod proxy_command;
+pub(crate) mod team;
 #[cfg(test)]
 pub(crate) mod test_peer;
 mod trust;
 pub use trust::{HostKeyAssessment, HostKeyReview, HostKeyTrustSource, assess_host_key};
+
+/// An immutable inventory source selected by an explicit connection intent.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum SessionTarget {
+    /// A Login in the current Personal or Local namespace.
+    Personal {
+        /// Login identifier.
+        profile_id: String,
+    },
+    /// A Login in one complete, source-bound Organization view.
+    Organization {
+        /// Captured deployment, Account, Organization and Device.
+        source: TeamSshSource,
+        /// Login identifier in that Organization alone.
+        profile_id: String,
+    },
+}
+
+impl SessionTarget {
+    /// The Login identifier within this target's explicit source.
+    pub fn profile_id(&self) -> &str {
+        match self {
+            Self::Personal { profile_id } | Self::Organization { profile_id, .. } => profile_id,
+        }
+    }
+}
 
 /// A resolved credential handed to the SSH adapter.
 ///
@@ -83,6 +112,8 @@ pub enum CredentialMaterial {
         /// The organization scope that issued the certificate, when known.
         scope: Option<Uuid>,
     },
+    /// Certificate authentication whose material is obtained only after Host trust.
+    OrganizationCertificate,
     /// Resolve a secret from an external provider at connection time.
     External {
         /// Non-secret provider configuration.
@@ -888,6 +919,7 @@ fn validate_credential(credential: &CredentialMaterial) -> Result<(), SshConnect
     match credential {
         CredentialMaterial::Password(_)
         | CredentialMaterial::PrivateKey(_)
+        | CredentialMaterial::OrganizationCertificate
         | CredentialMaterial::KeyboardInteractive => Ok(()),
         CredentialMaterial::Agent { public_key } => {
             agent::parse_public_key(public_key.as_deref()).map(|_| ())
@@ -1016,6 +1048,26 @@ impl std::fmt::Debug for SshConnection {
 }
 
 impl SshConnection {
+    pub(crate) async fn authenticate_team_certificate(
+        &mut self,
+        store: &Store,
+        certificate: crate::personal_server::TeamSshCertificate,
+    ) -> Result<(), SshConnectionError> {
+        certificate.current(store).map_err(|_| SshConnectionError::UnsupportedCredential)?;
+        let key = Ed25519SigningKey::from_bytes(certificate.signing_key.as_bytes())
+            .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
+        let signer = Ed25519SshSigner::new(key);
+        self.lifecycle.transition(ConnectionState::Authenticating)?;
+        self.credential.take();
+        let username = self.username.clone();
+        let result = self
+            .connection_mut()?
+            .authenticate_certificate(&username, &certificate.certificate, &signer)
+            .await
+            .map_err(Into::into);
+        self.finish_authentication(result)
+    }
+
     /// Open an SSH connection and complete key exchange through its saved route.
     ///
     /// Omitting `trust` is fail-closed and rejects every host key. Jump chains

@@ -93,6 +93,53 @@ Independent teams and Personal key state must remain intact.
 cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::team_membership::live_named_team_membership_lifecycle -- --exact --test-threads=1
 ```
 
+### Team inventory and permissions
+
+Use a separate fresh deployment descriptor with the Organization inventory routes enabled:
+
+```powershell
+$env:SCOPLEN_LIVE_ACCOUNT_DEPLOYMENT = '<absolute descriptor path>'
+cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::team_inventory::live_team_inventory_authoring_and_access_withdrawal -- --exact --test-threads=1
+```
+
+The public client registers two Accounts, synchronizes their independent encrypted Personal
+Hosts, creates teams and accepts a named invitation. The owner authors Hosts, a Login, a
+Group and independent view/connect policies. The member receives only the permitted complete
+view and cannot edit assets; foreign-team reads and stale ETag updates are refused. Removing
+and restoring Group membership withdraws and restores visibility. Deleting the view policy
+removes the assets without deleting the independent connect policy. Personal inventory,
+sync state and keys remain separate. Run against fresh SQLite and PostgreSQL deployments;
+this core check does not establish rendered or native desktop interaction.
+
+### Team certificate SSH and terminal-owned SFTP
+
+Use PowerShell 7, Docker and a fresh disposable HTTPS deployment with Account registration,
+team creation and the Organization local user-CA routes enabled. Supply the same strict
+three-field deployment descriptor described above; run once against each database backend.
+
+```powershell
+pwsh -NoProfile -File scripts/test-live-team-ssh.ps1 -Deployment '<absolute descriptor path>'
+```
+
+The script starts an owned, pinned OpenSSH container on a random loopback port. The client
+registers separate owner/member Accounts, creates a team, accepts its named invitation and
+authors a Host, Login and separate view/connect policies through public HTTPS APIs. It
+provisions the team's user CA and installs only its public key and exact scoped principal
+in the OpenSSH fixture. Ordinary authorized-key and password login are disabled.
+
+The recipient signs in with the same Account password on an independent second Device and
+discovers the existing team. The public session manager accepts first-use Host trust, opens
+a certificate-authenticated terminal, checks command output and resizing, then uploads,
+lists and downloads an exact binary payload through Files on the same connection. Recent
+retains the complete team source. Removing the connect policy and refreshing the permitted
+view must deny further
+certificate acquisition; Personal inventory remains separate.
+
+The script requires exactly one passing live test. It restores its environment and removes
+only its owned container; success also removes owned scratch files, while failure retains
+private diagnostics. Compilation or fixture setup alone is not live acceptance. The check
+does not establish native dialogs, rendered desktop interaction or macOS feature acceptance.
+
 ### Preconfirmed-profile integration
 
 The opt-in `live-server-integration` feature checks retained admitted-device authentication,

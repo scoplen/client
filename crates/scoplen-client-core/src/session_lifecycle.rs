@@ -15,6 +15,22 @@ pub struct SessionHistoryLease<F: Fn(&str) + Send + Sync> {
 }
 
 impl<F: Fn(&str) + Send + Sync> SessionHistoryLease<F> {
+    pub(crate) fn start_team(
+        inventory: Inventory,
+        store: &crate::store::Store,
+        snapshot: &crate::connection::team::TeamConnectionSnapshot,
+        profile: uuid::Uuid,
+        host: uuid::Uuid,
+        on_closed: F,
+    ) -> Result<Self, SessionError> {
+        let id = store
+            .record_team_session_start(&snapshot.source, snapshot.authority, host, profile)
+            .map_err(|_| SessionError::Failed {
+                reference: "Team session history could not be saved.".into(),
+            })?;
+        Ok(Self { inventory, id: id.to_string(), on_closed, ended: false })
+    }
+
     /// Record an accepted connection attempt against a live login.
     ///
     /// # Errors

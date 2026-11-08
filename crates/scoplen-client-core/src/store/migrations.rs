@@ -726,4 +726,94 @@ pub(crate) const MIGRATIONS: &[&str] = &[
             REFERENCES team_asset_views(origin,account_id,organization_id) ON DELETE CASCADE
     ) STRICT, WITHOUT ROWID;
     "#,
+    // 20: original Organization creates are separate from Personal objects and sync cursors.
+    r#"
+    CREATE TABLE team_authoring (
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK(length(account_id)=16),
+        device_id BLOB NOT NULL CHECK(length(device_id)=16),
+        organization_id BLOB NOT NULL CHECK(length(organization_id)=16),
+        operation_id BLOB NOT NULL CHECK(length(operation_id)=16),
+        resource_id BLOB NOT NULL CHECK(length(resource_id)=16),
+        collection TEXT NOT NULL CHECK(length(collection) BETWEEN 1 AND 32),
+        payload BLOB NOT NULL CHECK(length(payload) BETWEEN 1 AND 2097152),
+        phase INTEGER NOT NULL CHECK(phase BETWEEN 0 AND 2),
+        first_attempt_ms INTEGER CHECK(first_attempt_ms IS NULL OR first_attempt_ms>=0),
+        response BLOB CHECK(response IS NULL OR length(response) BETWEEN 1 AND 2097152),
+        PRIMARY KEY(origin,account_id,device_id,organization_id),
+        CHECK((phase=2)=(response IS NOT NULL)),
+        CHECK(phase=0 OR first_attempt_ms IS NOT NULL)
+    ) STRICT, WITHOUT ROWID;
+    "#,
+    // 21: Organization SSH identity and certificates remain device-local and source-bound.
+    r#"
+    CREATE TABLE team_ssh_signers (
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK(length(account_id)=16),
+        organization_id BLOB NOT NULL CHECK(length(organization_id)=16),
+        device_id BLOB NOT NULL CHECK(length(device_id)=16),
+        seed BLOB NOT NULL CHECK(length(seed)=32),
+        generation BLOB NOT NULL CHECK(length(generation)=16),
+        active INTEGER NOT NULL CHECK(active IN(0,1)),
+        vault_id BLOB CHECK(vault_id IS NULL OR length(vault_id)=16),
+        revision BLOB CHECK(revision IS NULL OR length(revision)=8),
+        PRIMARY KEY(origin,account_id,organization_id,device_id),
+        CHECK(active=0 OR (vault_id IS NOT NULL AND revision IS NOT NULL))
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE team_ssh_certificates (
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK(length(account_id)=16),
+        organization_id BLOB NOT NULL CHECK(length(organization_id)=16),
+        device_id BLOB NOT NULL CHECK(length(device_id)=16),
+        host_id BLOB NOT NULL CHECK(length(host_id)=16),
+        remote_user TEXT NOT NULL CHECK(length(CAST(remote_user AS BLOB)) BETWEEN 1 AND 255),
+        generation BLOB NOT NULL CHECK(length(generation)=16),
+        ca BLOB NOT NULL CHECK(length(ca) BETWEEN 1 AND 16384),
+        request BLOB NOT NULL CHECK(length(request) BETWEEN 1 AND 16384),
+        response BLOB NOT NULL CHECK(length(response) BETWEEN 1 AND 131072),
+        PRIMARY KEY(origin,account_id,organization_id,device_id,host_id,remote_user),
+        FOREIGN KEY(origin,account_id,organization_id,device_id)
+            REFERENCES team_ssh_signers(origin,account_id,organization_id,device_id) ON DELETE CASCADE
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE team_session_sources (
+        session_id BLOB PRIMARY KEY NOT NULL REFERENCES session_history(id) ON DELETE CASCADE,
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK(length(account_id)=16),
+        organization_id BLOB NOT NULL CHECK(length(organization_id)=16),
+        device_id BLOB NOT NULL CHECK(length(device_id)=16),
+        vault_id BLOB NOT NULL CHECK(length(vault_id)=16),
+        revision BLOB NOT NULL CHECK(length(revision)=8),
+        host_id BLOB NOT NULL CHECK(length(host_id)=16)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE team_host_trust (
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK(length(account_id)=16),
+        organization_id BLOB NOT NULL CHECK(length(organization_id)=16),
+        device_id BLOB NOT NULL CHECK(length(device_id)=16),
+        host_id BLOB NOT NULL CHECK(length(host_id)=16),
+        key TEXT NOT NULL CHECK(length(CAST(key AS BLOB)) BETWEEN 1 AND 16384),
+        fingerprint TEXT NOT NULL CHECK(length(CAST(fingerprint AS BLOB))=50),
+        accepted_at INTEGER NOT NULL CHECK(accepted_at>=0),
+        PRIMARY KEY(origin,account_id,organization_id,device_id,host_id)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TABLE team_ssh_operations (
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK(length(account_id)=16),
+        organization_id BLOB NOT NULL CHECK(length(organization_id)=16),
+        device_id BLOB NOT NULL CHECK(length(device_id)=16),
+        kind INTEGER NOT NULL CHECK(kind IN(0,1)),
+        operation_id BLOB NOT NULL UNIQUE CHECK(length(operation_id)=16),
+        payload BLOB NOT NULL CHECK(length(payload) BETWEEN 1 AND 16384),
+        ca BLOB CHECK(ca IS NULL OR length(ca) BETWEEN 1 AND 16384),
+        generation BLOB CHECK(generation IS NULL OR length(generation)=16),
+        phase INTEGER NOT NULL CHECK(phase BETWEEN 0 AND 2),
+        first_attempt INTEGER CHECK(first_attempt IS NULL OR first_attempt>=0),
+        response BLOB CHECK(response IS NULL OR length(response) BETWEEN 1 AND 131072),
+        PRIMARY KEY(origin,account_id,organization_id,device_id,kind),
+        CHECK((kind=0 AND ca IS NULL AND generation IS NULL) OR
+            (kind=1 AND ca IS NOT NULL AND generation IS NOT NULL)),
+        CHECK((phase=2 AND response IS NOT NULL) OR (phase!=2 AND response IS NULL)),
+        CHECK(phase=0 OR first_attempt IS NOT NULL)
+    ) STRICT, WITHOUT ROWID;
+    "#,
 ];

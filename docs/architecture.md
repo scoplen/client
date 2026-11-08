@@ -52,8 +52,30 @@ projections before fresh descriptor discovery. Store replacement cancels the own
 pull generation fences late responses. Reopening the encrypted store retains the cache but
 requires online current-view revalidation before exposing its rows. Personal notifications
 and object progress remain separate. Settings offers View assets with explicit complete-empty,
-updating, failure, lost-membership and unconfirmed-ACK states. Asset authoring, group/policy UI,
-CA setup and team SSH remain separate outcomes.
+updating, failure, lost-membership and unconfirmed-ACK states.
+
+`personal_server::teams::authoring` keeps administration separate from the synchronized view.
+Nine typed collections reuse public shared codecs and operation-specific Device scopes. Every
+live resource read captures its complete fields and strong ETag. A replace or delete sends the
+original If-Match once; it does not fetch a newer version or retry silently. The renderer disables
+another uncertain or conflicting mutation until an explicit refresh and review. Seven inventory
+forms exclude Personal credentials and server-owned trust attribution. Local groups contain
+Membership ids, IdP groups stay read-only, and ordinary access rules use the shared pure Cedar
+generator for one independent view or connect permission without dependency grants.
+
+`store::team_authoring` durably retains each team's original POST key, resource id, canonical body,
+first dispatch time and exact confirmed response in the encrypted Account database. Identity,
+Device, Organization, payload and phase checks guard dispatch and completion. An unknown result
+survives reopening and only explicit confirmation can send the same original request. A later
+refusal cannot settle an earlier lost response. The local receipt supplies no current authority;
+each send authenticates and authorizes again. Expired uncertainty is reviewed before archival.
+No Organization administration write enters Personal objects or changes Personal sync cursors.
+
+`TeamSshSetup` displays only native public CA material, safe original-request recovery state and
+Rust-derived setup rows for independently visible same-team Hosts and Logins. Public-key and
+principal fields remain selectable read-only text. Creating a CA uses a durable native preparation
+and its exact original confirmation. The renderer constructs no principal and never edits sshd.
+The displayed manual configuration requires validation with `sshd -t` before reload.
 
 The client lockfile retains HPKE and P-256 0.14, `crypto-bigint` 0.7.6 and `ctutils` 0.4.5 for
 RUSTSEC-2026-0387, without the former 0.5.5 bigint/P-256 0.13 dependency path. Updating the shared

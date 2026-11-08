@@ -20,6 +20,7 @@ export interface FrameTab {
 const faces: Record<SessionState, { mood: MarkMood; active: boolean; attention: boolean }> = {
   verifying: { mood: "awake", active: true, attention: false },
   trusting: { mood: "awake", active: true, attention: true },
+  command: { mood: "awake", active: true, attention: true },
   passphrase: { mood: "awake", active: true, attention: true },
   keyboardInteractive: { mood: "awake", active: true, attention: true },
   connecting: { mood: "awake", active: true, attention: false },

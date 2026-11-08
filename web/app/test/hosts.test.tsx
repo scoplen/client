@@ -6,11 +6,12 @@ import { I18nProvider } from "../src/i18n";
 import { InventoryContext, type InventoryApi } from "../src/inventory/api";
 import { HostsHome } from "../src/inventory/home";
 import { violations } from "../../ui/test/axe";
+import type { SessionTarget } from "../src/ipc/bindings";
 
 function show(
   api: InventoryApi,
   locale: "en" | "zh-Hans" = "en",
-  onConnect?: (profileId: string, label: string) => void,
+  onConnect?: (target: SessionTarget, label: string) => void,
   onViewOutput?: (output: import("../src/ipc/bindings").SavedTerminalOutput) => void,
 ) {
   return render(
@@ -39,7 +40,7 @@ describe("the host list", () => {
         : result;
     };
     const output = {
-      target: { profileId: "l-1", hostName: "prod-api-01", loginName: "deploy" },
+      target: { target: { kind: "personal", profileId: "l-1" }, hostName: "prod-api-01", loginName: "deploy" },
       snapshot: { version: 1, columns: 80, rows: 24, data: "saved terminal screen" },
     };
     api.savedOutput = vi.fn().mockResolvedValue({ status: "ok", data: output });
@@ -113,7 +114,9 @@ describe("the host list", () => {
     expect(screen.getByRole("button", { name: /prod-db-01.*Files/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Reconnect prod-db-01" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Reconnect prod-api-01" }));
-    await waitFor(() => expect(onConnect).toHaveBeenCalledWith("l-1", "prod-api-01 · deploy"));
+    await waitFor(() =>
+      expect(onConnect).toHaveBeenCalledWith({ kind: "personal", profileId: "l-1" }, "prod-api-01 · deploy"),
+    );
 
     unmount();
     show(sampleInventory(sampleHosts(), { failRecentSessions: true }));
@@ -148,6 +151,47 @@ describe("the host list", () => {
     expect(onConnect).not.toHaveBeenCalled();
   });
 
+  it("shows the team source and reconnects it without opening a Personal host with the same identifier", async () => {
+    const api = sampleInventory(sampleHosts());
+    const target: SessionTarget = {
+      kind: "organization",
+      profileId: "l-1",
+      source: {
+        origin: "https://teams.example.test",
+        accountId: "account-one",
+        organizationId: "team-one",
+        deviceId: "device-one",
+      },
+    };
+    const recent = api.recentSessions;
+    api.recentSessions = async () => {
+      const result = await recent();
+      return result.status === "ok"
+        ? { ...result, data: [{ ...result.data[0]!, target, hostName: "Team host" }] }
+        : result;
+    };
+    api.reconnectSession = vi.fn().mockResolvedValue({
+      status: "ok",
+      data: { target, hostName: "Team host", loginName: "deploy" },
+    });
+    const host = vi.spyOn(api, "host");
+    const onConnect = vi.fn();
+    show(api, "en", onConnect);
+    await screen.findByText("7 hosts");
+    await userEvent.click(
+      within(screen.getByRole("navigation", { name: "Hosts" })).getByRole("button", { name: "Recent" }),
+    );
+    const rows = screen.getByRole("list", { name: "Recent sessions" });
+    expect(within(rows).getByText(/team-one.*https:\/\/teams.example.test/)).toBeTruthy();
+    expect(within(rows).queryByRole("button", { name: /Team host.*Terminal/i })).toBeNull();
+    host.mockClear();
+    await userEvent.click(within(rows).getByText("Team host"));
+    expect(host).not.toHaveBeenCalled();
+    await userEvent.click(within(rows).getByRole("button", { name: "Reconnect Team host" }));
+    expect(api.reconnectSession).toHaveBeenCalledWith("s-api-1");
+    expect(onConnect).toHaveBeenCalledWith(target, "Team host · deploy");
+  });
+
   it("stars and unstars a host", async () => {
     show(sampleInventory(sampleHosts()));
     await screen.findByText("7 hosts");
@@ -176,7 +220,7 @@ describe("the host list", () => {
     const connect = await screen.findAllByRole("button", { name: "Connect" });
     expect(connect).toHaveLength(2);
     await userEvent.click(connect[0]!);
-    expect(onConnect).toHaveBeenCalledWith("l-1", "prod-api-01 · deploy");
+    expect(onConnect).toHaveBeenCalledWith({ kind: "personal", profileId: "l-1" }, "prod-api-01 · deploy");
   });
 
   it("explains an empty inventory and a failure to load", async () => {

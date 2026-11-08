@@ -897,6 +897,7 @@ async fn prompts_reject_wrong_kind_stale_duplicate_and_cross_attempt_responses()
 
 fn context() -> PreparationContext {
     PreparationContext {
+        source: None,
         profile_id: "login".into(),
         host_id: "host".into(),
         login: "fixture".into(),

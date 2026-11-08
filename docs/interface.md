@@ -342,11 +342,55 @@ empty result, unavailable membership, a failed refresh and an unconfirmed server
 have distinct messages. Only Rust's complete current projection renders rows; a stale or partial
 view hides them. The dialog reads local state every two seconds while open; its independent
 native owner refreshes previously viewed teams at least every 60 seconds and on relevant hints.
-Refresh assets starts a new complete pull; Close returns focus to its original button. This
-read-only view has no Connect action until the team certificate and SSH path is implemented.
+Refresh assets starts a new complete pull; Close returns focus to its original button.
 `team_assets` performs only a local read; `refresh_team_assets` collects and verifies every page,
 atomically publishes and withdraws that team's rows, then acknowledges its exact revision.
 Personal inventory, keys and progress remain separate.
+
+Manage assets and Access rules replace the asset dialog with ordinary named editors for the seven
+inventory collections, local membership groups and policies. `team_authoring_page` loads a live
+authorized directory; `team_authoring_resource` captures the current complete fields and strong
+ETag before editing or deleting. References are loaded independently from the selected team, and
+unavailable identifiers do not reveal hidden fields. Server-owned trust attribution stays outside
+editable fields. Identity-provider groups can be inspected but cannot be changed here.
+
+Optional authoring fields accept omission or JSON null. Rust omits absent values from responses.
+Their Serde defaults are explicit so generated IPC input types preserve that behavior. Required
+fields remain required; regenerate bindings after changing these DTOs.
+
+`prepare_team_authoring` validates and encodes shared typed fields and saves one original create
+per team in SQLCipher. `submit_team_authoring` sends exactly that UUIDv7 operation and canonical
+body; `pending_team_authoring` is a local recovery read. Unknown results permit only explicit
+Confirm original request. Prepared and confirmed requests can be dismissed, while expired
+uncertainty requires a successful explicit collection refresh before Archive reviewed request.
+`update_team_authoring` and `delete_team_authoring` use only the captured If-Match. Conflict,
+malformed completion or an unknown invocation disables another edit until an explicit fresh read.
+
+Create access rule selects a Membership or local Group and one independent view or connect grant.
+`preview_team_simple_rule` invokes the shared generator. The read-only source and dependency notice
+are reviewed before the normal durable policy create; dependencies receive no implicit grant.
+The Advanced editor accepts one supported Cedar policy. Fields preserve their exact permitted text.
+
+SSH CA setup reads `team_ssh_operations` locally and fetches `team_user_ca` from the selected team.
+The returned public CA and native per-Login setup rows show exact Host/Login ids, SSH username,
+scoped principal and configuration files. The renderer does not construct principals or change
+the remote machine. An administrator's Create team user CA first calls `prepare_team_user_ca`,
+then `confirm_team_ssh_operation` for that original operation. Unknown setup or issuance offers
+explicit confirmation; expired requests require refresh and review before discard. Confirming a
+certificate neither renews it nor starts a session. Manual setup requires `sshd -t` before reload.
+
+Only currently visible Login rows offer Connect. Their typed Organization `SessionTarget` retains
+canonical origin, Account, Organization and Device; Personal targets are a separate variant.
+Direct, Jump and credential-free proxy paths reuse the native SSH transport. Organization Command
+preparation shows the selected source, program and expanded arguments and waits for one explicit
+approval before starting a local helper. Host-key review precedes certificate issuance and native
+authentication. The resulting session uses the existing terminal and Files/SFTP owners. Split,
+duplicate, reconnect, Recent and saved output keep the same source. The Personal Workspace save
+action refuses team terminals, and standalone team Tunnels selection remains incomplete.
+Membership invalidation withdraws only that team's preparation and cached certificates; already
+established unmanaged SSH sessions are not described as forcibly revoked. Real client-core HTTPS
+inventory and certificate-authenticated SSH/SFTP checks pass on SQLite and PostgreSQL. Native
+desktop interaction for these workflows remains unverified on Windows and macOS.
 
 ## Inventory (roadmap C3)
 

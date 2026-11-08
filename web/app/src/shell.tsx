@@ -12,6 +12,7 @@ import type {
   TerminalSnapshot,
   WorkspaceTree,
   WorkspaceTreeInput,
+  SessionTarget,
 } from "./ipc/bindings";
 import { Frame } from "./frame";
 import { HostsHome } from "./inventory/home";
@@ -27,12 +28,20 @@ import type { SnippetTarget } from "./session-snippets";
 
 type View = "hosts" | "settings";
 
-type OpenSession = { id: string; profileId: string; label: string; snapshot?: TerminalSnapshot; sessionId?: string };
+type OpenSession = {
+  id: string;
+  target: SessionTarget;
+  label: string;
+  snapshot?: TerminalSnapshot;
+  sessionId?: string;
+};
 
 function savedTree(node: TerminalLayoutNode, sessions: OpenSession[]): WorkspaceTreeInput {
   if (node.type === "pane") {
     const session = sessions.find((entry) => entry.id === node.paneId)!;
-    return session.snapshot ? { kind: "savedOutput" } : { kind: "terminal", profileId: session.profileId };
+    return session.snapshot || session.target.kind === "organization"
+      ? { kind: "savedOutput" }
+      : { kind: "terminal", profileId: session.target.profileId };
   }
   return {
     kind: "split",
@@ -48,7 +57,7 @@ function restoredTree(tree: WorkspaceTree, sessions: OpenSession[]): TerminalLay
     sessions.push({
       id: terminal.sessionId,
       sessionId: terminal.sessionId,
-      profileId: terminal.profileId,
+      target: { kind: "personal", profileId: terminal.profileId },
       label: terminal.label,
     });
     return { type: "pane", paneId: terminal.sessionId };
@@ -100,10 +109,10 @@ export function Shell({
   const [windowError, setWindowError] = useState(false);
   const [workspacesOpen, setWorkspacesOpen] = useState(false);
 
-  const openSession = (profileId: string, label: string) => {
+  const openSession = (target: SessionTarget, label: string) => {
     const id = `session-${crypto.randomUUID()}`;
     workspace.restoreTab({ id, title: label }, { type: "pane", paneId: id }, id);
-    setSessions((current) => [...current, { id, profileId, label }]);
+    setSessions((current) => [...current, { id, target, label }]);
     setActiveTab(id);
     setView("hosts");
   };
@@ -114,7 +123,7 @@ export function Shell({
     workspace.restoreTab({ id, title: target.hostName }, { type: "pane", paneId: id }, id);
     setSessions((current) => [
       ...current,
-      { id, profileId: target.profileId, label: `${target.hostName} · ${target.loginName}`, snapshot },
+      { id, target: target.target, label: `${target.hostName} · ${target.loginName}`, snapshot },
     ]);
     setActiveTab(id);
     setView("hosts");
@@ -145,7 +154,7 @@ export function Shell({
       return;
     const paneId = `pane-${crypto.randomUUID()}`;
     workspace.splitPane(id, direction, paneId);
-    setSessions((current) => [...current, { id: paneId, profileId: session.profileId, label: session.label }]);
+    setSessions((current) => [...current, { id: paneId, target: session.target, label: session.label }]);
     setFocusRequest({ id: paneId });
   };
 
@@ -228,11 +237,13 @@ export function Shell({
       const first = sessions.find((session) => session.id === ids[0]);
       const attention = ids
         .map((id) => states[id])
-        .find((state) => state && ["trusting", "passphrase", "keyboardInteractive", "failed"].includes(state));
+        .find(
+          (state) => state && ["command", "trusting", "passphrase", "keyboardInteractive", "failed"].includes(state),
+        );
       return {
         id: tab.id,
         label: first?.label ?? tab.title,
-        seed: first?.profileId,
+        seed: first?.target.profileId,
         state: attention ?? states[ids[0]!],
       };
     }),
@@ -263,11 +274,12 @@ export function Shell({
       }}
       onDuplicate={(id) => {
         const session = sessions.find((candidate) => candidate.id === paneOrder(layout.layouts[id]!)[0]);
-        if (session) openSession(session.profileId, session.label);
+        if (session) openSession(session.target, session.label);
       }}
     >
       {workspacesOpen ? (
         <WorkspacesDialog
+          teamSessions={sessions.some((session) => session.target.kind === "organization")}
           tabs={layout.tabs.map((tab) => ({
             tree: savedTree(layout.layouts[tab.id]!, sessions),
             focused: paneOrder(layout.layouts[tab.id]!).indexOf(layout.focusedPaneIds[tab.id]!),
@@ -298,7 +310,13 @@ export function Shell({
         </p>
       ) : null}
       {view === "settings" ? (
-        <SettingsView key={settingsSection} status={status} onStatus={onStatus} section={settingsSection} />
+        <SettingsView
+          key={settingsSection}
+          status={status}
+          onStatus={onStatus}
+          section={settingsSection}
+          onConnect={(target) => openSession(target, target.profileId)}
+        />
       ) : activeTab !== "hosts" ? null : (
         <InventoryContext.Provider value={inventory}>
           <ForwardsContext.Provider value={forwards}>
@@ -375,7 +393,7 @@ export function Shell({
                   }
                 >
                   <SessionTerminal
-                    profileId={session.profileId}
+                    target={session.target}
                     label={session.label}
                     active={view !== "settings" && session.id === layout.activePaneId}
                     savedOutput={session.snapshot}

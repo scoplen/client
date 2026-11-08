@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { AppearanceProvider } from "@scoplen/ui";
 import { I18nProvider } from "../src/i18n";
 import { Shell } from "../src/shell";
+import type { SessionTarget } from "../src/ipc/bindings";
 
 const native = vi.hoisted(() => ({
   handler: undefined as undefined | ((event: { preventDefault(): void }) => void),
@@ -21,8 +22,8 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 vi.mock("../src/inventory/home", () => ({
-  HostsHome: ({ onConnect }: { onConnect: (id: string, label: string) => void }) => (
-    <button onClick={() => onConnect("profile", "Fixture host")}>Start fixture</button>
+  HostsHome: ({ onConnect }: { onConnect: (target: SessionTarget, label: string) => void }) => (
+    <button onClick={() => onConnect({ kind: "personal", profileId: "profile" }, "Fixture host")}>Start fixture</button>
   ),
 }));
 vi.mock("../src/session", async () => {

@@ -11,6 +11,54 @@ fn store() -> (tempfile::TempDir, Arc<Store>) {
     (dir, Arc::new(store))
 }
 
+#[tokio::test]
+async fn personal_configuration_failure_keeps_its_accepted_attempt_in_history() {
+    let (_dir, store) = store();
+    let inventory = Inventory::new(store.clone());
+    let host = inventory
+        .add_host(NewHost {
+            name: Some("Personal host".into()),
+            address: "personal.example.test".into(),
+            port: None,
+            username: "ops".into(),
+            sign_in: SignIn::Agent,
+        })
+        .unwrap();
+    let manager = SessionManager::default();
+    manager.reserve("personal", false).unwrap();
+    let changes = Arc::new(Mutex::new(Vec::new()));
+    let history_changes = changes.clone();
+    let result = manager
+        .run(
+            "personal",
+            &host.logins[0].id,
+            Some("true"),
+            false,
+            store,
+            |event| {
+                assert!(matches!(
+                    event,
+                    SessionEvent::Starting { .. } | SessionEvent::Failed { .. }
+                ));
+                Ok(())
+            },
+            |_, _| panic!("an Agent without a selected public key cannot connect"),
+            move |id, change| history_changes.lock().unwrap().push((id.to_owned(), change)),
+        )
+        .await;
+    assert!(result.is_err());
+    let recent = inventory.recent_sessions().unwrap();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].outcome, Some(RecentSessionOutcome::Failed));
+    assert!(recent[0].ended_at.is_some());
+    let changes = changes.lock().unwrap();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[0].0, recent[0].id);
+    assert_eq!(changes[0].1, HistoryChange::Opened);
+    assert_eq!(changes[1].0, recent[0].id);
+    assert_eq!(changes[1].1, HistoryChange::Closed);
+}
+
 fn snapshot(data: &str) -> TerminalSnapshot {
     TerminalSnapshot { version: 1, columns: 80, rows: 24, data: data.into() }
 }

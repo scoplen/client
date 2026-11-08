@@ -35,6 +35,7 @@ import type { ObjectSection } from "./objects";
 import { useLoad, type Loaded } from "./use-load";
 import { TunnelsHome } from "./tunnels";
 import { ForwardsContext } from "../use-forwards";
+import type { SessionTarget } from "../ipc/bindings";
 
 type ManageSection = ObjectSection | "tunnels";
 
@@ -52,7 +53,7 @@ export function HostsHome({
 }: {
   /** Whether the logins, keys, and routes editors are offered. */
   manage?: boolean;
-  onConnect?: (profileId: Id, label: string) => void;
+  onConnect?: (target: SessionTarget, label: string) => void;
   onViewOutput?: (output: import("../ipc/bindings").SavedTerminalOutput) => void;
 } = {}) {
   const { t } = useI18n();
@@ -110,7 +111,7 @@ export function HostsHome({
     try {
       const outcome = await api.reconnectSession(sessionId);
       if (outcome.status === "ok") {
-        onConnect(outcome.data.profileId, `${outcome.data.hostName} · ${outcome.data.loginName}`);
+        onConnect(outcome.data.target, `${outcome.data.hostName} · ${outcome.data.loginName}`);
       } else {
         const message =
           outcome.error.kind === "failed"
@@ -142,7 +143,8 @@ export function HostsHome({
     const outcome = await api.host(host.id);
     if (outcome.status !== "ok" || !outcome.data) return;
     const login = outcome.data.logins.find((candidate) => candidate.isDefault) ?? outcome.data.logins[0];
-    if (login) onConnect?.(login.id, `${outcome.data.name} · ${login.name ?? login.username}`);
+    if (login)
+      onConnect?.({ kind: "personal", profileId: login.id }, `${outcome.data.name} · ${login.name ?? login.username}`);
   };
 
   const onListKeyDown = (event: KeyboardEvent) => {
@@ -339,7 +341,9 @@ export function HostsHome({
               groups={groupList}
               onClose={() => setSelected(null)}
               onDelete={(host) => setDeleting(host)}
-              onConnect={onConnect}
+              onConnect={
+                onConnect ? (profileId, label) => onConnect({ kind: "personal", profileId }, label) : undefined
+              }
             />
           ) : null}
         </>
@@ -612,35 +616,48 @@ function RecentSessionRow({
   const status = session.outcome === null ? "open" : session.outcome;
   const date = new Date(Number(session.startedAt));
   const formatted = Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+  const team = session.target.kind === "organization" ? session.target.source : null;
+  const content = (
+    <>
+      <span className="flex min-w-0 items-center justify-between gap-3">
+        <span className="truncate text-sm font-medium text-foreground">{session.hostName}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{t(`hosts.recentSessions.kind.${session.kind}`)}</span>
+      </span>
+      {team ? (
+        <span className="break-all text-xs text-muted-foreground">
+          {t("teams.title")} · {team.organizationId} · {team.origin}
+        </span>
+      ) : null}
+      <span className="flex min-w-0 items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span className="truncate font-mono">
+          {session.username ? `${session.username}@` : ""}
+          {session.address}
+          {session.port !== 22 ? `:${session.port}` : ""}
+        </span>
+        <span className={status === "failed" ? "shrink-0 text-attention" : "shrink-0"}>
+          {t(`hosts.recentSessions.${status}`)}
+        </span>
+      </span>
+      {formatted ? (
+        <time dateTime={date.toISOString()} className="text-xs text-muted-foreground">
+          {formatted}
+        </time>
+      ) : null}
+    </>
+  );
   return (
     <li className="group flex items-center rounded-md hover:bg-inset/60">
-      <button
-        type="button"
-        onClick={() => onSelect(session.hostId)}
-        className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-md px-3 py-2 text-left focus-visible:outline-offset-0"
-      >
-        <span className="flex min-w-0 items-center justify-between gap-3">
-          <span className="truncate text-sm font-medium text-foreground">{session.hostName}</span>
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {t(`hosts.recentSessions.kind.${session.kind}`)}
-          </span>
-        </span>
-        <span className="flex min-w-0 items-center justify-between gap-3 text-xs text-muted-foreground">
-          <span className="truncate font-mono">
-            {session.username ? `${session.username}@` : ""}
-            {session.address}
-            {session.port !== 22 ? `:${session.port}` : ""}
-          </span>
-          <span className={status === "failed" ? "shrink-0 text-attention" : "shrink-0"}>
-            {t(`hosts.recentSessions.${status}`)}
-          </span>
-        </span>
-        {formatted ? (
-          <time dateTime={date.toISOString()} className="text-xs text-muted-foreground">
-            {formatted}
-          </time>
-        ) : null}
-      </button>
+      {team ? (
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5 px-3 py-2">{content}</div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onSelect(session.hostId)}
+          className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-md px-3 py-2 text-left focus-visible:outline-offset-0"
+        >
+          {content}
+        </button>
+      )}
       {onViewOutput && session.kind === "terminal" && session.hasSavedOutput ? (
         <Button
           variant="ghost"

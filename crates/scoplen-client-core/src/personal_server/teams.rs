@@ -2,11 +2,19 @@
 //! Account-scoped team discovery, durable creation and conditional name updates.
 
 pub(super) mod assets;
+mod authoring;
 mod membership;
+mod ssh;
 pub use assets::{TeamAssetSummary, TeamAssetsPhase, TeamAssetsView};
+pub use authoring::*;
 pub use membership::{
     TeamInvitationPageView, TeamInvitationView, TeamMemberPageView, TeamMemberView,
     TeamOperationKind, TeamOperationView,
+};
+pub(crate) use ssh::TeamSshAuthority;
+pub use ssh::{
+    TeamSshCertificate, TeamSshError, TeamSshFailure, TeamSshHostSetup, TeamSshOperationKind,
+    TeamSshOperationView, TeamSshSource, TeamUserCaView,
 };
 
 use std::{fmt, sync::Arc};
@@ -204,6 +212,18 @@ pub enum TeamFailure {
     /// A complete view is saved, but its revision-bound acknowledgement is unconfirmed.
     #[error("Team assets are saved. Refresh to confirm their server acknowledgement.")]
     AssetsAcknowledgementUnknown,
+    /// The shared typed authoring codec rejected the visible form values.
+    #[error("Check the team asset or access-rule fields and try again.")]
+    InvalidAuthoringData,
+    /// A source-bound original create still needs confirmation or explicit completion.
+    #[error("Finish the retained team creation request before creating another resource.")]
+    AuthoringPending,
+    /// The original precondition or dependency changed and needs explicit review.
+    #[error("Refresh and review this resource and its references before saving again.")]
+    AuthoringConflict,
+    /// The mutation result cannot be confirmed; never silently substitute a new request.
+    #[error("The team change could not be confirmed. Review the current state before continuing.")]
+    AuthoringUnknown,
 }
 
 /// Safe flattened IPC errors, without arbitrary server text or diagnostics.

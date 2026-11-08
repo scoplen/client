@@ -28,6 +28,7 @@ import type {
   RegistrationView,
   ProfileSnapshot,
   PasswordSignInView,
+  SessionTarget,
 } from "../ipc/bindings";
 import { AccountProfilesBoundary } from "../account-profiles";
 import { CreatePassphraseScreen, UnlockScreen, UnreadableScreen } from "../local-data";
@@ -78,6 +79,7 @@ function previewChallenge(transportId: string, informational: boolean): SessionE
     event: {
       kind: "keyboardInteractive",
       context: {
+        source: null,
         profileId: "gallery-interactive",
         hostId: "gallery-api-01",
         login: "deploy",
@@ -114,6 +116,7 @@ mockIPC(
       username?: string;
       intent?: string;
       profileId?: string;
+      target?: SessionTarget;
       sessionId?: string;
       transportId?: string;
       promptId?: string;
@@ -194,7 +197,7 @@ mockIPC(
       const transportId = crypto.randomUUID();
       queueMicrotask(() => {
         payload.messages?.onmessage({ kind: "starting", transportId, automatic: false });
-        if (payload.profileId === "gallery-interactive" && payload.messages) {
+        if (payload.target?.profileId === "gallery-interactive" && payload.messages) {
           interactivePreview = { sessionId: payload.sessionId!, transportId, emit: payload.messages.onmessage };
           payload.messages.onmessage(previewChallenge(transportId, false));
         } else payload.messages?.onmessage({ kind: "ready", transportId });
@@ -417,7 +420,7 @@ function Screen({
         />
       ) : files ? (
         <SessionTerminal
-          profileId={screen === "interactive" ? "gallery-interactive" : "gallery-api-01"}
+          target={{ kind: "personal", profileId: screen === "interactive" ? "gallery-interactive" : "gallery-api-01" }}
           label="api-01"
           onClose={() => onSettings("hosts")}
           onStateChange={setFilesState}

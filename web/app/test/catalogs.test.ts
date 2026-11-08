@@ -7,6 +7,7 @@ import type { SessionState } from "../src/session";
 const sessionStates = {
   verifying: true,
   trusting: true,
+  command: true,
   passphrase: true,
   keyboardInteractive: true,
   connecting: true,
@@ -30,6 +31,7 @@ const sample = {
   line: 5,
   directive: "Include",
   name: "prod-db-01",
+  kind: "Host",
   roles: "Owner",
   query: "db",
   username: "deploy",

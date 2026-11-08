@@ -123,7 +123,8 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                             &prompt_id,
                             PreparationResponse::AcceptHostKey,
                         )?,
-                        PreparationEvent::Passphrase { .. }
+                        PreparationEvent::CommandExecution { .. }
+                        | PreparationEvent::Passphrase { .. }
                         | PreparationEvent::KeyboardInteractive { .. } => {
                             panic!("password fixture must not request a key passphrase")
                         }

@@ -7,26 +7,60 @@ import userEvent from "@testing-library/user-event";
 import { AppearanceProvider } from "@scoplen/ui";
 import type { ScoplenTerminalElement } from "@scoplen/terminal";
 import { I18nProvider } from "../src/i18n";
+import { Menus } from "../src/menus";
 import { Shell } from "../src/shell";
 import { TerminalColorsProvider } from "../src/terminal-colors";
 import { AccountProfilesBoundary } from "../src/account-profiles";
-import type { PreparationContext, PreparationEvent, SavedTerminalOutput, SessionEvent } from "../src/ipc/bindings";
+import type {
+  PreparationContext,
+  PreparationEvent,
+  SavedTerminalOutput,
+  SessionEvent,
+  SessionTarget,
+} from "../src/ipc/bindings";
 
 vi.mock("../src/inventory/home", () => ({
   HostsHome: ({
     onConnect,
     onViewOutput,
   }: {
-    onConnect: (id: string, label: string) => void;
+    onConnect: (target: SessionTarget, label: string) => void;
     onViewOutput: (output: SavedTerminalOutput) => void;
   }) => (
     <>
-      <button onClick={() => onConnect("login-first", "First host")}>Start first</button>
-      <button onClick={() => onConnect("login-second", "Second host")}>Start second</button>
+      <button onClick={() => onConnect({ kind: "personal", profileId: "login-first" }, "First host")}>
+        Start first
+      </button>
+      <button onClick={() => onConnect({ kind: "personal", profileId: "login-second" }, "Second host")}>
+        Start second
+      </button>
+      <button
+        onClick={() =>
+          onConnect(
+            {
+              kind: "organization",
+              profileId: "login-first",
+              source: {
+                origin: "https://team.example.test",
+                accountId: "account-one",
+                organizationId: "team-one",
+                deviceId: "device-one",
+              },
+            },
+            "Team host",
+          )
+        }
+      >
+        Start team
+      </button>
       <button
         onClick={() =>
           onViewOutput({
-            target: { profileId: "login-first", hostName: "Saved host", loginName: "ops" },
+            target: {
+              target: { kind: "personal", profileId: "login-first" },
+              hostName: "Saved host",
+              loginName: "ops",
+            },
             snapshot: { version: 1, columns: 80, rows: 24, data: "offline output" },
           })
         }
@@ -84,7 +118,11 @@ function fixture() {
         return { generation: "1", selected: null, accounts: [], retainedProfile: false };
       if (command === "session_connect") {
         const finish = deferred<null>();
-        connections.push({ ...(payload as unknown as (typeof connections)[number]), finish });
+        connections.push({
+          ...(payload as unknown as (typeof connections)[number]),
+          profileId: (payload.target as SessionTarget).profileId,
+          finish,
+        });
         return finish.promise;
       }
       if (command === "session_stop_reconnecting") {
@@ -161,7 +199,7 @@ function shell(locale: "en" | "zh-Hans" = "en", profiles = false) {
     <AppearanceProvider>
       <TerminalColorsProvider>
         <I18nProvider locale={locale}>
-          {profiles ? <AccountProfilesBoundary>{content}</AccountProfilesBoundary> : content}
+          <Menus>{profiles ? <AccountProfilesBoundary>{content}</AccountProfilesBoundary> : content}</Menus>
         </I18nProvider>
       </TerminalColorsProvider>
     </AppearanceProvider>,
@@ -208,6 +246,32 @@ async function focusPane(button: "Previous pane" | "Next pane", terminal: Scople
   await waitFor(() => expect(document.activeElement).toBe(terminal));
 }
 
+it("preserves the complete team source when splitting and opening another session", async () => {
+  const f = fixture();
+  shell();
+  await userEvent.click(screen.getByRole("button", { name: "Start team" }));
+  await connect(f, 0);
+  await userEvent.click(screen.getByRole("button", { name: "Split right" }));
+  await connect(f, 1);
+  fireEvent.contextMenu(screen.getByRole("tab", { name: /Team host/ }), { clientX: 10, clientY: 10 });
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Open another session" }));
+  await connect(f, 2);
+  const targets = f.matching("session_connect").map((call) => call.args.target);
+  expect(targets).toEqual(
+    Array.from({ length: 3 }, () => ({
+      kind: "organization",
+      profileId: "login-first",
+      source: {
+        origin: "https://team.example.test",
+        accountId: "account-one",
+        organizationId: "team-one",
+        deviceId: "device-one",
+      },
+    })),
+  );
+  expect(new Set(f.connections.map((connection) => connection.sessionId)).size).toBe(3);
+});
+
 it("splits into independent ordinary sessions while preserving surviving terminals through focus, tabs and collapse", async () => {
   const f = fixture();
   const view = shell();
@@ -222,8 +286,18 @@ it("splits into independent ordinary sessions while preserving surviving termina
   expect(panes(view.container)[0]!.terminal).toBe(original.terminal);
   expect(f.matching("session_reserve_transport")).toHaveLength(2);
   expect(f.matching("session_connect").map((call) => call.args)).toEqual([
-    expect.objectContaining({ profileId: "login-first", sessionId: first.sessionId, command: null, pty: true }),
-    expect.objectContaining({ profileId: "login-first", sessionId: second.sessionId, command: null, pty: true }),
+    expect.objectContaining({
+      target: { kind: "personal", profileId: "login-first" },
+      sessionId: first.sessionId,
+      command: null,
+      pty: true,
+    }),
+    expect.objectContaining({
+      target: { kind: "personal", profileId: "login-first" },
+      sessionId: second.sessionId,
+      command: null,
+      pty: true,
+    }),
   ]);
   expect(second.sessionId).not.toBe(first.sessionId);
   expect(first.transportId).not.toBe(second.transportId);
@@ -301,6 +375,7 @@ it("keeps several pending preparations separate and shows only the selected pane
   await userEvent.click(screen.getAllByRole("button", { name: "Split below" })[1]!);
   const third = await connect(f, 2, false);
   const context: PreparationContext = {
+    source: null,
     profileId: "login-first",
     hostId: "host-first",
     host: "First host",
@@ -493,6 +568,7 @@ it("selects ready same-Login sibling panes and another tab without opening conne
       kind: "progress",
       phase: "authenticating",
       context: {
+        source: null,
         profileId: connection.profileId,
         hostId: `host-${connection.profileId}`,
         host,
@@ -718,7 +794,7 @@ it("saves complete active and inactive trees and focus, then explicitly opens th
     ids.map((sessionId, index) =>
       expect.objectContaining({
         sessionId,
-        profileId: index < 3 ? "login-first" : "login-second",
+        target: { kind: "personal", profileId: index < 3 ? "login-first" : "login-second" },
         pty: true,
         command: null,
       }),

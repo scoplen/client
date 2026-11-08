@@ -6,7 +6,7 @@
 // returned as typed. Nothing here carries a secret back to the interface.
 
 import { createContext, useContext } from "react";
-import type { SavedTerminalOutput, SavedOutputError } from "../ipc/bindings";
+import type { SavedTerminalOutput, SavedOutputError, SessionTarget } from "../ipc/bindings";
 
 export type Id = string;
 
@@ -81,6 +81,7 @@ export type SessionError =
 
 /** A redacted device-local session entry, newest first. */
 export interface RecentSession {
+  target: SessionTarget;
   id: Id;
   hostId: Id;
   hostName: string;
@@ -97,7 +98,7 @@ export interface RecentSession {
 
 /** A current, display-safe login resolved from an ended terminal session. */
 export interface ReconnectTarget {
-  profileId: Id;
+  target: SessionTarget;
   hostName: string;
   loginName: string;
 }

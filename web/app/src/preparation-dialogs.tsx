@@ -325,6 +325,13 @@ export function HopIdentity({ context }: { context: PreparationContext }) {
     : `${context.address}:${context.port}`;
   return (
     <div className="mb-4 min-w-0 space-y-1 text-sm">
+      {context.source ? (
+        <p className="m-0 break-all text-xs text-muted-foreground">
+          {t("teams.title")} · {context.source.organizationId}
+          <br />
+          {context.source.origin}
+        </p>
+      ) : null}
       <p className="m-0 text-muted-foreground">
         {context.target ? t("session.route.target") : t("session.route.hop")} · {context.position} / {context.total}
       </p>
