@@ -24,6 +24,8 @@ import type {
   NewHost,
   ObjectEditError,
   Outcome,
+  OpenSshExportEntry,
+  OpenSshExportSkipped,
   RecentSession,
   RouteDefinition,
   RouteInput,
@@ -1148,6 +1150,56 @@ export function sampleInventory(
         }),
       );
     },
+    previewOpenSshExport: (choices = []) => {
+      const entries: OpenSshExportEntry[] = [];
+      const skipped: OpenSshExportSkipped[] = [];
+      for (const host of hosts) {
+        const logins = profileRows().filter((profile) => profile.host === host.id);
+        if (!logins.length)
+          skipped.push({
+            hostId: host.id,
+            profileId: null,
+            hostName: host.name,
+            loginName: null,
+            reason: "missingLogin",
+          });
+        for (const login of logins) {
+          const row = { hostId: host.id, profileId: login.id, hostName: host.name, loginName: login.name };
+          const choice = choices.find((choice) => choice.profileId === login.id);
+          if (login.route.kind !== "direct") {
+            skipped.push({ ...row, reason: "unsupportedRoute" });
+          } else if (login.credential?.kind === "key" && !choice) {
+            skipped.push({ ...row, reason: "identityFileRequired" });
+          } else if (!login.credential || !["key", "password", "agent"].includes(login.credential.kind)) {
+            skipped.push({ ...row, reason: "unsupportedCredential" });
+          } else {
+            entries.push({
+              ...row,
+              loginName: login.name ?? login.username,
+              alias: `scoplen-${login.id}`,
+              address: host.address,
+              port: host.port,
+              username: login.username,
+              authentication:
+                login.credential.kind === "key" ? "identityFile" : (login.credential.kind as "password" | "agent"),
+              identityFile: choice?.identityFile ?? null,
+              route: { kind: "direct" },
+            });
+          }
+        }
+      }
+      return wait(ok({ revision: "sample-export", choices, entries, skipped, trustRecords: entries.length ? 1 : 0 }));
+    },
+    exportOpenSshConfig: (preview) =>
+      preview.entries.length
+        ? wait(
+            ok({
+              directory: "/Users/mia/Exports/scoplen-openssh-1730000000000",
+              hosts: preview.entries.length,
+              files: 2,
+            }),
+          )
+        : wait({ status: "error" as const, error: { kind: "empty" as const } }),
     onChange: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

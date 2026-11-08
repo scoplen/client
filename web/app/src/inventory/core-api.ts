@@ -28,6 +28,7 @@ import {
   type OpenSshImportError as IpcOpenSshImportError,
   type OpenSshImportPreview as IpcOpenSshImportPreview,
   type OpenSshImportResult as IpcOpenSshImportResult,
+  type OpenSshExportPreview as IpcOpenSshExportPreview,
   type ObjectEditError as IpcObjectEditError,
   type RouteInput as IpcRouteInput,
   type RouteSummary as IpcRouteSummary,
@@ -58,6 +59,7 @@ import type {
   OpenSshImportChoice,
   OpenSshImportPreview,
   OpenSshImportResult,
+  OpenSshExportChoice,
   ObjectEditError,
   Outcome,
   RecentSession,
@@ -265,6 +267,10 @@ export function createInventoryApi(commands = applicationCommands, profileGenera
           IpcOpenSshImportError
         >,
       ) as Outcome<OpenSshImportResult, OpenSshImportError>,
+    previewOpenSshExport: async (choices?: OpenSshExportChoice[]) =>
+      outcome(await commands.inventoryPreviewOpenSshExport(choices ?? null)),
+    exportOpenSshConfig: async (preview, locale) =>
+      outcome(await commands.inventoryExportOpenSshConfig(preview as IpcOpenSshExportPreview, locale)),
     onChange: (listener) => {
       let stopped = false;
       const unlisteners: (() => void | Promise<void>)[] = [];

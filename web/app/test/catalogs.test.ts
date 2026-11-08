@@ -32,6 +32,7 @@ const sample = {
   updated: 1,
   unchanged: 0,
   trust: 2,
+  files: 3,
   alias: "deployment",
   hops: "jump-a → jump-b",
   command: "ssh -W %h:%p jump",

@@ -6,7 +6,7 @@
 // returned as typed. Nothing here carries a secret back to the interface.
 
 import { createContext, useContext } from "react";
-import type { SavedTerminalOutput, SavedOutputError, SessionTarget } from "../ipc/bindings";
+import type { Locale, SavedTerminalOutput, SavedOutputError, SessionTarget } from "../ipc/bindings";
 
 export type Id = string;
 
@@ -395,6 +395,67 @@ export type OpenSshImportError =
   | { kind: "identityNotFound"; path: string }
   | { kind: "failed"; reference: string };
 
+export interface OpenSshExportChoice {
+  profileId: Id;
+  identityFile: string;
+}
+
+export interface OpenSshExportEntry {
+  hostId: Id;
+  profileId: Id;
+  alias: string;
+  hostName: string;
+  loginName: string;
+  address: string;
+  port: number;
+  username: string;
+  authentication: "password" | "agent" | "identityFile";
+  identityFile: string | null;
+  route: OpenSshImportEntry["route"];
+}
+
+export type OpenSshExportSkipReason =
+  | "missingLogin"
+  | "unavailableCredential"
+  | "identityFileRequired"
+  | "identityFileMismatch"
+  | "unsupportedCredential"
+  | "unsupportedRoute"
+  | "routeDependency"
+  | "unsupportedOptions"
+  | "invalidValue";
+
+export interface OpenSshExportSkipped {
+  hostId: Id;
+  profileId: Id | null;
+  hostName: string;
+  loginName: string | null;
+  reason: OpenSshExportSkipReason;
+}
+
+export interface OpenSshExportPreview {
+  revision: string;
+  choices: OpenSshExportChoice[];
+  entries: OpenSshExportEntry[];
+  skipped: OpenSshExportSkipped[];
+  trustRecords: number;
+}
+
+export interface OpenSshExportResult {
+  directory: string;
+  hosts: number;
+  files: number;
+}
+
+export type OpenSshExportError =
+  | { kind: "empty" }
+  | { kind: "inventoryChanged" }
+  | { kind: "sourceChanged" }
+  | { kind: "invalidSelection" }
+  | { kind: "destinationExists" }
+  | { kind: "writeFailed"; directory: string | null }
+  | { kind: "contextChanged" };
+
 export type Outcome<T, E> = { status: "ok"; data: T } | { status: "error"; error: E };
 
 /** A failure the user can only retry; nothing changed. */
@@ -460,6 +521,11 @@ export interface InventoryApi {
     choices?: OpenSshImportChoice[],
   ): Promise<Outcome<OpenSshImportPreview, OpenSshImportError>>;
   importOpenSshConfig(preview: OpenSshImportPreview): Promise<Outcome<OpenSshImportResult, OpenSshImportError>>;
+  previewOpenSshExport(choices?: OpenSshExportChoice[]): Promise<Outcome<OpenSshExportPreview, OpenSshExportError>>;
+  exportOpenSshConfig(
+    preview: OpenSshExportPreview,
+    locale: Locale,
+  ): Promise<Outcome<OpenSshExportResult | null, OpenSshExportError>>;
   /** Calls `listener` after any change to the inventory; returns a function that stops it. */
   onChange(listener: () => void): () => void;
 }

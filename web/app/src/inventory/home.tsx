@@ -23,10 +23,12 @@ import {
   type HostSummary,
   type Id,
   type OpenSshImportPreview,
+  type OpenSshExportPreview,
   type RecentSession,
 } from "./api";
 import { HostDetailsPanel } from "./host-details";
 import { OpenSshImportDialog, openSshImportErrorText } from "./openssh-import";
+import { OpenSshExportDialog, openSshExportErrorText } from "./openssh-export";
 import { InventoryObjects } from "./objects";
 import { routeText } from "./labels";
 import type { ObjectSection } from "./objects";
@@ -67,6 +69,8 @@ export function HostsHome({
   const [reconnectBusy, setReconnectBusy] = useState<Id | null>(null);
   const [importPreview, setImportPreview] = useState<OpenSshImportPreview | null>(null);
   const [importBusy, setImportBusy] = useState(false);
+  const [exportPreview, setExportPreview] = useState<OpenSshExportPreview | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
   const search = useRef<HTMLInputElement>(null);
 
   const sourceKey = source.kind === "group" ? `group:${source.id}` : source.kind;
@@ -170,6 +174,20 @@ export function HostsHome({
     }
   };
 
+  const previewOpenSshExport = async () => {
+    if (exportBusy) return;
+    setExportBusy(true);
+    try {
+      const result = await api.previewOpenSshExport();
+      if (result.status === "ok") setExportPreview(result.data);
+      else setToast({ message: openSshExportErrorText(t, result.error) });
+    } catch {
+      setToast({ message: t("export.error.preview") });
+    } finally {
+      setExportBusy(false);
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col md:flex-row" onKeyDown={onListKeyDown}>
       <Sidebar
@@ -224,6 +242,9 @@ export function HostsHome({
                   {t("hosts.importOpenSsh")}
                 </Button>
               ) : null}
+              <Button variant="ghost" busy={exportBusy} onClick={() => void previewOpenSshExport()}>
+                {t("hosts.exportOpenSsh")}
+              </Button>
               <Button variant="primary" onClick={() => setAdding(true)} className="gap-1.5 pl-3">
                 <Plus aria-hidden="true" className="size-4" />
                 {t("hosts.add")}
@@ -352,6 +373,8 @@ export function HostsHome({
           }}
         />
       ) : null}
+
+      {exportPreview ? <OpenSshExportDialog initial={exportPreview} onClose={() => setExportPreview(null)} /> : null}
 
       {toast ? (
         <Notice
