@@ -133,7 +133,11 @@ pub(super) fn prepare(
             let id = Uuid::parse_str(&id).map_err(|_| {
                 OpenSshImportError::CredentialUnavailable { alias: host.row.alias.clone() }
             })?;
-            if !eligible.iter().any(|credential| credential.id == id.to_string()) {
+            if !eligible.iter().any(|credential| credential.id == id.to_string())
+                || !records.iter().any(|credential| {
+                    credential.meta.id == id && auth_matches(host, credential.kind)
+                })
+            {
                 return Err(OpenSshImportError::CredentialUnavailable {
                     alias: host.row.alias.clone(),
                 });
@@ -141,7 +145,9 @@ pub(super) fn prepare(
             host.row.credential_id = Some(id.to_string());
             credentials.push(id);
         } else if let Some(file) = choice.and_then(|choice| choice.identity_file.clone()) {
-            if !host.row.identity_files.contains(&file) {
+            if !host.row.identity_files.contains(&file)
+                || host.required_auth == Some(parse::RequiredAuth::Password)
+            {
                 return Err(OpenSshImportError::IdentityNotFound { path: file });
             }
             host.row.identity_file = Some(file);
@@ -156,6 +162,9 @@ pub(super) fn prepare(
             });
             let external = previous.filter(|id| {
                 eligible.iter().any(|credential| credential.id == id.to_string())
+                    && records.iter().any(|credential| {
+                        credential.meta.id == *id && auth_matches(host, credential.kind)
+                    })
                     && !initial
                         .mappings
                         .iter()
@@ -172,7 +181,8 @@ pub(super) fn prepare(
         }
         if choice.is_none()
             && host.row.identity_file.as_deref().is_some_and(|file| {
-                identity_material(&mut parsed.sources, file, &host.row.alias).is_err()
+                identity_material(&mut parsed.sources, file, &host.row.alias, host.allow_agent)
+                    .is_err()
             })
         {
             host.row.identity_file = None;
@@ -203,7 +213,8 @@ pub(super) fn prepare(
         let profile_id = builder.id(&profile_key, ObjectType::ACCESS_PROFILE)?;
         let created = !builder.snapshot.objects.get(&host_id).is_some_and(|o| !o.is_tombstoned());
         let (credential, mut changed) = if let Some(file) = host.row.identity_file.as_deref() {
-            let (material, public) = identity_material(&mut parsed.sources, file, alias)?;
+            let (material, public) =
+                identity_material(&mut parsed.sources, file, alias, host.allow_agent)?;
             let (kind, binding, secret) = match material {
                 CredentialMaterial::PrivateKey(secret) => {
                     (CredentialKind::PrivateKey, CredentialBinding::Shared, Some(secret))
@@ -378,6 +389,7 @@ fn identity_material(
     sources: &mut parse::Sources,
     file: &str,
     alias: &str,
+    allow_agent: bool,
 ) -> Result<(CredentialMaterial, String), OpenSshImportError> {
     let bytes = Zeroizing::new(
         sources
@@ -400,6 +412,9 @@ fn identity_material(
         private_key_passphrase_required(&material).map_err(|_| unavailable())?;
         Ok((material, private.public_key().to_openssh().map_err(|_| unavailable())?))
     } else {
+        if !allow_agent {
+            return Err(unavailable());
+        }
         let public = ssh_key::PublicKey::from_openssh(
             std::str::from_utf8(&bytes).map_err(|_| unavailable())?,
         )
@@ -417,6 +432,19 @@ fn usable(store: &Store, credential: &Credential) -> bool {
             && validate_credential(&material).is_ok()
             && private_key_passphrase_required(&material).is_ok()
     })
+}
+
+fn auth_matches(host: &parse::Host, kind: CredentialKind) -> bool {
+    if !host.allow_agent && kind == CredentialKind::Agent {
+        return false;
+    }
+    match host.required_auth {
+        None => true,
+        Some(parse::RequiredAuth::Password) => kind == CredentialKind::Password,
+        Some(parse::RequiredAuth::PublicKey) => {
+            matches!(kind, CredentialKind::PrivateKey | CredentialKind::Agent)
+        }
+    }
 }
 
 fn field(number: u64) -> FieldPath {

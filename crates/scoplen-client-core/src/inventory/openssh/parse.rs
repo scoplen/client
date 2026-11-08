@@ -101,7 +101,16 @@ pub(super) struct Host {
     pub row: OpenSshImportEntry,
     pub keys: Vec<PathBuf>,
     pub trust: BTreeMap<String, PublicKey>,
+    pub required_auth: Option<RequiredAuth>,
+    pub allow_agent: bool,
+    host_key_alias: Option<String>,
     known_files: Vec<PathBuf>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RequiredAuth {
+    Password,
+    PublicKey,
 }
 
 pub(super) struct Parsed {
@@ -197,7 +206,9 @@ pub(super) fn read(path: &str) -> Result<Parsed, OpenSshImportError> {
                     unsupported.push(diagnostic());
                     continue;
                 }
-                let endpoint = if host.row.port == 22 {
+                let endpoint = if let Some(alias) = &host.host_key_alias {
+                    alias.clone()
+                } else if host.row.port == 22 {
                     host.row.address.clone()
                 } else {
                     format!("[{}]:{}", host.row.address, host.row.port)
@@ -293,6 +304,10 @@ fn read_config(
                 | "proxyjump"
                 | "proxycommand"
                 | "userknownhostsfile"
+                | "preferredauthentications"
+                | "identitiesonly"
+                | "identityagent"
+                | "hostkeyalias"
         ) || node.keyword == "proxycommand"
             && node.value != "none"
             && !proxy_command_supported(&node.value, "example", 22, "user")
@@ -349,6 +364,28 @@ fn evaluate(
         single("hostname").unwrap_or_else(|| alias.into()).replace("%h", alias).replace("%%", "%");
     let username = single("user").unwrap_or_else(|| sources.user.clone());
     let invalid = |directive: &str| OpenSshSkipReason::InvalidValue { directive: directive.into() };
+    let required_auth = match single("preferredauthentications").as_deref() {
+        None => None,
+        Some("password") => Some(RequiredAuth::Password),
+        Some("publickey") => Some(RequiredAuth::PublicKey),
+        _ => return Err(invalid("PreferredAuthentications")),
+    };
+    if single("identitiesonly").is_some_and(|value| value != "yes") {
+        return Err(invalid("IdentitiesOnly"));
+    }
+    let allow_agent = match single("identityagent").as_deref() {
+        None => true,
+        Some("none") => false,
+        _ => return Err(invalid("IdentityAgent")),
+    };
+    let host_key_alias = single("hostkeyalias");
+    if host_key_alias.as_ref().is_some_and(|value| {
+        value.is_empty()
+            || value.chars().any(|c| c.is_whitespace() || c.is_control())
+            || value.contains(['%', '$', '*', '?', '!', ',', '[', ']'])
+    }) {
+        return Err(invalid("HostKeyAlias"));
+    }
     if address.is_empty() || address.contains('%') || address.chars().any(char::is_whitespace) {
         return Err(invalid("HostName"));
     }
@@ -380,7 +417,9 @@ fn evaluate(
     } else {
         OpenSshImportRoute::Direct
     };
-    if identities.is_empty() {
+    if required_auth == Some(RequiredAuth::Password) {
+        identities.clear();
+    } else if identities.is_empty() {
         identities = ["id_ed25519", "id_ecdsa", "id_rsa"]
             .iter()
             .map(|name| format!("~/.ssh/{name}"))
@@ -430,6 +469,9 @@ fn evaluate(
         },
         keys,
         trust: BTreeMap::new(),
+        required_auth,
+        allow_agent,
+        host_key_alias,
         known_files,
     })
 }
@@ -472,7 +514,14 @@ fn evaluate_nodes(
                     identities.push(node.words[0].clone());
                 }
             }
-            "hostname" | "user" | "port" | "userknownhostsfile" => {
+            "hostname"
+            | "user"
+            | "port"
+            | "userknownhostsfile"
+            | "preferredauthentications"
+            | "identitiesonly"
+            | "identityagent"
+            | "hostkeyalias" => {
                 if node.words.is_empty()
                     || node.keyword != "userknownhostsfile" && node.words.len() != 1
                 {
