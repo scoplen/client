@@ -436,6 +436,7 @@ export function sampleInventory(
   }));
   let objectForwards = sampleForwardSeeds.map((forward) => ({ ...forward }));
   let sessionSequence = 0;
+  const importedAliases = new Map<string, Id>();
   const deleted = new Map<string, HostDetails>();
   const listeners = new Set<() => void>();
   const changed = () => listeners.forEach((l) => l());
@@ -1062,38 +1063,86 @@ export function sampleInventory(
     },
     chooseKeyFile: () => wait("/Users/mia/.ssh/id_ed25519"),
     chooseOpenSshConfig: () => wait("/Users/mia/.ssh/config"),
-    previewOpenSshConfig: (path) =>
-      wait(
+    previewOpenSshConfig: (path, choices = []) => {
+      const choice = choices.find((entry) => entry.alias === "prod-api");
+      return wait(
         ok({
           path,
+          choices,
+          sourceRevision: "sample-source",
+          inventoryRevision: String(hosts.length),
+          files: 2,
+          eligibleCredentials: [laptopKey, nasPassword].map(({ id, name, kind }) => ({ id, name, kind })),
           entries: [
-            { alias: "prod-api", address: "prod.example.com", port: 22, username: "deploy", identityFile: null },
+            {
+              alias: "prod-api",
+              address: "prod.example.com",
+              port: 22,
+              username: "deploy",
+              sourceFile: path,
+              line: 2,
+              identityFile: choice?.credentialId ? null : (choice?.identityFile ?? "/Users/mia/.ssh/id_ed25519"),
+              identityFiles: ["/Users/mia/.ssh/id_ed25519"],
+              credentialId: choice?.credentialId ?? null,
+              needsCredential: false,
+              route: { kind: "direct" as const },
+              trustRecords: 1,
+              action: importedAliases.has(path + "::prod-api") ? ("unchanged" as const) : ("create" as const),
+            },
           ],
           skippedHosts: [
-            { alias: "legacy", line: 5, reason: { kind: "unsupportedDirective", directive: "ForwardAgent" } },
+            {
+              alias: "legacy",
+              sourceFile: path,
+              line: 5,
+              reason: { kind: "unsupportedDirective" as const, directive: "ForwardAgent" },
+            },
           ],
-          unsupported: [{ line: 7, directive: "ForwardAgent" }],
+          unsupported: [{ sourceFile: path, line: 7, directive: "ForwardAgent" }],
         }),
-      ),
+      );
+    },
     importOpenSshConfig: (preview) => {
-      if (hosts.length > 0) return wait({ status: "error" as const, error: { kind: "inventoryNotEmpty" as const } });
       if (preview.entries.length === 0) return wait({ status: "error" as const, error: { kind: "noHosts" as const } });
-      const imported = host({
-        id: `h-${Date.now()}`,
-        name: "prod-api",
-        address: "prod.example.com",
-        port: 22,
-        favorite: false,
-        tags: {},
-        groups: [],
-        notes: null,
-        logins: [login(`l-${Date.now()}`, "deploy", agent, { kind: "direct" })],
+      if (preview.entries.some((entry) => entry.needsCredential))
+        return wait({ status: "error" as const, error: { kind: "credentialsRequired" as const } });
+      const imported = preview.entries.map((entry) => {
+        const key = preview.path + "::" + entry.alias;
+        const id = importedAliases.get(key) ?? `import-${entry.alias}`;
+        const existing = hosts.find((item) => item.id === id);
+        const credential = entry.credentialId
+          ? credentialLabelForSummary(objectCredentials.find((item) => item.id === entry.credentialId))
+          : laptopKey;
+        const current = host({
+          id,
+          name: entry.alias,
+          address: entry.address,
+          port: entry.port,
+          favorite: existing?.favorite ?? false,
+          tags: existing?.tags ?? {},
+          groups: [],
+          notes: null,
+          logins: [
+            login(
+              `login-${id}`,
+              entry.username,
+              credential,
+              entry.route.kind === "direct" ? { kind: "direct" } : { kind: entry.route.kind, name: entry.alias },
+            ),
+          ],
+        });
+        importedAliases.set(key, id);
+        hosts = [...hosts.filter((item) => item.id !== id), current];
+        return current;
       });
-      hosts = [imported];
       changed();
       return wait(
         ok({
-          hosts: [imported],
+          hosts: imported,
+          created: preview.entries.filter((entry) => entry.action === "create").length,
+          updated: preview.entries.filter((entry) => entry.action === "update").length,
+          unchanged: preview.entries.filter((entry) => entry.action === "unchanged").length,
+          trustRecords: preview.entries.reduce((count, entry) => count + entry.trustRecords, 0),
           skippedHosts: preview.skippedHosts,
           unsupported: preview.unsupported,
         }),

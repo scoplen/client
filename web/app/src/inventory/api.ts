@@ -326,9 +326,24 @@ export interface OpenSshImportEntry {
   port: number;
   username: string;
   identityFile: string | null;
+  identityFiles: string[];
+  credentialId: Id | null;
+  needsCredential: boolean;
+  sourceFile: string;
+  line: number;
+  action: "create" | "update" | "unchanged";
+  route: { kind: "direct" } | { kind: "jump"; hops: string[] } | { kind: "command"; command: string };
+  trustRecords: number;
+}
+
+export interface OpenSshImportChoice {
+  alias: string;
+  identityFile: string | null;
+  credentialId: Id | null;
 }
 
 export interface OpenSshUnsupportedDirective {
+  sourceFile: string;
   line: number;
   directive: string;
 }
@@ -336,17 +351,23 @@ export interface OpenSshUnsupportedDirective {
 export type OpenSshSkipReason =
   | { kind: "unsupportedDirective"; directive: string }
   | { kind: "globalRules"; directive: string }
-  | { kind: "duplicateAlias" }
+  | { kind: "routeDependency"; alias: string }
   | { kind: "invalidValue"; directive: string };
 
 export interface OpenSshSkippedHost {
   alias: string;
+  sourceFile: string;
   line: number;
   reason: OpenSshSkipReason;
 }
 
 export interface OpenSshImportPreview {
   path: string;
+  choices: OpenSshImportChoice[];
+  sourceRevision: string;
+  inventoryRevision: string;
+  files: number;
+  eligibleCredentials: { id: Id; name: string | null; kind: CredentialKindInput }[];
   entries: OpenSshImportEntry[];
   skippedHosts: OpenSshSkippedHost[];
   unsupported: OpenSshUnsupportedDirective[];
@@ -354,6 +375,10 @@ export interface OpenSshImportPreview {
 
 export interface OpenSshImportResult {
   hosts: HostDetails[];
+  created: number;
+  updated: number;
+  unchanged: number;
+  trustRecords: number;
   skippedHosts: OpenSshSkippedHost[];
   unsupported: OpenSshUnsupportedDirective[];
 }
@@ -364,7 +389,9 @@ export type OpenSshImportError =
   | { kind: "tooLarge" }
   | { kind: "sourceChanged" }
   | { kind: "noHosts" }
-  | { kind: "inventoryNotEmpty" }
+  | { kind: "inventoryChanged" }
+  | { kind: "credentialsRequired" }
+  | { kind: "credentialUnavailable"; alias: string }
   | { kind: "identityNotFound"; path: string }
   | { kind: "failed"; reference: string };
 
@@ -428,7 +455,10 @@ export interface InventoryApi {
   /** Asks the system for a private key file; null when the user cancels. */
   chooseKeyFile(): Promise<string | null>;
   chooseOpenSshConfig(): Promise<string | null>;
-  previewOpenSshConfig(path: string): Promise<Outcome<OpenSshImportPreview, OpenSshImportError>>;
+  previewOpenSshConfig(
+    path: string,
+    choices?: OpenSshImportChoice[],
+  ): Promise<Outcome<OpenSshImportPreview, OpenSshImportError>>;
   importOpenSshConfig(preview: OpenSshImportPreview): Promise<Outcome<OpenSshImportResult, OpenSshImportError>>;
   /** Calls `listener` after any change to the inventory; returns a function that stops it. */
   onChange(listener: () => void): () => void;

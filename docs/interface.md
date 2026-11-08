@@ -413,9 +413,9 @@ Contract: `web/app/src/inventory/api.ts` (`InventoryApi`). Screens: `inventory/h
 | `deleteHost(id)` | Deletes the host, its logins, and unnamed credentials no other login uses, and returns a token. |
 | `undoDelete(token)` | Restores everything that deletion removed, for as long as the store keeps the tombstones. |
 | `chooseKeyFile()` | Opens the system file picker starting in `~/.ssh`, returns the path or `null`. |
-| `chooseOpenSshConfig()` | Opens a native picker for an OpenSSH config file, starting in `~/.ssh`; returns the path or `null` when canceled. The entry point is offered on the empty host list. |
-| `previewOpenSshConfig(path)` | Reads at most 1 MiB of UTF-8 text and returns the selected path, importable literal hosts, skipped hosts with reasons, and every unsupported directive with its source line. It does not write to the store or source file. The review dialog lists the complete report and disables Import when no host is representable. |
-| `importOpenSshConfig(preview)` | Available only while the host inventory is empty. Re-reads the source and rejects a changed preview, validates every host and identity file, then writes all importable hosts as one transaction. It returns imported hosts and the skip report; on an expected error, nothing is written. The source file is never modified. |
+| `chooseOpenSshConfig()` | Opens a native picker for an OpenSSH config file, starting in `~/.ssh`; returns the path or `null` when canceled. The entry point is offered on both empty and existing host lists. |
+| `previewOpenSshConfig(path, choices?)` | Reads the config and supported included sources, returning source and inventory revisions, file count, create/update/unchanged entries, ordered Jump or literal Command routes, identity choices, trust counts, skipped hosts, and unsupported directives with source paths and lines. Rust supplies the redacted eligible credential list. An identity selection sends the complete choice list for a fresh preview; the interface cannot confirm a stale or unresolved preview. No store or source file is changed. |
+| `importOpenSshConfig(preview)` | Revalidates the exact preview, source and inventory revisions, and selected credentials, then writes all included entries in one store transaction. It works with an existing inventory and uses a source ledger for repeat imports. It returns hosts, created/updated/unchanged counts, trust counts, and the complete skip report; an expected refusal writes nothing. The source files are never modified. |
 | `onChange(listener)` | Calls the listener after any inventory change; built on the `storeChanged` event (`ipc/store-events.ts`). |
 
 The independent object editor uses the same `InventoryApi` boundary for the
@@ -459,7 +459,23 @@ closing or reconnecting releases the previous helper before preparing a new atte
 
 Every operation that can fail returns `Outcome`; a `Failure` carries a reference for support, free of secrets.
 
-The tier-0 OpenSSH importer accepts simple literal `Host` blocks with `HostName`, `User`, `Port`, and `IdentityFile` values. It skips a host block when a directive or value in that block cannot be represented. Global settings, wildcard `Host` patterns, `Include`, and `Match` can affect other blocks, so the preview excludes every host in those files and explains why. Full OpenSSH semantics, `known_hosts`, keys discovery, and idempotent re-import belong to roadmap C10; this flow is limited to an empty inventory.
+The OpenSSH import review is available from both empty and existing host lists.
+Every entry shows its effective endpoint, source location, planned action, route,
+identity, and trusted-key count. The user can select a discovered identity file
+or a credential admitted by the Rust connection preflight. Unresolved identities
+block confirmation; unavailable choices and source or inventory changes require
+a refreshed review. A successful import shows the created, updated, unchanged,
+trusted-key, and skipped counts without opening a connection. Re-import preserves
+the source-to-object association and selected identity rather than duplicating
+hosts. The complete skipped/unsupported report remains visible before import;
+the native supported subset and the remaining migration acceptance are tracked
+in roadmap C10.
+
+For aliases still listed in a repeated import, the update refreshes that source's
+imported trust records and removes records absent, conflicting, or revoked in the
+current source. Manually added trust is retained. Removing an entire alias from
+the source does not delete its previously imported Host, identity, or trust.
+
 Session lifecycle commands emit `sessionChanged` after a successful open, close, or
 forget operation so the Recent view reloads without polling. The event carries only
 the session identifier and transition. The connection owner records accepted SSH

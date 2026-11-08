@@ -55,6 +55,7 @@ import type {
   InventoryApi,
   NewHost,
   OpenSshImportError,
+  OpenSshImportChoice,
   OpenSshImportPreview,
   OpenSshImportResult,
   ObjectEditError,
@@ -250,9 +251,12 @@ export function createInventoryApi(commands = applicationCommands, profileGenera
       if (result.status === "ok") return result.data;
       throw new Error(failure(result.error).reference);
     },
-    previewOpenSshConfig: async (path: string) =>
+    previewOpenSshConfig: async (path: string, choices?: OpenSshImportChoice[]) =>
       outcome(
-        (await commands.inventoryPreviewOpenSshConfig(path)) as Result<IpcOpenSshImportPreview, IpcOpenSshImportError>,
+        (await commands.inventoryPreviewOpenSshConfig(path, choices ?? null)) as Result<
+          IpcOpenSshImportPreview,
+          IpcOpenSshImportError
+        >,
       ) as Outcome<OpenSshImportPreview, OpenSshImportError>,
     importOpenSshConfig: async (preview: OpenSshImportPreview) =>
       outcome(
