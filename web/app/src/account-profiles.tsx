@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { invoke } from "@tauri-apps/api/core";
-import { Button, Dialog, Field } from "@scoplen/ui";
+import { Button, Dialog, Field, Select } from "@scoplen/ui";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { commands, events, makeCommands, type ProfileSnapshot } from "./ipc/bindings";
 import { useI18n } from "./i18n";
@@ -126,6 +126,7 @@ export function ProfileSwitcher() {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const form = useRef<HTMLFormElement>(null);
+  const selector = useRef<HTMLButtonElement>(null);
   if (!profile) return null;
   const snapshot = profile.snapshot;
   if (snapshot.retainedProfile)
@@ -149,28 +150,23 @@ export function ProfileSwitcher() {
   };
   return (
     <>
-      <label className="sr-only" htmlFor="account-profile">
-        {t("accounts.selector")}
-      </label>
-      <select
-        id="account-profile"
-        aria-label={t("accounts.selector")}
+      <Select
+        ref={selector}
+        label={t("accounts.selector")}
         value={snapshot.selected ?? ""}
-        className="ui-control h-8 max-w-40 min-w-0 rounded-md border border-border bg-background px-2 text-xs sm:max-w-56"
-        onChange={(event) => {
-          setTarget(event.target.value);
+        disabled={busy || target !== undefined}
+        className="max-w-40 sm:max-w-56"
+        options={[
+          { value: "", label: t("accounts.local") },
+          ...snapshot.accounts
+            .filter((account) => account.ready)
+            .map((account) => ({ value: account.id, label: `${account.origin} · ${account.accountId}` })),
+        ]}
+        onValueChange={(value) => {
+          setTarget(value);
           setFailed(null);
         }}
-      >
-        <option value="">{t("accounts.local")}</option>
-        {snapshot.accounts
-          .filter((account) => account.ready)
-          .map((account) => (
-            <option key={account.id} value={account.id}>
-              {account.origin} · {account.accountId}
-            </option>
-          ))}
-      </select>
+      />
       <Dialog
         open={target !== undefined}
         onOpenChange={(open) => {
@@ -179,6 +175,7 @@ export function ProfileSwitcher() {
         title={t("accounts.switchTitle")}
         description={t("accounts.switchBody")}
         closeLabel={t("accounts.keep")}
+        finalFocus={selector}
         footer={
           <>
             <Button disabled={busy} onClick={() => setTarget(undefined)}>

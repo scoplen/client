@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Scoplen",
+        "width": 1200,
+        "height": 780,
+        "minWidth": 480,
+        "minHeight": 400,
+        "center": true,
+        "decorations": false
+      }
+    ]
+  }
+}

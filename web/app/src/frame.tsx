@@ -34,8 +34,8 @@ const faces: Record<SessionState, { mood: MarkMood; active: boolean; attention: 
  * The window: a strip of tabs above the content. The first tab is always
  * Hosts, led by the mark; each session adds a tab led by its host's egg,
  * whose face shows the connection (eyes wide while connecting, asleep when
- * closed). On macOS the strip is the title bar, with room left for the
- * window controls, and dragging its empty space moves the window.
+ * closed). The strip is the title bar, leaving room for macOS traffic lights
+ * or Windows controls. Dragging its empty space moves the window.
  */
 export function Frame({
   platform,
@@ -70,7 +70,7 @@ export function Frame({
     <div className="isolate flex h-screen flex-col bg-background">
       <header
         data-tauri-drag-region
-        className={`flex h-12 shrink-0 items-center gap-1.5 border-b-(length:--scoplen-border-width) border-border pr-2 ${platform === "macos" ? "pl-[5.75rem]" : "pl-2"}`}
+        className={`flex h-12 shrink-0 items-center gap-1.5 border-b-(length:--scoplen-border-width) border-border ${platform === "macos" ? "pl-[5.75rem]" : "pl-2"} ${platform === "windows" ? "pr-[8.625rem]" : "pr-2"}`}
       >
         <div
           role="tablist"
@@ -147,9 +147,15 @@ export function Frame({
         <div data-tauri-drag-region className="h-full min-w-6 flex-1" />
         <ProfileSwitcher />
         {onWorkspaces ? (
-          <Button variant="ghost" className="shrink-0 gap-1.5 px-2" onClick={onWorkspaces}>
+          <Button
+            variant="ghost"
+            aria-label={t("workspaces.title")}
+            title={t("workspaces.title")}
+            className="shrink-0 gap-1.5 px-2"
+            onClick={onWorkspaces}
+          >
             <PanelsTopLeft aria-hidden="true" className="size-4" />
-            {t("workspaces.title")}
+            <span className="hidden sm:inline">{t("workspaces.title")}</span>
           </Button>
         ) : null}
         <IconButton label={t("frame.settings")} pressed={settingsActive} onClick={onSettings}>
