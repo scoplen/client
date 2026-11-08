@@ -17,6 +17,7 @@ export { Mark, bodyPath, type MarkGesture, type MarkMood, type MarkProps } from 
 export { Notice, type NoticeProps } from "./components/notice";
 export { Pick } from "./components/pick";
 export { SearchField, type SearchFieldProps } from "./components/search-field";
+export { Select, type SelectOption, type SelectProps } from "./components/select";
 export { Segmented, type SegmentedOption, type SegmentedProps } from "./components/segmented";
 export { Tag } from "./components/tag";
 export { TextAreaField, type TextAreaFieldProps } from "./components/text-area-field";
