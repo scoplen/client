@@ -148,6 +148,8 @@ pub fn ipc() -> Builder<tauri::Wry> {
             inventory::inventory_undo_delete,
             inventory::inventory_preview_open_ssh_config,
             inventory::inventory_import_open_ssh_config,
+            inventory::inventory_preview_open_ssh_export,
+            inventory::inventory_export_open_ssh_config,
             inventory::choose_open_ssh_config,
             inventory::choose_key_file,
             local_data::local_data_status,

@@ -416,6 +416,8 @@ Contract: `web/app/src/inventory/api.ts` (`InventoryApi`). Screens: `inventory/h
 | `chooseOpenSshConfig()` | Opens a native picker for an OpenSSH config file, starting in `~/.ssh`; returns the path or `null` when canceled. The entry point is offered on both empty and existing host lists. |
 | `previewOpenSshConfig(path, choices?)` | Reads the config and supported included sources, returning source and inventory revisions, file count, create/update/unchanged entries, ordered Jump or literal Command routes, identity choices, trust counts, skipped hosts, and unsupported directives with source paths and lines. Rust supplies the redacted eligible credential list. An identity selection sends the complete choice list for a fresh preview; the interface cannot confirm a stale or unresolved preview. No store or source file is changed. |
 | `importOpenSshConfig(preview)` | Revalidates the exact preview, source and inventory revisions, and selected credentials, then writes all included entries in one store transaction. It works with an existing inventory and uses a source ledger for repeat imports. It returns hosts, created/updated/unchanged counts, trust counts, and the complete skip report; an expected refusal writes nothing. The source files are never modified. |
+| `previewOpenSshExport(choices?)` | Reviews the complete Local or Personal profile inventory, independent of the current host filter. Returns a revision, the complete external identity choices, concrete OpenSSH aliases with effective endpoints/authentication/routes, every skipped Host or Login with its reason, and the ordinary trusted-key count. It performs no export write and returns no secret material or generated file contents. |
+| `exportOpenSshConfig(preview, locale)` | Opens a native parent-directory picker; cancellation returns `null` and preserves the review. Rust revalidates the exact preview before creating an exclusively owned `scoplen-openssh-<timestamp>` child with `config`, `known_hosts`, and any required agent public-key files. Existing destinations are refused. Returns the directory, Host-block count and file count, or a typed error; a retained partial directory is explicitly identified on write failure. |
 | `onChange(listener)` | Calls the listener after any inventory change; built on the `storeChanged` event (`ipc/store-events.ts`). |
 
 The independent object editor uses the same `InventoryApi` boundary for the
@@ -475,6 +477,23 @@ For aliases still listed in a repeated import, the update refreshes that source'
 imported trust records and removes records absent, conflicting, or revoked in the
 current source. Manually added trust is retained. Removing an entire alias from
 the source does not delete its previously imported Host, identity, or trust.
+
+The standard OpenSSH export is offered from Hosts, including filtered and empty
+lists. Its review states the full-profile scope and lists every included Login
+and every skipped entry. A software-key Login needs an existing matching source
+file selected through the native picker; Rust validates it and returns a fresh
+preview. This path is referenced rather than copied. Password Logins prompt in
+external OpenSSH, and agent Logins need their exact key already loaded; only
+agent public keys are written. Neither passwords nor private keys are exported.
+An empty preview still shows the complete report but cannot be saved. Native
+picker cancellation retains the review; changed inventory or key sources require
+refresh before saving. Success retains the report and shows the actual directory,
+counts, config path and a command example using an exported alias. The user quotes
+the path for their shell. Feedback receives focus so it remains visible above a
+long report. An unreadable save response directs the user to inspect the chosen
+parent directory before another explicit export. This standard export does not implement
+the separate encrypted Scoplen export, generated-config management, or helper
+subcommands tracked in roadmap C10.
 
 Session lifecycle commands emit `sessionChanged` after a successful open, close, or
 forget operation so the Recent view reloads without polling. The event carries only

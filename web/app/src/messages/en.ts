@@ -560,6 +560,7 @@ export const en = {
   "hosts.empty.title": "No hosts yet",
   "hosts.empty.body": "Add a host with its address and how you sign in, and you can connect to it from here.",
   "hosts.importOpenSsh": "Import OpenSSH config",
+  "hosts.exportOpenSsh": "Export OpenSSH",
   "hosts.empty.favorites": "No favorites. Star a host to keep it here.",
   "hosts.empty.recent": "Hosts you connect to will appear here.",
   "hosts.recentSessions": "Recent sessions",
@@ -877,6 +878,64 @@ export const en = {
   "import.error.noHosts": "No importable Host blocks were found. Choose another file.",
   "import.error.identityNotFound":
     "The identity file could not be read: {path}. Check the source path, then refresh the preview.",
+  "export.title": "Review OpenSSH export",
+  "export.close": "Close export",
+  "export.scope":
+    "This preview covers the current profile's entire Personal inventory, including hosts outside your current search or group.",
+  "export.files":
+    "Choose a parent folder to write config and known_hosts into a new scoplen-openssh-… folder. Existing files are not replaced.",
+  "export.secrets":
+    "Passwords and private keys are not copied. Software-key entries reference the existing matching key file you choose; agent entries include only their public key.",
+  "export.summary": "SSH entries: {count} · Skipped: {skipped} · Trust records: {trust}",
+  "export.entries": "SSH entries to export ({count})",
+  "export.empty":
+    "No SSH entries can be exported yet. Review the skipped entries below, choose any required identity files, or update the inventory and refresh.",
+  "export.authentication.password": "OpenSSH asks for the password when connecting.",
+  "export.authentication.agent":
+    "Uses the system SSH agent. Its matching key must already be loaded; only the public key is exported.",
+  "export.authentication.identityFile": "References this existing private key file; the file must remain available.",
+  "export.skipped": "Skipped entries ({count})",
+  "export.skippedHint":
+    "Only entries listed above are written. Choose matching identity files where offered, or fix other skipped entries in Manage inventory and refresh.",
+  "export.chooseIdentity": "Choose matching key for {name}…",
+  "export.skip.missingLogin": "This host has no Login. Add one before exporting.",
+  "export.skip.unavailableCredential": "This Login's credential is unavailable on this device.",
+  "export.skip.identityFileRequired": "Choose an existing private key file matching this Login's saved key.",
+  "export.skip.identityFileMismatch":
+    "The selected file does not match this Login's saved key. Choose its matching private key file.",
+  "export.skip.unsupportedCredential": "This credential cannot be represented by this OpenSSH export.",
+  "export.skip.unsupportedRoute": "This route cannot be represented by this OpenSSH export.",
+  "export.skip.routeDependency": "A required jump Login cannot be exported. Resolve it and refresh.",
+  "export.skip.unsupportedOptions":
+    "This Login has options or host-key trust settings this OpenSSH export cannot preserve.",
+  "export.skip.invalidValue": "This Login has a value that cannot be represented in an OpenSSH configuration.",
+  "export.save": "Choose folder and export…",
+  "export.working": "Preparing or saving the reviewed export…",
+  "export.cancelled": "Folder selection cancelled. No export was written; this preview is still available.",
+  "export.saved":
+    "Exported {count, plural, one {# SSH entry} other {# SSH entries}} in {files, plural, one {# file} other {# files}}.",
+  "export.use":
+    "Use the command below, replacing <config> with the config file path shown, quoted for your shell. You can also include this file from your SSH configuration. It references the exported known_hosts.",
+  "export.config": "Config file: {path}",
+  "export.done": "Done",
+  "export.error.preview": "The export preview could not be prepared. Refresh to try again.",
+  "export.error.picker": "The key file picker could not finish. Choose the matching file again.",
+  "export.error.empty": "There are no exportable SSH entries. Resolve skipped entries and refresh.",
+  "export.error.inventoryChanged": "The inventory changed. Refresh and review the export again.",
+  "export.error.sourceChanged":
+    "A selected identity file changed or became unavailable. Choose it again and review a refreshed preview.",
+  "export.error.invalidSelection":
+    "The selected key file or destination cannot be used. Choose a matching key file or an ordinary local folder.",
+  "export.error.destinationExists":
+    "An export folder with this name already exists. Choose a folder and export again; the existing destination was not replaced.",
+  "export.error.writeFailed":
+    "The export could not be written. No export folder was retained. Choose a writable folder and try again.",
+  "export.error.partial":
+    "The export could not finish, and its incomplete folder could not be removed. Inspect this folder before exporting again: {path}",
+  "export.error.contextChanged":
+    "The selected profile changed. Close this preview and reopen Export from the current profile.",
+  "export.error.unknown":
+    "The export result could not be read. Check your selected parent folder, then refresh the preview before starting another export.",
   "settings.personal.inventory.title": "Inventory sync",
   "settings.personal.inventory.body":
     "Review and confirm which local objects join Personal sync. Their later changes sync automatically. Unselected and newly created local objects stay on this device.",

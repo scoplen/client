@@ -34,8 +34,35 @@ Reimporting the same source preserves object identities and writes only reviewed
 For listed aliases, confirmation replaces source-owned fields and removes imported trust
 no longer supplied by that source; manually added trust remains. Removing an entire alias
 from the configuration does not delete its migrated inventory. Edits to reviewed files or
-imported objects require a fresh preview. SSH config generation, managed Includes and
-portable export remain separate roadmap outcomes.
+imported objects require a fresh preview. The constrained `PreferredAuthentications password`
+or `publickey`, `IdentitiesOnly yes`, `IdentityAgent none` and literal `HostKeyAlias` forms emitted by export are
+also understood. Password blocks require an explicit saved password Credential; key and
+public Agent sidecars retain their ordinary import behavior.
+
+Use Export OpenSSH in Hosts to review all Logins in the current Local or Personal profile,
+including rows outside the active search or group filter. Compatible Direct and explicit
+Direct-hop Jump Logins produce standard `config` and `known_hosts` files in a fresh
+`scoplen-openssh-<timestamp>` child of the selected folder. Use `ssh -F <export>/config <alias>`.
+Stable aliases and Host/Login comments identify each block. Existing files are never overwritten.
+
+Password blocks ask for the password in external OpenSSH; saved passwords are never included.
+Agent blocks include only the exact public identity in `identities/*.pub`; its private key
+must already be available in the system agent. Software keys reference a verified existing
+private-key file with the same public half as the actual saved key. Imported source files
+are discovered automatically when still available; otherwise choose a matching file in the
+review. External OpenSSH uses that file with its own passphrase and disables Agent substitution
+for the source-key block. No private key is copied, and
+generated or pasted keys without an external source remain excluded.
+
+Each exported Host gets its own `HostKeyAlias`, preserving independent trust even when Hosts
+share an address and port. Only ordinary host-specific keys accepted by the current trust
+policy are written. A Host with no saved trust still requires OpenSSH first-use review.
+Unsupported credentials, routes, options or saved trust semantics are reported per Login;
+an excluded Jump hop also excludes its dependent target. Key paths or destination paths with
+unrepresentable expansion syntax are refused. Inventory or selected source changes require
+a fresh review. If a write fails, the newly created child is removed; if cleanup fails, the
+dialog identifies the retained partial directory. Managed Includes, JSON/age portable secret
+export and the complete C10 migration gate remain separate roadmap outcomes.
 
 When adding a host, choose Key and Create a new key to generate an Ed25519 key
 in the Rust core. The private key stays in the encrypted store; the host, Login

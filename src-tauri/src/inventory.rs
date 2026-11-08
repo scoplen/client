@@ -10,7 +10,8 @@ use scoplen_client_core::inventory::{
     AccessProfileInput, AccessProfileSummary, AddHostError, Areas, CredentialInput,
     CredentialSummary, Deletion, DeletionStore, EditHost, EditHostError, Failure, ForwardInput,
     ForwardSummary, GroupError, GroupInput, GroupSummary, HostDetails, HostSource, HostSummary,
-    Inventory, NewHost, ObjectEditError, OpenSshImportChoice, OpenSshImportError,
+    Inventory, NewHost, ObjectEditError, OpenSshExportChoice, OpenSshExportError,
+    OpenSshExportPreview, OpenSshExportResult, OpenSshImportChoice, OpenSshImportError,
     OpenSshImportPreview, OpenSshImportResult, RecentSession, RecentSessionKind,
     RecentSessionOutcome, ReconnectTarget, RouteInput, RouteSummary, SessionError,
 };
@@ -681,6 +682,56 @@ pub async fn inventory_import_open_ssh_config(
     tauri::async_runtime::spawn_blocking(move || inventory.import_open_ssh_config(preview))
         .await
         .map_err(|error| OpenSshImportError::Failed { reference: error.to_string() })?
+}
+
+/// Review all compatible saved Logins without exporting secrets or changing inventory.
+#[tauri::command]
+#[specta::specta]
+pub async fn inventory_preview_open_ssh_export(
+    local: LocalDataState,
+    choices: Option<Vec<OpenSshExportChoice>>,
+) -> Result<OpenSshExportPreview, OpenSshExportError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        local
+            .with_store(|store| {
+                Inventory::new(store.clone()).preview_open_ssh_export(choices.unwrap_or_default())
+            })
+            .unwrap_or(Err(OpenSshExportError::ContextChanged))
+    })
+    .await
+    .map_err(|_| OpenSshExportError::ContextChanged)?
+}
+
+/// Choose a parent folder and write the reviewed standard configuration to a fresh child.
+#[tauri::command]
+#[specta::specta]
+pub async fn inventory_export_open_ssh_config(
+    local: LocalDataState,
+    app: tauri::AppHandle,
+    preview: OpenSshExportPreview,
+    locale: scoplen_client_core::locale::Locale,
+) -> Result<Option<OpenSshExportResult>, OpenSshExportError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt as _;
+        let title = match locale {
+            scoplen_client_core::locale::Locale::En => "Choose OpenSSH export parent folder",
+            scoplen_client_core::locale::Locale::ZhHans => "选择 OpenSSH 导出的父文件夹",
+        };
+        if local.store().is_none() {
+            return Err(OpenSshExportError::ContextChanged);
+        }
+        let Some(parent) = app.dialog().file().set_title(title).blocking_pick_folder() else {
+            return Ok(None);
+        };
+        let parent = parent.into_path().map_err(|_| OpenSshExportError::InvalidSelection)?;
+        local
+            .with_store(|store| {
+                Inventory::new(store.clone()).export_open_ssh_config(preview, parent).map(Some)
+            })
+            .unwrap_or(Err(OpenSshExportError::ContextChanged))
+    })
+    .await
+    .map_err(|_| OpenSshExportError::ContextChanged)?
 }
 
 /// Opens the conventional `~/.ssh/config` import picker. Cancellation returns `null`.

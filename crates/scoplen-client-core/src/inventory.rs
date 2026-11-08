@@ -33,6 +33,8 @@ use crate::terminal_output::{SavedOutputError, TerminalSnapshot};
 
 mod openssh;
 pub use openssh::{
+    OpenSshExportAuthentication, OpenSshExportChoice, OpenSshExportEntry, OpenSshExportError,
+    OpenSshExportPreview, OpenSshExportResult, OpenSshExportSkipReason, OpenSshExportSkipped,
     OpenSshImportAction, OpenSshImportChoice, OpenSshImportCredential, OpenSshImportEntry,
     OpenSshImportError, OpenSshImportPreview, OpenSshImportResult, OpenSshImportRoute,
     OpenSshSkipReason, OpenSshSkippedHost, OpenSshUnsupportedDirective,

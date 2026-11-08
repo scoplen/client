@@ -282,6 +282,17 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	inventoryPreviewOpenSshConfig: (path: string, choices: OpenSshImportChoice[] | null) => typedError<OpenSshImportPreview, OpenSshImportError>(__TAURI_INVOKE("inventory_preview_open_ssh_config", { path, choices })),
 	/**  Atomically creates or updates the reviewed source inventory. */
 	inventoryImportOpenSshConfig: (preview: OpenSshImportPreview) => typedError<OpenSshImportResult, OpenSshImportError>(__TAURI_INVOKE("inventory_import_open_ssh_config", { preview })),
+	/**  Review all compatible saved Logins without exporting secrets or changing inventory. */
+	inventoryPreviewOpenSshExport: (choices: OpenSshExportChoice[] | null) => typedError<OpenSshExportPreview, OpenSshExportError>(__TAURI_INVOKE("inventory_preview_open_ssh_export", { choices })),
+	/**  Choose a parent folder and write the reviewed standard configuration to a fresh child. */
+	inventoryExportOpenSshConfig: (preview: OpenSshExportPreview, locale: Locale) => typedError<{
+	/**  Fresh directory containing config, known_hosts and public identities only. */
+	directory: string,
+	/**  Number of Host blocks written. */
+	hosts: number,
+	/**  Number of regular files written. */
+	files: number,
+} | null, OpenSshExportError>(__TAURI_INVOKE("inventory_export_open_ssh_config", { preview, locale })),
 	/**  Opens the conventional `~/.ssh/config` import picker. Cancellation returns `null`. */
 	chooseOpenSshConfig: () => typedError<string | null, Failure>(__TAURI_INVOKE("choose_open_ssh_config")),
 	/**  Opens the native private-key file picker; `null` means cancellation. */
@@ -1202,6 +1213,127 @@ export type ObjectEditError =
 { kind: "failed"; reference: string } |
 /**  A platform-bound credential could not be created or removed. */
 { kind: "platformCredential"; reference: string };
+
+/**  The external authentication an exported Login requires. */
+export type OpenSshExportAuthentication =
+/**  OpenSSH asks for the password; no saved password is exported. */
+"password" |
+/**  The exact public identity must already be loaded in the system agent. */
+"agent" |
+/**  OpenSSH reads the verified existing private-key source file. */
+"identityFile";
+
+/**  An existing external private-key file selected for one Login. */
+export type OpenSshExportChoice = {
+	/**  The saved Login identifier. */
+	profileId: string,
+	/**  The source file to reference, never copy. */
+	identityFile: string,
+};
+
+/**  One complete standard Host block that will be written. */
+export type OpenSshExportEntry = {
+	/**  Saved Host identifier. */
+	hostId: string,
+	/**  Saved Login identifier. */
+	profileId: string,
+	/**  Stable concrete alias for external OpenSSH. */
+	alias: string,
+	/**  Saved Host display name. */
+	hostName: string,
+	/**  Saved Login display name, or its username. */
+	loginName: string,
+	/**  Actual SSH endpoint. */
+	address: string,
+	/**  Actual SSH port. */
+	port: number,
+	/**  Remote username. */
+	username: string,
+	/**  External credential mechanism, without secret material. */
+	authentication: OpenSshExportAuthentication,
+	/**  Existing private-key source path; absent for password and agent. */
+	identityFile: string | null,
+	/**  Direct or explicit Direct-hop Jump route. */
+	route: OpenSshImportRoute,
+};
+
+/**  An export refusal never overwrites an existing destination. */
+export type OpenSshExportError =
+/**  No complete Host block is available. */
+{ kind: "empty" } |
+/**  Saved inventory changed after review. */
+{ kind: "inventoryChanged" } |
+/**  An external key source changed after review. */
+{ kind: "sourceChanged" } |
+/**  A source choice or destination is invalid. */
+{ kind: "invalidSelection" } |
+/**  The fresh destination already exists and was left untouched. */
+{ kind: "destinationExists" } |
+/**  Writing failed; any retained partial export is identified explicitly. */
+{ kind: "writeFailed";
+/**  Partial owned directory if cleanup failed; otherwise absent. */
+directory: string | null } |
+/**  The originating profile is no longer available. */
+{ kind: "contextChanged" };
+
+/**  Read-only review of all inventory in the current Local or Personal profile. */
+export type OpenSshExportPreview = {
+	/**  Fingerprint of reviewed inventory and external source files. */
+	revision: string,
+	/**  Explicit existing-key source choices used for this review. */
+	choices: OpenSshExportChoice[],
+	/**  Complete Host blocks, including independently usable Jump Logins. */
+	entries: OpenSshExportEntry[],
+	/**  Every excluded Host or Login and its reason. */
+	skipped: OpenSshExportSkipped[],
+	/**  Ordinary exact trusted host keys that will be written. */
+	trustRecords: number,
+};
+
+/**  The newly created export directory and its actual written counts. */
+export type OpenSshExportResult = {
+	/**  Fresh directory containing config, known_hosts and public identities only. */
+	directory: string,
+	/**  Number of Host blocks written. */
+	hosts: number,
+	/**  Number of regular files written. */
+	files: number,
+};
+
+/**  Why a saved Host or Login cannot be represented by this export. */
+export type OpenSshExportSkipReason =
+/**  The Host has no saved Login. */
+"missingLogin" |
+/**  The assigned Credential is missing or unusable. */
+"unavailableCredential" |
+/**  A software key needs a matching existing external private-key file. */
+"identityFileRequired" |
+/**  The selected external file does not match the actual saved private key. */
+"identityFileMismatch" |
+/**  This Credential kind cannot be represented without exporting a secret. */
+"unsupportedCredential" |
+/**  This route has no supported standard representation. */
+"unsupportedRoute" |
+/**  A required direct Jump Login cannot be exported. */
+"routeDependency" |
+/**  Saved options or trust semantics cannot be represented faithfully. */
+"unsupportedOptions" |
+/**  An endpoint or username cannot be represented safely. */
+"invalidValue";
+
+/**  A complete per-row refusal, including Hosts without Logins. */
+export type OpenSshExportSkipped = {
+	/**  Saved Host identifier. */
+	hostId: string,
+	/**  Saved Login identifier, absent when the Host has none. */
+	profileId: string | null,
+	/**  Saved Host display name. */
+	hostName: string,
+	/**  Saved Login display name, absent when the Host has none. */
+	loginName: string | null,
+	/**  Why no Host block will be written. */
+	reason: OpenSshExportSkipReason,
+};
 
 /**  What confirming this row will do to the imported objects. */
 export type OpenSshImportAction =

@@ -23,6 +23,12 @@ pub(crate) struct ImportWrite {
     pub implicit: bool,
 }
 
+pub(crate) struct ExportSnapshot {
+    pub objects: BTreeMap<Uuid, Object>,
+    pub identity_files: BTreeMap<Uuid, Vec<String>>,
+    pub revision: String,
+}
+
 fn snapshot(
     conn: &Connection,
     source: &str,
@@ -61,6 +67,43 @@ fn snapshot(
 }
 
 impl Store {
+    pub(crate) fn openssh_export_snapshot(&self) -> Result<ExportSnapshot, StoreError> {
+        let conn = self.conn();
+        let mut objects = BTreeMap::new();
+        for kind in [
+            ObjectType::HOST,
+            ObjectType::ACCESS_PROFILE,
+            ObjectType::CREDENTIAL,
+            ObjectType::ROUTE,
+            ObjectType::TRUST_RECORD,
+        ] {
+            for object in list_objects(&conn, kind)? {
+                objects.insert(object.id, object);
+            }
+        }
+        let mut identity_files = BTreeMap::<Uuid, Vec<String>>::new();
+        let mut query = conn.prepare(
+            "SELECT object_id,source_file FROM openssh_import_sources
+             WHERE source_key LIKE 'credential:%' ORDER BY object_id,source_file",
+        )?;
+        let mut hash = Sha256::new();
+        for (id, object) in &objects {
+            hash.update(id.as_bytes());
+            hash.update(object.encode()?);
+        }
+        let rows =
+            query.query_map([], |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (bytes, file) = row?;
+            let id = Uuid::from_slice(&bytes).map_err(|_| StoreError::InvalidIdentifier)?;
+            hash.update(id.as_bytes());
+            hash.update((file.len() as u64).to_be_bytes());
+            hash.update(file.as_bytes());
+            identity_files.entry(id).or_default().push(file);
+        }
+        Ok(ExportSnapshot { objects, identity_files, revision: format!("{:x}", hash.finalize()) })
+    }
+
     pub(crate) fn openssh_import_snapshot(
         &self,
         source: &str,

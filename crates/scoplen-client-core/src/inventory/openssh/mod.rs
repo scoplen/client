@@ -2,8 +2,11 @@
 
 //! Explicit, repeatable migration from read-only OpenSSH files.
 
+mod export;
 mod parse;
 mod plan;
+
+pub use export::*;
 
 use super::*;
 
