@@ -8,6 +8,7 @@ use crate::{
 
 use super::*;
 
+mod browser_team_ssh;
 mod isolation;
 mod team_inventory;
 mod team_membership;

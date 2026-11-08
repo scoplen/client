@@ -180,6 +180,42 @@ only its owned container; success also removes owned scratch files, while failur
 private diagnostics. Compilation or fixture setup alone is not live acceptance. The check
 does not establish native dialogs, rendered desktop interaction or macOS feature acceptance.
 
+### Browser-authored team to native SSH
+
+The separate browser-team check consumes assets already configured through the production
+console. On a fresh disposable HTTPS deployment, register two test Accounts, sign in to the
+console, create a team, invite and join the member, and save a Host pointing to the owned
+OpenSSH fixture. Save its AccessProfile with username `smoke` and Direct route integer zero,
+set the Host's `default_profile` to it, and grant the member explicit view/connect policies.
+
+The private descriptor contains exactly `disposable: true`, `origin`, `ca_certificate`,
+`organization_id`, `host_id`, `profile_id`, `owner_username`, `owner_password_file`,
+`member_username` and `member_password_file`. The origin is `https://localhost:<port>`;
+the CA and password file paths are absolute. Password files contain the test password's
+raw UTF-8 bytes with no added newline. Use only disposable test credentials. The descriptor
+is bounded to 8 KiB, the CA to 64 KiB and each password file to 4 KiB.
+
+Keep the existing owned OpenSSH container alive and provide its separate descriptor with
+exactly `disposable: true`, `container`, `owner` and `port`, using the ownership label and
+loopback-binding format of `test-live-team-ssh.ps1`.
+
+```powershell
+$env:SCOPLEN_LIVE_BROWSER_TEAM_DEPLOYMENT = '<absolute browser-team descriptor path>'
+$env:SCOPLEN_LIVE_TEAM_SSH_FIXTURE = '<absolute owned OpenSSH descriptor path>'
+cargo test --locked -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::browser_team_ssh::live_browser_authored_team_ssh_and_sftp -- --exact --test-threads=1
+```
+
+This path signs in to both existing Accounts on fresh native Devices, verifies the saved
+Host endpoint/default Login and explicit Direct route, and reads the member's current team
+view. The owner provisions the existing native CA if absent and installs its public trust
+on the owned OpenSSH fixture. The member then runs the same real terminal and binary SFTP
+checks above. The container ownership and exact loopback port must match the descriptor.
+Each upload uses a fresh basename and deletes only that captured file after its roundtrip.
+It does not create or repair team assets, invitations or policies. Success
+removes its owned client stores; the fixture owner remains responsible for the server,
+password files and OpenSSH container. Run once per database backend after actual console
+acceptance. Compilation alone does not establish the browser-to-native workflow.
+
 ### Preconfirmed-profile integration
 
 The opt-in `live-server-integration` feature checks retained admitted-device authentication,

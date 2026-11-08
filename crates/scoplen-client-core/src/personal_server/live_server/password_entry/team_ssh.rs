@@ -17,7 +17,9 @@ use crate::{
         TeamSimpleRuleInput, TeamSimpleRuleResource, TeamSshError, TeamSshOperationKind,
         TeamSshSource,
     },
-    session_files::{SessionDownloadStatus, SessionUploadStatus},
+    session_files::{
+        RemoteFileKind, SessionDownloadStatus, SessionFileMutationStatus, SessionUploadStatus,
+    },
     session_manager::{SessionEvent, SessionManager},
 };
 
@@ -28,11 +30,11 @@ use super::{
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SshFixture {
+pub(super) struct SshFixture {
     disposable: bool,
     container: String,
     owner: String,
-    port: u16,
+    pub(super) port: u16,
 }
 
 impl SshFixture {
@@ -48,7 +50,7 @@ impl SshFixture {
         output.stdout
     }
 
-    async fn install(&self, ca: &str, principal: &str) {
+    pub(super) async fn install(&self, ca: &str, principal: &str) {
         assert!(self.disposable && self.port != 0);
         assert!(self.container.starts_with("scoplen-team-ssh-"));
         assert!(uuid::Uuid::parse_str(&self.owner).is_ok());
@@ -61,6 +63,8 @@ impl SshFixture {
             ])
             .await;
         assert_eq!(String::from_utf8(label).unwrap().trim(), self.owner);
+        let binding = self.docker(&["port", &self.container, "2222/tcp"]).await;
+        assert_eq!(String::from_utf8(binding).unwrap().trim(), format!("127.0.0.1:{}", self.port));
         let setup = r#"set -eu
 home=$(getent passwd smoke | cut -d: -f6)
 test -n "$home"
@@ -99,7 +103,7 @@ async fn wait_for_output(output: &mut mpsc::UnboundedReceiver<Vec<u8>>, marker: 
     }
 }
 
-async fn terminal_and_files(
+pub(super) async fn terminal_and_files(
     personal: &PersonalServer,
     store: Arc<Store>,
     target: &SessionTarget,
@@ -153,7 +157,8 @@ async fn terminal_and_files(
         wait_for_output(&mut output_rx, b"SCOPLEN-TEAM-READY").await;
         sessions.resize(id, &transport, 100, 30).unwrap();
         let original: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
-        let source = directory.join("team-upload.bin");
+        let filename = format!("team-upload-{}.bin", uuid::Uuid::now_v7());
+        let source = directory.join(&filename);
         std::fs::write(&source, &original).unwrap();
         let uploaded = sessions
             .upload_file_with_picker(
@@ -173,7 +178,7 @@ async fn terminal_and_files(
             .list_files(id, &transport, &uuid::Uuid::now_v7().to_string(), b".".to_vec())
             .await
             .expect("browse the same certificate-authenticated SFTP session");
-        let remote = listing.entries.iter().find(|entry| entry.name == "team-upload.bin").unwrap();
+        let remote = listing.entries.iter().find(|entry| entry.name == filename).unwrap();
         assert_eq!(remote.size_bytes.as_deref(), Some("4096"));
         let destination = directory.join("team-downloaded.bin");
         let downloaded = sessions
@@ -189,6 +194,22 @@ async fn terminal_and_files(
             .expect("download the actual uploaded binary");
         assert_eq!(downloaded.status, SessionDownloadStatus::Saved);
         assert_eq!(std::fs::read(destination).unwrap(), original);
+        let removed = sessions
+            .delete_remote_entry_with_confirmation(
+                id,
+                &transport,
+                &uuid::Uuid::now_v7().to_string(),
+                b".".to_vec(),
+                remote.path.clone(),
+                |kind, name| async move {
+                    assert_eq!(kind, RemoteFileKind::File);
+                    assert_eq!(name, filename);
+                    Ok(true)
+                },
+            )
+            .await
+            .expect("remove only the captured disposable upload");
+        assert_eq!(removed.status, SessionFileMutationStatus::Saved);
         sessions.close(id).unwrap();
     };
     let (terminal, ()) =

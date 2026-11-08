@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Add an opt-in public-client acceptance path for existing browser-authored team assets.
+  Independent Device sign-in reads the saved Host/Login and permissions, then exercises
+  real certificate SSH and terminal-owned binary SFTP without recreating those assets.
+
 - Added reviewed standard OpenSSH config and known-host export for compatible Direct/Jump
   Logins. Passwords stay external prompts, exact Agent identities export public sidecars,
   and software keys reference verified existing files without copying private keys. Independent
