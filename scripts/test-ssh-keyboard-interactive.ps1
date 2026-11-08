@@ -26,8 +26,8 @@ try {
     $smoke = Join-Path $metadata.target_directory "debug/examples/ssh_keyboard_interactive_smoke$suffix"
     $setup = @'
 set -eu
-apk add --no-cache openssh-server-pam=9.9_p2-r0 linux-pam=1.6.1-r1 >/dev/null
-apk info -v | grep -Fx 'openssh-server-pam-9.9_p2-r0'
+apk add --no-cache openssh-server-pam=9.9_p2-r1 linux-pam=1.6.1-r1 >/dev/null
+apk info -v | grep -Fx 'openssh-server-pam-9.9_p2-r1'
 apk info -v | grep -Fx 'linux-pam-1.6.1-r1'
 adduser -D scoplen
 printf 'scoplen:fixture-interactive-password\n' | chpasswd
