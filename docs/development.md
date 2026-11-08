@@ -42,6 +42,7 @@ Run with PowerShell 7, Docker, OpenSSH `ssh` and `ssh-keygen` available:
 
 ```powershell
 pwsh -NoProfile -File scripts/test-openssh-import.ps1
+pwsh -NoProfile -File scripts/test-openssh-export.ps1
 ```
 
 The script starts a pinned, owned OpenSSH container with a disposable public key and reads
@@ -55,6 +56,18 @@ prompt; the session verifies real command output, PTY resizing and an exact bina
 upload/list/download. A reviewed source edit updates the existing Host and Login identities.
 The importer must leave all source files unchanged. Success removes owned temporary files
 and the container; failure stops the owned container and retains private diagnostics.
+
+The export check creates an encrypted source key and disposable password, then asks the public
+Inventory facade for a standard export. The installed unmodified OpenSSH client consumes that
+configuration for real password, encrypted source-file, exact-key Agent and Jump command execution.
+The Agent uses an owned socket or named pipe and advertises a decoy before the selected key;
+the user's system agent is never changed. The native OpenSSH askpass program is the fixture
+executable itself and reads only disposable prompt input. A Host with wrong independent trust
+at the same endpoint and a Host without saved trust must both fail strict verification, including
+on the non-default fixture port. Fresh import automatically recovers private-source and public
+Agent rows; password rows explicitly select a saved password Credential. This is standard
+configuration export acceptance, not JSON/age secret export, managed Includes or native-picker
+acceptance. Successful runs remove their owned container and files; failed evidence remains local.
 
 `inventory::openssh::tests` covers explicit saved-Credential selection, unsupported implicit
 identities, multiple-key choice, source/inventory changes, atomic refusal, route mapping,

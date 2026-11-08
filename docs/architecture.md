@@ -286,7 +286,7 @@ without key bytes or passwords. Existing Credentials pass ordinary material pref
 an unusable implicit identity leaves the row awaiting an explicit choice. Public source
 keys create exact-key Agent Credentials and private OpenSSH source keys create shared
 Credentials inside SQLCipher, retaining the connection-time encrypted-key unlock policy.
-Only ordinary exact known-host endpoints create imported trust. Conflicting keys of one
+Only ordinary exact known-host endpoints or literal HostKeyAlias associations create imported trust. Conflicting keys of one
 algorithm and keys marked revoked are withheld; unsupported trust entries remain reported.
 
 Migration 22 adds `openssh_import_sources`, an encrypted device-local ledger from canonical
@@ -299,6 +299,24 @@ metadata, source mappings and stale source-trust tombstones commit together befo
 For each retained alias the source's current trust set replaces its previous imported set;
 manual trust and inventory for aliases absent from the source remain unchanged. This is
 an explicit migration workflow, not automatic bidirectional file synchronization.
+
+The same module previews standard OpenSSH export from a read-only inventory snapshot and
+the local source ledger. Its DTO contains only display data and paths. Password export emits
+an external prompt; Agent export writes the exact public identity sidecar; software-key export
+compares the actual resolved private-key public half with an existing source file and references
+that file without copying it. Encrypted source public halves can be checked without unlocking.
+Source bytes and current inventory bind the preview; confirmation replans before creating files.
+Only compatible Direct and Direct-hop Jump Logins are included, with complete per-row exclusions
+and no route downgrade when a required hop is unavailable.
+
+Stable per-Host HostKeyAlias values scope ordinary current-policy trust independently from
+endpoint equality. Unsupported saved trust semantics exclude the associated Host; absence of
+saved trust permits ordinary external first-use review. The importer accepts constrained
+password/publickey preferences, IdentitiesOnly yes, IdentityAgent none and literal HostKeyAlias, preserving exported
+authentication and trust associations. Password import requires an explicit saved Credential.
+The profile-bound native command chooses a parent folder and creates a fresh timestamped child;
+all files use create-new writes. Failure cleans only that newly owned child and reports its path
+if cleanup fails. No external private source file or existing destination is changed.
 
 ## Personal account identity
 
@@ -632,7 +650,11 @@ and reconfirmation UI is a separate outcome. Organization-only inventory is not 
 
 Migration 3 adds `implicit_objects`, an encrypted, device-local visibility marker for tier-0 AccessProfiles and Credentials. Creating a host marks its login and credential implicit in the same transaction. Inspecting a host promotes its login; inspecting a private-key login promotes that credential, while password and agent credentials remain implicit. Using the same private key for a second host reuses and promotes the credential in the host creation transaction. The marker does not replicate and does not change the object format. `areas()` reports Keys only after a private-key credential becomes explicit.
 
-The empty Hosts list can open a native file picker and preview a limited OpenSSH config before writing. The Rust core reads a bounded UTF-8 file, separates representable literal `Host` blocks from skipped hosts, and reports unsupported directives with line numbers. `Include`, `Match`, wildcard hosts, or global rules can change the meaning of every block, so a file containing them yields a report without importable hosts. The frontend displays that report and sends the preview back for confirmation. The core re-reads and compares the source before import; if it changed, the user must preview again. Identity files and every host are validated before one atomic store transaction. The source config is never written. Complete OpenSSH import and idempotent re-import remain roadmap C10.
+Hosts offers Import OpenSSH for both empty and existing inventories, and Export OpenSSH for
+the complete current profile. Rust owns file access, migration evaluation, authentication
+preflight and reviewed writes; the frontend only renders the report and sends explicit choices.
+The migration behavior and source ledger are described in OpenSSH migration above. Managed
+Includes, JSON/age export and the remaining complete C10 acceptance remain incomplete.
 
 The Add Host `GenerateKey` intent creates a fresh software Ed25519 identity in
 Rust using the existing random source and OpenSSH encoder. Its private key and
