@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { Button, Select } from "../src";
@@ -83,6 +83,61 @@ describe("Select", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(onValueChange).not.toHaveBeenCalled();
   });
+
+  it("keeps focus on an outside control when that control closes the popup", async () => {
+    render(
+      <>
+        <Select label="Identity" options={options} value="" onValueChange={() => {}} />
+        <Button>After</Button>
+      </>,
+    );
+    await userEvent.click(screen.getByRole("combobox"));
+    await screen.findByRole("listbox");
+    const after = screen.getByRole("button", { name: "After" });
+    await userEvent.click(after);
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(after));
+  });
+
+  it.each([false, true])(
+    "restores focus after an asynchronous choice without stealing another control's focus (%s)",
+    async (moveFocus) => {
+      let complete!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        complete = resolve;
+      });
+      function Example() {
+        const [value, setValue] = useState("");
+        const [busy, setBusy] = useState(false);
+        return (
+          <>
+            <Select
+              label="Identity"
+              options={options}
+              value={value}
+              disabled={busy}
+              onValueChange={(next) => {
+                setValue(next);
+                setBusy(true);
+                void pending.then(() => setBusy(false));
+              }}
+            />
+            <Button>After</Button>
+          </>
+        );
+      }
+      render(<Example />);
+      const trigger = screen.getByRole("combobox");
+      await userEvent.click(trigger);
+      await userEvent.click(await screen.findByRole("option", { name: "Work account" }));
+      await waitFor(() => expect(trigger).toHaveProperty("disabled", true));
+      const after = screen.getByRole("button", { name: "After" });
+      if (moveFocus) await userEvent.click(after);
+      await act(async () => complete());
+      await waitFor(() => expect(trigger).toHaveProperty("disabled", false));
+      await waitFor(() => expect(document.activeElement).toBe(moveFocus ? after : trigger));
+    },
+  );
 
   it("names the control and options for assistive technology", async () => {
     const { container } = render(<Select label="Open profile" options={options} value="" onValueChange={() => {}} />);

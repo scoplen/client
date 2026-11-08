@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { Select as BaseSelect } from "@base-ui/react/select";
 import { Check, ChevronDown } from "lucide-react";
-import type { Ref } from "react";
+import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
 
 export interface SelectOption<T extends string> {
   value: T;
@@ -38,6 +38,18 @@ export function Select<T extends string>({
   className,
   ref,
 }: SelectProps<T>) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const deferredFocus = useRef<Element | null>(null);
+  useImperativeHandle(ref, () => trigger.current!, []);
+  useEffect(() => {
+    if (disabled || !deferredFocus.current || !trigger.current) return;
+    const doc = trigger.current.ownerDocument;
+    const active = doc.activeElement;
+    if (active === deferredFocus.current || active === doc.body || !active?.isConnected) {
+      trigger.current.focus({ preventScroll: true });
+    }
+    deferredFocus.current = null;
+  }, [disabled]);
   const groups = new Map<string | undefined, SelectOption<T>[]>();
   for (const option of options) {
     const items = groups.get(option.group) ?? [];
@@ -71,7 +83,7 @@ export function Select<T extends string>({
       }}
     >
       <BaseSelect.Trigger
-        ref={ref}
+        ref={trigger}
         id={id}
         aria-label={label}
         aria-describedby={describedBy}
@@ -98,7 +110,20 @@ export function Select<T extends string>({
           alignItemWithTrigger={false}
           className="z-50 outline-none"
         >
-          <BaseSelect.Popup className="min-w-(--anchor-width) max-w-[min(30rem,calc(100vw-1rem))] overflow-hidden rounded-lg border-(length:--scoplen-border-width) border-border bg-raised p-1 text-xs text-foreground shadow-(--scoplen-shadow-popover) outline-none">
+          <BaseSelect.Popup
+            finalFocus={
+              disabled
+                ? () => {
+                    if (trigger.current) {
+                      // Selection may disable the field until its refreshed choices arrive.
+                      deferredFocus.current = trigger.current.ownerDocument.activeElement;
+                    }
+                    return false;
+                  }
+                : true
+            }
+            className="min-w-(--anchor-width) max-w-[min(30rem,calc(100vw-1rem))] overflow-hidden rounded-lg border-(length:--scoplen-border-width) border-border bg-raised p-1 text-xs text-foreground shadow-(--scoplen-shadow-popover) outline-none"
+          >
             <BaseSelect.List aria-label={label} className="max-h-[min(20rem,var(--available-height))] overflow-y-auto">
               {Array.from(groups, ([group, items]) =>
                 group ? (
