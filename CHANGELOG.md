@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added repeatable OpenSSH migration into existing inventories, with source-order Host and
+  Include evaluation, explicit usable identity choices, saved Jump/command Routes and
+  ordinary known-host association. Create/Update/Unchanged review commits source identities
+  and object changes atomically; reimport preserves IDs and refreshes source-owned trust
+  while keeping manual trust and absent-alias inventory. Unsupported source semantics are
+  reported without rewriting the files. Config generation and portable export remain open.
+
 - Added named team asset CRUD, local membership groups and access policy management. Original
   creates remain durable across uncertain responses; edits and deletes use their captured ETag
   and require explicit review after conflicts or uncertain completion. Normal access rules use

@@ -59,6 +59,12 @@ pub fn assess_host_key(
     Ok(TrustPolicy::load(store, &records)?.assess(host, key, &records))
 }
 
+pub(crate) fn acceptance_account(store: &Store) -> Result<Option<Uuid>, String> {
+    let records =
+        Repository::<TrustRecord>::new(store).list().map_err(|error| error.to_string())?;
+    Ok(TrustPolicy::load(store, &records)?.acceptance_account())
+}
+
 pub(super) struct TrustPolicy {
     device: Uuid,
     personal: Option<PersonalTrustDevices>,

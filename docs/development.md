@@ -36,6 +36,33 @@ pnpm dev
 
 The first launch rebuilds the Rust dependencies. A fresh checkout does not need this cleanup.
 
+## Disposable OpenSSH migration integration
+
+Run with PowerShell 7, Docker, OpenSSH `ssh` and `ssh-keygen` available:
+
+```powershell
+pwsh -NoProfile -File scripts/test-openssh-import.ps1
+```
+
+The script starts a pinned, owned OpenSSH container with a disposable public key and reads
+that fixture's actual host public keys into an ordinary known-host source. Through
+the public Inventory facade, its example imports a configuration with quoted paths,
+ordered Includes, repeated aliases, wildcard/negated rules and ordinary known-host keys
+into a nonempty encrypted inventory. It compares evaluated endpoint/user/port values with
+the installed `ssh -G`, confirms unchanged reimport without object writes, then connects
+the imported Login through the public session manager. Imported trust must avoid a first-use
+prompt; the session verifies real command output, PTY resizing and an exact binary SFTP
+upload/list/download. A reviewed source edit updates the existing Host and Login identities.
+The importer must leave all source files unchanged. Success removes owned temporary files
+and the container; failure stops the owned container and retains private diagnostics.
+
+`inventory::openssh::tests` covers explicit saved-Credential selection, unsupported implicit
+identities, multiple-key choice, source/inventory changes, atomic refusal, route mapping,
+complete unsupported reports, bounded input and recursive Includes. Trust regressions cover
+conflicting and revoked keys, HostName changes and removing source trust while preserving
+manual trust. Rendered import interaction and native file-picker acceptance are separate
+from this public-core/OpenSSH check.
+
 ## Disposable Personal server integration
 
 ### Password registration and independent-device sign-in

@@ -276,16 +276,13 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	/**  Restores a deletion made by this running desktop process. */
 	inventoryUndoDelete: (token: string) => typedError<null, Failure>(__TAURI_INVOKE("inventory_undo_delete", { token })),
 	/**
-	 *  Reads an OpenSSH config for the empty-inventory preview without modifying
+	 *  Reads an OpenSSH config and explicit identity choices without modifying
 	 *  the source file or local store.
 	 */
-	inventoryPreviewOpenSshConfig: (path: string) => typedError<OpenSshImportPreview, OpenSshImportError>(__TAURI_INVOKE("inventory_preview_open_ssh_config", { path })),
-	/**  Imports a previously previewed OpenSSH config into an empty inventory. */
+	inventoryPreviewOpenSshConfig: (path: string, choices: OpenSshImportChoice[] | null) => typedError<OpenSshImportPreview, OpenSshImportError>(__TAURI_INVOKE("inventory_preview_open_ssh_config", { path, choices })),
+	/**  Atomically creates or updates the reviewed source inventory. */
 	inventoryImportOpenSshConfig: (preview: OpenSshImportPreview) => typedError<OpenSshImportResult, OpenSshImportError>(__TAURI_INVOKE("inventory_import_open_ssh_config", { preview })),
-	/**
-	 *  Opens the conventional `~/.ssh/config` picker used by the empty-list
-	 *  onboarding flow. Cancellation returns `null`.
-	 */
+	/**  Opens the conventional `~/.ssh/config` import picker. Cancellation returns `null`. */
 	chooseOpenSshConfig: () => typedError<string | null, Failure>(__TAURI_INVOKE("choose_open_ssh_config")),
 	/**  Opens the native private-key file picker; `null` means cancellation. */
 	chooseKeyFile: () => typedError<string | null, Failure>(__TAURI_INVOKE("choose_key_file")),
@@ -1206,100 +1203,185 @@ export type ObjectEditError =
 /**  A platform-bound credential could not be created or removed. */
 { kind: "platformCredential"; reference: string };
 
-/**
- *  A representable entry found in an OpenSSH configuration file. This is a
- *  preview DTO: it never contains private key material.
- */
-export type OpenSshImportEntry = {
-	/**  The `Host` alias that becomes the display name. */
+/**  What confirming this row will do to the imported objects. */
+export type OpenSshImportAction =
+/**  A new source Host will be created. */
+"create" |
+/**  Existing source objects have reviewed changes. */
+"update" |
+/**  No object field needs a write. */
+"unchanged";
+
+/**  One explicit identity choice for a concrete OpenSSH alias. */
+export type OpenSshImportChoice = {
+	/**  Alias shown in the preview. */
 	alias: string,
-	/**  The resolved host name or address. */
-	address: string,
-	/**  SSH port, defaulting to 22. */
-	port: number,
-	/**  The configured user, or the current local user when omitted. */
-	username: string,
-	/**  An identity file to read at commit time, if configured. */
+	/**  One of this alias's discovered identity files. */
 	identityFile: string | null,
+	/**  An existing usable local Credential, instead of a source identity file. */
+	credentialId: string | null,
 };
 
-/**  Why the empty-list OpenSSH import could not proceed. */
+/**  One current local Credential which passes ordinary SSH material preflight. */
+export type OpenSshImportCredential = {
+	/**  The existing Credential identifier; never secret material. */
+	id: string,
+	/**  The saved display name, when present. */
+	name: string | null,
+	/**  The supported authentication kind. */
+	kind: CredentialKindInput,
+};
+
+/**  Display-only import row. Private keys and passwords never enter this projection. */
+export type OpenSshImportEntry = {
+	/**  The concrete source alias. */
+	alias: string,
+	/**  The evaluated SSH endpoint address. */
+	address: string,
+	/**  The evaluated nonzero SSH port. */
+	port: number,
+	/**  The evaluated remote username. */
+	username: string,
+	/**  The source file containing this declaration. */
+	sourceFile: string,
+	/**  One-based source line for the displayed declaration. */
+	line: number,
+	/**  The selected source identity file, if any. */
+	identityFile: string | null,
+	/**  Existing source or discovered identity files available for explicit selection. */
+	identityFiles: string[],
+	/**  The selected existing Credential identifier, if any. */
+	credentialId: string | null,
+	/**  Confirmation is unavailable until this row has one usable identity. */
+	needsCredential: boolean,
+	/**  The evaluated supported connection route. */
+	route: OpenSshImportRoute,
+	/**  The effect on the previously imported objects. */
+	action: OpenSshImportAction,
+	/**  Number of ordinary host keys associated with the included Hosts. */
+	trustRecords: number,
+};
+
+/**  An import failure leaves the inventory unchanged. */
 export type OpenSshImportError =
-/**  The selected file could not be read. */
+/**  A required configuration file could not be read. */
 { kind: "fileNotFound" } |
-/**  The source was not valid UTF-8. */
+/**  A source file is not UTF-8 text. */
 { kind: "notText" } |
-/**  The config or its simple-host list exceeds the bounded onboarding import. */
+/**  The source collection exceeds the bounded import size. */
 { kind: "tooLarge" } |
-/**  No representable host block was found. */
+/**  There are no included concrete aliases. */
 { kind: "noHosts" } |
-/**  The source changed after the user reviewed its preview. */
+/**  Reviewed source files changed and require a fresh preview. */
 { kind: "sourceChanged" } |
-/**  Import is intentionally limited to the first-launch empty inventory. */
-{ kind: "inventoryNotEmpty" } |
-/**  An identity file named by a representable entry could not be read. */
+/**  Reviewed imported objects changed and require a fresh preview. */
+{ kind: "inventoryChanged" } |
+/**  At least one included alias still needs an explicit identity. */
+{ kind: "credentialsRequired" } |
+/**  A selected local Credential cannot authenticate this alias. */
+{ kind: "credentialUnavailable";
+/**  Alias requiring a new identity choice. */
+alias: string } |
+/**  A chosen source identity could not be read. */
 { kind: "identityNotFound";
-/**  The path, which is not secret. */
+/**  The chosen local source path. */
 path: string } |
-/**  The selected file or local store failed without a partial import. */
+/**  The local operation failed without partial changes. */
 { kind: "failed";
-/**  A diagnostic reference safe to show for retryable failures. */
+/**  A safe explanation without credential contents. */
 reference: string };
 
-/**  A preview of importing one OpenSSH configuration file. */
+/**  A complete read-only preview bound to the source files and current imported objects. */
 export type OpenSshImportPreview = {
-	/**  The selected source path. */
+	/**  The canonical root configuration used as the local source identity. */
 	path: string,
-	/**  Entries that can be represented by the tier-0 importer. */
+	/**  The explicit identity choices used to compute this preview. */
+	choices: OpenSshImportChoice[],
+	/**  The current safe Credential picker catalog, with secrets omitted. */
+	eligibleCredentials: OpenSshImportCredential[],
+	/**  Fingerprint of all files actually read for this preview. */
+	sourceRevision: string,
+	/**  Fingerprint of the imported objects and selected Credential records. */
+	inventoryRevision: string,
+	/**  Number of distinct configuration, identity and trust files read. */
+	files: number,
+	/**  Concrete aliases included in this preview. */
 	entries: OpenSshImportEntry[],
-	/**  Literal aliases excluded from import, with a visible reason. */
+	/**  Aliases excluded with their source and explanation. */
 	skippedHosts: OpenSshSkippedHost[],
-	/**  Directives that will be skipped and shown to the user. */
+	/**  Every unrepresentable source declaration found during reading. */
 	unsupported: OpenSshUnsupportedDirective[],
 };
 
-/**  The result of importing a preview into an empty inventory. */
+/**  The atomic import result, including unchanged rows. */
 export type OpenSshImportResult = {
-	/**  Hosts created from the preview. */
+	/**  Imported Host details, including rows which were already current. */
 	hosts: HostDetails[],
-	/**  Literal aliases excluded from import, with a visible reason. */
+	/**  Number of new Host rows. */
+	created: number,
+	/**  Number of existing Host rows with imported changes. */
+	updated: number,
+	/**  Number of already-current Host rows. */
+	unchanged: number,
+	/**  Number of ordinary host keys associated with the included Hosts. */
+	trustRecords: number,
+	/**  Aliases excluded with their source and explanation. */
 	skippedHosts: OpenSshSkippedHost[],
-	/**  Unsupported directives retained for the report. */
+	/**  Every unrepresentable source declaration found during reading. */
 	unsupported: OpenSshUnsupportedDirective[],
 };
 
-/**  Why a literal `Host` alias cannot be imported without changing its meaning. */
-export type OpenSshSkipReason =
-/**  A directive within this host block has no tier-0 representation. */
-{ kind: "unsupportedDirective";
-/**  The directive name as written. */
-directive: string } |
-/**  A global rule could change any host in the source file. */
-{ kind: "globalRules";
-/**  The global directive responsible for the exclusion. */
-directive: string } |
-/**  Multiple `Host` blocks name the same alias. */
-{ kind: "duplicateAlias" } |
-/**  A supported directive has a value outside the simple import subset. */
-{ kind: "invalidValue";
-/**  The directive name as written. */
-directive: string };
+/**  A route already supported by the client connection orchestrator. */
+export type OpenSshImportRoute =
+/**  Ordinary direct SSH. */
+{ kind: "direct" } |
+/**  Explicit concrete aliases, each using a direct Login. */
+{ kind: "jump";
+/**  Ordered concrete aliases of direct jump Logins. */
+hops: string[] } |
+/**  The existing literal-argument ProxyCommand transport. */
+{ kind: "command";
+/**  The saved literal-argument command. */
+command: string };
 
-/**  A literal alias excluded from the tier-0 import preview. */
+/**  Why importing an alias would change its configured meaning. */
+export type OpenSshSkipReason =
+/**  A matching source option has no executable client representation. */
+{ kind: "unsupportedDirective";
+/**  The source keyword responsible for exclusion. */
+directive: string } |
+/**  A conditional rule cannot be frozen into a concrete Host. */
+{ kind: "globalRules";
+/**  The source keyword responsible for exclusion. */
+directive: string } |
+/**  A supported option has an unrepresentable value. */
+{ kind: "invalidValue";
+/**  The source keyword responsible for exclusion. */
+directive: string } |
+/**  A Jump hop is unavailable or is itself routed. */
+{ kind: "routeDependency";
+/**  The missing or routed hop alias. */
+alias: string };
+
+/**  A concrete alias that needs a source correction before importing. */
 export type OpenSshSkippedHost = {
-	/**  The `Host` alias. */
+	/**  The concrete source alias. */
 	alias: string,
-	/**  One-based line of its `Host` block. */
+	/**  The source file containing this declaration. */
+	sourceFile: string,
+	/**  One-based source line for the displayed declaration. */
 	line: number,
-	/**  Why importing it would be misleading. */
+	/**  The reason this alias cannot be imported faithfully. */
 	reason: OpenSshSkipReason,
 };
 
-/**  A directive the limited tier-0 importer cannot represent yet. */
+/**  A source directive or trust entry with no faithful representation in this import. */
 export type OpenSshUnsupportedDirective = {
-	/**  One-based source line. */
+	/**  The source file containing this declaration. */
+	sourceFile: string,
+	/**  One-based source line for the displayed declaration. */
 	line: number,
-	/**  The directive name as written. */
+	/**  The source keyword requiring correction or manual handling. */
 	directive: string,
 };
 
