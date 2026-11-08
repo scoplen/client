@@ -8,6 +8,7 @@ import { HostsHome } from "../src/inventory/home";
 import { SettingsView } from "../src/settings";
 import { violations } from "../../ui/test/axe";
 import type { SessionTarget } from "../src/ipc/bindings";
+import { selectOption } from "./select-option";
 
 function show(
   api: InventoryApi,
@@ -274,9 +275,8 @@ describe("importing an OpenSSH config", () => {
     expect(within(dialog).getByText(`${source} · line 2`)).toBeTruthy();
     expect(within(dialog).getByText("Imported trust records: 1")).toBeTruthy();
     expect(within(dialog).getByText("/Users/mia/.ssh/id_ed25519", { selector: "p" })).toBeTruthy();
-    expect(within(dialog).getByRole("combobox", { name: "Identity for prod-api" })).toHaveProperty(
-      "value",
-      "file:/Users/mia/.ssh/id_ed25519",
+    expect(within(dialog).getByRole("combobox", { name: "Identity for prod-api" }).textContent).toContain(
+      "/Users/mia/.ssh/id_ed25519",
     );
     expect(within(dialog).getByText(/Uses unsupported ForwardAgent/)).toBeTruthy();
     expect(within(dialog).getByText("line 7: ForwardAgent")).toBeTruthy();
@@ -346,10 +346,7 @@ describe("importing an OpenSSH config", () => {
     const confirm = within(dialog).getByRole("button", { name: "Import hosts" });
     expect(confirm.hasAttribute("disabled")).toBe(true);
     expect(within(dialog).getByText(/Choose an identity for 1 host/)).toBeTruthy();
-    await userEvent.selectOptions(
-      within(dialog).getByRole("combobox", { name: "Identity for prod-api" }),
-      "credential:c-laptop",
-    );
+    await selectOption(within(dialog).getByRole("combobox", { name: "Identity for prod-api" }), "laptop");
     await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(false));
     const choices = [{ alias: "prod-api", identityFile: null, credentialId: "c-laptop" }];
     expect(preview).toHaveBeenLastCalledWith(source, choices);
@@ -374,15 +371,15 @@ describe("importing an OpenSSH config", () => {
     const importHosts = vi.spyOn(api, "importOpenSshConfig");
     const dialog = await open(api);
     const select = within(dialog).getByRole("combobox", { name: "Identity for prod-api" });
-    await userEvent.selectOptions(select, "credential:c-laptop");
+    await selectOption(select, "laptop");
     expect(await within(dialog).findByRole("alert")).toHaveProperty(
       "textContent",
       expect.stringContaining("selected credential for prod-api is unavailable"),
     );
-    expect(select).toHaveProperty("value", "credential:c-laptop");
+    expect(select.textContent).toContain("laptop");
     expect(within(dialog).getByRole("button", { name: "Import hosts" }).hasAttribute("disabled")).toBe(true);
     expect(importHosts).not.toHaveBeenCalled();
-    await userEvent.selectOptions(select, "");
+    await selectOption(select, "Use configured identity");
     await waitFor(() =>
       expect(within(dialog).getByRole("button", { name: "Import hosts" }).hasAttribute("disabled")).toBe(false),
     );
@@ -658,7 +655,7 @@ describe("editing a host", () => {
   it("saves an explicit Interactive choice and can select a saved credential again", async () => {
     const dialog = await open();
     const select = within(dialog).getByLabelText("Sign in as admin");
-    await userEvent.selectOptions(select, "interactive");
+    await selectOption(select, "Interactive (OTP/PAM)");
     expect(within(dialog).queryByLabelText("Password")).toBeNull();
     expect(await violations(dialog)).toEqual([]);
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -666,9 +663,8 @@ describe("editing a host", () => {
     expect(await screen.findByText(/Interactive.*Direct/)).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Edit host" }));
     const reopened = await screen.findByRole("dialog", { name: "Edit host" });
-    expect((within(reopened).getByLabelText("Sign in as admin") as HTMLSelectElement).value).toBe("interactive");
-    await within(reopened).findByRole("option", { name: "Password" });
-    await userEvent.selectOptions(within(reopened).getByLabelText("Sign in as admin"), "c-nas");
+    expect(within(reopened).getByLabelText("Sign in as admin").textContent).toContain("Interactive (OTP/PAM)");
+    await selectOption(within(reopened).getByLabelText("Sign in as admin"), "Password");
     await userEvent.click(within(reopened).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit host" })).toBeNull());
     expect(await screen.findByText(/Password.*Direct/)).toBeTruthy();
@@ -676,7 +672,7 @@ describe("editing a host", () => {
 
   it("restores focus to Edit host after cancelling credential changes", async () => {
     const dialog = await open();
-    await userEvent.selectOptions(within(dialog).getByLabelText("Sign in as admin"), "interactive");
+    await selectOption(within(dialog).getByLabelText("Sign in as admin"), "Interactive (OTP/PAM)");
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit host" })).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit host" }));

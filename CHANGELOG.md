@@ -4,6 +4,9 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Use themed dropdowns throughout inventory, tunnel, snippet, history and team forms,
+  preserving grouped choices, keyboard operation, disabled states and required validation.
+
 - Move OpenSSH import and export to Settings > Data > Import and export, keeping
   the Hosts toolbar focused on search and adding hosts. Existing migration previews,
   confirmations, reports and native file/folder pickers are preserved.

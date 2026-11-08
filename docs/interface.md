@@ -22,9 +22,11 @@ maximize. Close follows the ordinary terminal-save and application shutdown path
 and local unlock retain their own draggable strip and controls. macOS keeps its native
 traffic lights in the overlay title bar. Narrow windows show Workspaces as a labeled icon.
 
-The Account selector uses `@scoplen/ui`'s themed Select popup. Arrow keys, Home/End,
-typeahead, Enter and Escape work without an operating-system selection menu. It marks the
-current profile, excludes accounts that are not ready and returns focus after dismissal.
+All dropdown choices use `@scoplen/ui`'s themed Select popup, including inventory, tunnel,
+snippet, team and history forms and the gallery controls. Arrow keys, Home/End,
+typeahead, Enter and Escape work without an operating-system selection menu. Field selectors
+keep their labels, required state, disabled choices and identity option groups. The Account
+selector marks the current profile, excludes accounts that are not ready and returns focus after dismissal.
 Choosing another profile opens the existing switch confirmation; choosing the current
 profile has no effect. The profile's local passphrase remains a transient confirmation input.
 
