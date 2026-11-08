@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { Button, Select } from "../src";
@@ -92,5 +92,44 @@ describe("Select", () => {
     expect(screen.getByRole("option", { name: "Local" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("option", { name: "Unavailable account" }).getAttribute("aria-disabled")).toBe("true");
     expect(await violations(list)).toEqual([]);
+  });
+
+  it("retains field labels, required validation and named option groups", async () => {
+    function Example() {
+      const [value, setValue] = useState("");
+      return (
+        <form aria-label="Identity form">
+          <label htmlFor="identity">Identity</label>
+          <span id="identity-hint">Choose a saved identity.</span>
+          <Select
+            id="identity"
+            label="Identity"
+            aria-describedby="identity-hint"
+            size="field"
+            required
+            value={value}
+            onValueChange={setValue}
+            options={[
+              { value: "", label: "Choose identity" },
+              { value: "file", label: "Key file", group: "Files" },
+              { value: "saved", label: "Saved key", group: "Saved credentials" },
+            ]}
+          />
+        </form>
+      );
+    }
+    render(<Example />);
+    const form = screen.getByRole("form") as HTMLFormElement;
+    const trigger = screen.getByLabelText("Identity");
+    expect(trigger.tagName).toBe("BUTTON");
+    expect(trigger.getAttribute("aria-describedby")).toBe("identity-hint");
+    expect(form.checkValidity()).toBe(false);
+    await userEvent.click(trigger);
+    const files = await screen.findByRole("group", { name: "Files" });
+    expect(screen.getByRole("group", { name: "Saved credentials" })).toBeTruthy();
+    expect(await violations(screen.getByRole("listbox"))).toEqual([]);
+    await userEvent.click(within(files).getByRole("option", { name: "Key file" }));
+    expect(trigger.textContent).toBe("Key file");
+    expect(form.checkValidity()).toBe(true);
   });
 });

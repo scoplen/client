@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { selectOption } from "./select-option";
 import { I18nProvider } from "../src/i18n";
 import type { SnippetView } from "../src/ipc/bindings";
 import { SessionSnippets, type SnippetTarget } from "../src/session-snippets";
@@ -204,8 +205,8 @@ it("supports exact empty choices and integer strings without JavaScript coercion
   });
   fixture();
   await chooseSnippet();
-  expect(screen.getByRole("combobox", { name: "toString" })).toHaveProperty("value", "");
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "toString" }), "0");
+  expect(screen.getByRole("combobox", { name: "toString" }).textContent).toBe("Choose a value");
+  await selectOption(screen.getByRole("combobox", { name: "toString" }), "(empty value)");
   await userEvent.click(screen.getByRole("button", { name: "Review command" }));
   expect(commands.snippetsPrepare).toHaveBeenCalledExactlyOnceWith(snippet.id, {
     count: "9223372036854775807",
@@ -243,7 +244,7 @@ it("creates a real editor intent with literal template, typed variable, folder a
   await userEvent.type(screen.getByRole("textbox", { name: "Tags (optional)" }), "ops{Enter}release");
   await userEvent.click(screen.getByRole("button", { name: "Add variable" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Variable name" }), "version");
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Type" }), "integer");
+  await selectOption(screen.getByRole("combobox", { name: "Type" }), "Integer");
   await userEvent.click(screen.getByRole("checkbox", { name: "Use a default value" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Default value" }), "42");
   expect(await violations(screen.getByRole("dialog"))).toEqual([]);

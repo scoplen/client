@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { selectOption } from "./select-option";
 import { I18nProvider } from "../src/i18n";
 import type {
   TeamAuthoringCollection,
@@ -201,7 +202,7 @@ it("uses the shared rule preview with Membership ids and does not implicitly gra
   await loaded();
   await userEvent.click(screen.getByRole("button", { name: "Create access rule" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Rule name" }), "Team view");
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Member" }), member.id);
+  await selectOption(screen.getByRole("combobox", { name: "Member" }), "alex");
   await userEvent.click(await screen.findByRole("checkbox", { name: "Production" }));
   await userEvent.click(screen.getByRole("button", { name: "Preview rule" }));
   expect(await screen.findByText(/Each referenced asset needs its own view permission/)).toBeTruthy();
@@ -235,7 +236,7 @@ it("keeps identity-provider groups read-only even when the user has an administr
   commands.teamAuthoringResource.mockResolvedValue({ status: "ok", data: group });
   fixture("access");
   await loaded();
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Asset type" }), "group");
+  await selectOption(screen.getByRole("combobox", { name: "Asset type" }), "Member group");
   await userEvent.click(await screen.findByRole("button", { name: "Edit Identity operators" }));
   expect((screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByRole("textbox", { name: "Name" }).matches(":disabled")).toBe(true);
@@ -353,7 +354,7 @@ it("removes a snippet default when changing its variable to secret input", async
       />
     </I18nProvider>,
   );
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Variable type" }), "4");
+  await selectOption(screen.getByRole("combobox", { name: "Variable type" }), "Secret input");
   expect(change).toHaveBeenLastCalledWith({
     kind: "snippet",
     fields: { name: "Run", template: "echo", variables: { argument: { kind: 4 } } },

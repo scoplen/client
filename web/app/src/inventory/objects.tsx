@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Confirm, Dialog, Field, IconButton, Mark, Notice, TextAreaField } from "@scoplen/ui";
+import { Button, Confirm, Dialog, Field, IconButton, Mark, Notice, Select, TextAreaField } from "@scoplen/ui";
 import { Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
@@ -638,19 +638,15 @@ function SelectField({
       <label htmlFor={id} className="text-sm font-medium text-foreground">
         {label}
       </label>
-      <select
+      <Select
         id={id}
+        label={label}
+        size="field"
         value={value}
         disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        className="ui-input h-10 px-3 text-sm"
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+        onValueChange={onChange}
+        options={options}
+      />
       {hint ? <p className="m-0 text-sm text-muted-foreground">{hint}</p> : null}
     </div>
   );

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useProfileCommands } from "./account-profiles";
-import { Button, Confirm, Dialog } from "@scoplen/ui";
+import { Button, Confirm, Dialog, Select } from "@scoplen/ui";
 import { useEffect, useId, useRef, useState } from "react";
 import { catalogs, useI18n } from "./i18n";
 import {
@@ -98,23 +98,22 @@ export function PersonalHistorySettings({
       <label className="mt-3 block text-sm" htmlFor={`${id}-object`}>
         {t("settings.personal.history.object")}
       </label>
-      <select
+      <Select
         id={`${id}-object`}
-        className="mt-2 block w-full min-w-0 rounded-md border border-border bg-background p-2 text-sm"
+        label={t("settings.personal.history.object")}
+        size="field"
+        className="mt-2 w-full"
         value={objectId}
         disabled={disabled || busy}
-        onChange={(event) => {
-          setObjectId(event.target.value);
+        onValueChange={(next) => {
+          setObjectId(next);
           setHistory(null);
         }}
-      >
-        <option value="">{t("settings.personal.history.choose")}</option>
-        {objects.map((object) => (
-          <option key={object.id} value={object.id}>
-            {object.name ?? object.id}
-          </option>
-        ))}
-      </select>
+        options={[
+          { value: "", label: t("settings.personal.history.choose") },
+          ...objects.map((object) => ({ value: object.id, label: object.name ?? object.id })),
+        ]}
+      />
       <Button
         className="mt-3"
         disabled={disabled || busy || !authenticated || !objectId}

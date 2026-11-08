@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Dialog, Tag } from "@scoplen/ui";
+import { Button, Dialog, Select, Tag } from "@scoplen/ui";
 import { useId, useState } from "react";
 import { useI18n } from "../i18n";
 import {
@@ -170,33 +170,28 @@ export function OpenSshImportDialog({
                       <label htmlFor={fieldId} className="font-medium">
                         {t("import.identity", { alias: entry.alias })}
                       </label>
-                      <select
+                      <Select
                         id={fieldId}
-                        className="ui-input h-10 w-full min-w-0 px-3 text-sm"
+                        label={t("import.identity", { alias: entry.alias })}
+                        size="field"
+                        className="w-full"
                         value={value}
                         disabled={busy}
-                        onChange={(event) => choose(entry, event.target.value)}
-                      >
-                        <option value="">{t("import.identity.default")}</option>
-                        {entry.identityFiles.length ? (
-                          <optgroup label={t("import.identity.files")}>
-                            {entry.identityFiles.map((path) => (
-                              <option key={path} value={`file:${path}`}>
-                                {path}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ) : null}
-                        {preview.eligibleCredentials.length ? (
-                          <optgroup label={t("import.identity.saved")}>
-                            {preview.eligibleCredentials.map((credential) => (
-                              <option key={credential.id} value={`credential:${credential.id}`}>
-                                {credential.name ?? t(`objects.credential.kind.${credential.kind}`)}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ) : null}
-                      </select>
+                        onValueChange={(next) => choose(entry, next)}
+                        options={[
+                          { value: "", label: t("import.identity.default") },
+                          ...entry.identityFiles.map((path) => ({
+                            value: `file:${path}`,
+                            label: path,
+                            group: t("import.identity.files"),
+                          })),
+                          ...preview.eligibleCredentials.map((credential) => ({
+                            value: `credential:${credential.id}`,
+                            label: credential.name ?? t(`objects.credential.kind.${credential.kind}`),
+                            group: t("import.identity.saved"),
+                          })),
+                        ]}
+                      />
                       {identityFile ? (
                         <p className="m-0 break-all font-mono text-xs text-muted-foreground">{identityFile}</p>
                       ) : null}
