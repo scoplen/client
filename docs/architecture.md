@@ -19,10 +19,12 @@ web/app (React)  ── typed commands, binary channels ──  src-tauri  ─�
 - `scoplen-client-core` holds every behavior, so it is the same on both platforms and testable without a window.
 - `scoplen-client-platform` is the only crate that may contain `unsafe` code or FFI; it is denied by default there too and allowed per module with each block documented.
 
-The shared libraries, Pageant and ssh-key patches are pinned to published `proto@e34ee91`,
+The shared libraries, Pageant and ssh-key patches are pinned to published `proto@a94554e`,
 including D-137 Organization inventory/view, group/policy and user-CA contracts, and the
 P-256 short-scalar import correction. D-138 permits an absent verified SSO fact in ordinary
 password-Account connection context; it does not invent an SSO authentication time.
+D-139 adds parsed inspection of source-IP-dependent connect policies for the initial
+local-user-CA issuance boundary.
 Fresh Device authentication obtains team scopes; refresh preserves
 or narrows the retained family's ceiling.
 It retains the D-127/D-128 password-account contracts,
