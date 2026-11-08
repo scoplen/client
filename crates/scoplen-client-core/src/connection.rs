@@ -41,11 +41,12 @@ use crate::store::Store;
 
 mod agent;
 pub mod preparation;
-mod proxy_command;
+pub(crate) mod proxy_command;
 pub(crate) mod team;
 #[cfg(test)]
 pub(crate) mod test_peer;
 mod trust;
+pub(crate) use trust::acceptance_account as host_key_acceptance_account;
 pub use trust::{HostKeyAssessment, HostKeyReview, HostKeyTrustSource, assess_host_key};
 
 /// An immutable inventory source selected by an explicit connection intent.
@@ -511,7 +512,7 @@ fn resolve_route_credential(
     resolve_credential(store, record).map(Some)
 }
 
-fn resolve_credential(
+pub(crate) fn resolve_credential(
     store: &Store,
     credential: &Credential,
 ) -> Result<CredentialMaterial, ConnectionPlanError> {
@@ -915,7 +916,9 @@ async fn connect_route(
     }
 }
 
-fn validate_credential(credential: &CredentialMaterial) -> Result<(), SshConnectionError> {
+pub(crate) fn validate_credential(
+    credential: &CredentialMaterial,
+) -> Result<(), SshConnectionError> {
     match credential {
         CredentialMaterial::Password(_)
         | CredentialMaterial::PrivateKey(_)

@@ -271,6 +271,35 @@ After every committed change the shell sends the frontend a `storeChanged` event
 
 `SQLCipher` is built with a vendored, statically linked OpenSSL on both platforms, so a build never links a system OpenSSL by accident.
 
+## OpenSSH migration
+
+`inventory::openssh` reads a bounded configuration/include tree, evaluates first-value
+Host rules for concrete aliases and maps representable results to existing Host,
+AccessProfile, Credential, Route and TrustRecord objects. Include evaluation restores its
+outer Host state. The importer accepts `*` and `?` Include patterns in lexical order;
+character classes, Match and unsupported directives report source/line information and
+exclude affected aliases. ProxyCommand must fit the existing literal-argument transport;
+shell operators/expansion are not converted. Jump hops must name imported Direct aliases.
+
+The safe preview contains source paths, evaluated values, identity choices and effects,
+without key bytes or passwords. Existing Credentials pass ordinary material preflight;
+an unusable implicit identity leaves the row awaiting an explicit choice. Public source
+keys create exact-key Agent Credentials and private OpenSSH source keys create shared
+Credentials inside SQLCipher, retaining the connection-time encrypted-key unlock policy.
+Only ordinary exact known-host endpoints create imported trust. Conflicting keys of one
+algorithm and keys marked revoked are withheld; unsupported trust entries remain reported.
+
+Migration 22 adds `openssh_import_sources`, an encrypted device-local ledger from canonical
+root source and source object key to object identity. It never enters synchronized object
+fields. Reimport retains stable identities, preserves unrelated fields and emits no model
+writes for unchanged rows. The preview fingerprints all read source bytes and the relevant
+mapped/selected objects; confirmation replans, compares the projection and rechecks the
+inventory revision inside the immediate commit transaction. Object changes, implicit
+metadata, source mappings and stale source-trust tombstones commit together before events.
+For each retained alias the source's current trust set replaces its previous imported set;
+manual trust and inventory for aliases absent from the source remain unchanged. This is
+an explicit migration workflow, not automatic bidirectional file synchronization.
+
 ## Personal account identity
 
 Migration 11 adds neutral, device-local admitted provenance with immutable canonical origin,

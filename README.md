@@ -10,7 +10,32 @@ Owner and operator: Plystra LLC. Responsible maintainer: Plystra LLC.
 
 Maturity: Exploration. Maintenance: Active.
 
-The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. An empty inventory can preview and import simple literal OpenSSH `Host` blocks, reporting skipped hosts and unsupported directives without modifying the source file. SSH connects directly, through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, through an explicit saved Jump chain, or through a saved local ProxyCommand. Each SSH host uses its saved password, OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA software key, or an explicitly selected key in the system SSH agent, after independent host-key review. The target opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after that host's review. New or changed keys require explicit acceptance; wildcard-only and CA records do not authorize raw host keys. Other credential kinds and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
+The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. OpenSSH migration previews new and previously imported aliases alongside existing inventory, including their usable identity, route and ordinary known host keys. SSH connects directly, through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, through an explicit saved Jump chain, or through a saved local ProxyCommand. Each SSH host uses its saved password, OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA software key, or an explicitly selected key in the system SSH agent, after independent host-key review. The target opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after that host's review. New or changed keys require explicit acceptance; wildcard-only and CA records do not authorize raw host keys. Other credential kinds and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
+
+Use Import OpenSSH in Hosts to select a configuration and review Create, Update and
+Unchanged rows before confirming. Literal aliases receive applicable global and wildcard
+`Host` rules in source order, including lexically ordered `Include` files. Relative Includes
+use `~/.ssh`; relative identity and known-host paths use the client's working directory.
+Source files remain read-only. Available private OpenSSH keys become encrypted-store
+Credentials; public identity files select that exact key in the system agent. Missing,
+unusable or multiple identities require an explicit source-key or saved-Credential choice.
+Create a saved password Credential first for password-only aliases. Confirmation requires
+one usable identity for every included alias and commits the entire reviewed batch together.
+
+Direct routes, `ProxyJump` chains of imported Direct aliases and literal-argument
+`ProxyCommand` values map to existing Routes. Shell operators and expansion in ProxyCommand,
+inline Jump user/port overrides, nested routes, `Match`, Include character classes and
+other unrepresentable directives are reported with source locations; affected aliases are
+skipped. Ordinary exact `known_hosts` entries bind to the evaluated address and port.
+Hashed, wildcard, CA and revoked entries are reported; conflicting ordinary keys of one
+algorithm and keys marked revoked do not become ordinary trusted keys.
+
+Reimporting the same source preserves object identities and writes only reviewed changes.
+For listed aliases, confirmation replaces source-owned fields and removes imported trust
+no longer supplied by that source; manually added trust remains. Removing an entire alias
+from the configuration does not delete its migrated inventory. Edits to reviewed files or
+imported objects require a fresh preview. SSH config generation, managed Includes and
+portable export remain separate roadmap outcomes.
 
 When adding a host, choose Key and Create a new key to generate an Ed25519 key
 in the Rust core. The private key stays in the encrypted store; the host, Login
