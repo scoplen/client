@@ -8,6 +8,13 @@ export const zhHans: Messages = {
   "shell.nav.about": "关于",
   "shell.nav.settings": "设置",
 
+  "window.controls": "窗口控制",
+  "window.minimize": "最小化窗口",
+  "window.maximize": "最大化窗口",
+  "window.restore": "还原窗口",
+  "window.close": "关闭窗口",
+  "window.failed": "窗口操作失败，请重试，或按 Alt+F4 关闭 Scoplen。",
+
   "about.title": "关于 Scoplen",
   "about.summary": "SSH 客户端和堡垒机，完全自己部署。",
   "about.version": "版本 {version}，适用于 {platform, select, macos {macOS} windows {Windows} other {当前系统}}",

@@ -8,6 +8,13 @@ export const en = {
   "shell.nav.about": "About",
   "shell.nav.settings": "Settings",
 
+  "window.controls": "Window controls",
+  "window.minimize": "Minimize window",
+  "window.maximize": "Maximize window",
+  "window.restore": "Restore window",
+  "window.close": "Close window",
+  "window.failed": "The window action failed. Try again, or use Alt+F4 to close Scoplen.",
+
   "about.title": "About Scoplen",
   "about.summary": "An SSH client and bastion, fully self-hosted.",
   "about.version": "Version {version} for {platform, select, macos {macOS} windows {Windows} other {this system}}",

@@ -9,6 +9,7 @@ import { Menus } from "./menus";
 import { Shell } from "./shell";
 import { TerminalColorsProvider } from "./terminal-colors";
 import { AccountProfilesBoundary } from "./account-profiles";
+import { WindowControls } from "./window-controls";
 
 type Startup =
   { state: "loading" } | { state: "ready"; info: AppInfo; status: Status } | { state: "failed"; reference: string };
@@ -67,6 +68,7 @@ export function App() {
         <LanguageProvider choice={language} setChoice={setLanguage}>
           <I18nProvider locale={locale}>
             <Menus>
+              <WindowControls standalone={startup.state !== "ready" || startup.status.state !== "open"} />
               <SkipTarget />
               {startup.state === "loading" ? <StartupLoading /> : null}
               {startup.state === "ready" ? (

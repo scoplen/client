@@ -262,14 +262,104 @@ it("selects a ready account only after explicit session-shutdown confirmation", 
   f.handlers.set("account_profiles_snapshot", () => before);
   f.handlers.set("select_account_profile", () => ({ ...before, generation: "2", selected: account.id }));
   render(view());
-  await userEvent.selectOptions(await screen.findByLabelText("Open profile"), account.id);
+  await userEvent.click(await screen.findByRole("combobox", { name: "Open profile" }));
+  await userEvent.click(await screen.findByRole("option", { name: `${account.origin} · ${account.accountId}` }));
   expect(f.calls.some((call) => call.command === "select_account_profile")).toBe(false);
   expect(await screen.findByRole("dialog")).toBeTruthy();
   expect(screen.getByText(/Switching closes every SSH session/)).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "Switch profile" }));
-  await waitFor(() => expect((screen.getByLabelText("Open profile") as HTMLSelectElement).value).toBe(account.id));
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Open profile" }).textContent).toContain(account.accountId),
+  );
   const selection = f.calls.find((call) => call.command === "select_account_profile")!;
   expect(selection.args).toEqual({ generation: "1", profileId: account.id, localPassphrase: null });
+});
+
+it("cancels profile selection with focus return and leaves the current profile unchanged", async () => {
+  const f = fixture();
+  const account = { id: "saved-account", origin: preparation.origin, accountId: "saved-identity", ready: true };
+  f.handlers.set("account_profiles_snapshot", () => ({
+    ...local,
+    accounts: [account, { ...account, id: "pending", origin: "https://pending.example.test", ready: false }],
+  }));
+  render(view());
+  const trigger = await screen.findByRole("combobox", { name: "Open profile" });
+  await userEvent.click(trigger);
+  await screen.findByRole("listbox");
+  expect(screen.queryByRole("option", { name: /pending.example.test/ })).toBeNull();
+  await userEvent.click(await screen.findByRole("option", { name: "Local" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await userEvent.click(trigger);
+  await userEvent.click(await screen.findByRole("option", { name: /saved-identity/ }));
+  await screen.findByRole("dialog");
+  expect(trigger.textContent).toBe("Local");
+  await userEvent.type(screen.getByLabelText("Profile local passphrase (if required)"), "transient passphrase");
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  expect(trigger.textContent).toBe("Local");
+  expect(f.calls.some((call) => call.command === "select_account_profile")).toBe(false);
+  await userEvent.click(trigger);
+  await userEvent.click(await screen.findByRole("option", { name: /saved-identity/ }));
+  expect(screen.getByLabelText("Profile local passphrase (if required)")).toHaveProperty("value", "");
+});
+
+it("clears the passphrase on submit and keeps profile switching busy until the captured request finishes", async () => {
+  const f = fixture();
+  const account = { id: "saved-account", origin: preparation.origin, accountId: "saved-identity", ready: true };
+  const before = { ...local, accounts: [account] };
+  f.handlers.set("account_profiles_snapshot", () => before);
+  let finish!: (snapshot: ProfileSnapshot) => void;
+  f.handlers.set(
+    "select_account_profile",
+    () =>
+      new Promise<ProfileSnapshot>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  render(view());
+  const trigger = await screen.findByRole("combobox", { name: "Open profile" });
+  await userEvent.click(trigger);
+  await userEvent.click(await screen.findByRole("option", { name: /saved-identity/ }));
+  const passphrase = screen.getByLabelText("Profile local passphrase (if required)");
+  await userEvent.type(passphrase, "transient passphrase");
+  await userEvent.click(screen.getByRole("button", { name: "Switch profile" }));
+  expect(passphrase).toHaveProperty("value", "");
+  expect(passphrase).toHaveProperty("disabled", true);
+  expect(trigger).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", { name: "Switching…" })).toHaveProperty("disabled", true);
+  await userEvent.keyboard("{Escape}");
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(f.calls.filter((call) => call.command === "select_account_profile")).toHaveLength(1);
+  expect(f.calls.find((call) => call.command === "select_account_profile")!.args).toEqual({
+    generation: "1",
+    profileId: account.id,
+    localPassphrase: "transient passphrase",
+  });
+  await act(async () => finish({ ...before, generation: "2", selected: account.id }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.getByRole("combobox", { name: "Open profile" }).textContent).toContain(account.accountId);
+});
+
+it("switches to Local only after confirmation without asking for a profile passphrase", async () => {
+  const f = fixture();
+  const account = { id: "saved-account", origin: preparation.origin, accountId: "saved-identity", ready: true };
+  const before = { ...local, selected: account.id, accounts: [account] };
+  f.handlers.set("account_profiles_snapshot", () => before);
+  f.handlers.set("select_account_profile", () => ({ ...before, generation: "2", selected: null }));
+  render(view());
+  await userEvent.click(await screen.findByRole("combobox", { name: "Open profile" }));
+  await userEvent.click(await screen.findByRole("option", { name: "Local" }));
+  await screen.findByRole("dialog");
+  expect(screen.queryByLabelText("Profile local passphrase (if required)")).toBeNull();
+  expect(f.calls.some((call) => call.command === "select_account_profile")).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: "Switch profile" }));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Open profile" }).textContent).toBe("Local"));
+  expect(f.calls.find((call) => call.command === "select_account_profile")!.args).toEqual({
+    generation: "1",
+    profileId: null,
+    localPassphrase: null,
+  });
 });
 
 it("keeps a retained root accessible without requesting registration state or relabeling it Local", async () => {

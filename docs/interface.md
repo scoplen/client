@@ -16,6 +16,18 @@ reached — is the core's.
 
 ## Look and feel
 
+Windows uses the tab strip as its title bar, with themed minimize, maximize/restore and
+close buttons on the right. Empty strip space drags the window and double-clicks toggle
+maximize. Close follows the ordinary terminal-save and application shutdown path. Startup
+and local unlock retain their own draggable strip and controls. macOS keeps its native
+traffic lights in the overlay title bar. Narrow windows show Workspaces as a labeled icon.
+
+The Account selector uses `@scoplen/ui`'s themed Select popup. Arrow keys, Home/End,
+typeahead, Enter and Escape work without an operating-system selection menu. It marks the
+current profile, excludes accounts that are not ready and returns focus after dismissal.
+Choosing another profile opens the existing switch confirmation; choosing the current
+profile has no effect. The profile's local passphrase remains a transient confirmation input.
+
 The interface has a character: the Scoplen mark, a small tilted egg whose eyes are a text cursor and a wink (`web/ui/src/components/mark.tsx`). It reacts only when something happens, never on its own: it watches the field being typed in the Add host dialog and shuts its eyes for a password or key, sleeps while the local data is locked, shakes its head when something is refused, and every host has its own egg in one of a few poses chosen from its identifier (`host-egg.tsx`). A session tab's egg shows the connection: eyes wide while connecting, asleep once closed, the attention color when it failed. The selected item is marked by the mark's open eye on its left edge (`pick.tsx`). With reduced motion the faces still change but nothing animates.
 
 Colors and shapes come from a theme the person chooses in Settings (`web/ui/src/themes.css`, `theme.tsx`): Paper (the default), Brutal, Sakura, Midnight, and Phosphor, each in light and dark where it has both, or following the system. A theme sets every color token and its radii, border width, shadows, the way buttons press, and the heading face; components read only the tokens. Every theme's text pairs are checked for WCAG AA contrast by `web/ui/test/tokens.test.ts`. The choice is an interface preference of the device and is kept in the webview's local storage until the core offers a settings store.
