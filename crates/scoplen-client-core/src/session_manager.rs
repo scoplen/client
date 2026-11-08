@@ -20,10 +20,13 @@ use uuid::Uuid;
 
 use crate::connection::preparation::{
     PreparationContext, PreparationControl, PreparationError, PreparationEvent,
-    PreparationResponse, prepare_connection,
+    PreparationResponse, prepare_resolved_target_connection, resolve_target_preparation_plan,
 };
-use crate::connection::{MAX_SSH_INPUT, SshConnectionError, SshSession, terminal_size};
+use crate::connection::{
+    MAX_SSH_INPUT, SessionTarget, SshConnectionError, SshSession, terminal_size,
+};
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
+use crate::personal_server::PersonalServer;
 use crate::session_files::{
     self, DownloadCheckpoint, DownloadExecution, DownloadInput, FileTransferProgress,
     MutationPreflight, RemoteDirectory, RemoteMutation, RemoteTextPreview, RemoteTextPreviewIssue,
@@ -1468,6 +1471,34 @@ impl SessionManager {
         output: impl Fn(Uuid, Vec<u8>) -> Result<(), String>,
         history_changed: impl Fn(&str, HistoryChange) + Clone + Send + Sync + 'static,
     ) -> Result<(), String> {
+        self.run_target(
+            session_id,
+            &SessionTarget::Personal { profile_id: profile_id.to_owned() },
+            &PersonalServer::default(),
+            command,
+            pty,
+            store,
+            emit,
+            output,
+            history_changed,
+        )
+        .await
+    }
+
+    /// Run a source-bound terminal using the same transport, Files and reconnect owners.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_target(
+        &self,
+        session_id: &str,
+        target: &SessionTarget,
+        personal: &PersonalServer,
+        command: Option<&str>,
+        pty: bool,
+        store: Arc<Store>,
+        emit: impl Fn(SessionEvent) -> Result<(), String> + Sync,
+        output: impl Fn(Uuid, Vec<u8>) -> Result<(), String>,
+        history_changed: impl Fn(&str, HistoryChange) + Clone + Send + Sync + 'static,
+    ) -> Result<(), String> {
         let mut intents = {
             let mut sessions =
                 self.sessions.lock().map_err(|_| "session manager is unavailable")?;
@@ -1517,7 +1548,8 @@ impl SessionManager {
             let result = self
                 .attempt(
                     session_id,
-                    profile_id,
+                    target,
+                    personal,
                     command,
                     pty,
                     &store,
@@ -1626,7 +1658,8 @@ impl SessionManager {
     async fn attempt(
         &self,
         session_id: &str,
-        profile_id: &str,
+        target: &SessionTarget,
+        personal: &PersonalServer,
         command: Option<&str>,
         pty: bool,
         store: &Arc<Store>,
@@ -1639,15 +1672,31 @@ impl SessionManager {
         output: &impl Fn(Uuid, Vec<u8>) -> Result<(), String>,
         history_changed: impl Fn(&str, HistoryChange) + Clone + Send + Sync + 'static,
     ) -> Result<(), AttemptError> {
-        let id = Uuid::parse_str(profile_id)
+        let id = Uuid::parse_str(target.profile_id())
             .map_err(|_| AttemptError::Local("the Login identifier is invalid".into()))?;
+        let team_plan = match target {
+            SessionTarget::Organization { .. } => {
+                Some(resolve_target_preparation_plan(store, personal, target)?)
+            }
+            SessionTarget::Personal { .. } => None,
+        };
         let closed = history_changed.clone();
-        let history = SessionHistoryLease::start(
-            Inventory::with_deletions(store.clone(), DeletionStore::default()),
-            profile_id.to_owned(),
-            RecentSessionKind::Terminal,
-            move |id| closed(id, HistoryChange::Closed),
-        )
+        let inventory = Inventory::with_deletions(store.clone(), DeletionStore::default());
+        let on_closed = move |id: &str| closed(id, HistoryChange::Closed);
+        let history = if let Some(plan) = &team_plan {
+            let team = plan.team().expect("Organization plan retains its source");
+            let host = Uuid::parse_str(&plan.target_context().host_id)
+                .map_err(|_| AttemptError::Local("The team Host identifier is invalid.".into()))?;
+            team.current(store, personal).map_err(AttemptError::Local)?;
+            SessionHistoryLease::start_team(inventory, store, team, id, host, on_closed)
+        } else {
+            SessionHistoryLease::start(
+                inventory,
+                target.profile_id().to_owned(),
+                RecentSessionKind::Terminal,
+                on_closed,
+            )
+        }
         .map_err(|error| AttemptError::Local(error.to_string()))?;
         {
             let mut sessions = self
@@ -1667,22 +1716,27 @@ impl SessionManager {
             }
         }
         history_changed(history.id(), HistoryChange::Opened);
-        let connection = prepare_connection(store, id, control, |event| {
-            if let PreparationEvent::Verified { context, .. } = &event
-                && context.target
-                && let Ok(mut sessions) = self.sessions.lock()
-                && let Some(active) =
-                    sessions.get_mut(session_id).and_then(|entry| entry.active.as_mut())
-                && active.id == transport
-            {
-                active.context = Some(context.clone());
-            }
-            emit(SessionEvent::Preparation {
-                transport_id: transport.to_string(),
-                event: Box::new(event),
+        let plan = match team_plan {
+            Some(plan) => plan,
+            None => resolve_target_preparation_plan(store, personal, target)?,
+        };
+        let connection =
+            prepare_resolved_target_connection(store, personal, plan, control, |event| {
+                if let PreparationEvent::Verified { context, .. } = &event
+                    && context.target
+                    && let Ok(mut sessions) = self.sessions.lock()
+                    && let Some(active) =
+                        sessions.get_mut(session_id).and_then(|entry| entry.active.as_mut())
+                    && active.id == transport
+                {
+                    active.context = Some(context.clone());
+                }
+                emit(SessionEvent::Preparation {
+                    transport_id: transport.to_string(),
+                    event: Box::new(event),
+                })
             })
-        })
-        .await;
+            .await;
         let connection = match connection {
             Ok(connection) => connection,
             Err(_) if control.is_cancelled() => {

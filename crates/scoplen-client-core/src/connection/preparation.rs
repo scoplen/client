@@ -26,6 +26,8 @@ use super::{
     assess_host_key, private_key_passphrase_required, resolve_connection_plan, transport_route,
     validate_credential,
 };
+use super::{SessionTarget, team::TeamConnectionSnapshot};
+use crate::personal_server::{PersonalServer, TeamSshSource};
 use crate::repository::{
     AccessProfile, Change, Edit, Host, Provenance, Record, RecordError, Repository, TrustRecord,
     TrustRecordChange,
@@ -49,6 +51,8 @@ pub struct AuthenticationPrompt {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparationContext {
+    /// Explicit Organization source; absent only for Local or Personal inventory.
+    pub source: Option<TeamSshSource>,
     /// Login identifier.
     pub profile_id: String,
     /// Host identifier.
@@ -103,6 +107,17 @@ pub enum PreparationPhase {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum PreparationEvent {
+    /// Review an Organization-authored program before creating any local process.
+    CommandExecution {
+        /// Exact source and target selected by this preparation.
+        context: PreparationContext,
+        /// One-use approval token, never retained across reconnect.
+        prompt_id: String,
+        /// Parsed and expanded literal executable.
+        program: String,
+        /// Parsed and expanded literal arguments, including empty values.
+        arguments: Vec<String>,
+    },
     /// One complete ordered challenge round on the retained connection.
     KeyboardInteractive {
         /// Trusted identity of this hop.
@@ -157,6 +172,8 @@ pub enum PreparationEvent {
 /// One response converted at the IPC boundary. Secret debug output is redacted.
 #[derive(Debug)]
 pub enum PreparationResponse {
+    /// Run the exact Organization command captured by this attempt.
+    AcceptCommand,
     /// Ordered one-time answers, including an explicit empty response.
     KeyboardInteractive(KeyboardInteractiveResponse),
     /// Accept the exact key retained by the core.
@@ -203,6 +220,7 @@ impl From<&str> for PreparationError {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum PromptKind {
+    Command,
     KeyboardInteractive,
     Trust,
     Passphrase,
@@ -266,6 +284,7 @@ impl PreparationControl {
         }
         let mut state = self.state.lock().map_err(|_| "preparation is unavailable")?;
         let kind = match response {
+            PreparationResponse::AcceptCommand => PromptKind::Command,
             PreparationResponse::KeyboardInteractive(_) => PromptKind::KeyboardInteractive,
             PreparationResponse::AcceptHostKey => PromptKind::Trust,
             PreparationResponse::Passphrase(_) => PromptKind::Passphrase,
@@ -428,6 +447,7 @@ struct Step {
     plan: ConnectionPlan,
     context: PreparationContext,
     passphrase: bool,
+    team: Option<Arc<TeamConnectionSnapshot>>,
 }
 
 /// Locally resolved immutable inputs; credentials remain inside Rust preparation.
@@ -437,6 +457,46 @@ impl PreparationPlan {
     pub(crate) fn target_context(&self) -> &PreparationContext {
         &self.0.last().expect("target step exists").context
     }
+
+    pub(crate) fn team(&self) -> Option<&TeamConnectionSnapshot> {
+        self.0.last().and_then(|step| step.team.as_deref())
+    }
+}
+
+pub(crate) fn resolve_target_preparation_plan(
+    store: &Store,
+    personal: &PersonalServer,
+    target: &SessionTarget,
+) -> Result<PreparationPlan, PreparationError> {
+    let profile =
+        Uuid::parse_str(target.profile_id()).map_err(|_| "The Login identifier is invalid.")?;
+    let SessionTarget::Organization { source, .. } = target else {
+        return resolve_preparation_plan(store, profile);
+    };
+    let snapshot = Arc::new(TeamConnectionSnapshot::load(store, personal, source)?);
+    let plans = snapshot.plans(profile)?;
+    let total = u32::try_from(plans.len()).map_err(|_| "The team Jump route is too large.")?;
+    let mut steps = Vec::with_capacity(plans.len());
+    for (index, (plan, profile, host)) in plans.into_iter().enumerate() {
+        transport_route(&plan).map_err(|error| error.to_string())?;
+        validate_credential(&plan.credential).map_err(|error| error.to_string())?;
+        let position = index as u32 + 1;
+        let context = PreparationContext {
+            source: Some(source.clone()),
+            profile_id: plan.profile_id.to_string(),
+            host_id: plan.host_id.to_string(),
+            login: profile.name.unwrap_or_else(|| profile.username.clone()),
+            host: host.name,
+            username: plan.username.clone(),
+            address: plan.address.clone(),
+            port: plan.port,
+            position,
+            total,
+            target: position == total,
+        };
+        steps.push(Step { plan, context, passphrase: false, team: Some(snapshot.clone()) });
+    }
+    Ok(PreparationPlan(steps))
 }
 
 pub(crate) fn resolve_preparation_plan(
@@ -496,6 +556,7 @@ fn resolve_steps(store: &Store, target_id: Uuid) -> Result<Vec<Step>, String> {
             .map_err(|e| e.to_string())?
             .ok_or("the Host was not found")?;
         let context = PreparationContext {
+            source: None,
             profile_id: plan.profile_id.to_string(),
             host_id: plan.host_id.to_string(),
             login: profile.name.unwrap_or_else(|| plan.username.clone()),
@@ -507,7 +568,7 @@ fn resolve_steps(store: &Store, target_id: Uuid) -> Result<Vec<Step>, String> {
             total,
             target: index as u32 + 1 == total,
         };
-        steps.push(Step { plan, context, passphrase });
+        steps.push(Step { plan, context, passphrase, team: None });
     }
     Ok(steps)
 }
@@ -580,10 +641,87 @@ pub(crate) async fn prepare_resolved_connection(
     control: &PreparationControl,
     emit: impl Fn(PreparationEvent) -> Result<(), String> + Sync,
 ) -> Result<SshConnection, PreparationError> {
+    prepare_resolved_inner(store, plan, None, control, emit).await
+}
+
+pub(crate) async fn prepare_resolved_target_connection(
+    store: &Arc<Store>,
+    personal: &PersonalServer,
+    plan: PreparationPlan,
+    control: &PreparationControl,
+    emit: impl Fn(PreparationEvent) -> Result<(), String> + Sync,
+) -> Result<SshConnection, PreparationError> {
+    let team = plan.team().map(|snapshot| (snapshot.source.clone(), snapshot.authority));
+    let preparation = prepare_resolved_inner(store, plan, Some((store, personal)), control, emit);
+    let Some((source, authority)) = team else { return preparation.await };
+    let changes = async {
+        let mut changes = store.team_asset_changes();
+        loop {
+            if personal.team_ssh_authority(store, &source).map_err(|error| error.to_string())?
+                != Some(authority)
+            {
+                return Err(PreparationError::Local(
+                    "Team access changed. Refresh its assets before connecting again.".into(),
+                ));
+            }
+            changes.changed().await.map_err(|_| "Team access is unavailable.")?;
+        }
+    };
+    tokio::select! { biased;
+        result = changes => result,
+        result = preparation => result,
+    }
+}
+
+async fn prepare_resolved_inner(
+    store: &Store,
+    plan: PreparationPlan,
+    team_provider: Option<(&Arc<Store>, &PersonalServer)>,
+    control: &PreparationControl,
+    emit: impl Fn(PreparationEvent) -> Result<(), String> + Sync,
+) -> Result<SshConnection, PreparationError> {
     let mut connections = ConnectionStack(Vec::new());
     let result = async {
         for step in plan.0 {
             control.active(|| Ok(()))?;
+            if let Some(team) = &step.team {
+                team.current(
+                    store,
+                    team_provider.ok_or("Team certificate provider is unavailable.")?.1,
+                )?;
+                if let ConnectionRoute::Command { command } = &step.plan.route {
+                    let (program, arguments) = super::proxy_command::resolve(
+                        command,
+                        &step.plan.address,
+                        step.plan.port,
+                        &step.plan.username,
+                    )?;
+                    let program =
+                        program.into_string().map_err(|_| "The connection program is invalid.")?;
+                    let arguments = arguments
+                        .into_iter()
+                        .map(|argument| {
+                            argument.into_string().map_err(|_| "A connection argument is invalid.")
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    control
+                        .prompt(
+                            PromptKind::Command,
+                            |prompt_id| PreparationEvent::CommandExecution {
+                                context: step.context.clone(),
+                                prompt_id,
+                                program,
+                                arguments,
+                            },
+                            &emit,
+                        )
+                        .await?;
+                    team.current(
+                        store,
+                        team_provider.ok_or("Team certificate provider is unavailable.")?.1,
+                    )?;
+                }
+            }
             emit(PreparationEvent::Progress {
                 context: step.context.clone(),
                 phase: PreparationPhase::Connecting,
@@ -606,7 +744,10 @@ pub(crate) async fn prepare_resolved_connection(
                 .map_err(|_| "host-key state is unavailable")?
                 .clone()
                 .ok_or("SSH server did not present a host key")?;
-            let assessment = assess_host_key(store, step.plan.host_id, &key)?;
+            let assessment = match &step.team {
+                Some(team) => team.assess(store, step.plan.host_id, &key)?,
+                None => assess_host_key(store, step.plan.host_id, &key)?,
+            };
             let status = assessment.status;
             if status != HostKeyStatus::Trusted {
                 control
@@ -627,9 +768,28 @@ pub(crate) async fn prepare_resolved_connection(
                         &emit,
                     )
                     .await?;
-                control.active(|| accept_key(store, step.plan.host_id, &key))?;
+                control.active(|| match &step.team {
+                    Some(team) => {
+                        team.current(
+                            store,
+                            team_provider.ok_or("Team certificate provider is unavailable.")?.1,
+                        )?;
+                        store
+                            .accept_team_host_key(
+                                &team.source,
+                                step.plan.host_id,
+                                &key.key,
+                                &key.fingerprint,
+                            )
+                            .map_err(|_| "Team Host trust could not be saved.".into())
+                    }
+                    None => accept_key(store, step.plan.host_id, &key),
+                })?;
             }
-            let confirmed = assess_host_key(store, step.plan.host_id, &key)?;
+            let confirmed = match &step.team {
+                Some(team) => team.assess(store, step.plan.host_id, &key)?,
+                None => assess_host_key(store, step.plan.host_id, &key)?,
+            };
             if confirmed.status != HostKeyStatus::Trusted {
                 return Err(
                     "host-key trust changed during preparation; connect again to review it".into(),
@@ -642,6 +802,46 @@ pub(crate) async fn prepare_resolved_connection(
                 source: confirmed.source.ok_or("host-key provenance is unavailable")?,
             })?;
             let connection = connections.0.last_mut().expect("current connection retained");
+            if let Some(team) = &step.team {
+                let (owner, personal) =
+                    team_provider.ok_or("Team certificate provider is unavailable.")?;
+                team.current(store, personal)?;
+                emit(PreparationEvent::Progress {
+                    context: step.context.clone(),
+                    phase: PreparationPhase::Authenticating,
+                })?;
+                let authentication = async {
+                    let certificate = control
+                        .run(async {
+                            personal
+                                .team_ssh_certificate(
+                                    (*owner).clone(),
+                                    &team.source,
+                                    step.plan.host_id,
+                                    &step.plan.username,
+                                )
+                                .await
+                                .map_err(|error| error.to_string())
+                        })
+                        .await?;
+                    team.current(store, personal)?;
+                    certificate.current(store).map_err(|error| error.to_string())?;
+                    control
+                        .run(async {
+                            Ok(connection.authenticate_team_certificate(store, certificate).await)
+                        })
+                        .await??;
+                    Ok::<(), PreparationError>(())
+                };
+                tokio::time::timeout(AUTHENTICATION_TIMEOUT, authentication).await.map_err(
+                    |_| {
+                        PreparationError::Local(
+                            "SSH authentication timed out; connect again".into(),
+                        )
+                    },
+                )??;
+                continue;
+            }
             let authentication_deadline = Instant::now() + AUTHENTICATION_TIMEOUT;
             let authentication = async {
                 let mut incorrect = false;

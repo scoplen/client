@@ -5,7 +5,7 @@ import { AppearanceProvider } from "@scoplen/ui";
 import { I18nProvider } from "../src/i18n";
 import { Shell } from "../src/shell";
 import { WorkspacesDialog } from "../src/workspaces";
-import type { WorkspaceInput, WorkspaceView } from "../src/ipc/bindings";
+import type { SessionTarget, WorkspaceInput, WorkspaceView } from "../src/ipc/bindings";
 import { violations } from "../../ui/test/axe";
 
 const api = vi.hoisted(() => ({
@@ -22,17 +22,21 @@ vi.mock("../src/account-profiles", () => ({
 }));
 vi.mock("../src/ipc/store-events", () => ({ useStoreChanges: () => undefined }));
 vi.mock("../src/inventory/home", () => ({
-  HostsHome: ({ onConnect }: { onConnect: (id: string, name: string) => void }) => (
+  HostsHome: ({ onConnect }: { onConnect: (target: SessionTarget, name: string) => void }) => (
     <>
-      <button onClick={() => onConnect("login-first", "First host")}>Start first</button>
-      <button onClick={() => onConnect("login-second", "Second host")}>Start second</button>
+      <button onClick={() => onConnect({ kind: "personal", profileId: "login-first" }, "First host")}>
+        Start first
+      </button>
+      <button onClick={() => onConnect({ kind: "personal", profileId: "login-second" }, "Second host")}>
+        Start second
+      </button>
     </>
   ),
 }));
 vi.mock("../src/session", () => ({
-  SessionTerminal: ({ profileId, sessionId }: { profileId: string; sessionId?: string }) => (
+  SessionTerminal: ({ target, sessionId }: { target: SessionTarget; sessionId?: string }) => (
     <p data-testid="session" data-session={sessionId}>
-      {profileId}
+      {target.profileId}
     </p>
   ),
 }));
@@ -46,6 +50,18 @@ const tabs: WorkspaceInput["tabs"] = [
 const openedTab = (sessionId: string, profileId: string, label: string) => ({
   tree: { kind: "terminal", terminal: { sessionId, profileId, label } },
   focusedSessionId: sessionId,
+});
+
+it("refuses to save team terminals into a Personal workspace", async () => {
+  render(
+    <I18nProvider locale="en">
+      <WorkspacesDialog tabs={tabs} active={0} teamSessions onOpen={vi.fn()} onClose={vi.fn()} />
+    </I18nProvider>,
+  );
+  await screen.findByText("Team terminals cannot be saved in a Personal workspace yet.");
+  await userEvent.type(screen.getByLabelText("Workspace name"), "Operations");
+  expect((screen.getByRole("button", { name: "Save current tabs" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(api.workspacesCreate).not.toHaveBeenCalled();
 });
 
 beforeEach(() => {

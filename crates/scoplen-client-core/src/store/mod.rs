@@ -14,6 +14,10 @@ pub(crate) mod personal;
 pub(crate) mod profiles;
 pub(crate) mod sync;
 pub(crate) mod team_assets;
+pub(crate) mod team_authoring;
+pub(crate) mod team_sessions;
+pub(crate) mod team_ssh;
+pub(crate) mod team_ssh_operations;
 pub(crate) mod teams;
 
 use std::collections::HashSet;

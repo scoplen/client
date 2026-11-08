@@ -572,6 +572,7 @@ async fn admitted_drop_uses_the_existing_worker_and_unknown_results_are_never_re
         let entry = sessions.get_mut("terminal").unwrap();
         entry.transfer_worker_running = false;
         entry.active.as_mut().unwrap().context = Some(PreparationContext {
+            source: None,
             profile_id: Uuid::now_v7().to_string(),
             host_id: Uuid::now_v7().to_string(),
             login: "fixture".into(),

@@ -55,6 +55,8 @@ struct PeerState {
     refresh: Option<RefreshPeer>,
     teams: Option<teams::TeamPeer>,
     team_lifecycle: Option<team_lifecycle::TeamLifecyclePeer>,
+    team_authoring: Option<team_authoring::AuthoringPeer>,
+    team_ssh: Option<team_ssh::TeamSshPeer>,
     pause: Option<(String, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     notification: Option<notification::NotificationPeer>,
 }
@@ -253,8 +255,14 @@ async fn answer(
         state.paths.push(path.into());
         let team_create = path == "/api/v1/orgs" && request.method() == http::Method::POST;
         let team_lifecycle = path.starts_with("/api/v1/orgs/") && state.team_lifecycle.is_some();
+        let team_ssh = path.starts_with("/api/v1/orgs/") && state.team_ssh.is_some();
+        let team_authoring = path.starts_with("/api/v1/orgs/") && state.team_authoring.is_some();
         if request.headers().contains_key("cookie")
-            || request.headers().contains_key("idempotency-key") && !team_create && !team_lifecycle
+            || request.headers().contains_key("idempotency-key")
+                && !team_create
+                && !team_lifecycle
+                && !team_ssh
+                && !team_authoring
         {
             return Err("unexpected credential transport".into());
         }
@@ -329,6 +337,8 @@ async fn answer(
                     && !(path.ends_with("/ack") && state.replies.contains_key(path))
                     && !team_create
                     && !team_lifecycle
+                    && !team_ssh
+                    && !team_authoring
                     && !(path.starts_with("/api/v1/orgs/")
                         && request.method() == http::Method::PATCH)
                     && (request.method() != http::Method::GET || !body.is_empty())
@@ -354,6 +364,10 @@ async fn answer(
                     proofs,
                     origin,
                 )?
+            } else if team_authoring {
+                state.team_authoring.as_mut().unwrap().answer(&request, &body)?
+            } else if path.starts_with("/api/v1/orgs") && state.team_ssh.is_some() {
+                state.team_ssh.as_mut().unwrap().answer(&request, &body)?
             } else if path.starts_with("/api/v1/orgs") && state.team_lifecycle.is_some() {
                 state.team_lifecycle.as_mut().unwrap().answer(&request, &body)?
             } else if path.starts_with("/api/v1/orgs") && state.teams.is_some() {
@@ -419,7 +433,9 @@ mod account;
 mod membership;
 mod revalidation;
 mod team_assets;
+mod team_authoring;
 mod team_lifecycle;
+mod team_ssh;
 mod teams;
 mod trust;
 

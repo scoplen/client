@@ -12,7 +12,7 @@ import {
 import { useState } from "react";
 import { useI18n } from "./i18n";
 import { languageChoices, useLanguage, type LanguageChoice } from "./language";
-import type { Status } from "./ipc/bindings";
+import type { SessionTarget, Status } from "./ipc/bindings";
 import { PassphraseSettings } from "./local-data";
 import { PersonalSettings } from "./personal-settings";
 import { TerminalSettings } from "./terminal-settings";
@@ -27,10 +27,12 @@ export function SettingsView({
   status,
   onStatus,
   section: initial = "appearance",
+  onConnect,
 }: {
   status: Status & { state: "open" };
   onStatus: (status: Status) => void;
   section?: SettingsSection;
+  onConnect?: (target: SessionTarget) => void;
 }) {
   const { t } = useI18n();
   const [section, setSection] = useState<SettingsSection>(initial);
@@ -87,7 +89,7 @@ export function SettingsView({
           {section === "appearance" ? <Appearance /> : null}
           {section === "terminal" ? <TerminalSettings /> : null}
           {section === "data" ? <PassphraseSettings status={status} onStatus={onStatus} /> : null}
-          {section === "personal" ? <PersonalSettings /> : null}
+          {section === "personal" ? <PersonalSettings onConnect={onConnect} /> : null}
         </div>
       </div>
     </main>

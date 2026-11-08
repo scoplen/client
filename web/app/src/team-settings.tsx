@@ -3,18 +3,22 @@ import { Button, Field } from "@scoplen/ui";
 import { useEffect, useRef, useState } from "react";
 import { useProfileCommands } from "./account-profiles";
 import { useI18n } from "./i18n";
-import type { TeamCreationView, TeamPageView, TeamSettingsView, TeamSummary } from "./ipc/bindings";
+import type { SessionTarget, TeamCreationView, TeamPageView, TeamSettingsView, TeamSummary } from "./ipc/bindings";
 import { TeamMembership } from "./team-membership";
 import { TeamAssets } from "./team-assets";
+import { TeamAuthoring } from "./team-authoring";
+import { TeamSshSetup } from "./team-ssh-setup";
 
 export function TeamSettings({
   authenticated,
   disabled,
   onBusyChange,
+  onConnect,
 }: {
   authenticated: boolean;
   disabled: boolean;
   onBusyChange: (busy: boolean) => void;
+  onConnect?: (target: SessionTarget) => void;
 }) {
   const commands = useProfileCommands();
   const { t } = useI18n();
@@ -33,6 +37,10 @@ export function TeamSettings({
   const [nameSaved, setNameSaved] = useState(false);
   const [membership, setMembership] = useState<{ teamId: string | null } | null>(null);
   const [assets, setAssets] = useState<TeamSummary | null>(null);
+  const [accessRules, setAccessRules] = useState<TeamSummary | null>(null);
+  const accessOpener = useRef<HTMLButtonElement | null>(null);
+  const [sshSetup, setSshSetup] = useState<TeamSummary | null>(null);
+  const sshOpener = useRef<HTMLButtonElement | null>(null);
   const assetsOpener = useRef<HTMLButtonElement | null>(null);
   const editRevision = useRef(0);
   const editField = useRef<HTMLInputElement>(null);
@@ -344,6 +352,28 @@ export function TeamSettings({
                 >
                   {t("teams.membership.manage")}
                 </Button>
+                <Button
+                  className="mt-3 ml-2"
+                  variant="secondary"
+                  disabled={locked || !authenticated}
+                  onClick={(event) => {
+                    accessOpener.current = event.currentTarget;
+                    setAccessRules(team);
+                  }}
+                >
+                  {t("teams.authoring.access")}
+                </Button>
+                <Button
+                  className="mt-3 ml-2"
+                  variant="secondary"
+                  disabled={locked || !authenticated}
+                  onClick={(event) => {
+                    sshOpener.current = event.currentTarget;
+                    setSshSetup(team);
+                  }}
+                >
+                  {t("teams.ssh.open")}
+                </Button>
               </li>
             ))}
           </ul>
@@ -364,9 +394,31 @@ export function TeamSettings({
         <TeamAssets
           key={assets.id}
           team={assets}
+          onConnect={onConnect}
           onClose={() => {
             setAssets(null);
             assetsOpener.current?.focus();
+          }}
+        />
+      ) : null}
+      {accessRules ? (
+        <TeamAuthoring
+          key={accessRules.id}
+          team={accessRules}
+          section="access"
+          onClose={() => {
+            setAccessRules(null);
+            accessOpener.current?.focus();
+          }}
+        />
+      ) : null}
+      {sshSetup ? (
+        <TeamSshSetup
+          key={sshSetup.id}
+          team={sshSetup}
+          onClose={() => {
+            setSshSetup(null);
+            sshOpener.current?.focus();
           }}
         />
       ) : null}

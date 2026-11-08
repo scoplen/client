@@ -59,6 +59,8 @@ pub struct TeamAssetsView {
     pub account_id: String,
     /// Selected team, never inferred from a bare vault id.
     pub organization_id: String,
+    /// Current source-bound installation, never inferred by the renderer.
+    pub device_id: String,
     /// Durable Organization inventory vault, once discovered.
     pub vault_id: Option<String>,
     /// Exact positive uint64 equality fence, represented without JavaScript precision loss.
@@ -81,7 +83,7 @@ impl PersonalServer {
         let identity = record(store)?;
         let organization = parse_id(organization_id)?;
         let saved = store.team_assets_record(&identity, organization).map_err(storage)?;
-        asset_view(&identity, organization, saved)
+        asset_view(&identity, organization, store.device_id(), saved)
     }
 
     /// Collect every page under one descriptor revision and publish exactly once, then ACK.
@@ -117,8 +119,22 @@ impl PersonalServer {
                     _ => 4,
                 };
                 let _active = super::super::background::guard(run.as_ref())?;
+                let invalidate_ssh = matches!(
+                    error,
+                    TeamError::Team(TeamFailure::AssetsChanged | TeamFailure::TeamNotFound)
+                        | TeamError::Personal(
+                            PersonalServerError::AuthenticationRequired
+                                | PersonalServerError::PermissionDenied
+                        )
+                );
                 store
-                    .finish_team_asset_pull(&identity, organization, generation, phase)
+                    .finish_team_asset_pull(
+                        &identity,
+                        organization,
+                        generation,
+                        phase,
+                        invalidate_ssh,
+                    )
                     .map_err(storage)?;
                 if phase == 2 && attempt < 2 {
                     continue;
@@ -401,12 +417,14 @@ fn require_success(response: &Response) -> Result<(), TeamError> {
 fn asset_view(
     identity: &PersonalRecord,
     organization: Uuid,
+    device: Uuid,
     record: Option<TeamAssetRecord>,
 ) -> Result<TeamAssetsView, TeamError> {
     let mut view = TeamAssetsView {
         origin: identity.origin.clone(),
         account_id: identity.account_id.to_string(),
         organization_id: organization.to_string(),
+        device_id: device.to_string(),
         vault_id: None,
         revision: None,
         phase: TeamAssetsPhase::NotLoaded,

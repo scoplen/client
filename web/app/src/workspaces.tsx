@@ -18,11 +18,13 @@ export function WorkspacesDialog({
   active,
   onOpen,
   onClose,
+  teamSessions = false,
 }: {
   tabs: WorkspaceInput["tabs"];
   active: number | null;
   onOpen: (workspace: OpenedWorkspace) => void;
   onClose: () => void;
+  teamSessions?: boolean;
 }) {
   const commands = useProfileCommands();
   const { t } = useI18n();
@@ -86,7 +88,8 @@ export function WorkspacesDialog({
       if (alive.current) setBusy(false);
     }
   };
-  const save = () =>
+  const save = () => {
+    if (teamSessions) return;
     void run(async () => {
       const result = await commands.workspacesCreate({ name, tabs, active });
       if (!alive.current) return;
@@ -96,6 +99,7 @@ export function WorkspacesDialog({
         await reload();
       }
     });
+  };
   const open = (item: WorkspaceView) =>
     void run(async () => {
       const result = await commands.workspacesOpen(item.id);
@@ -210,12 +214,13 @@ export function WorkspacesDialog({
                   type="submit"
                   variant="primary"
                   busy={busy}
-                  disabled={!hasTerminal || offline || name.trim() === ""}
+                  disabled={!hasTerminal || offline || teamSessions || name.trim() === ""}
                 >
                   {t("workspaces.save")}
                 </Button>
               </div>
             </form>
+            {teamSessions ? <p role="status">{t("workspaces.teamUnavailable")}</p> : null}
             {loading ? (
               <p role="status">{t("workspaces.loading")}</p>
             ) : items.length === 0 && !issue ? (

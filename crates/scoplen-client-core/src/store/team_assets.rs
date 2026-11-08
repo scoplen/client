@@ -73,8 +73,11 @@ impl Store {
         organization: Uuid,
         generation: Uuid,
         phase: i64,
+        invalidate_ssh: bool,
     ) -> Result<(), StoreError> {
-        self.conn().execute(
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
             "UPDATE team_asset_views SET phase=?5,acknowledged=0 WHERE origin=?1 AND account_id=?2
              AND organization_id=?3 AND generation=?4",
             params![
@@ -85,6 +88,13 @@ impl Store {
                 phase
             ],
         )?;
+        let authority_changed = changed == 1
+            && invalidate_ssh
+            && super::team_ssh::invalidate_authority(&tx, identity, organization)?;
+        tx.commit()?;
+        if authority_changed {
+            self.team_changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+        }
         Ok(())
     }
 
@@ -126,7 +136,11 @@ impl Store {
                 params![identity.origin, identity.account_id.as_bytes().as_slice(), organization.as_bytes().as_slice(),
                     object.id.as_bytes().as_slice(), object.encode()?])?;
         }
+        let authority_changed = super::team_ssh::publish_authority(&tx, identity, publication)?;
         tx.commit()?;
+        if authority_changed {
+            self.team_changes.send_modify(|generation| *generation = generation.wrapping_add(1));
+        }
         Ok(())
     }
 
@@ -210,6 +224,57 @@ impl Store {
         Ok(Some(record))
     }
 
+    pub(crate) fn team_ssh_snapshot(
+        &self,
+        identity: &PersonalRecord,
+        organization: Uuid,
+        vault: Uuid,
+        revision: u64,
+    ) -> Result<Option<Vec<Object>>, StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Err(StoreError::AccountContext);
+        }
+        let conn = self.conn();
+        let matches = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM team_asset_views WHERE origin=?1 AND account_id=?2
+                AND organization_id=?3 AND vault_id=?4 AND revision=?5)",
+            params![
+                identity.origin,
+                identity.account_id.as_bytes().as_slice(),
+                organization.as_bytes().as_slice(),
+                vault.as_bytes().as_slice(),
+                revision.to_be_bytes().as_slice()
+            ],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !matches {
+            return Ok(None);
+        }
+        let mut query = conn.prepare_cached(
+            "SELECT payload FROM team_asset_objects WHERE origin=?1 AND account_id=?2
+                AND organization_id=?3 ORDER BY object_id",
+        )?;
+        let rows = query.query_map(
+            params![
+                identity.origin,
+                identity.account_id.as_bytes().as_slice(),
+                organization.as_bytes().as_slice()
+            ],
+            |row| row.get::<_, Vec<u8>>(0),
+        )?;
+        let mut objects = Vec::new();
+        let mut size = 0usize;
+        for row in rows {
+            let bytes = row?;
+            size = size
+                .checked_add(bytes.len())
+                .filter(|size| *size <= 32 * 1024 * 1024)
+                .ok_or(StoreError::InvalidIdentifier)?;
+            objects.push(Object::decode(&bytes)?);
+        }
+        Ok(Some(objects))
+    }
+
     pub(crate) fn tracked_team_assets(
         &self,
         identity: &PersonalRecord,
@@ -236,10 +301,16 @@ impl Store {
         organization: Uuid,
         vault: Option<Uuid>,
     ) -> Result<(), StoreError> {
-        let changed = self.conn().execute("UPDATE team_asset_views SET phase=2,acknowledged=0,generation=?4
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute("UPDATE team_asset_views SET phase=2,acknowledged=0,generation=?4
             WHERE origin=?1 AND account_id=?2 AND organization_id=?3 AND (?5 IS NULL OR vault_id=?5)",
             params![identity.origin, identity.account_id.as_bytes().as_slice(), organization.as_bytes().as_slice(),
                 scoplen_model::new_uuid_v7()?.as_bytes().as_slice(), vault.map(|id| id.as_bytes().to_vec())])?;
+        if changed > 0 {
+            super::team_ssh::invalidate_authority(&tx, identity, organization)?;
+        }
+        tx.commit()?;
         if changed > 0 {
             self.team_changes.send_modify(|generation| *generation = generation.wrapping_add(1));
         }

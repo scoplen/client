@@ -4,11 +4,20 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Added named team asset CRUD, local membership groups and access policy management. Original
+  creates remain durable across uncertain responses; edits and deletes use their captured ETag
+  and require explicit review after conflicts or uncertain completion. Normal access rules use
+  the shared Cedar generator for independent view or exact-user connect permissions.
+
+- Added SSH CA setup and explicit original-request recovery. Administrators can create the team's
+  user CA, inspect its actual public key and the exact native Host/Login principal mapping, and
+  configure sshd manually after `sshd -t`. The client never changes remote configuration.
+
 - Added View assets for each discovered team, with a Rust-owned complete current-view pull,
   independent encrypted cache, background refresh and permission/membership withdrawal.
   Partial or mismatched pages never publish; server acknowledgement follows complete local
   publication. The dialog distinguishes empty, updating, unavailable and unconfirmed states.
-  Team asset editing, access rules, CA setup and team SSH remain separate work.
+  Manage assets, Access rules and SSH CA setup extend the same selected-team entry.
 
 - Added software Ed25519 key generation when adding a host. The host, Login and
   private-key Credential save together in the encrypted store. Copy public key

@@ -3,18 +3,29 @@ import { Button, Dialog } from "@scoplen/ui";
 import { useEffect, useRef, useState } from "react";
 import { useProfileCommands } from "./account-profiles";
 import { useI18n } from "./i18n";
-import type { TeamAssetsView, TeamSummary } from "./ipc/bindings";
+import type { SessionTarget, TeamAssetsView, TeamSummary } from "./ipc/bindings";
+import { TeamAuthoring } from "./team-authoring";
 
-export function TeamAssets({ team, onClose }: { team: TeamSummary; onClose: () => void }) {
+export function TeamAssets({
+  team,
+  onClose,
+  onConnect,
+}: {
+  team: TeamSummary;
+  onClose: () => void;
+  onConnect?: (target: SessionTarget) => void;
+}) {
   const commands = useProfileCommands();
   const { t } = useI18n();
   const [view, setView] = useState<TeamAssetsView | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
   const [reload, setReload] = useState(0);
+  const [managing, setManaging] = useState(false);
   const inFlight = useRef(false);
 
   useEffect(() => {
+    if (managing) return;
     let active = true;
     let reading = false;
     inFlight.current = true;
@@ -66,7 +77,7 @@ export function TeamAssets({ team, onClose }: { team: TeamSummary; onClose: () =
       active = false;
       clearInterval(timer);
     };
-  }, [commands, team.id, reload]);
+  }, [commands, team.id, reload, managing]);
 
   const refresh = () => {
     if (inFlight.current) return;
@@ -86,7 +97,7 @@ export function TeamAssets({ team, onClose }: { team: TeamSummary; onClose: () =
           : failed === "assetsAcknowledgementUnknown"
             ? "teams.assets.acknowledgement"
             : failed === "permissionDenied"
-              ? "teams.error.permission"
+              ? "teams.error.accessDenied"
               : failed === "authenticationRequired" || failed === "membershipScopeRequired"
                 ? "teams.error.authentication"
                 : "teams.assets.failed";
@@ -103,6 +114,8 @@ export function TeamAssets({ team, onClose }: { team: TeamSummary; onClose: () =
     return value in keys ? t(`teams.assets.kind.${keys[value as keyof typeof keys]}`) : value;
   };
 
+  if (managing) return <TeamAuthoring key={team.id} team={team} onClose={() => setManaging(false)} />;
+
   return (
     <Dialog
       open
@@ -113,6 +126,17 @@ export function TeamAssets({ team, onClose }: { team: TeamSummary; onClose: () =
       closeLabel={t("teams.assets.close")}
       footer={
         <>
+          <Button
+            variant="secondary"
+            disabled={busy || phase === "updating"}
+            onClick={() => {
+              setView(null);
+              setBusy(true);
+              setManaging(true);
+            }}
+          >
+            {t("teams.authoring.open")}
+          </Button>
           <Button variant="secondary" disabled={busy || phase === "updating"} onClick={refresh}>
             {t("teams.assets.refresh")}
           </Button>
@@ -163,6 +187,27 @@ export function TeamAssets({ team, onClose }: { team: TeamSummary; onClose: () =
                     </p>
                     {asset.address ? (
                       <p className="mt-1 break-all select-text font-mono text-sm">{asset.address}</p>
+                    ) : null}
+                    {asset.kind === "AccessProfile" && onConnect ? (
+                      <Button
+                        className="mt-2"
+                        variant="primary"
+                        onClick={() => {
+                          onClose();
+                          onConnect({
+                            kind: "organization",
+                            source: {
+                              origin: view.origin,
+                              accountId: view.accountId,
+                              organizationId: view.organizationId,
+                              deviceId: view.deviceId,
+                            },
+                            profileId: asset.id,
+                          });
+                        }}
+                      >
+                        {t("teams.assets.connect")}
+                      </Button>
                     ) : null}
                   </li>
                 ))}

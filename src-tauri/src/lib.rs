@@ -22,6 +22,8 @@ pub mod session_transfers;
 mod smoke;
 pub mod snippets;
 pub mod ssh;
+pub mod team_authoring;
+pub mod team_ssh;
 pub mod teams;
 mod window_state;
 pub mod workspaces;
@@ -165,6 +167,20 @@ pub fn ipc() -> Builder<tauri::Wry> {
             teams::teams_page,
             teams::team_assets,
             teams::refresh_team_assets,
+            team_authoring::team_authoring_page,
+            team_authoring::team_authoring_resource,
+            team_authoring::pending_team_authoring,
+            team_authoring::prepare_team_authoring,
+            team_authoring::submit_team_authoring,
+            team_authoring::discard_team_authoring,
+            team_authoring::update_team_authoring,
+            team_authoring::delete_team_authoring,
+            team_authoring::preview_team_simple_rule,
+            team_ssh::team_ssh_operations,
+            team_ssh::team_user_ca,
+            team_ssh::prepare_team_user_ca,
+            team_ssh::confirm_team_ssh_operation,
+            team_ssh::discard_team_ssh_operation,
             teams::team_settings,
             teams::update_team_name,
             teams::pending_team_creation,

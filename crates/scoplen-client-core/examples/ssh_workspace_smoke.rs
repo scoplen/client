@@ -73,7 +73,8 @@ impl Pane {
                             &prompt_id,
                             PreparationResponse::AcceptHostKey,
                         )?,
-                        PreparationEvent::Passphrase { .. }
+                        PreparationEvent::CommandExecution { .. }
+                        | PreparationEvent::Passphrase { .. }
                         | PreparationEvent::KeyboardInteractive { .. } => {
                             return Err("password fixture requested unexpected input".to_owned());
                         }

@@ -2,14 +2,14 @@
 import { Button } from "@scoplen/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
-import { type PersonalServerError, type PersonalServerStatus } from "./ipc/bindings";
+import { type PersonalServerError, type PersonalServerStatus, type SessionTarget } from "./ipc/bindings";
 import { useProfileCommands } from "./account-profiles";
 import { AccountRegistration } from "./account-registration";
 import { PersonalSyncSettings } from "./personal-sync-settings";
 import { PersonalAccountSettings } from "./personal-account-settings";
 import { TeamSettings } from "./team-settings";
 
-export function PersonalSettings() {
+export function PersonalSettings({ onConnect }: { onConnect?: (target: SessionTarget) => void } = {}) {
   const commands = useProfileCommands();
   const { t } = useI18n();
   const [status, setStatus] = useState<PersonalServerStatus | null>(null);
@@ -159,7 +159,12 @@ export function PersonalSettings() {
           {!revalidation ? (
             <>
               <PersonalAccountSettings authenticated={authenticated} disabled={busy} onBusyChange={childBusy} />
-              <TeamSettings authenticated={authenticated} disabled={busy} onBusyChange={childBusy} />
+              <TeamSettings
+                authenticated={authenticated}
+                disabled={busy}
+                onBusyChange={childBusy}
+                onConnect={onConnect}
+              />
               <PersonalSyncSettings authenticated={authenticated} disabled={busy} onBusyChange={childBusy} />
             </>
           ) : null}

@@ -22,6 +22,7 @@ import {
   type PreparationContext,
   type SessionTransferIssue,
   type SessionPreparationIntent,
+  type SessionTarget,
 } from "./ipc/bindings";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
 import { SessionFiles, type EnqueueFeedback, type FileOperationOutcome } from "./session-files";
@@ -39,6 +40,7 @@ import {
 export type SessionState =
   | "verifying"
   | "trusting"
+  | "command"
   | "passphrase"
   | "keyboardInteractive"
   | "connecting"
@@ -51,6 +53,7 @@ export type SessionState =
 const sessionFaces: Record<SessionState, { mood: MarkMood; active: boolean; attention: boolean }> = {
   verifying: { mood: "awake", active: true, attention: false },
   trusting: { mood: "awake", active: true, attention: true },
+  command: { mood: "awake", active: true, attention: true },
   passphrase: { mood: "awake", active: true, attention: true },
   keyboardInteractive: { mood: "awake", active: true, attention: true },
   connecting: { mood: "awake", active: true, attention: false },
@@ -62,7 +65,7 @@ const sessionFaces: Record<SessionState, { mood: MarkMood; active: boolean; atte
 
 /** A small output surface for the first live SSH session slice. */
 export function SessionTerminal({
-  profileId,
+  target,
   label,
   active = true,
   onClose,
@@ -78,7 +81,7 @@ export function SessionTerminal({
   registerSnippetTarget,
   getSnippetTargets,
 }: {
-  profileId: string;
+  target: SessionTarget;
   label: string;
   /** Only the selected session may display its pending prompt. */
   active?: boolean;
@@ -101,6 +104,21 @@ export function SessionTerminal({
   /** Opens the terminal color settings. */
   onOpenColors?: () => void;
 }) {
+  const profileId = target.profileId;
+  const targetKind = target.kind;
+  const {
+    origin = "",
+    accountId = "",
+    organizationId = "",
+    deviceId = "",
+  } = target.kind === "organization" ? target.source : {};
+  const connectionTarget = useMemo<SessionTarget>(
+    () =>
+      targetKind === "personal"
+        ? { kind: "personal", profileId }
+        : { kind: "organization", profileId, source: { origin, accountId, organizationId, deviceId } },
+    [targetKind, profileId, origin, accountId, organizationId, deviceId],
+  );
   const commands = useProfileCommands();
   const { t } = useI18n();
   const titleId = useId();
@@ -119,6 +137,9 @@ export function SessionTerminal({
   const checkpointTail = useRef<Promise<void>>(Promise.resolve());
   const [error, setError] = useState<string | null>(null);
   const [hostPrompt, setHostPrompt] = useState<Extract<PreparationEvent, { kind: "trust" }> | null>(null);
+  const [commandPrompt, setCommandPrompt] = useState<Extract<PreparationEvent, { kind: "commandExecution" }> | null>(
+    null,
+  );
   const hostKey = hostPrompt?.hostKey ?? null;
   const [verified, setVerified] = useState<Array<Extract<PreparationEvent, { kind: "verified" }>>>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -197,6 +218,7 @@ export function SessionTerminal({
           setTrustBusy(false);
           setTrustError(null);
           setHostPrompt(null);
+          setCommandPrompt(null);
           setPassphrasePrompt(null);
           setChallenge(null);
           setChallengeError(null);
@@ -259,6 +281,7 @@ export function SessionTerminal({
                 break;
               }
               setHostPrompt(preparation.kind === "trust" ? preparation : null);
+              setCommandPrompt(preparation.kind === "commandExecution" ? preparation : null);
               setPassphrasePrompt(preparation.kind === "passphrase" ? preparation.promptId : null);
               setChallenge(preparation.kind === "keyboardInteractive" ? preparation : null);
               currentPrompt.current = preparation.kind === "progress" ? null : preparation.promptId;
@@ -268,13 +291,15 @@ export function SessionTerminal({
                   : null,
               );
               setState(
-                preparation.kind === "trust"
-                  ? "trusting"
-                  : preparation.kind === "keyboardInteractive"
-                    ? "keyboardInteractive"
-                    : preparation.kind === "passphrase"
-                      ? "passphrase"
-                      : "connecting",
+                preparation.kind === "commandExecution"
+                  ? "command"
+                  : preparation.kind === "trust"
+                    ? "trusting"
+                    : preparation.kind === "keyboardInteractive"
+                      ? "keyboardInteractive"
+                      : preparation.kind === "passphrase"
+                        ? "passphrase"
+                        : "connecting",
               );
               break;
             }
@@ -326,7 +351,7 @@ export function SessionTerminal({
               void commands.sessionCloseTransport(sessionId).catch(() => undefined);
               return { status: "ok" as const, data: null };
             }
-            return commands.sessionConnect(profileId, null, true, sessionId, messages);
+            return commands.sessionConnect(connectionTarget, null, true, sessionId, messages);
           })
           .then((result) => {
             if (!active || !mounted.current || current !== generation.current) return;
@@ -364,7 +389,7 @@ export function SessionTerminal({
         return { unsubscribe: stop };
       },
     });
-  }, [profileId, sessionId, commands]);
+  }, [connectionTarget, sessionId, commands]);
 
   const inputSink = useMemo<TerminalSink>(
     () => ({
@@ -552,6 +577,7 @@ export function SessionTerminal({
         setState("verifying");
         setError(null);
         setHostPrompt(null);
+        setCommandPrompt(null);
         setTrustError(null);
         setPassphraseError(null);
         connectSession();
@@ -580,6 +606,7 @@ export function SessionTerminal({
     trusting.current = false;
     setTrustBusy(false);
     setHostPrompt(null);
+    setCommandPrompt(null);
     setPassphrasePrompt(null);
     setChallenge(null);
     setChallengeError(null);
@@ -601,6 +628,7 @@ export function SessionTerminal({
       });
   };
   const cancelTrust = () => interruptTransport(false, t("session.trust.cancelled"));
+  const cancelCommand = () => interruptTransport(false, t("session.command.cancelled"));
 
   const respond = async (promptId: string, intent: SessionPreparationIntent) => {
     if (trusting.current || !mounted.current || currentPrompt.current !== promptId) return;
@@ -623,6 +651,7 @@ export function SessionTerminal({
       setTrustBusy(false);
       currentPrompt.current = null;
       setHostPrompt(null);
+      setCommandPrompt(null);
       setPassphrasePrompt(null);
       setChallenge(null);
       setChallengeError(null);
@@ -665,6 +694,7 @@ export function SessionTerminal({
     trusting.current = false;
     setTrustBusy(false);
     setHostPrompt(null);
+    setCommandPrompt(null);
     setError(null);
     currentPrompt.current = null;
     setPassphrasePrompt(null);
@@ -696,29 +726,31 @@ export function SessionTerminal({
   const status =
     state === "verifying"
       ? t("session.verifying")
-      : state === "trusting"
-        ? t(
-            hostKey?.changed
-              ? "session.trust.changedTitle"
-              : hostKey?.review
-                ? "session.trust.reviewTitle"
-                : "session.firstConnection",
-          )
-        : state === "keyboardInteractive"
-          ? t("session.interactive.status")
-          : state === "passphrase"
-            ? t("session.passphrase.status")
-            : state === "reconnecting"
-              ? retry
-                ? t("session.reconnecting.wait", { attempt: retry.attempt, seconds: retry.delaySeconds })
-                : t("session.reconnecting")
-              : state === "connecting"
-                ? t("session.connecting")
-                : state === "connected"
-                  ? t("session.connected")
-                  : state === "closed"
-                    ? t("session.closed")
-                    : t("session.failed");
+      : state === "command"
+        ? t("session.command.reviewing")
+        : state === "trusting"
+          ? t(
+              hostKey?.changed
+                ? "session.trust.changedTitle"
+                : hostKey?.review
+                  ? "session.trust.reviewTitle"
+                  : "session.firstConnection",
+            )
+          : state === "keyboardInteractive"
+            ? t("session.interactive.status")
+            : state === "passphrase"
+              ? t("session.passphrase.status")
+              : state === "reconnecting"
+                ? retry
+                  ? t("session.reconnecting.wait", { attempt: retry.attempt, seconds: retry.delaySeconds })
+                  : t("session.reconnecting")
+                : state === "connecting"
+                  ? t("session.connecting")
+                  : state === "connected"
+                    ? t("session.connected")
+                    : state === "closed"
+                      ? t("session.closed")
+                      : t("session.failed");
 
   const face = sessionFaces[state];
   const unknownTransfer = transfers.snapshot?.items.some((item) => item.state === "unknown") ?? false;
@@ -734,6 +766,11 @@ export function SessionTerminal({
             <h2 id={titleId} className="ui-display truncate text-base">
               {label}
             </h2>
+            {target.kind === "organization" ? (
+              <p className="m-0 break-all text-xs text-muted-foreground">
+                {t("teams.title")} · {target.source.organizationId}
+              </p>
+            ) : null}
             <p className="m-0 flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
               <span
                 aria-hidden="true"
@@ -978,6 +1015,61 @@ export function SessionTerminal({
         onCancel={cancelTrust}
       />
       <Dialog
+        finalFocus={returnInputFocus}
+        open={active && commandPrompt !== null}
+        onOpenChange={(open) => {
+          if (!open && active) cancelCommand();
+        }}
+        title={t("session.command.title")}
+        description={t("session.command.body")}
+        closeLabel={t("session.trust.cancel")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={cancelCommand}>
+              {t("session.trust.cancel")}
+            </Button>
+            <Button
+              variant="primary"
+              busy={trustBusy}
+              onClick={() => {
+                if (commandPrompt) void respond(commandPrompt.promptId, { kind: "acceptCommand" });
+              }}
+            >
+              {t("session.command.run")}
+            </Button>
+          </>
+        }
+      >
+        {commandPrompt ? (
+          <div className="space-y-4 text-sm">
+            <HopIdentity context={commandPrompt.context} />
+            <dl className="space-y-3">
+              <div>
+                <dt className="text-muted-foreground">{t("session.command.program")}</dt>
+                <dd className="m-0 break-all font-mono select-text">{commandPrompt.program}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">{t("session.command.arguments")}</dt>
+                <dd className="m-0">
+                  <ol className="list-inside list-decimal space-y-1 p-0">
+                    {commandPrompt.arguments.map((argument, index) => (
+                      <li key={index} className="break-all font-mono select-text">
+                        {JSON.stringify(argument)}
+                      </li>
+                    ))}
+                  </ol>
+                </dd>
+              </div>
+            </dl>
+            {trustError ? (
+              <p role="alert" className="text-attention">
+                {trustError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </Dialog>
+      <Dialog
         open={active && detailsOpen}
         onOpenChange={setDetailsOpen}
         title={t("session.details.title")}
@@ -1061,6 +1153,7 @@ function Stage({
     state === "connecting" ||
     state === "reconnecting" ||
     state === "trusting" ||
+    state === "command" ||
     state === "passphrase" ||
     state === "keyboardInteractive";
   return (

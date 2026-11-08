@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use uuid::Uuid;
 
-use crate::connection::{ConnectionPlan, ConnectionPlanError, resolve_connection_plan};
+use crate::connection::{
+    ConnectionPlan, ConnectionPlanError, SessionTarget, resolve_connection_plan,
+};
 use crate::repository::{
     AccessProfile, AccessProfileChange, Change, Credential, CredentialBinding, CredentialChange,
     CredentialKind, DeviceKey, Edit, Forward, ForwardChange, ForwardKind, Host, HostChange,
@@ -223,6 +225,8 @@ pub enum RecentSessionOutcome {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentSession {
+    /// Explicit source for reconnect and saved-output navigation.
+    pub target: SessionTarget,
     /// The device-local session identifier.
     pub id: String,
     /// The live Host this session used.
@@ -264,7 +268,7 @@ pub struct SavedTerminalOutput {
 #[serde(rename_all = "camelCase")]
 pub struct ReconnectTarget {
     /// The current AccessProfile to pass to the normal connection entry point.
-    pub profile_id: String,
+    pub target: SessionTarget,
     /// Current Host display name.
     pub host_name: String,
     /// Current login name, or username when unnamed.
@@ -2146,6 +2150,26 @@ impl Inventory {
         let hosts = self.host_records()?;
         let profiles = self.profiles()?;
         let sessions = self.store.recent_sessions(SESSION_HISTORY_LIMIT).map_err(failure)?;
+        let sources = self.store.team_session_sources().map_err(failure)?;
+        let personal = crate::personal_server::PersonalServer::default();
+        let mut snapshots = HashMap::new();
+        for saved in sources.values() {
+            let source = &saved.source;
+            let key = (
+                source.origin.clone(),
+                source.account_id.clone(),
+                source.organization_id.clone(),
+                source.device_id.clone(),
+            );
+            snapshots.entry(key).or_insert_with(|| {
+                crate::connection::team::TeamConnectionSnapshot::load(
+                    &self.store,
+                    &personal,
+                    source,
+                )
+                .ok()
+            });
+        }
         let saved = sessions
             .iter()
             .map(|session| self.store.has_scrollback(session.id).map(|saved| (session.id, saved)))
@@ -2154,9 +2178,39 @@ impl Inventory {
         Ok(sessions
             .into_iter()
             .filter_map(|session| {
-                let profile = profiles.iter().find(|profile| profile.meta.id == session.profile)?;
-                let host = hosts.iter().find(|host| host.meta.id == profile.host)?;
+                let (target, profile, host) = if let Some(saved) = sources.get(&session.id) {
+                    let source = &saved.source;
+                    let key = (
+                        source.origin.clone(),
+                        source.account_id.clone(),
+                        source.organization_id.clone(),
+                        source.device_id.clone(),
+                    );
+                    let snapshot = snapshots.get(&key)?.as_ref()?;
+                    if saved.revision == 0 || snapshot.authority.vault != saved.vault {
+                        return None;
+                    }
+                    let profile = snapshot.read::<AccessProfile>(session.profile).ok()?;
+                    let host = snapshot.read::<Host>(profile.host).ok()?;
+                    if host.meta.id != saved.host {
+                        return None;
+                    }
+                    (
+                        SessionTarget::Organization {
+                            source: source.clone(),
+                            profile_id: id(profile.meta.id),
+                        },
+                        profile,
+                        host,
+                    )
+                } else {
+                    let profile =
+                        profiles.iter().find(|profile| profile.meta.id == session.profile)?.clone();
+                    let host = hosts.iter().find(|host| host.meta.id == profile.host)?.clone();
+                    (SessionTarget::Personal { profile_id: id(profile.meta.id) }, profile, host)
+                };
                 Some(RecentSession {
+                    target,
                     id: id(session.id),
                     host_id: id(host.meta.id),
                     host_name: host.name.clone(),
@@ -2267,6 +2321,15 @@ impl Inventory {
             return Err(SavedOutputError::Unavailable);
         }
         let snapshot = self.store.scrollback(id)?.ok_or(SavedOutputError::Unavailable)?;
+        let sources = self.store.team_session_sources().map_err(|_| SavedOutputError::Storage)?;
+        if let Some(source) = sources.get(&id) {
+            return Ok(SavedTerminalOutput {
+                target: self
+                    .team_reconnect_target(source, session.profile)
+                    .map_err(|_| SavedOutputError::Unavailable)?,
+                snapshot,
+            });
+        }
         let profiles = self.profiles().map_err(|_| SavedOutputError::Storage)?;
         let profile = profiles
             .iter()
@@ -2279,7 +2342,9 @@ impl Inventory {
             .ok_or(SavedOutputError::Unavailable)?;
         Ok(SavedTerminalOutput {
             target: ReconnectTarget {
-                profile_id: crate::inventory::id(profile.meta.id),
+                target: SessionTarget::Personal {
+                    profile_id: crate::inventory::id(profile.meta.id),
+                },
                 host_name: host.name.clone(),
                 login_name: profile.name.clone().unwrap_or_else(|| profile.username.clone()),
             },
@@ -2303,6 +2368,10 @@ impl Inventory {
         if session.kind != SessionKind::Terminal {
             return Err(SessionError::UnsupportedSessionKind);
         }
+        let sources = self.store.team_session_sources().map_err(session_failure)?;
+        if let Some(source) = sources.get(&session_id) {
+            return self.team_reconnect_target(source, session.profile);
+        }
         let profiles = self.profiles().map_err(session_failure)?;
         let profile = profiles
             .iter()
@@ -2314,9 +2383,40 @@ impl Inventory {
             .find(|host| host.meta.id == profile.host)
             .ok_or(SessionError::ProfileNotFound)?;
         Ok(ReconnectTarget {
-            profile_id: id(profile.meta.id),
+            target: SessionTarget::Personal { profile_id: id(profile.meta.id) },
             host_name: host.name.clone(),
             login_name: profile.name.clone().unwrap_or_else(|| profile.username.clone()),
+        })
+    }
+
+    fn team_reconnect_target(
+        &self,
+        saved: &crate::store::team_sessions::TeamSessionSource,
+        profile: Uuid,
+    ) -> Result<ReconnectTarget, SessionError> {
+        let snapshot = crate::connection::team::TeamConnectionSnapshot::load(
+            &self.store,
+            &crate::personal_server::PersonalServer::default(),
+            &saved.source,
+        )
+        .map_err(|_| SessionError::ProfileNotFound)?;
+        if saved.revision == 0 || snapshot.authority.vault != saved.vault {
+            return Err(SessionError::ProfileNotFound);
+        }
+        let profile =
+            snapshot.read::<AccessProfile>(profile).map_err(|_| SessionError::ProfileNotFound)?;
+        let host =
+            snapshot.read::<Host>(profile.host).map_err(|_| SessionError::ProfileNotFound)?;
+        if host.meta.id != saved.host {
+            return Err(SessionError::ProfileNotFound);
+        }
+        Ok(ReconnectTarget {
+            target: SessionTarget::Organization {
+                source: saved.source.clone(),
+                profile_id: id(profile.meta.id),
+            },
+            host_name: host.name,
+            login_name: profile.name.unwrap_or(profile.username),
         })
     }
 
@@ -3011,8 +3111,10 @@ impl Inventory {
 
     fn recent_hosts(&self, profiles: &[AccessProfile]) -> Result<BTreeSet<Uuid>, Failure> {
         let recent = self.store.recent_sessions(1000).map_err(failure)?;
+        let team_sources = self.store.team_session_sources().map_err(failure)?;
         Ok(recent
             .into_iter()
+            .filter(|session| !team_sources.contains_key(&session.id))
             .filter_map(|session| {
                 profiles.iter().find(|profile| profile.meta.id == session.profile)
             })
@@ -4408,7 +4510,7 @@ mod tests {
         assert_eq!(
             inventory.reconnect_session(open.id.clone()),
             Ok(ReconnectTarget {
-                profile_id: profile,
+                target: SessionTarget::Personal { profile_id: profile },
                 host_name: "api".into(),
                 login_name: "ops".into(),
             })

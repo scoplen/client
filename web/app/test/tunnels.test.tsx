@@ -88,6 +88,7 @@ function remoteSnapshot(overrides: Partial<ForwardSnapshot> = {}): ForwardSnapsh
 
 function challenge(kind: "trust" | "passphrase" | "keyboardInteractive", promptId = "prompt-1"): PreparationEvent {
   const context = {
+    source: null,
     profileId: "l-3",
     hostId: "h-db-1",
     login: "ops",

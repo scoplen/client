@@ -5,8 +5,10 @@
 use crate::events::{SessionChangeKind, SessionChanged};
 use crate::frames::SessionMessage;
 use crate::profile_context::ProfileRequest as LocalDataState;
+use scoplen_client_core::connection::SessionTarget;
 use scoplen_client_core::connection::preparation::PreparationResponse;
 use scoplen_client_core::locale::Locale;
+use scoplen_client_core::personal_server::PersonalServer;
 use scoplen_client_core::session_files::{
     RemoteDirectory, RemoteFileKind, RemoteTextPreview, RemoteTextPreviewIssue,
     SessionFileMutationResult,
@@ -55,6 +57,8 @@ pub fn session_reserve_transport(
 #[derive(Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SessionPreparationIntent {
+    /// Approve only the exact local team connection command retained by Rust.
+    AcceptCommand,
     /// Ordered one-time answers to the exact current server challenge.
     KeyboardInteractive {
         /// Answers are consumed and never returned to the renderer.
@@ -73,6 +77,7 @@ impl SessionPreparationIntent {
     /// Consume write-only answers immediately into the common redacting response.
     pub(crate) fn into_response(self) -> Result<PreparationResponse, String> {
         match self {
+            Self::AcceptCommand => Ok(PreparationResponse::AcceptCommand),
             Self::KeyboardInteractive { answers } => PreparationResponse::keyboard_interactive(
                 answers.into_iter().map(String::into_bytes).collect(),
             ),
@@ -107,7 +112,8 @@ pub async fn session_connect(
     app: tauri::AppHandle,
     local: LocalDataState,
     manager: tauri::State<'_, SessionManager>,
-    profile_id: String,
+    personal: tauri::State<'_, PersonalServer>,
+    target: SessionTarget,
     command: Option<String>,
     pty: bool,
     session_id: String,
@@ -122,9 +128,10 @@ pub async fn session_connect(
     };
     let profile_generation = local.generation();
     manager
-        .run(
+        .run_target(
             &session_id,
-            &profile_id,
+            &target,
+            &personal,
             command.as_deref(),
             pty,
             store,

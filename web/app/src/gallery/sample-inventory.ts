@@ -291,6 +291,7 @@ const jump = { kind: "jump", name: "prod-jump" } as const;
 const seededRecentSessions: RecentSession[] = [
   {
     id: "s-api-1",
+    target: { kind: "personal", profileId: "l-1" },
     hostId: "h-api-1",
     hostName: "prod-api-01",
     address: "10.0.1.24",
@@ -304,6 +305,7 @@ const seededRecentSessions: RecentSession[] = [
   },
   {
     id: "s-db-1",
+    target: { kind: "personal", profileId: "l-3" },
     hostId: "h-db-1",
     hostName: "prod-db-01",
     address: "10.0.4.12",
@@ -543,6 +545,7 @@ export function sampleInventory(
       }
       const now = String(Date.now());
       const session: RecentSession = {
+        target: { kind: "personal", profileId },
         id: `s-gallery-${++sessionSequence}`,
         hostId: current.id,
         hostName: current.name,
@@ -587,7 +590,13 @@ export function sampleInventory(
       if (!profile || !host) {
         return wait({ status: "error" as const, error: { kind: "profileNotFound" as const } });
       }
-      return wait(ok({ profileId: profile.id, hostName: host.name, loginName: profile.name ?? profile.username }));
+      return wait(
+        ok({
+          target: { kind: "personal" as const, profileId: profile.id },
+          hostName: host.name,
+          loginName: profile.name ?? profile.username,
+        }),
+      );
     },
     forgetSession: (id: string) => {
       const index = sessions.findIndex((session) => session.id === id);
