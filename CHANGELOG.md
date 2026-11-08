@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Extend real team SSH/SFTP acceptance across mixed Owner/Member roles with independent CAs,
+  source-bound certificate caches and connect-permission withdrawal. The remaining team's
+  certificate still opens SSH and transfers files after the other team's access is removed.
+
 - Use themed dropdowns throughout inventory, tunnel, snippet, history and team forms,
   preserving grouped choices, keyboard operation, disabled states and required validation.
 

@@ -204,9 +204,20 @@ The recipient signs in with the same Account password on an independent second D
 discovers the existing team. The public session manager accepts first-use Host trust, opens
 a certificate-authenticated terminal, checks command output and resizing, then uploads,
 lists and downloads an exact binary payload through Files on the same connection. Recent
-retains the complete team source. Removing the connect policy and refreshing the permitted
-view must deny further
-certificate acquisition; Personal inventory remains separate.
+retains the complete team source. The same Account then creates an independent team as Owner,
+with its own Host, Login, enabled permit-all policy and real user CA. Another real SSH/SFTP
+roundtrip confirms ordinary independent Host-key review and a certificate signed by that CA
+with the exact team/Host principal. Both teams have proven usable certificates before refusal
+checks. Supplying the Owner team's source with the Member team's Host is refused by the
+client's complete source-bound view, before a request or CA lookup.
+
+Removing the Member team's connect policy and refreshing its permitted view invalidates its
+captured certificate locally, and a new certificate request is denied by the server. The
+independent Owner team's captured certificate and cache remain usable for another real
+SSH/SFTP roundtrip without a new Host-key prompt. The owned sshd trusts only that team's
+public CA and exact principal for these checks; Personal inventory remains separate.
+These assertions do not establish remote revocation of already issued direct certificates,
+termination of unmanaged sessions or the complete cross-tenant server-request matrix.
 
 The script requires exactly one passing live test. It restores its environment and removes
 only its owned container; success also removes owned scratch files, while failure retains

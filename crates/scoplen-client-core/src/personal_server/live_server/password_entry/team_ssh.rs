@@ -14,8 +14,8 @@ use crate::{
     personal_server::{
         TeamAuthoringCollection as Collection, TeamAuthoringData as Data, TeamHostFields,
         TeamLoginFields, TeamPolicyFields, TeamRouteReference, TeamSimplePermission,
-        TeamSimpleRuleInput, TeamSimpleRuleResource, TeamSshError, TeamSshOperationKind,
-        TeamSshSource,
+        TeamSimpleRuleInput, TeamSimpleRuleResource, TeamSshError, TeamSshFailure,
+        TeamSshOperationKind, TeamSshSource, TeamUserCaView,
     },
     session_files::{
         RemoteFileKind, SessionDownloadStatus, SessionFileMutationStatus, SessionUploadStatus,
@@ -253,6 +253,33 @@ pub(super) async fn terminal_and_files_with_trust(
     assert!(recent[0].ended_at.is_some());
 }
 
+async fn provision_user_ca(
+    personal: &PersonalServer,
+    store: &Arc<Store>,
+    source: &TeamSshSource,
+) -> TeamUserCaView {
+    assert!(personal.team_user_ca(store.clone(), source).await.unwrap().is_none());
+    let prepared = personal.prepare_team_user_ca(store, source).unwrap();
+    personal
+        .confirm_team_ssh_operation(
+            store.clone(),
+            source,
+            TeamSshOperationKind::UserCa,
+            &prepared.operation_id,
+        )
+        .await
+        .unwrap();
+    personal
+        .discard_team_ssh_operation(
+            store,
+            source,
+            TeamSshOperationKind::UserCa,
+            &prepared.operation_id,
+        )
+        .unwrap();
+    personal.team_user_ca(store.clone(), source).await.unwrap().unwrap()
+}
+
 async fn roundtrip(deployment: PasswordDeployment, ssh: SshFixture, directory: &Path) {
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
     let owner_device = Device::new(&directory.join("owner"));
@@ -389,26 +416,7 @@ async fn roundtrip(deployment: PasswordDeployment, ssh: SshFixture, directory: &
     };
     let owner_source = source(&owner_store);
     let member_source = source(&member_store);
-    assert!(owner.team_user_ca(owner_store.clone(), &owner_source).await.unwrap().is_none());
-    let prepared = owner.prepare_team_user_ca(&owner_store, &owner_source).unwrap();
-    owner
-        .confirm_team_ssh_operation(
-            owner_store.clone(),
-            &owner_source,
-            TeamSshOperationKind::UserCa,
-            &prepared.operation_id,
-        )
-        .await
-        .unwrap();
-    owner
-        .discard_team_ssh_operation(
-            &owner_store,
-            &owner_source,
-            TeamSshOperationKind::UserCa,
-            &prepared.operation_id,
-        )
-        .unwrap();
-    let trust = owner.team_user_ca(owner_store.clone(), &owner_source).await.unwrap().unwrap();
+    let trust = provision_user_ca(&owner, &owner_store, &owner_source).await;
     let setup = trust.setups.iter().find(|setup| setup.profile_id == login.id).unwrap();
     assert_eq!(setup.principal, format!("spl:{}:h:{}:smoke", team.id, destination.id));
     ssh.install(&trust.public_key, &setup.principal).await;
@@ -425,6 +433,91 @@ async fn roundtrip(deployment: PasswordDeployment, ssh: SshFixture, directory: &
         .await
         .unwrap();
     assert!(cached.cached);
+    let owned_team = create_team(&member, &member_store, "Independent certificate Owner").await;
+    let owned_host = create_resource(
+        &member,
+        &member_store,
+        &owned_team.id,
+        Data::Host(TeamHostFields {
+            name: Some("Independent certificate Host".into()),
+            address: "127.0.0.1".into(),
+            port: Some(ssh.port),
+            ..Default::default()
+        }),
+    )
+    .await;
+    let owned_login = create_resource(
+        &member,
+        &member_store,
+        &owned_team.id,
+        Data::Login(TeamLoginFields {
+            host: owned_host.id.clone(),
+            name: Some("Independent certificate Login".into()),
+            username: "smoke".into(),
+            route: Some(TeamRouteReference::Direct(0)),
+            terminal_profile: None,
+            startup_command: None,
+            agent_forwarding: None,
+        }),
+    )
+    .await;
+    create_resource(
+        &member,
+        &member_store,
+        &owned_team.id,
+        Data::Policy(TeamPolicyFields {
+            name: "Permit all within the independent team".into(),
+            source: "permit(principal, action, resource);".into(),
+            enabled: true,
+        }),
+    )
+    .await;
+    member.refresh_team_assets(member_store.clone(), &owned_team.id).await.unwrap();
+    let owned_source =
+        TeamSshSource { organization_id: owned_team.id.clone(), ..member_source.clone() };
+    let owned_trust = provision_user_ca(&member, &member_store, &owned_source).await;
+    assert_ne!(owned_trust.public_key, trust.public_key);
+    let owned_setup =
+        owned_trust.setups.iter().find(|setup| setup.profile_id == owned_login.id).unwrap();
+    assert_eq!(owned_setup.host_id, owned_host.id);
+    assert_eq!(owned_setup.principal, format!("spl:{}:h:{}:smoke", owned_team.id, owned_host.id));
+    ssh.install(&owned_trust.public_key, &owned_setup.principal).await;
+    let owned_target =
+        SessionTarget::Organization { source: owned_source.clone(), profile_id: owned_login.id };
+    terminal_and_files(&member, member_store.clone(), &owned_target, directory).await;
+    let owned_cached = member
+        .team_ssh_certificate(
+            member_store.clone(),
+            &owned_source,
+            owned_host.id.parse().unwrap(),
+            "smoke",
+        )
+        .await
+        .expect("the independent team has a real usable certificate after normal Host-key review");
+    assert!(owned_cached.cached);
+    let owned_ca =
+        ssh_key::PublicKey::from_openssh(&owned_trust.public_key).unwrap().to_bytes().unwrap();
+    assert_eq!(owned_cached.certificate.certificate().ca_public_key_blob(), owned_ca.as_slice());
+    assert_eq!(
+        owned_cached.certificate.certificate().principals(),
+        std::slice::from_ref(&owned_setup.principal)
+    );
+    assert_ne!(
+        owned_cached.certificate.certificate().ca_public_key_blob(),
+        cached.certificate.certificate().ca_public_key_blob()
+    );
+    cached.current(&member_store).expect("independent team setup preserves the Member certificate");
+    assert!(matches!(
+        member
+            .team_ssh_certificate(
+                member_store.clone(),
+                &owned_source,
+                destination.id.parse().unwrap(),
+                "smoke"
+            )
+            .await,
+        Err(TeamSshError::Ssh(TeamSshFailure::ViewRequired)),
+    ));
     let connect = connect_policy.unwrap();
     owner
         .delete_team_authoring(
@@ -437,6 +530,10 @@ async fn roundtrip(deployment: PasswordDeployment, ssh: SshFixture, directory: &
         .await
         .unwrap();
     member.refresh_team_assets(member_store.clone(), &team.id).await.unwrap();
+    assert_eq!(
+        cached.current(&member_store),
+        Err(TeamSshError::Ssh(TeamSshFailure::AuthorityChanged))
+    );
     assert!(matches!(
         member
             .team_ssh_certificate(
@@ -448,12 +545,27 @@ async fn roundtrip(deployment: PasswordDeployment, ssh: SshFixture, directory: &
             .await,
         Err(TeamSshError::Personal(PersonalServerError::PermissionDenied)),
     ));
+    owned_cached.current(&member_store).expect("the independent Owner certificate remains current");
+    assert!(
+        member
+            .team_ssh_certificate(
+                member_store.clone(),
+                &owned_source,
+                owned_host.id.parse().unwrap(),
+                "smoke"
+            )
+            .await
+            .expect("the independent team's original certificate cache remains usable")
+            .cached
+    );
+    terminal_and_files_with_trust(&member, member_store.clone(), &owned_target, directory, 0).await;
     assert_eq!(member_store.get(personal_host.id).unwrap().as_ref(), Some(&personal_host));
     assert_eq!(
         first_member_store.get(first_personal_host.id).unwrap().as_ref(),
         Some(&first_personal_host),
     );
     assert!(member_store.get(destination.id.parse().unwrap()).unwrap().is_none());
+    assert!(member_store.get(owned_host.id.parse().unwrap()).unwrap().is_none());
 }
 
 #[tokio::test]
