@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Dialog, Field, TextAreaField } from "@scoplen/ui";
+import { Button, Dialog, Field, Select, TextAreaField } from "@scoplen/ui";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useProfileCommands } from "./account-profiles";
 import { useI18n } from "./i18n";
@@ -451,21 +451,23 @@ export function SessionSnippets({
                 />
                 <label className="flex flex-col gap-1.5 text-sm font-medium">
                   {t("snippets.variableKind")}
-                  <select
-                    className="ui-input h-10 px-3 text-sm"
+                  <Select
+                    label={t("snippets.variableKind")}
+                    size="field"
                     value={variable.kind}
-                    onChange={(event) =>
+                    onValueChange={(next) =>
                       updateVariable(variable.key, {
-                        kind: event.target.value as SnippetVariableInput["kind"],
+                        kind: next,
                         default: null,
-                        choices: event.target.value === "choice" ? [""] : [],
+                        choices: next === "choice" ? [""] : [],
                       })
                     }
-                  >
-                    <option value="text">{t("snippets.kind.text")}</option>
-                    <option value="integer">{t("snippets.kind.integer")}</option>
-                    <option value="choice">{t("snippets.kind.choice")}</option>
-                  </select>
+                    options={[
+                      { value: "text", label: t("snippets.kind.text") },
+                      { value: "integer", label: t("snippets.kind.integer") },
+                      { value: "choice", label: t("snippets.kind.choice") },
+                    ]}
+                  />
                 </label>
                 {variable.kind === "choice" ? (
                   <TextAreaField
@@ -575,8 +577,9 @@ export function SessionSnippets({
             ) : variable.kind === "choice" ? (
               <label key={index} className="flex flex-col gap-1.5 text-sm font-medium">
                 {variable.name}
-                <select
-                  className="ui-input h-10 px-3 text-sm"
+                <Select
+                  label={variable.name}
+                  size="field"
                   disabled={busy}
                   required
                   value={
@@ -584,20 +587,18 @@ export function SessionSnippets({
                       ? ""
                       : String(variable.choices.indexOf(valueOf(variable.name) ?? ""))
                   }
-                  onChange={(event) => {
-                    const value = variable.choices[Number(event.target.value)];
+                  onValueChange={(next) => {
+                    const value = variable.choices[Number(next)];
                     if (value !== undefined) setValues({ ...values, [variable.name]: value });
                   }}
-                >
-                  <option value="" disabled>
-                    {t("snippets.choose")}
-                  </option>
-                  {variable.choices.map((choice, choiceIndex) => (
-                    <option key={choiceIndex} value={choiceIndex}>
-                      {choice || t("snippets.emptyChoice")}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: "", label: t("snippets.choose"), disabled: true },
+                    ...variable.choices.map((choice, choiceIndex) => ({
+                      value: String(choiceIndex),
+                      label: choice || t("snippets.emptyChoice"),
+                    })),
+                  ]}
+                />
               </label>
             ) : (
               <Field

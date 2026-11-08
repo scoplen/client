@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Dialog, Field, HostEgg, IconButton, Tag, TextAreaField } from "@scoplen/ui";
+import { Button, Dialog, Field, HostEgg, IconButton, Select, Tag, TextAreaField } from "@scoplen/ui";
 import { Pencil, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useI18n } from "../i18n";
@@ -261,12 +261,13 @@ function EditHostDialog({
                 <label htmlFor={`host-login-${login.id}`} className="font-medium wrap-anywhere">
                   {t("host.edit.loginCredential", { name: login.name ?? login.username })}
                 </label>
-                <select
+                <Select
                   id={`host-login-${login.id}`}
+                  label={t("host.edit.loginCredential", { name: login.name ?? login.username })}
+                  size="field"
                   aria-describedby={selected === "interactive" ? `host-login-hint-${login.id}` : undefined}
                   value={selected}
-                  onChange={(event) => {
-                    const value = event.target.value;
+                  onValueChange={(value) => {
                     setLoginCredentials((current) => ({
                       ...current,
                       [login.id]:
@@ -275,21 +276,21 @@ function EditHostDialog({
                           : { kind: "saved", credential: value || null },
                     }));
                   }}
-                  className="ui-input h-10 min-w-0 max-w-full px-3 text-sm font-normal"
-                >
-                  <option value="">{t("objects.profile.anyCredential")}</option>
-                  <option value="interactive">{t("objects.credential.kind.keyboardInteractive")}</option>
-                  {login.credential &&
-                  login.credential.kind !== "keyboardInteractive" &&
-                  !saved.some((credential) => credential.id === login.credential!.id) ? (
-                    <option value={login.credential.id}>{credentialText(t, login.credential)}</option>
-                  ) : null}
-                  {saved.map((credential) => (
-                    <option key={credential.id} value={credential.id}>
-                      {credentialText(t, { ...credential, fingerprint: null, comment: null })}
-                    </option>
-                  ))}
-                </select>
+                  className="max-w-full font-normal"
+                  options={[
+                    { value: "", label: t("objects.profile.anyCredential") },
+                    { value: "interactive", label: t("objects.credential.kind.keyboardInteractive") },
+                    ...(login.credential &&
+                    login.credential.kind !== "keyboardInteractive" &&
+                    !saved.some((credential) => credential.id === login.credential!.id)
+                      ? [{ value: login.credential.id, label: credentialText(t, login.credential) }]
+                      : []),
+                    ...saved.map((credential) => ({
+                      value: credential.id,
+                      label: credentialText(t, { ...credential, fingerprint: null, comment: null }),
+                    })),
+                  ]}
+                />
                 {selected === "interactive" ? (
                   <span id={`host-login-hint-${login.id}`} className="text-muted-foreground">
                     {t("add.interactive.hint")}
@@ -469,19 +470,18 @@ function GroupDialog({
         />
         <label className="flex flex-col gap-1.5 text-sm font-medium" htmlFor="group-parent">
           {t("host.edit.groupParent")}
-          <select
+          <Select
             id="group-parent"
+            label={t("host.edit.groupParent")}
+            size="field"
             value={parent}
-            onChange={(event) => setParent(event.target.value)}
-            className="ui-input h-10 px-3 text-sm font-normal"
-          >
-            <option value="">{t("host.edit.groupNoParent")}</option>
-            {parentOptions.map((candidate) => (
-              <option key={candidate.id} value={candidate.id}>
-                {candidate.name}
-              </option>
-            ))}
-          </select>
+            onValueChange={setParent}
+            className="font-normal"
+            options={[
+              { value: "", label: t("host.edit.groupNoParent") },
+              ...parentOptions.map((candidate) => ({ value: candidate.id, label: candidate.name })),
+            ]}
+          />
         </label>
       </form>
     </Dialog>

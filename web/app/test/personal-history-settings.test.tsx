@@ -2,6 +2,7 @@
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { selectOption } from "./select-option";
 import { I18nProvider } from "../src/i18n";
 import type { PersonalInventoryHistory, PersonalInventoryObject } from "../src/ipc/bindings";
 import { PersonalHistorySettings } from "../src/personal-history-settings";
@@ -79,7 +80,7 @@ function fixture({
 }
 
 async function query() {
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Synced object" }), object.id);
+  await selectOption(screen.getByRole("combobox", { name: "Synced object" }), "Production");
   await userEvent.click(screen.getByRole("button", { name: "View version history" }));
   return screen.findByRole("dialog");
 }
@@ -153,7 +154,7 @@ it("rejects duplicate query intents and displays only localized safe failures", 
       }),
   );
   render(f.view());
-  await userEvent.selectOptions(screen.getByRole("combobox"), object.id);
+  await selectOption(screen.getByRole("combobox"), "Production");
   await userEvent.dblClick(screen.getByRole("button", { name: "View version history" }));
   expect(f.calls).toHaveLength(1);
   await act(async () => fail("secret arbitrary transport diagnostic"));
@@ -168,7 +169,7 @@ it("requires authentication for a query and respects account activity", async ()
   for (const options of [{ authenticated: false }, { disabled: true }]) {
     const f = fixture(options);
     const { unmount } = render(f.view());
-    if (!options.disabled) await userEvent.selectOptions(screen.getByRole("combobox"), object.id);
+    if (!options.disabled) await selectOption(screen.getByRole("combobox"), "Production");
     expect((screen.getByRole("button", { name: "View version history" }) as HTMLButtonElement).disabled).toBe(true);
     expect(f.calls).toEqual([]);
     unmount();
@@ -181,7 +182,7 @@ it.each(["en", "zh-Hans"] as const)(
     const f = fixture({ locale });
     f.restored.mockRejectedValue(new Error("sensitive refresh diagnostic"));
     render(f.view());
-    await userEvent.selectOptions(screen.getByRole("combobox"), object.id);
+    await selectOption(screen.getByRole("combobox"), "Production");
     await userEvent.click(
       screen.getByRole("button", { name: locale === "en" ? "View version history" : "查看版本历史" }),
     );
@@ -210,7 +211,7 @@ it.each(["en", "zh-Hans"] as const)(
     const f = fixture({ locale });
     f.handlers.set("query_personal_inventory_history", () => Promise.reject("historySignerUnavailable"));
     render(f.view());
-    await userEvent.selectOptions(screen.getByRole("combobox"), object.id);
+    await selectOption(screen.getByRole("combobox"), "Production");
     await userEvent.click(
       screen.getByRole("button", { name: locale === "en" ? "View version history" : "查看版本历史" }),
     );
@@ -227,7 +228,7 @@ it("localizes restoration errors and clears the consumed review instead of retry
   const f = fixture({ locale: "zh-Hans" });
   f.handlers.set("restore_personal_inventory_history", () => Promise.reject("previewExpired"));
   render(f.view());
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "已同步对象" }), object.id);
+  await selectOption(screen.getByRole("combobox", { name: "已同步对象" }), "Production");
   await userEvent.click(screen.getByRole("button", { name: "查看版本历史" }));
   const dialog = await screen.findByRole("dialog");
   await userEvent.click(within(dialog).getByRole("radio", { name: /版本 9007199254740993/ }));

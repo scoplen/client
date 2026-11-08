@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Confirm, Dialog, Field, IconButton } from "@scoplen/ui";
+import { Button, Confirm, Dialog, Field, IconButton, Select } from "@scoplen/ui";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useContext, useEffect, useId, useRef, useState } from "react";
 import { useI18n } from "../i18n";
@@ -547,20 +547,19 @@ function StartDialog({
       <label htmlFor={id} className="block text-sm font-medium">
         {t("tunnels.login")}
       </label>
-      <select
+      <Select
         id={id}
+        label={t("tunnels.login")}
+        size="field"
         value={profile}
         disabled={busy}
-        onChange={(event) => setProfile(event.target.value)}
+        onValueChange={setProfile}
         className={selectStyle}
-      >
-        <option value="">{t("tunnels.chooseLogin")}</option>
-        {profiles.map((item) => (
-          <option key={item.id} value={item.id} disabled={item.orphaned}>
-            {loginLabel(item)}
-          </option>
-        ))}
-      </select>
+        options={[
+          { value: "", label: t("tunnels.chooseLogin") },
+          ...profiles.map((item) => ({ value: item.id, label: loginLabel(item), disabled: item.orphaned })),
+        ]}
+      />
       {profiles.every((item) => item.orphaned) ? (
         <p className="text-sm text-attention">{t("tunnels.noLogins")}</p>
       ) : null}
@@ -672,20 +671,23 @@ function TunnelEditor({
           <label htmlFor={mode} className="block text-sm font-medium">
             {t("tunnels.mode")}
           </label>
-          <select
+          <Select
             id={mode}
+            label={t("tunnels.mode")}
+            size="field"
             value={kind}
             disabled={busy}
-            onChange={(event) => {
-              setKind(event.target.value as ForwardInput["kind"]);
+            onValueChange={(next) => {
+              setKind(next);
               setError(null);
             }}
             className={selectStyle}
-          >
-            <option value="local">{t("tunnels.localTcp")}</option>
-            <option value="remote">{t("tunnels.remoteTcp")}</option>
-            <option value="dynamic">{t("tunnels.dynamicSocks")}</option>
-          </select>
+            options={[
+              { value: "local", label: t("tunnels.localTcp") },
+              { value: "remote", label: t("tunnels.remoteTcp") },
+              { value: "dynamic", label: t("tunnels.dynamicSocks") },
+            ]}
+          />
         </div>
         {kind === "dynamic" ? <p className="text-sm text-muted-foreground">{t("tunnels.dynamicBody")}</p> : null}
         {kind === "remote" ? <p className="text-sm text-muted-foreground">{t("tunnels.remoteBody")}</p> : null}
@@ -736,23 +738,26 @@ function TunnelEditor({
           <label htmlFor={select} className="block text-sm font-medium">
             {t("tunnels.defaultLogin")}
           </label>
-          <select
+          <Select
             id={select}
+            label={t("tunnels.defaultLogin")}
+            size="field"
             value={value.profile}
             disabled={busy}
-            onChange={(event) => setValue((current) => ({ ...current, profile: event.target.value }))}
+            onValueChange={(next) => setValue((current) => ({ ...current, profile: next }))}
             className={selectStyle}
-          >
-            <option value="">{t("tunnels.chooseAtStart")}</option>
-            {value.profile && !profiles.some((profile) => profile.id === value.profile) ? (
-              <option value={value.profile}>{t("tunnels.loginUnavailable")}</option>
-            ) : null}
-            {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id} disabled={profile.orphaned}>
-                {loginLabel(profile)}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: "", label: t("tunnels.chooseAtStart") },
+              ...(value.profile && !profiles.some((profile) => profile.id === value.profile)
+                ? [{ value: value.profile, label: t("tunnels.loginUnavailable") }]
+                : []),
+              ...profiles.map((profile) => ({
+                value: profile.id,
+                label: loginLabel(profile),
+                disabled: profile.orphaned,
+              })),
+            ]}
+          />
         </div>
         {error && !invalid && error.kind !== "emptyName" ? (
           <p role="alert" className="text-sm text-attention">
@@ -764,7 +769,7 @@ function TunnelEditor({
   );
 }
 
-const selectStyle = "mt-2 h-10 w-full min-w-0 rounded-md border border-border bg-inset px-3 text-sm text-foreground";
+const selectStyle = "mt-2 w-full";
 
 function editError(t: ReturnType<typeof useI18n>["t"], error: ObjectEditError): string {
   if (error.kind === "inUse") return t("tunnels.error.inUse");

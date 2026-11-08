@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { Button, Field, TextAreaField } from "@scoplen/ui";
+import { Button, Field, Select, TextAreaField } from "@scoplen/ui";
 import { useId, useRef, useState } from "react";
 import { useI18n } from "./i18n";
 import type {
@@ -90,20 +90,17 @@ export function TeamSelect({
       <label htmlFor={id} className="text-sm font-medium">
         {label}
       </label>
-      <select
+      <Select
         id={id}
-        className="ui-input h-10 min-w-0 max-w-full px-3 text-sm"
+        label={label}
+        size="field"
+        className="max-w-full"
         value={value}
         required={required}
         disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+        onValueChange={onChange}
+        options={options}
+      />
     </div>
   );
 }

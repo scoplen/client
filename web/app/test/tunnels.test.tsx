@@ -3,6 +3,7 @@ import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { selectOption } from "./select-option";
 import { I18nProvider } from "../src/i18n";
 import { sampleHosts, sampleInventory } from "../src/gallery/sample-inventory";
 import { InventoryContext } from "../src/inventory/api";
@@ -242,7 +243,7 @@ it("saves Dynamic with a loopback default, no fixed target and keyboard form sub
   await userEvent.tab();
   const mode = within(dialog).getByRole("combobox", { name: "Mode" });
   expect(document.activeElement).toBe(mode);
-  await userEvent.selectOptions(mode, "dynamic");
+  await selectOption(mode, "Dynamic SOCKS");
   await userEvent.tab();
   expect(document.activeElement).toBe(within(dialog).getByLabelText("Bind address"));
   expect((within(dialog).getByLabelText("Bind address") as HTMLInputElement).value).toBe("127.0.0.1");
@@ -278,7 +279,7 @@ it("clears Local targets when saved as Dynamic and requires fresh targets when c
   await screen.findByText("postgres-prod");
   await userEvent.click(screen.getByRole("button", { name: "Edit postgres-prod" }));
   let dialog = screen.getByRole("dialog", { name: "Edit tunnel" });
-  await userEvent.selectOptions(within(dialog).getByLabelText("Mode"), "dynamic");
+  await selectOption(within(dialog).getByLabelText("Mode"), "Dynamic SOCKS");
   await userEvent.clear(within(dialog).getByLabelText("Bind address"));
   await userEvent.type(within(dialog).getByLabelText("Bind address"), "0.0.0.0");
   expect(within(dialog).getByRole("note").textContent).toContain(
@@ -292,12 +293,12 @@ it("clears Local targets when saved as Dynamic and requires fresh targets when c
     expect.objectContaining({ kind: "dynamic", bindAddress: "0.0.0.0", targetHost: null, targetPort: null }),
   );
   const saved = screen.getByText("postgres-prod").closest("li")!;
-  expect(within(saved).getByText("0.0.0.0:5433")).toBeTruthy();
+  expect(await within(saved).findByText("0.0.0.0:5433")).toBeTruthy();
   expect(within(saved).queryByText(/prod-db/)).toBeNull();
   await userEvent.click(within(saved).getByRole("button", { name: "Edit postgres-prod" }));
   dialog = screen.getByRole("dialog", { name: "Edit tunnel" });
-  expect((within(dialog).getByLabelText("Mode") as HTMLSelectElement).value).toBe("dynamic");
-  await userEvent.selectOptions(within(dialog).getByLabelText("Mode"), "local");
+  expect(within(dialog).getByLabelText("Mode").textContent).toBe("Dynamic SOCKS");
+  await selectOption(within(dialog).getByLabelText("Mode"), "Local TCP");
   expect((within(dialog).getByLabelText("Target host") as HTMLInputElement).value).toBe("");
   expect((within(dialog).getByLabelText("Target port") as HTMLInputElement).value).toBe("");
   expect((within(dialog).getByLabelText("Target host") as HTMLInputElement).required).toBe(true);
@@ -309,7 +310,7 @@ it("saves Remote endpoints with a loopback default, requested-scope disclosure a
   await screen.findByText("metrics-remote");
   await userEvent.click(screen.getByRole("button", { name: "Add tunnel" }));
   const dialog = screen.getByRole("dialog", { name: "New tunnel" });
-  await userEvent.selectOptions(within(dialog).getByLabelText("Mode"), "remote");
+  await selectOption(within(dialog).getByLabelText("Mode"), "Remote TCP");
   expect((within(dialog).getByLabelText("Requested remote address") as HTMLInputElement).value).toBe("127.0.0.1");
   expect(within(dialog).getByText(/policy may override this address, including a loopback request/)).toBeTruthy();
   await userEvent.type(within(dialog).getByLabelText("Name"), "remote-service");
@@ -344,12 +345,12 @@ it("edits a saved Remote without changing direction or losing its local target a
   await screen.findByText("metrics-remote");
   await userEvent.click(screen.getByRole("button", { name: "Edit metrics-remote" }));
   const dialog = screen.getByRole("dialog", { name: "Edit tunnel" });
-  expect((within(dialog).getByLabelText("Mode") as HTMLSelectElement).value).toBe("remote");
+  expect(within(dialog).getByLabelText("Mode").textContent).toBe("Remote TCP");
   expect((within(dialog).getByLabelText("Local target host") as HTMLInputElement).value).toBe("localhost");
   await userEvent.clear(within(dialog).getByLabelText("Local target port"));
   await userEvent.type(within(dialog).getByLabelText("Local target port"), "9091");
   await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
-  expect((within(dialog).getByLabelText("Mode") as HTMLSelectElement).disabled).toBe(true);
+  expect((within(dialog).getByLabelText("Mode") as HTMLButtonElement).disabled).toBe(true);
   await act(() => pending.resolve({ status: "error", error: { kind: "invalidForward", field: "targetPort" } }));
   expect(await within(dialog).findByText("Enter a port from 1 to 65535.")).toBeTruthy();
   expect((within(dialog).getByLabelText("Local target port") as HTMLInputElement).value).toBe("9091");
@@ -366,7 +367,7 @@ it("starts Remote with an explicit Login and retains its fixed endpoints and Sto
   const saved = screen.getByText("metrics-remote").closest("li")!;
   await userEvent.click(within(saved).getByRole("button", { name: "Start" }));
   const dialog = screen.getByRole("dialog", { name: "Start metrics-remote" });
-  await userEvent.selectOptions(within(dialog).getByLabelText("Login"), "l-3");
+  await selectOption(within(dialog).getByLabelText("Login"), "prod-db-01 · dba");
   await userEvent.click(within(dialog).getByRole("button", { name: "Start" }));
   await screen.findByText("Listening");
   expect(f.calls.find((call) => call.command === "forward_start")?.args).toEqual({
@@ -466,7 +467,7 @@ it.each(
   const trigger = await screen.findByRole("button", { name: opener });
   await userEvent.click(trigger);
   const dialog = screen.getByRole("dialog", { name: opener === "Add tunnel" ? "New tunnel" : "Edit tunnel" });
-  await userEvent.selectOptions(within(dialog).getByLabelText("Mode"), "dynamic");
+  await selectOption(within(dialog).getByLabelText("Mode"), "Dynamic SOCKS");
   if (dismissal === "escape") await userEvent.keyboard("{Escape}");
   else if (dismissal === "cancel")
     await userEvent.click(within(dialog).getAllByRole("button", { name: "Cancel" }).at(-1)!);
@@ -502,7 +503,7 @@ it("starts saved Dynamic with the selected Login through the existing commands a
   await userEvent.click(within(saved).getByRole("button", { name: "Start" }));
   const dialog = screen.getByRole("dialog", { name: "Start staging-socks" });
   expect(within(dialog).getByRole("button", { name: "Start" }).hasAttribute("disabled")).toBe(true);
-  await userEvent.selectOptions(within(dialog).getByLabelText("Login"), "l-3");
+  await selectOption(within(dialog).getByLabelText("Login"), "prod-db-01 · dba");
   await userEvent.click(within(dialog).getByRole("button", { name: "Start" }));
   await screen.findByText("Listening");
   expect(f.calls.find((call) => call.command === "forward_start")?.args).toEqual({
@@ -672,12 +673,12 @@ it("retains Dynamic edits after an invalid save and disables the form while savi
   await userEvent.clear(within(dialog).getByLabelText("Bind address"));
   await userEvent.type(within(dialog).getByLabelText("Bind address"), "invalid-address");
   await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
-  expect((within(dialog).getByLabelText("Mode") as HTMLSelectElement).disabled).toBe(true);
+  expect((within(dialog).getByLabelText("Mode") as HTMLButtonElement).disabled).toBe(true);
   expect((within(dialog).getByLabelText("Bind address") as HTMLInputElement).disabled).toBe(true);
   await act(() => pending.resolve({ status: "error", error: { kind: "invalidForward", field: "bindAddress" } }));
   expect(await within(dialog).findByText("Enter an IPv4 or IPv6 address.")).toBeTruthy();
   expect((within(dialog).getByLabelText("Bind address") as HTMLInputElement).value).toBe("invalid-address");
-  expect((within(dialog).getByLabelText("Mode") as HTMLSelectElement).value).toBe("dynamic");
+  expect(within(dialog).getByLabelText("Mode").textContent).toBe("Dynamic SOCKS");
   expect(within(dialog).queryByLabelText("Target host")).toBeNull();
 });
 

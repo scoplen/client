@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { selectOption } from "./select-option";
 import { sampleHosts, sampleInventory } from "../src/gallery/sample-inventory";
 import { I18nProvider } from "../src/i18n";
 import { InventoryContext, type InventoryApi, type RouteInput } from "../src/inventory/api";
@@ -27,7 +28,7 @@ describe("independent inventory objects", () => {
     const dialog = await screen.findByRole("dialog", { name: "New key" });
     await userEvent.type(within(dialog).getByLabelText("Secret material"), "discard-secret");
     await userEvent.type(within(dialog).getByLabelText("Public key"), "discard-public-key");
-    await userEvent.selectOptions(within(dialog).getByLabelText("Kind"), "keyboardInteractive");
+    await selectOption(within(dialog).getByLabelText("Kind"), "Interactive (OTP/PAM)");
     expect(within(dialog).queryByLabelText("Secret material")).toBeNull();
     expect(within(dialog).queryByLabelText("Public key")).toBeNull();
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -89,13 +90,15 @@ describe("independent inventory objects", () => {
     await screen.findByText("laptop");
     await userEvent.click(screen.getByRole("button", { name: "Add key" }));
     const dialog = await screen.findByRole("dialog", { name: "New key" });
-    await userEvent.selectOptions(within(dialog).getByLabelText("Kind"), "deviceKey");
+    await selectOption(within(dialog).getByLabelText("Kind"), "Device-bound key");
 
     const binding = within(dialog).getByLabelText("Storage");
-    expect(within(binding).getByRole("option", { name: "This device only" })).toBeTruthy();
-    expect(within(binding).getByRole("option", { name: "Resolved at connect time" })).toBeTruthy();
+    await userEvent.click(binding);
+    const storage = await screen.findByRole("listbox");
+    expect(within(storage).getByRole("option", { name: "This device only" })).toBeTruthy();
+    expect(within(storage).getByRole("option", { name: "Resolved at connect time" })).toBeTruthy();
     expect(within(dialog).queryByLabelText("Device-only material")).toBeNull();
-    await userEvent.selectOptions(binding, "none");
+    await userEvent.click(within(storage).getByRole("option", { name: "Resolved at connect time" }));
     await userEvent.type(within(dialog).getByLabelText("Name"), "platform key");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
     expect(await screen.findByText("platform key")).toBeTruthy();
@@ -145,15 +148,17 @@ describe("independent inventory objects", () => {
     await userEvent.click(screen.getByRole("button", { name: "Add route" }));
     const dialog = await screen.findByRole("dialog", { name: "New route" });
     await userEvent.type(within(dialog).getByLabelText("Name"), "office proxy");
-    await userEvent.selectOptions(within(dialog).getByLabelText("Kind"), "httpConnect");
+    await selectOption(within(dialog).getByLabelText("Kind"), "HTTP CONNECT proxy");
     await userEvent.type(within(dialog).getByLabelText("Proxy endpoint"), "proxy.example:8080");
     const credential = within(dialog).getByLabelText("Proxy credential");
+    await userEvent.click(credential);
+    const passwords = await screen.findByRole("listbox");
     expect(
-      within(credential)
+      within(passwords)
         .getAllByRole("option")
-        .map((option) => (option as HTMLOptionElement).value),
-    ).toEqual(["", "c-nas"]);
-    await userEvent.selectOptions(credential, "c-nas");
+        .map((option) => option.textContent),
+    ).toEqual(["No proxy credential", "Password"]);
+    await userEvent.click(within(passwords).getByRole("option", { name: "Password" }));
     expect(within(dialog).getByText(/plain TCP/)).toBeTruthy();
     await userEvent.type(within(dialog).getByLabelText("Proxy username"), "proxy-user");
     expect(await violations(dialog)).toEqual([]);
@@ -172,7 +177,7 @@ describe("independent inventory objects", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Edit office proxy" }));
     const edit = await screen.findByRole("dialog", { name: "Edit office proxy" });
     expect((within(edit).getByLabelText("Proxy username") as HTMLInputElement).value).toBe("proxy-user");
-    await userEvent.selectOptions(within(edit).getByLabelText("Proxy credential"), "");
+    await selectOption(within(edit).getByLabelText("Proxy credential"), "No proxy credential");
     expect(within(edit).queryByLabelText("Proxy username")).toBeNull();
     await userEvent.click(within(edit).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(updated).toHaveLength(1));
