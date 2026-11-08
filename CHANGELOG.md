@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Replaced the Windows native title bar with themed controls in the tab strip. Dragging,
+  double-click maximize, minimize, restore and ordinary close remain available; startup and
+  local unlock also retain window controls. macOS keeps its native traffic lights.
+- Replaced the native Account selector popup with the shared themed Select component,
+  including keyboard navigation, typeahead, selected state and focus return. Switching
+  still requires confirmation; choosing the active profile leaves sessions untouched.
+
 - Added reviewed standard OpenSSH config and known-host export for compatible Direct/Jump
   Logins. Passwords stay external prompts, exact Agent identities export public sidecars,
   and software keys reference verified existing files without copying private keys. Independent
