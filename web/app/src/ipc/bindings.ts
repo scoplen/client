@@ -293,6 +293,16 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	/**  Number of regular files written. */
 	files: number,
 } | null, OpenSshExportError>(__TAURI_INVOKE("inventory_export_open_ssh_config", { preview, locale })),
+	/**  Report the current profile's stable native-owned Include path. */
+	generatedOpenSshStatus: () => typedError<OpenSshGeneratedStatus, OpenSshGeneratedError>(__TAURI_INVOKE("generated_open_ssh_status")),
+	/**  Review complete scoped compatibility and friendly aliases before publication. */
+	generatedOpenSshPreview: (choices: OpenSshExportChoice[] | null) => typedError<OpenSshGeneratedPreview, OpenSshGeneratedError>(__TAURI_INVOKE("generated_open_ssh_preview", { choices })),
+	/**  Consume the captured native review and atomically publish its complete generation. */
+	generatedOpenSshGenerate: (previewId: string) => typedError<OpenSshGeneratedResult, OpenSshGeneratedError>(__TAURI_INVOKE("generated_open_ssh_generate", { previewId })),
+	/**  Publish an empty wrapper, then remove only this scope's marked generations. */
+	generatedOpenSshClear: () => typedError<OpenSshGeneratedStatus, OpenSshGeneratedError>(__TAURI_INVOKE("generated_open_ssh_clear")),
+	/**  Discard a review off the main thread without deleting generated output. */
+	generatedOpenSshDiscard: () => typedError<null, OpenSshGeneratedError>(__TAURI_INVOKE("generated_open_ssh_discard")),
 	/**  Opens the conventional `~/.ssh/config` import picker. Cancellation returns `null`. */
 	chooseOpenSshConfig: () => typedError<string | null, Failure>(__TAURI_INVOKE("choose_open_ssh_config")),
 	/**  Opens the native private-key file picker; `null` means cancellation. */
@@ -1493,6 +1503,93 @@ export type OpenSshExportSkipped = {
 	loginName: string | null,
 	/**  Why no Host block will be written. */
 	reason: OpenSshExportSkipReason,
+};
+
+/**  One Host's friendly alias decision, independent of UUID alias compatibility. */
+export type OpenSshGeneratedAlias = {
+	/**  Saved Host identifier. */
+	hostId: string,
+	/**  Complete saved display name. */
+	hostName: string,
+	/**  Selected default or first live Login, before export compatibility checks. */
+	profileId: string | null,
+	/**  Additional lowercase alias, only when it will be emitted. */
+	alias: string | null,
+	/**  Why no friendly alias will be emitted. */
+	problem: OpenSshGeneratedAliasProblem | null,
+};
+
+/**  Why a Host cannot receive an additional friendly alias. */
+export type OpenSshGeneratedAliasProblem =
+/**  The complete Host name is outside the supported ASCII grammar. */
+"invalidName" |
+/**  Another live Host has the same ASCII case-insensitive name. */
+"duplicateName" |
+/**  The name is reserved for stable UUID aliases. */
+"reservedName" |
+/**  The Host has no live Login. */
+"missingLogin" |
+/**  The selected default or first Login cannot be exported. */
+"incompatibleLogin";
+
+/**  Publication errors are structured and never contain secret material. */
+export type OpenSshGeneratedError =
+/**  The selected profile or its Personal ownership changed. */
+{ kind: "contextChanged" } |
+/**  The review was discarded, replaced or already consumed. */
+{ kind: "previewExpired" } |
+/**  The scoped inventory changed after review. */
+{ kind: "inventoryChanged" } |
+/**  A selected source changed after review. */
+{ kind: "sourceChanged" } |
+/**  The stable target changed after review or is no longer owned. */
+{ kind: "targetChanged" } |
+/**  A choice or path cannot be represented safely. */
+{ kind: "invalidSelection" } |
+/**  The old active wrapper was retained; partial output is identified if necessary. */
+{ kind: "writeFailed";
+/**  Owned incomplete generation retained only when cleanup fails. */
+directory: string | null } |
+/**  An empty wrapper was published, but some owned generations remain. */
+{ kind: "clearFailed";
+/**  Owned scope directory containing the retained files. */
+directory: string };
+
+/**  Secret-free review retained and revalidated by the native boundary. */
+export type OpenSshGeneratedPreview = {
+	/**  Native receipt identity; the frontend does not choose output generations. */
+	id: string,
+	/**  Exact reviewed namespace. */
+	destination: ArchiveDestination,
+	/**  Existing authentication, strict-trust and per-Login compatibility report. */
+	report: OpenSshExportPreview,
+	/**  Friendly alias outcome for every live Host, including excluded Hosts. */
+	aliases: OpenSshGeneratedAlias[],
+};
+
+/**  Counts of a complete published configuration generation. */
+export type OpenSshGeneratedResult = {
+	/**  Stable endpoint after successful publication. */
+	status: OpenSshGeneratedStatus,
+	/**  Compatible Login blocks in the new generation. */
+	hosts: number,
+	/**  Files in the new generation, excluding the stable wrapper. */
+	files: number,
+};
+
+/**  Current native-owned Include endpoint, derived from the active profile. */
+export type OpenSshGeneratedStatus = {
+	/**  Exact current Local or Personal namespace. */
+	destination: ArchiveDestination,
+	/**  Stable wrapper path, never the user's own OpenSSH config. */
+	includePath: string,
+	/**  Complete line to add manually to the user's own configuration. */
+	includeLine: string,
+	/**
+	 *  A complete generation is referenced, including a generation with no Login blocks.
+	 *  Missing output and the empty wrapper published by Clear report false.
+	 */
+	active: boolean,
 };
 
 /**  What confirming this row will do to the imported objects. */

@@ -62,8 +62,31 @@ Unsupported credentials, routes, options or saved trust semantics are reported p
 an excluded Jump hop also excludes its dependent target. Key paths or destination paths with
 unrepresentable expansion syntax are refused. Inventory or selected source changes require
 a fresh review. If a write fails, the newly created child is removed; if cleanup fails, the
-dialog identifies the retained partial directory. Managed Includes and the complete C10
-migration gate remain separate roadmap outcomes.
+dialog identifies the retained partial directory.
+
+Settings > Data also provides Generate OpenSSH config for the current Local profile or
+selected Account's Personal vault. Review the same authentication and compatibility report,
+then generate a stable native-owned Include file. Copy the displayed Include line into your
+own OpenSSH config manually; Scoplen never reads or edits that config for generation.
+Every compatible Login retains its `scoplen-<Login UUID without hyphens>` alias. A complete
+ASCII Host name matching `[A-Za-z0-9][A-Za-z0-9._-]*` also gets a lowercase friendly alias
+when it is unique among all live Hosts in that namespace and outside the UUID alias namespace.
+The friendly alias uses the Host's valid saved default Login, otherwise its first live Login
+by UUID. An incompatible selected Login does not silently select another username. The
+review explains every omitted friendly alias; Jump references always retain UUID aliases.
+
+Generate and Regenerate are explicit operations: inventory edits do not update these files
+automatically. A complete generation contains its own `config`, `known_hosts` and public
+identity sidecars; its stable Include wrapper changes only after all files are written and
+synced. Old complete generations remain available until Clear. Local and each Personal vault
+have independent stable paths, and a reopened profile uses its original path. An empty or
+fully excluded inventory can publish a generation with no Login blocks. Clear first publishes
+a valid empty Include wrapper, then removes only that namespace's marked generations. It does
+not change inventory, external private-key files, or the user's OpenSSH config. A stale review,
+changed key source or target, or failed publication preserves the previous active generation;
+failed cleanup identifies the retained directory. Generated configuration is an output and is
+never read back into inventory. The separate `spl config generate`/`ssh-proxy` helper workflow
+and the complete C10 migration gate remain in the roadmap.
 
 The same Settings page provides Scoplen JSON/age import and export for Local inventory or
 the selected Account's Personal vault. JSON exports omit passwords, software private keys

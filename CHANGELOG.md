@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Add explicit generated OpenSSH configuration in Settings > Data with reviewed compatible
+  Logins, friendly Host aliases and stable UUID aliases. Generate complete independent files,
+  atomically publish a stable Include, and support regeneration and clearing the last entry.
+  Keep external authentication and the user's own OpenSSH configuration independent.
+
 - Add reviewed Local/Personal Scoplen JSON/age import and export in Settings > Data.
   Omit secrets by default; encrypt explicitly included passwords, software keys and Snippet
   defaults with a confirmed passphrase. Remap references, retain destination-bound source

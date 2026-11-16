@@ -25,6 +25,9 @@ import type {
   ObjectEditError,
   Outcome,
   OpenSshExportEntry,
+  OpenSshExportChoice,
+  OpenSshExportPreview,
+  OpenSshGeneratedPreview,
   OpenSshExportSkipped,
   RecentSession,
   RouteDefinition,
@@ -506,6 +509,55 @@ export function sampleInventory(
     (source.kind === "favorites" && h.favorite) ||
     (source.kind === "recent" && recentSessionRows().some((session) => session.hostId === h.id)) ||
     (source.kind === "group" && h.groups.includes(source.id));
+
+  const exportPreview = (choices: OpenSshExportChoice[] = []): OpenSshExportPreview => {
+    const entries: OpenSshExportEntry[] = [];
+    const skipped: OpenSshExportSkipped[] = [];
+    for (const host of hosts) {
+      const logins = profileRows().filter((profile) => profile.host === host.id);
+      if (!logins.length)
+        skipped.push({
+          hostId: host.id,
+          profileId: null,
+          hostName: host.name,
+          loginName: null,
+          reason: "missingLogin",
+        });
+      for (const login of logins) {
+        const row = { hostId: host.id, profileId: login.id, hostName: host.name, loginName: login.name };
+        const choice = choices.find((choice) => choice.profileId === login.id);
+        if (login.route.kind !== "direct") {
+          skipped.push({ ...row, reason: "unsupportedRoute" });
+        } else if (login.credential?.kind === "key" && !choice) {
+          skipped.push({ ...row, reason: "identityFileRequired" });
+        } else if (!login.credential || !["key", "password", "agent"].includes(login.credential.kind)) {
+          skipped.push({ ...row, reason: "unsupportedCredential" });
+        } else {
+          entries.push({
+            ...row,
+            loginName: login.name ?? login.username,
+            alias: `scoplen-${login.id}`,
+            address: host.address,
+            port: host.port,
+            username: login.username,
+            authentication:
+              login.credential.kind === "key" ? "identityFile" : (login.credential.kind as "password" | "agent"),
+            identityFile: choice?.identityFile ?? null,
+            route: { kind: "direct" },
+          });
+        }
+      }
+    }
+    return { revision: "sample-export", choices, entries, skipped, trustRecords: entries.length ? 1 : 0 };
+  };
+  let generatedActive = false;
+  let generatedPreview: OpenSshGeneratedPreview | null = null;
+  const generatedStatus = () => ({
+    destination: { scope: "local" as const },
+    includePath: "/home/fixture/scoplen/openssh/local/active.conf",
+    includeLine: 'Include "/home/fixture/scoplen/openssh/local/active.conf"',
+    active: generatedActive,
+  });
 
   return {
     areas: () =>
@@ -1150,46 +1202,7 @@ export function sampleInventory(
         }),
       );
     },
-    previewOpenSshExport: (choices = []) => {
-      const entries: OpenSshExportEntry[] = [];
-      const skipped: OpenSshExportSkipped[] = [];
-      for (const host of hosts) {
-        const logins = profileRows().filter((profile) => profile.host === host.id);
-        if (!logins.length)
-          skipped.push({
-            hostId: host.id,
-            profileId: null,
-            hostName: host.name,
-            loginName: null,
-            reason: "missingLogin",
-          });
-        for (const login of logins) {
-          const row = { hostId: host.id, profileId: login.id, hostName: host.name, loginName: login.name };
-          const choice = choices.find((choice) => choice.profileId === login.id);
-          if (login.route.kind !== "direct") {
-            skipped.push({ ...row, reason: "unsupportedRoute" });
-          } else if (login.credential?.kind === "key" && !choice) {
-            skipped.push({ ...row, reason: "identityFileRequired" });
-          } else if (!login.credential || !["key", "password", "agent"].includes(login.credential.kind)) {
-            skipped.push({ ...row, reason: "unsupportedCredential" });
-          } else {
-            entries.push({
-              ...row,
-              loginName: login.name ?? login.username,
-              alias: `scoplen-${login.id}`,
-              address: host.address,
-              port: host.port,
-              username: login.username,
-              authentication:
-                login.credential.kind === "key" ? "identityFile" : (login.credential.kind as "password" | "agent"),
-              identityFile: choice?.identityFile ?? null,
-              route: { kind: "direct" },
-            });
-          }
-        }
-      }
-      return wait(ok({ revision: "sample-export", choices, entries, skipped, trustRecords: entries.length ? 1 : 0 }));
-    },
+    previewOpenSshExport: (choices = []) => wait(ok(exportPreview(choices))),
     exportOpenSshConfig: (preview) =>
       preview.entries.length
         ? wait(
@@ -1200,6 +1213,43 @@ export function sampleInventory(
             }),
           )
         : wait({ status: "error" as const, error: { kind: "empty" as const } }),
+    generatedOpenSshStatus: () => wait(ok(generatedStatus())),
+    generatedOpenSshPreview: (choices = []) => {
+      const report = exportPreview(choices);
+      generatedPreview = {
+        id: "sample-generated-review",
+        destination: { scope: "local" },
+        report,
+        aliases: hosts.map((host) => {
+          const profile = report.entries.find((entry) => entry.hostId === host.id);
+          const valid = /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(host.name);
+          return {
+            hostId: host.id,
+            hostName: host.name,
+            profileId: profile?.profileId ?? null,
+            alias: profile && valid ? host.name.toLowerCase() : null,
+            problem: !profile ? "incompatibleLogin" : valid ? null : "invalidName",
+          };
+        }),
+      };
+      return wait(ok(generatedPreview));
+    },
+    generatedOpenSshGenerate: () => {
+      if (!generatedPreview) return wait({ status: "error" as const, error: { kind: "previewExpired" as const } });
+      const hosts = generatedPreview.report.entries.length;
+      generatedActive = true;
+      generatedPreview = null;
+      return wait(ok({ status: generatedStatus(), hosts, files: hosts ? 3 : 1 }));
+    },
+    generatedOpenSshClear: () => {
+      generatedActive = false;
+      generatedPreview = null;
+      return wait(ok(generatedStatus()));
+    },
+    generatedOpenSshDiscard: () => {
+      generatedPreview = null;
+      return wait(ok(null));
+    },
     portableArchivePreview: () =>
       wait(
         ok({

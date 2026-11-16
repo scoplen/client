@@ -289,6 +289,11 @@ export function createInventoryApi(commands = applicationCommands, profileGenera
     portableArchiveExport: async (options, passphrase, locale) =>
       outcome(await commands.portableArchiveExport(options, passphrase, locale)),
     portableArchiveDiscard: async () => outcome(await commands.portableArchiveDiscard()),
+    generatedOpenSshStatus: async () => outcome(await commands.generatedOpenSshStatus()),
+    generatedOpenSshPreview: async (choices) => outcome(await commands.generatedOpenSshPreview(choices ?? null)),
+    generatedOpenSshGenerate: async (previewId) => outcome(await commands.generatedOpenSshGenerate(previewId)),
+    generatedOpenSshClear: async () => outcome(await commands.generatedOpenSshClear()),
+    generatedOpenSshDiscard: async () => outcome(await commands.generatedOpenSshDiscard()),
     onChange: (listener) => {
       let stopped = false;
       const unlisteners: (() => void | Promise<void>)[] = [];

@@ -3,7 +3,10 @@
 //! Standard OpenSSH consumes reviewed exports with password, source-key and exact-agent auth.
 
 use scoplen_client_core::{
-    inventory::{Inventory, NewHost, OpenSshExportAuthentication, OpenSshImportChoice, SignIn},
+    inventory::{
+        Inventory, NewHost, OpenSshExportAuthentication, OpenSshExportEntry, OpenSshImportChoice,
+        SignIn, generated_open_ssh_include_line,
+    },
     repository::{
         AccessProfile, AccessProfileChange, Credential, CredentialBinding, CredentialChange,
         CredentialKind, Edit, Host, HostChange, Provenance, Repository, Route, RouteChange,
@@ -14,6 +17,7 @@ use scoplen_client_core::{
 use scoplen_crypto::{Ed25519SigningKey, LocalDatabaseKey};
 use scoplen_ssh::{AgentIdentity, AgentMessage};
 use std::{
+    collections::BTreeMap,
     env, fs, io,
     path::Path,
     sync::{
@@ -175,65 +179,9 @@ async fn run(args: &[String]) -> Result<()> {
     let config = Path::new(&exported.directory).join("config");
     let signs = Arc::new(AtomicUsize::new(0));
     let agent = start_agent(key, wrong, signs.clone()).await?;
-    for row in &entries {
-        let effective = tokio::process::Command::new("ssh")
-            .args(["-G", "-F"])
-            .arg(&config)
-            .arg(&row.alias)
-            .output()
-            .await?;
-        assert!(effective.status.success());
-        let text = String::from_utf8(effective.stdout)?;
-        assert!(text.contains(&format!(
-            "hostkeyalias scoplen-host-{}",
-            Uuid::parse_str(&row.host_id)?.simple()
-        )));
-        assert!(text.contains(&format!("port {}", row.port)));
-        let input = match row.authentication {
-            OpenSshExportAuthentication::Password => Some(args[4].as_str()),
-            OpenSshExportAuthentication::IdentityFile => Some(args[3].as_str()),
-            OpenSshExportAuthentication::Agent => None,
-        };
-        let mut command = tokio::process::Command::new("ssh");
-        command
-            .args(["-F"])
-            .arg(&config)
-            .args([
-                "-o",
-                "StrictHostKeyChecking=yes",
-                "-o",
-                "ConnectTimeout=5",
-                "-o",
-                "NumberOfPasswordPrompts=1",
-            ])
-            .kill_on_drop(true);
-        if let Some(file) = input {
-            command
-                .env("SSH_ASKPASS", env::current_exe()?)
-                .env("SSH_ASKPASS_REQUIRE", "force")
-                .env("DISPLAY", "scoplen-fixture")
-                .env("SCOPLEN_EXPORT_ASKPASS_FILE", file);
-        } else {
-            command.args(["-o", "BatchMode=yes"]);
-        }
-        command.arg(&row.alias).arg("printf scoplen-export-ok");
-        let output = tokio::time::timeout(Duration::from_secs(20), command.output()).await??;
-        if row.host_id == no_trust.summary.id || row.host_id == independent.summary.id {
-            assert!(!output.status.success());
-            assert!(
-                String::from_utf8_lossy(&output.stderr).contains("Host key verification failed")
-            );
-        } else if !output.status.success() || output.stdout != b"scoplen-export-ok" {
-            return Err(format!(
-                "exported {:?} SSH failed: {}",
-                row.authentication,
-                String::from_utf8_lossy(&output.stderr)
-            )
-            .into());
-        }
-    }
+    let rejected_hosts = [no_trust.summary.id.clone(), independent.summary.id.clone()];
+    check_connections(&config, &entries, args, &rejected_hosts, &BTreeMap::new()).await?;
     assert_eq!(signs.load(Ordering::SeqCst), 2);
-    agent.abort();
     // Fresh imports recover key and exact-Agent rows; passwords require a saved explicit choice.
     let fresh_store =
         Arc::new(Store::open(&scratch.path().join("fresh.db"), &LocalDatabaseKey::new([53; 32]))?);
@@ -294,10 +242,256 @@ async fn run(args: &[String]) -> Result<()> {
         inventory.export_open_ssh_config(reviewed, scratch.path().into()),
         Err(scoplen_client_core::inventory::OpenSshExportError::InventoryChanged)
     ));
+    Repository::<Host>::new(&store).update(
+        Uuid::parse_str(&password_host.summary.id)?,
+        HostChange { address: Some("127.0.0.1".into()), ..Default::default() },
+    )?;
+    generated_include(
+        &inventory,
+        &store,
+        scratch.path(),
+        args,
+        &[
+            (password_host.summary.id.as_str(), "prod-api"),
+            (source_host.summary.id.as_str(), "source-key"),
+            (agent_host.summary.id.as_str(), "jump-entry"),
+            (jump_host.summary.id.as_str(), "jump-target"),
+        ],
+        &rejected_hosts,
+    )
+    .await?;
+    assert_eq!(signs.load(Ordering::SeqCst), 4);
+    agent.abort();
     println!(
         "OpenSSH password, encrypted source-key, exact isolated-agent and Jump export; independent host trust, first-use refusal and explicit-password import round-trip passed"
     );
     Ok(())
+}
+
+async fn check_connections(
+    config: &Path,
+    entries: &[OpenSshExportEntry],
+    args: &[String],
+    rejected_hosts: &[String],
+    aliases: &BTreeMap<String, String>,
+) -> Result<()> {
+    for row in entries {
+        let alias = aliases.get(&row.profile_id).unwrap_or(&row.alias);
+        let effective = tokio::process::Command::new("ssh")
+            .args(["-G", "-F"])
+            .arg(config)
+            .arg(alias)
+            .output()
+            .await?;
+        assert!(effective.status.success());
+        let text = String::from_utf8(effective.stdout)?;
+        assert!(text.contains(&format!(
+            "hostkeyalias scoplen-host-{}",
+            Uuid::parse_str(&row.host_id)?.simple()
+        )));
+        assert!(text.contains(&format!("port {}", row.port)));
+        let input = match row.authentication {
+            OpenSshExportAuthentication::Password => Some(args[4].as_str()),
+            OpenSshExportAuthentication::IdentityFile => Some(args[3].as_str()),
+            OpenSshExportAuthentication::Agent => None,
+        };
+        let mut command = tokio::process::Command::new("ssh");
+        command
+            .args(["-F"])
+            .arg(config)
+            .args([
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "-o",
+                "ConnectTimeout=5",
+                "-o",
+                "NumberOfPasswordPrompts=1",
+            ])
+            .kill_on_drop(true);
+        if let Some(file) = input {
+            command
+                .env("SSH_ASKPASS", env::current_exe()?)
+                .env("SSH_ASKPASS_REQUIRE", "force")
+                .env("DISPLAY", "scoplen-fixture")
+                .env("SCOPLEN_EXPORT_ASKPASS_FILE", file);
+        } else {
+            command.args(["-o", "BatchMode=yes"]);
+        }
+        command.arg(alias).arg("printf scoplen-export-ok");
+        let output = tokio::time::timeout(Duration::from_secs(20), command.output()).await??;
+        if rejected_hosts.contains(&row.host_id) {
+            assert!(!output.status.success());
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("Host key verification failed")
+            );
+        } else if !output.status.success() || output.stdout != b"scoplen-export-ok" {
+            return Err(format!(
+                "exported {:?} SSH failed: {}",
+                row.authentication,
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+async fn generated_include(
+    inventory: &Inventory,
+    store: &Arc<Store>,
+    scratch: &Path,
+    args: &[String],
+    host_names: &[(&str, &str)],
+    rejected_hosts: &[String],
+) -> Result<()> {
+    for (id, name) in host_names {
+        Repository::<Host>::new(store).update(
+            Uuid::parse_str(id)?,
+            HostChange { name: Some((*name).into()), ..Default::default() },
+        )?;
+    }
+    let wrapper = scratch.join("active.conf");
+    let user_config = scratch.join("user-config");
+    let user_bytes =
+        format!("# Owned fixture user config.\n{}\n", generated_open_ssh_include_line(&wrapper)?);
+    fs::write(&user_config, &user_bytes)?;
+    let preview = inventory.preview_generated_open_ssh(vec![])?;
+    let aliases = preview
+        .aliases
+        .iter()
+        .filter_map(|alias| Some((alias.profile_id.clone()?, alias.alias.clone()?)))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(aliases.len(), 4);
+    let generated = inventory.write_generated_open_ssh(&preview, &scratch.join("generated-one"))?;
+    fs::write(
+        &wrapper,
+        format!(
+            "{}\n",
+            generated_open_ssh_include_line(&Path::new(&generated.directory).join("config"))?
+        ),
+    )?;
+    check_connections(&user_config, &preview.report.entries, args, rejected_hosts, &aliases)
+        .await?;
+
+    let password = host_names[0].0;
+    let password_profile = Uuid::parse_str(
+        &preview.report.entries.iter().find(|row| row.host_id == password).unwrap().profile_id,
+    )?;
+    Repository::<Host>::new(store).update(
+        Uuid::parse_str(password)?,
+        HostChange { port: Edit::Set(2299), ..Default::default() },
+    )?;
+    Repository::<AccessProfile>::new(store).update(
+        password_profile,
+        AccessProfileChange { username: Some("regenerated-user".into()), ..Default::default() },
+    )?;
+    let removed_host = host_names[1].0;
+    let removed_login =
+        preview.report.entries.iter().find(|row| row.host_id == removed_host).unwrap();
+    store.delete(Uuid::parse_str(&removed_login.profile_id)?)?;
+    let trust = Repository::<TrustRecord>::new(store)
+        .list()?
+        .into_iter()
+        .find(|record| record.host == Some(Uuid::parse_str(password).unwrap()))
+        .unwrap();
+    let replacement = ssh_key::PrivateKey::new(
+        ssh_key::private::Ed25519Keypair::from_seed(&[92; 32]).into(),
+        "",
+    )?;
+    Repository::<TrustRecord>::new(store).update(
+        trust.meta.id,
+        TrustRecordChange {
+            key: Edit::Set(replacement.public_key().to_openssh()?),
+            fingerprint: Edit::Set(
+                replacement.public_key().fingerprint(ssh_key::HashAlg::Sha256).to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+    let preview = inventory.preview_generated_open_ssh(vec![])?;
+    let generated = inventory.write_generated_open_ssh(&preview, &scratch.join("generated-two"))?;
+    fs::write(
+        &wrapper,
+        format!(
+            "{}\n",
+            generated_open_ssh_include_line(&Path::new(&generated.directory).join("config"))?
+        ),
+    )?;
+    let effective = effective_config(&user_config, "prod-api").await?;
+    assert!(effective.lines().any(|line| line == "port 2299"));
+    assert!(effective.lines().any(|line| line == "user regenerated-user"));
+    assert!(effective.lines().any(|line| line == "hostname 127.0.0.1"));
+    let removed = effective_config(&user_config, "source-key").await?;
+    assert!(removed.lines().any(|line| line == "hostname source-key"));
+    assert!(!removed.contains("hostkeyalias scoplen-host-"));
+    assert!(effective_config(&user_config, "jump-target").await?.contains("hostname 127.0.0.1"));
+    assert!(
+        fs::read_to_string(Path::new(&generated.directory).join("known_hosts"))?
+            .contains(&replacement.public_key().to_openssh()?)
+    );
+    Repository::<Host>::new(store).update(
+        Uuid::parse_str(password)?,
+        HostChange { port: Edit::Set(args[1].parse()?), ..Default::default() },
+    )?;
+    Repository::<AccessProfile>::new(store).update(
+        password_profile,
+        AccessProfileChange { username: Some("smoke".into()), ..Default::default() },
+    )?;
+    let preview = inventory.preview_generated_open_ssh(vec![])?;
+    let generated =
+        inventory.write_generated_open_ssh(&preview, &scratch.join("generated-trust"))?;
+    fs::write(
+        &wrapper,
+        format!(
+            "{}\n",
+            generated_open_ssh_include_line(&Path::new(&generated.directory).join("config"))?
+        ),
+    )?;
+    let password_entry = preview.report.entries.iter().find(|row| row.host_id == password).unwrap();
+    check_connections(
+        &user_config,
+        std::slice::from_ref(password_entry),
+        args,
+        &[password.to_owned()],
+        &aliases,
+    )
+    .await?;
+    for login in Repository::<AccessProfile>::new(store).list()? {
+        store.delete(login.meta.id)?;
+    }
+    let empty = inventory.preview_generated_open_ssh(vec![])?;
+    assert!(empty.report.entries.is_empty());
+    let generated = inventory.write_generated_open_ssh(&empty, &scratch.join("generated-empty"))?;
+    fs::write(
+        &wrapper,
+        format!(
+            "{}\n",
+            generated_open_ssh_include_line(&Path::new(&generated.directory).join("config"))?
+        ),
+    )?;
+    let effective = effective_config(&user_config, "prod-api").await?;
+    assert!(effective.lines().any(|line| line == "hostname prod-api"));
+    assert!(!effective.contains("hostkeyalias scoplen-host-"));
+    fs::write(&wrapper, "# Cleared fixture Include.\n")?;
+    assert_eq!(effective_config(&user_config, "prod-api").await?, effective);
+    assert_eq!(fs::read(&user_config)?, user_bytes.as_bytes());
+    println!(
+        "Generated OpenSSH Include: friendly password/key/Agent/Jump connections, port/user/trust regeneration, removed entries, empty inventory and clear passed; user config unchanged"
+    );
+    Ok(())
+}
+
+async fn effective_config(config: &Path, alias: &str) -> Result<String> {
+    let output = tokio::process::Command::new("ssh")
+        .args(["-G", "-F"])
+        .arg(config)
+        .arg(alias)
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Err("generated Include could not be read by OpenSSH".into());
+    }
+    Ok(String::from_utf8(output.stdout)?)
 }
 
 async fn start_agent(

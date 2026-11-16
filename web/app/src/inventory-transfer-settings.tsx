@@ -6,6 +6,7 @@ import { useInventory, type OpenSshExportPreview, type OpenSshImportPreview } fr
 import { OpenSshExportDialog, openSshExportErrorText } from "./inventory/openssh-export";
 import { OpenSshImportDialog, openSshImportErrorText } from "./inventory/openssh-import";
 import { PortableTransferSettings } from "./inventory/portable-transfer";
+import { GeneratedConfigSettings } from "./inventory/generated-config";
 
 /** Reviewed inventory migration for the current Local or Account profile. */
 export function InventoryTransferSettings() {
@@ -84,6 +85,7 @@ export function InventoryTransferSettings() {
         />
       ) : null}
       {exportPreview ? <OpenSshExportDialog initial={exportPreview} onClose={() => setExportPreview(null)} /> : null}
+      <GeneratedConfigSettings />
       <PortableTransferSettings />
     </section>
   );
