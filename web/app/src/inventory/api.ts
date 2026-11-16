@@ -457,6 +457,42 @@ export type OpenSshExportError =
   | { kind: "contextChanged" };
 
 export type PortableArchiveDestination = { scope: "local" } | { scope: "personal"; ownerId: Id; vaultId: Id };
+export interface OpenSshGeneratedStatus {
+  destination: PortableArchiveDestination;
+  includePath: string;
+  includeLine: string;
+  active: boolean;
+}
+export type OpenSshGeneratedAliasProblem =
+  "invalidName" | "duplicateName" | "reservedName" | "missingLogin" | "incompatibleLogin";
+export interface OpenSshGeneratedAlias {
+  hostId: Id;
+  hostName: string;
+  profileId: Id | null;
+  alias: string | null;
+  problem: OpenSshGeneratedAliasProblem | null;
+}
+export interface OpenSshGeneratedPreview {
+  id: string;
+  destination: PortableArchiveDestination;
+  report: OpenSshExportPreview;
+  aliases: OpenSshGeneratedAlias[];
+}
+export interface OpenSshGeneratedResult {
+  status: OpenSshGeneratedStatus;
+  hosts: number;
+  files: number;
+}
+export type OpenSshGeneratedError =
+  | { kind: "contextChanged" }
+  | { kind: "previewExpired" }
+  | { kind: "inventoryChanged" }
+  | { kind: "sourceChanged" }
+  | { kind: "targetChanged" }
+  | { kind: "invalidSelection" }
+  | { kind: "writeFailed"; directory: string | null }
+  | { kind: "clearFailed"; directory: string };
+
 export interface PortableArchiveExportOptions {
   secrets: "omitted" | "included";
 }
@@ -606,6 +642,13 @@ export interface InventoryApi {
     locale: Locale,
   ): Promise<Outcome<PortableArchiveExportResult | null, PortableArchiveError>>;
   portableArchiveDiscard(): Promise<Outcome<null, PortableArchiveError>>;
+  generatedOpenSshStatus(): Promise<Outcome<OpenSshGeneratedStatus, OpenSshGeneratedError>>;
+  generatedOpenSshPreview(
+    choices?: OpenSshExportChoice[],
+  ): Promise<Outcome<OpenSshGeneratedPreview, OpenSshGeneratedError>>;
+  generatedOpenSshGenerate(previewId: string): Promise<Outcome<OpenSshGeneratedResult, OpenSshGeneratedError>>;
+  generatedOpenSshClear(): Promise<Outcome<OpenSshGeneratedStatus, OpenSshGeneratedError>>;
+  generatedOpenSshDiscard(): Promise<Outcome<null, OpenSshGeneratedError>>;
   /** Calls `listener` after any change to the inventory; returns a function that stops it. */
   onChange(listener: () => void): () => void;
 }

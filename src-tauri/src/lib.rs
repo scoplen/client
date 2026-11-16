@@ -10,6 +10,7 @@ pub mod events;
 pub mod file_drop;
 pub mod forwards;
 pub mod frames;
+pub mod generated_open_ssh;
 pub mod inventory;
 pub mod local_data;
 pub mod password_sign_in;
@@ -151,6 +152,11 @@ pub fn ipc() -> Builder<tauri::Wry> {
             inventory::inventory_import_open_ssh_config,
             inventory::inventory_preview_open_ssh_export,
             inventory::inventory_export_open_ssh_config,
+            generated_open_ssh::generated_open_ssh_status,
+            generated_open_ssh::generated_open_ssh_preview,
+            generated_open_ssh::generated_open_ssh_generate,
+            generated_open_ssh::generated_open_ssh_clear,
+            generated_open_ssh::generated_open_ssh_discard,
             inventory::choose_open_ssh_config,
             inventory::choose_key_file,
             portable_archives::portable_archive_preview,
@@ -270,6 +276,7 @@ pub fn run() {
             app.manage(ForwardShutdown::default());
             app.manage(inventory::InventoryState::default());
             app.manage(std::sync::Arc::new(portable_archives::PortableArchiveState::default()));
+            app.manage(std::sync::Arc::new(generated_open_ssh::GeneratedOpenSshState::default()));
             app.manage(scoplen_client_core::personal_server::PersonalServer::default());
             let background = std::sync::Arc::new(scoplen_client_core::personal_server::PersonalSyncRuntime::default());
             background.set_store(app.state::<local_data::LocalDataState>().store());

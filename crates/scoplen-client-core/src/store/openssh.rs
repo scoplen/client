@@ -66,6 +66,38 @@ fn snapshot(
     Ok(ImportSnapshot { mappings, objects, revision: format!("{:x}", digest.finalize()) })
 }
 
+fn export_snapshot(
+    conn: &Connection,
+    objects: BTreeMap<Uuid, Object>,
+    binding: &[u8],
+) -> Result<ExportSnapshot, StoreError> {
+    let mut identity_files = BTreeMap::<Uuid, Vec<String>>::new();
+    let mut query = conn.prepare(
+        "SELECT object_id,source_file FROM openssh_import_sources
+         WHERE source_key LIKE 'credential:%' ORDER BY object_id,source_file",
+    )?;
+    let mut hash = Sha256::new();
+    hash.update(binding);
+    for (id, object) in &objects {
+        hash.update(id.as_bytes());
+        hash.update(object.encode()?);
+    }
+    let rows =
+        query.query_map([], |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)))?;
+    for row in rows {
+        let (bytes, file) = row?;
+        let id = Uuid::from_slice(&bytes).map_err(|_| StoreError::InvalidIdentifier)?;
+        if !objects.get(&id).is_some_and(|object| object.object_type == ObjectType::CREDENTIAL) {
+            continue;
+        }
+        hash.update(id.as_bytes());
+        hash.update((file.len() as u64).to_be_bytes());
+        hash.update(file.as_bytes());
+        identity_files.entry(id).or_default().push(file);
+    }
+    Ok(ExportSnapshot { objects, identity_files, revision: format!("{:x}", hash.finalize()) })
+}
+
 impl Store {
     pub(crate) fn openssh_export_snapshot(&self) -> Result<ExportSnapshot, StoreError> {
         let conn = self.conn();
@@ -81,27 +113,40 @@ impl Store {
                 objects.insert(object.id, object);
             }
         }
-        let mut identity_files = BTreeMap::<Uuid, Vec<String>>::new();
+        export_snapshot(&conn, objects, &[])
+    }
+
+    pub(crate) fn openssh_generated_destination(
+        &self,
+    ) -> Result<crate::portable_archive::ArchiveDestination, StoreError> {
+        Ok(super::portable::context(&self.conn(), self.device_id)
+            .map_err(|_| StoreError::AccountContext)?
+            .destination)
+    }
+
+    pub(crate) fn openssh_generated_snapshot(
+        &self,
+    ) -> Result<(crate::portable_archive::ArchiveDestination, ExportSnapshot), StoreError> {
+        let conn = self.conn();
+        let context = super::portable::context(&conn, self.device_id)
+            .map_err(|_| StoreError::AccountContext)?;
         let mut query = conn.prepare(
-            "SELECT object_id,source_file FROM openssh_import_sources
-             WHERE source_key LIKE 'credential:%' ORDER BY object_id,source_file",
+            "SELECT id,envelope FROM objects WHERE vault IS ?1 AND deleted=0
+             AND type IN (1,2,3,4,6) ORDER BY id",
         )?;
-        let mut hash = Sha256::new();
-        for (id, object) in &objects {
-            hash.update(id.as_bytes());
-            hash.update(object.encode()?);
-        }
-        let rows =
-            query.query_map([], |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)))?;
+        let rows = query
+            .query_map(params![context.vault.map(|id| id.as_bytes().to_vec())], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
+        let mut objects = BTreeMap::new();
         for row in rows {
-            let (bytes, file) = row?;
-            let id = Uuid::from_slice(&bytes).map_err(|_| StoreError::InvalidIdentifier)?;
-            hash.update(id.as_bytes());
-            hash.update((file.len() as u64).to_be_bytes());
-            hash.update(file.as_bytes());
-            identity_files.entry(id).or_default().push(file);
+            let (id, bytes) = row?;
+            let object = decode(&id, &bytes)?;
+            objects.insert(object.id, object);
         }
-        Ok(ExportSnapshot { objects, identity_files, revision: format!("{:x}", hash.finalize()) })
+        let mut binding = context.key;
+        binding.extend_from_slice(&context.generation);
+        Ok((context.destination, export_snapshot(&conn, objects, &binding)?))
     }
 
     pub(crate) fn openssh_import_snapshot(
@@ -172,3 +217,6 @@ impl Store {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod generated_tests;

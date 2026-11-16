@@ -3,6 +3,47 @@
 // Messages use ICU MessageFormat.
 
 export const en = {
+  "include.title": "OpenSSH configuration",
+  "include.body":
+    "Use your saved hosts from OpenSSH. Review and generate a configuration for the current inventory, then include it in your own SSH config.",
+  "include.manage": "Manage OpenSSH config",
+  "include.review": "Review generated OpenSSH config",
+  "include.instructions":
+    "After generating, add this line to your OpenSSH config. Regenerate here when your hosts change.",
+  "include.generate": "Generate configuration",
+  "include.regenerate": "Regenerate configuration",
+  "include.generated": "Configuration generated for {count, plural, one {# Login} other {# Logins}}.",
+  "include.empty":
+    "No compatible connections are available. Generating replaces this inventory's previous entries with an empty configuration.",
+  "include.aliases": "Host commands",
+  "include.alias.invalidName":
+    "This Host name cannot be used as an SSH alias. Compatible Logins keep their UUID aliases below.",
+  "include.alias.duplicateName":
+    "This name is shared by more than one Host. Compatible Logins keep their UUID aliases below.",
+  "include.alias.reservedName":
+    "This name is reserved for Login aliases. Compatible Logins keep their UUID aliases below.",
+  "include.alias.missingLogin": "Add a Login to use this Host from OpenSSH.",
+  "include.alias.incompatibleLogin":
+    "The default Login cannot be exported. Review its exclusion below; another username is not selected automatically.",
+  "include.clear": "Clear generated configuration",
+  "include.clearTitle": "Clear generated OpenSSH config?",
+  "include.clearBody":
+    "Remove this inventory's generated connection entries and older generated versions. Your saved hosts, credentials and own SSH config are kept. The Include line can stay in your config.",
+  "include.cleared": "Generated connection entries cleared. The Include file remains valid and empty.",
+  "include.error.load": "The configuration could not be reviewed. Check that this profile is unlocked, then try again.",
+  "include.error.generate": "The generation result could not be read. Review the configuration before trying again.",
+  "include.error.clear": "The clear result could not be read. Review the configuration before trying again.",
+  "include.error.contextChanged":
+    "The active profile changed. Close this review and reopen it from the current profile.",
+  "include.error.previewExpired": "This review expired. Refresh the preview before generating.",
+  "include.error.inventoryChanged": "The inventory changed. Refresh the preview and review the new entries.",
+  "include.error.sourceChanged": "A selected key file changed. Refresh the preview and choose the matching file again.",
+  "include.error.targetChanged": "The generated files changed. Refresh the preview before replacing them.",
+  "include.error.invalidSelection": "A key-file selection is invalid. Refresh the preview and choose it again.",
+  "include.error.writeFailed":
+    "The configuration could not be written. Check access to the generated folder, then refresh the preview.",
+  "include.error.partial": "The configuration could not be completed. Review the retained generated folder: {path}",
+  "include.error.clearFailed": "The generated files could not be cleared completely. Review this folder: {path}",
   "shell.skip": "Skip to content",
   "shell.nav": "Main",
   "shell.nav.about": "About",

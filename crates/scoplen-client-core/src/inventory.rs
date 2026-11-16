@@ -35,9 +35,11 @@ mod openssh;
 pub use openssh::{
     OpenSshExportAuthentication, OpenSshExportChoice, OpenSshExportEntry, OpenSshExportError,
     OpenSshExportPreview, OpenSshExportResult, OpenSshExportSkipReason, OpenSshExportSkipped,
-    OpenSshImportAction, OpenSshImportChoice, OpenSshImportCredential, OpenSshImportEntry,
-    OpenSshImportError, OpenSshImportPreview, OpenSshImportResult, OpenSshImportRoute,
-    OpenSshSkipReason, OpenSshSkippedHost, OpenSshUnsupportedDirective,
+    OpenSshGeneratedAlias, OpenSshGeneratedAliasProblem, OpenSshGeneratedError,
+    OpenSshGeneratedPreview, OpenSshGeneratedResult, OpenSshGeneratedStatus, OpenSshImportAction,
+    OpenSshImportChoice, OpenSshImportCredential, OpenSshImportEntry, OpenSshImportError,
+    OpenSshImportPreview, OpenSshImportResult, OpenSshImportRoute, OpenSshSkipReason,
+    OpenSshSkippedHost, OpenSshUnsupportedDirective, generated_open_ssh_include_line,
 };
 
 const UNDO_LIFETIME: Duration = Duration::from_secs(5 * 60);

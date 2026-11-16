@@ -17,12 +17,12 @@ use crate::portable_archive::{
     ImportTrustPreview, PortableArchiveError as Error,
 };
 
-struct Context {
-    key: Vec<u8>,
-    vault: Option<Uuid>,
+pub(super) struct Context {
+    pub(super) key: Vec<u8>,
+    pub(super) vault: Option<Uuid>,
     account: Option<Uuid>,
-    destination: ArchiveDestination,
-    generation: Vec<u8>,
+    pub(super) destination: ArchiveDestination,
+    pub(super) generation: Vec<u8>,
 }
 
 struct PersonalContext {
@@ -253,7 +253,7 @@ impl Store {
     }
 }
 
-fn context(conn: &Connection, device: Uuid) -> Result<Context, Error> {
+pub(super) fn context(conn: &Connection, device: Uuid) -> Result<Context, Error> {
     let personal: Option<PersonalContext> = conn
         .query_row(
             "SELECT p.origin,p.account_id,p.personal_vault_id,p.auth_generation,s.generation

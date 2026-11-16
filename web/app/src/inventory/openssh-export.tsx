@@ -13,7 +13,6 @@ import {
 export function OpenSshExportDialog({ initial, onClose }: { initial: OpenSshExportPreview; onClose: () => void }) {
   const api = useInventory();
   const { t, locale } = useI18n();
-  const id = useId();
   const [preview, setPreview] = useState(initial);
   const [choices, setChoices] = useState(initial.choices);
   const [busy, setBusy] = useState(false);
@@ -175,80 +174,105 @@ export function OpenSshExportDialog({ initial, onClose }: { initial: OpenSshExpo
             </p>
           ) : null}
         </div>
-        <section aria-labelledby={`${id}-entries`}>
-          <h3 id={`${id}-entries`} className="m-0 font-medium">
-            {t("export.entries", { count: preview.entries.length })}
-          </h3>
-          {preview.entries.length === 0 ? (
-            <p>{t("export.empty")}</p>
-          ) : (
-            <ul className="mt-2 mb-0 list-none divide-y divide-border p-0">
-              {preview.entries.map((entry) => (
-                <li key={entry.profileId} className="space-y-1.5 py-3 first:pt-0">
-                  <p className="m-0 break-all font-medium">{entry.alias}</p>
-                  <p className="m-0 break-all text-muted-foreground">
-                    {entry.hostName}
-                    {entry.loginName ? ` · ${entry.loginName}` : ""}
-                  </p>
-                  <p className="m-0 break-all font-mono text-xs">
-                    {entry.username}@{entry.address}
-                    {entry.port === 22 ? "" : `:${entry.port}`}
-                  </p>
-                  <p className="m-0 break-all text-muted-foreground">
-                    {entry.route.kind === "direct"
-                      ? t("host.route.direct")
-                      : entry.route.kind === "jump"
-                        ? t("import.route.jump", { hops: entry.route.hops.join(" → ") })
-                        : t("import.route.command", { command: entry.route.command })}
-                  </p>
-                  <p className="m-0 text-muted-foreground">{t(`export.authentication.${entry.authentication}`)}</p>
-                  {entry.identityFile ? (
-                    <p className="m-0 break-all font-mono text-xs text-muted-foreground">{entry.identityFile}</p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-        {preview.skipped.length > 0 ? (
-          <section aria-labelledby={`${id}-skipped`}>
-            <h3 id={`${id}-skipped`} className="m-0 font-medium">
-              {t("export.skipped", { count: preview.skipped.length })}
-            </h3>
-            <p className="text-muted-foreground">{t("export.skippedHint")}</p>
-            <ul className="mt-2 mb-0 list-none space-y-3 p-0">
-              {preview.skipped.map((entry, index) => (
-                <li key={entry.profileId ?? `${entry.hostId}:${index}`} className="space-y-1.5">
-                  <p className="m-0 break-all font-medium">
-                    {entry.hostName}
-                    {entry.loginName ? ` · ${entry.loginName}` : ""}
-                  </p>
-                  <p className="m-0 text-muted-foreground">{t(`export.skip.${entry.reason}`)}</p>
-                  {choices.find((choice) => choice.profileId === entry.profileId) ? (
-                    <p className="m-0 break-all font-mono text-xs text-muted-foreground">
-                      {choices.find((choice) => choice.profileId === entry.profileId)!.identityFile}
-                    </p>
-                  ) : null}
-                  {!saved &&
-                  entry.profileId &&
-                  ["identityFileRequired", "identityFileMismatch"].includes(entry.reason) ? (
-                    <Button
-                      variant="secondary"
-                      className="h-auto min-h-9 max-w-full py-2 text-left break-all whitespace-normal"
-                      disabled={busy}
-                      onClick={() => void chooseIdentity(entry.profileId!)}
-                    >
-                      {t("export.chooseIdentity", { name: entry.loginName ?? entry.hostName })}
-                    </Button>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
+        <OpenSshExportReport
+          preview={preview}
+          choices={choices}
+          busy={busy}
+          onChooseIdentity={saved ? undefined : chooseIdentity}
+        />
         {stale && !busy ? <p className="m-0 text-attention">{t("import.reviewAgain")}</p> : null}
       </div>
     </Dialog>
+  );
+}
+
+export function OpenSshExportReport({
+  preview,
+  choices,
+  busy,
+  onChooseIdentity,
+}: {
+  preview: OpenSshExportPreview;
+  choices: OpenSshExportChoice[];
+  busy: boolean;
+  onChooseIdentity?: (profileId: string) => void | Promise<void>;
+}) {
+  const { t } = useI18n();
+  const id = useId();
+  return (
+    <>
+      <section aria-labelledby={`${id}-entries`}>
+        <h3 id={`${id}-entries`} className="m-0 font-medium">
+          {t("export.entries", { count: preview.entries.length })}
+        </h3>
+        {preview.entries.length === 0 ? (
+          <p>{t("export.empty")}</p>
+        ) : (
+          <ul className="mt-2 mb-0 list-none divide-y divide-border p-0">
+            {preview.entries.map((entry) => (
+              <li key={entry.profileId} className="space-y-1.5 py-3 first:pt-0">
+                <p className="m-0 break-all font-medium">{entry.alias}</p>
+                <p className="m-0 break-all text-muted-foreground">
+                  {entry.hostName}
+                  {entry.loginName ? ` · ${entry.loginName}` : ""}
+                </p>
+                <p className="m-0 break-all font-mono text-xs">
+                  {entry.username}@{entry.address}
+                  {entry.port === 22 ? "" : `:${entry.port}`}
+                </p>
+                <p className="m-0 break-all text-muted-foreground">
+                  {entry.route.kind === "direct"
+                    ? t("host.route.direct")
+                    : entry.route.kind === "jump"
+                      ? t("import.route.jump", { hops: entry.route.hops.join(" → ") })
+                      : t("import.route.command", { command: entry.route.command })}
+                </p>
+                <p className="m-0 text-muted-foreground">{t(`export.authentication.${entry.authentication}`)}</p>
+                {entry.identityFile ? (
+                  <p className="m-0 break-all font-mono text-xs text-muted-foreground">{entry.identityFile}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      {preview.skipped.length > 0 ? (
+        <section aria-labelledby={`${id}-skipped`}>
+          <h3 id={`${id}-skipped`} className="m-0 font-medium">
+            {t("export.skipped", { count: preview.skipped.length })}
+          </h3>
+          <p className="text-muted-foreground">{t("export.skippedHint")}</p>
+          <ul className="mt-2 mb-0 list-none space-y-3 p-0">
+            {preview.skipped.map((entry, index) => (
+              <li key={entry.profileId ?? `${entry.hostId}:${index}`} className="space-y-1.5">
+                <p className="m-0 break-all font-medium">
+                  {entry.hostName}
+                  {entry.loginName ? ` · ${entry.loginName}` : ""}
+                </p>
+                <p className="m-0 text-muted-foreground">{t(`export.skip.${entry.reason}`)}</p>
+                {choices.find((choice) => choice.profileId === entry.profileId) ? (
+                  <p className="m-0 break-all font-mono text-xs text-muted-foreground">
+                    {choices.find((choice) => choice.profileId === entry.profileId)!.identityFile}
+                  </p>
+                ) : null}
+                {onChooseIdentity &&
+                entry.profileId &&
+                ["identityFileRequired", "identityFileMismatch"].includes(entry.reason) ? (
+                  <Button
+                    variant="secondary"
+                    className="h-auto min-h-9 max-w-full py-2 text-left break-all whitespace-normal"
+                    disabled={busy}
+                    onClick={() => void onChooseIdentity(entry.profileId!)}
+                  >
+                    {t("export.chooseIdentity", { name: entry.loginName ?? entry.hostName })}
+                  </Button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </>
   );
 }
 
