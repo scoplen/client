@@ -113,9 +113,9 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	snippetsPrepare: (id: string, values: { [key in string]: string }) => typedError<PreparedSnippet, SnippetIssue>(__TAURI_INVOKE("snippets_prepare", { id, values })),
 	/**  List complete saved definitions and fixed unavailable reasons. */
 	workspacesList: () => typedError<WorkspaceView[], WorkspaceIssue>(__TAURI_INVOKE("workspaces_list")),
-	/**  Save every current terminal tree and focused pane as a new local object. */
+	/**  Save complete terminal trees and explicitly selected saved tunnels as a local object. */
 	workspacesCreate: (input: WorkspaceInput) => typedError<WorkspaceView, WorkspaceIssue>(__TAURI_INVOKE("workspaces_create", { input })),
-	/**  Validate every saved slot and return complete trees with fresh pane identities. */
+	/**  Preflight all slots, then project fresh terminal trees and ordered saved-tunnel starts. */
 	workspacesOpen: (id: string) => typedError<OpenedWorkspace, WorkspaceIssue>(__TAURI_INVOKE("workspaces_open", { id })),
 	/**  Tombstone a selected definition, including unsupported retained definitions. */
 	workspacesDelete: (id: string) => typedError<null, WorkspaceIssue>(__TAURI_INVOKE("workspaces_delete", { id })),
@@ -1807,12 +1807,14 @@ export type OpenSshUnsupportedDirective = {
 	directive: string,
 };
 
-/**  A complete tab set that the shell appends only after successful validation. */
+/**  A complete opening intent returned only after all dependencies are valid. */
 export type OpenedWorkspace = {
 	/**  Saved order with fresh runtime identities. */
 	tabs: WorkspaceTab[],
 	/**  Selected tab index, or Hosts when absent. */
 	active: number | null,
+	/**  Saved starts dispatched through the ordinary forwarding owner, in order. */
+	forwards: WorkspaceForward[],
 };
 
 /**  Explicit next action for one original Device admission. */
@@ -4150,7 +4152,27 @@ export type UnreadableReason =
 /**  It was written by a newer version of Scoplen. */
 "newerVersion";
 
-/**  The ordered tab intent; no output, connection state or commands are accepted. */
+/**  A validated saved-tunnel start projection, without reserving a run. */
+export type WorkspaceForward = {
+	/**  Current saved Forward identifier. */
+	forwardId: string,
+	/**  Explicitly retained Login identifier. */
+	profileId: string,
+	/**  Current saved tunnel name. */
+	name: string,
+	/**  Current Host and selected Login display text. */
+	label: string,
+};
+
+/**  An explicitly selected saved tunnel and its current Login. */
+export type WorkspaceForwardInput = {
+	/**  Saved Forward identifier; temporary runs cannot be captured. */
+	forwardId: string,
+	/**  Login retained independently of the Forward's default. */
+	profileId: string,
+};
+
+/**  Ordered terminal and saved-tunnel intent, without live state or commands. */
 export type WorkspaceInput = {
 	/**  Display name for a newly created object. */
 	name: string,
@@ -4158,6 +4180,8 @@ export type WorkspaceInput = {
 	tabs: WorkspaceTabInput[],
 	/**  Selected tab index, or Hosts when absent. */
 	active: number | null,
+	/**  Explicitly selected saved definitions, in restoration order. */
+	forwards: WorkspaceForwardInput[],
 };
 
 /**  Content-free failures suitable for localized interface messages. */
@@ -4170,7 +4194,7 @@ export type WorkspaceIssue =
 { kind: "notFound" } |
 /**  The supplied name is blank or exceeds the existing text bound. */
 { kind: "invalidName" } |
-/**  At least one ordinary terminal is required. */
+/**  At least one ordinary terminal or saved tunnel is required. */
 { kind: "emptyTabs" } |
 /**  Saving the complete tab set would convert offline output into SSH intent. */
 { kind: "savedOutputUnsupported" } |
@@ -4260,6 +4284,8 @@ export type WorkspaceView = {
 	name: string,
 	/**  Number of saved terminal tabs, when readable. */
 	tabCount: number,
+	/**  Number of saved tunnels, when readable. */
+	forwardCount: number,
 	/**  A fixed reason Open is unavailable; Delete remains explicit. */
 	issue: WorkspaceIssue | null,
 };

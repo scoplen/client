@@ -610,7 +610,7 @@ impl ForwardManager {
     }
 }
 
-fn start_configuration(
+pub(crate) fn start_configuration(
     store: &Store,
     intent: ForwardStartIntent,
 ) -> Result<(ForwardConfiguration, PreparationPlan), ForwardIssue> {

@@ -431,10 +431,12 @@ mod tests {
         use crate::workspaces::{
             workspaces_create, workspaces_delete, workspaces_list, workspaces_open,
         };
-        use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
+        use scoplen_client_core::inventory::{
+            ForwardInput, ForwardKindInput, Inventory, NewHost, SignIn,
+        };
         use scoplen_client_core::workspaces::{
-            WorkspaceInput, WorkspaceIssue, WorkspaceSplitDirection, WorkspaceTabInput,
-            WorkspaceTree, WorkspaceTreeInput,
+            WorkspaceForwardInput, WorkspaceInput, WorkspaceIssue, WorkspaceSplitDirection,
+            WorkspaceTabInput, WorkspaceTree, WorkspaceTreeInput,
         };
 
         let directory =
@@ -453,6 +455,21 @@ mod tests {
                 })
                 .unwrap();
             let leaf = WorkspaceTreeInput::Terminal { profile_id: host.logins[0].id.clone() };
+            let forward = Inventory::new(store.clone())
+                .create_forward(ForwardInput {
+                    name: "Native saved tunnel".into(),
+                    kind: ForwardKindInput::Dynamic,
+                    bind_address: "127.0.0.1".into(),
+                    bind_port: 1080,
+                    target_host: None,
+                    target_port: None,
+                    profile: None,
+                })
+                .unwrap();
+            let selected = WorkspaceForwardInput {
+                forward_id: forward.id.clone(),
+                profile_id: host.logins[0].id.clone(),
+            };
             let saved = workspaces_create(
                 workspace_request(local.clone(), store.clone()),
                 WorkspaceInput {
@@ -466,6 +483,7 @@ mod tests {
                         focused: 1,
                     }],
                     active: Some(0),
+                    forwards: vec![selected.clone()],
                 },
             )
             .await
@@ -482,6 +500,9 @@ mod tests {
                     .await
                     .unwrap();
             assert_eq!(opened.active, Some(0));
+            assert_eq!(opened.forwards.len(), 1);
+            assert_eq!(opened.forwards[0].forward_id, forward.id);
+            assert_eq!(opened.forwards[0].profile_id, host.logins[0].id);
             let WorkspaceTree::Split { direction, first, second } = &opened.tabs[0].tree else {
                 panic!("split missing")
             };
@@ -514,6 +535,29 @@ mod tests {
                     .await,
                 Err(WorkspaceIssue::Unavailable)
             );
+            let tunnel_only = workspaces_create(
+                workspace_request(local.clone(), store.clone()),
+                WorkspaceInput {
+                    name: "Native tunnels only".into(),
+                    tabs: vec![],
+                    active: None,
+                    forwards: vec![selected],
+                },
+            )
+            .await
+            .unwrap();
+            let tunnels = workspaces_open(
+                workspace_request(local.clone(), store.clone()),
+                tunnel_only.id.clone(),
+            )
+            .await
+            .unwrap();
+            assert!(tunnels.tabs.is_empty());
+            assert_eq!(tunnels.active, None);
+            assert_eq!(tunnels.forwards.len(), 1);
+            workspaces_delete(workspace_request(local.clone(), store.clone()), tunnel_only.id)
+                .await
+                .unwrap();
             workspaces_delete(workspace_request(local, store.clone()), saved.id).await.unwrap();
             assert!(store.recent_sessions(10).unwrap().is_empty());
         });
