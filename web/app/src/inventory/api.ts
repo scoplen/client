@@ -456,6 +456,70 @@ export type OpenSshExportError =
   | { kind: "writeFailed"; directory: string | null }
   | { kind: "contextChanged" };
 
+export type PortableArchiveDestination = { scope: "local" } | { scope: "personal"; ownerId: Id; vaultId: Id };
+export interface PortableArchiveExportOptions {
+  secrets: "omitted" | "included";
+}
+export interface PortableArchiveExportResult {
+  destination: PortableArchiveDestination;
+  objects: number;
+  secrets: "omitted" | "included";
+}
+export type PortableArchiveImportProblem =
+  | "missingReference"
+  | "missingSecret"
+  | "incompatibleTarget"
+  | "deletedTarget"
+  | "preferenceConflict"
+  | "unsupportedData"
+  | "invalidTrust";
+/** Safe native review metadata; decrypted fields and file paths never cross this boundary. */
+export interface PortableArchiveImportEntry {
+  sourceId: Id;
+  targetId: Id | null;
+  objectType: string;
+  action: "create" | "replace" | "unchanged" | "blocked";
+  omittedSecrets: string[];
+  retainSecretAvailable: boolean;
+  requiresDeviceSetup: boolean;
+  trust: { algorithm: string; fingerprint: string; isCa: boolean; revoked: boolean; requiresConsent: boolean } | null;
+  problem: PortableArchiveImportProblem | null;
+}
+export interface PortableArchiveImportPreview {
+  id: string;
+  sourceRevision: string;
+  destinationRevision: string;
+  destination: PortableArchiveDestination;
+  entries: PortableArchiveImportEntry[];
+  canImport: boolean;
+}
+export interface PortableArchiveImportConsent {
+  retainSecretSourceIds: Id[];
+  trustSourceIds: Id[];
+}
+export interface PortableArchiveImportResult {
+  created: number;
+  updated: number;
+  unchanged: number;
+}
+export type PortableArchiveError =
+  | "invalidArchive"
+  | "passphraseRequired"
+  | "unencryptedSecrets"
+  | "decryption"
+  | "encryption"
+  | "unsupportedData"
+  | "unsupportedDestination"
+  | "contextChanged"
+  | "previewExpired"
+  | "sourceChanged"
+  | "destinationChanged"
+  | "consentRequired"
+  | "blocked"
+  | "storage"
+  | "io"
+  | "destinationExists";
+
 export type Outcome<T, E> = { status: "ok"; data: T } | { status: "error"; error: E };
 
 /** A failure the user can only retry; nothing changed. */
@@ -526,6 +590,22 @@ export interface InventoryApi {
     preview: OpenSshExportPreview,
     locale: Locale,
   ): Promise<Outcome<OpenSshExportResult | null, OpenSshExportError>>;
+  portableArchivePreview(
+    chooseFile: boolean,
+    passphrase: string | null,
+    locale: Locale,
+  ): Promise<Outcome<PortableArchiveImportPreview | null, PortableArchiveError>>;
+  portableArchiveImport(
+    previewId: string,
+    passphrase: string | null,
+    consent: PortableArchiveImportConsent,
+  ): Promise<Outcome<PortableArchiveImportResult, PortableArchiveError>>;
+  portableArchiveExport(
+    options: PortableArchiveExportOptions,
+    passphrase: string | null,
+    locale: Locale,
+  ): Promise<Outcome<PortableArchiveExportResult | null, PortableArchiveError>>;
+  portableArchiveDiscard(): Promise<Outcome<null, PortableArchiveError>>;
   /** Calls `listener` after any change to the inventory; returns a function that stops it. */
   onChange(listener: () => void): () => void;
 }

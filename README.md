@@ -62,8 +62,30 @@ Unsupported credentials, routes, options or saved trust semantics are reported p
 an excluded Jump hop also excludes its dependent target. Key paths or destination paths with
 unrepresentable expansion syntax are refused. Inventory or selected source changes require
 a fresh review. If a write fails, the newly created child is removed; if cleanup fails, the
-dialog identifies the retained partial directory. Managed Includes, JSON/age portable secret
-export and the complete C10 migration gate remain separate roadmap outcomes.
+dialog identifies the retained partial directory. Managed Includes and the complete C10
+migration gate remain separate roadmap outcomes.
+
+The same Settings page provides Scoplen JSON/age import and export for Local inventory or
+the selected Account's Personal vault. JSON exports omit passwords, software private keys
+and secret Snippet defaults. Explicitly including secrets requires an export passphrase and
+confirmation; the whole document is then encrypted as a standard age file. Generated and
+pasted software keys can move this way without an external key file. Device-bound credentials
+retain their descriptions and require setup on the destination device.
+
+Import reviews creates, replacements, unchanged entries, missing references, omitted secrets
+and required device setup before any inventory is saved. Each new imported host key requires
+explicit consent to its complete calculated fingerprint, CA status and revocation state.
+A new shared Credential with an omitted secret blocks the batch. An existing compatible
+imported Credential can retain its secret only with an explicit choice; retaining an omitted
+Snippet default is optional. Repair any blocked entry, then choose the file and review again.
+
+Reimporting the same source object ids updates their previous targets even when the archive
+file was moved or renamed. Removing an entry from the archive does not delete its old target.
+Source or destination changes require a fresh review. Confirmation commits the complete
+inventory, receipts and Personal sync changes together after full archive authentication;
+decrypted contents never enter frontend reports or plaintext temporary files. Exports create
+a new file and do not replace an existing one. Organization inventory, legal dangling-reference
+imports and native picker/rendered acceptance remain separate C10 outcomes.
 
 When adding a host, choose Key and Create a new key to generate an Ed25519 key
 in the Rust core. The private key stays in the encrypted store; the host, Login

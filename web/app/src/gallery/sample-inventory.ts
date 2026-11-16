@@ -1200,6 +1200,31 @@ export function sampleInventory(
             }),
           )
         : wait({ status: "error" as const, error: { kind: "empty" as const } }),
+    portableArchivePreview: () =>
+      wait(
+        ok({
+          id: "sample-archive-review",
+          sourceRevision: "sample-archive-source",
+          destinationRevision: "sample-archive-destination",
+          destination: { scope: "local" as const },
+          entries: hosts.map((host) => ({
+            sourceId: host.id,
+            targetId: host.id,
+            objectType: "Host",
+            action: "unchanged" as const,
+            omittedSecrets: [],
+            retainSecretAvailable: false,
+            requiresDeviceSetup: false,
+            trust: null,
+            problem: null,
+          })),
+          canImport: true,
+        }),
+      ),
+    portableArchiveImport: () => wait(ok({ created: 0, updated: 0, unchanged: hosts.length })),
+    portableArchiveExport: (options) =>
+      wait(ok({ destination: { scope: "local" as const }, objects: hosts.length, secrets: options.secrets })),
+    portableArchiveDiscard: () => wait(ok(null)),
     onChange: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

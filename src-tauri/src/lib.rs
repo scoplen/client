@@ -15,6 +15,7 @@ pub mod local_data;
 pub mod password_sign_in;
 pub mod personal_inventory;
 pub mod personal_server;
+pub mod portable_archives;
 pub mod profile_context;
 pub mod session_directory_sync;
 pub mod session_editor;
@@ -152,6 +153,10 @@ pub fn ipc() -> Builder<tauri::Wry> {
             inventory::inventory_export_open_ssh_config,
             inventory::choose_open_ssh_config,
             inventory::choose_key_file,
+            portable_archives::portable_archive_preview,
+            portable_archives::portable_archive_import,
+            portable_archives::portable_archive_export,
+            portable_archives::portable_archive_discard,
             local_data::local_data_status,
             local_data::unlock_local_data,
             local_data::create_local_passphrase,
@@ -264,6 +269,7 @@ pub fn run() {
             app.manage(forwards::ForwardManager::default());
             app.manage(ForwardShutdown::default());
             app.manage(inventory::InventoryState::default());
+            app.manage(std::sync::Arc::new(portable_archives::PortableArchiveState::default()));
             app.manage(scoplen_client_core::personal_server::PersonalServer::default());
             let background = std::sync::Arc::new(scoplen_client_core::personal_server::PersonalSyncRuntime::default());
             background.set_store(app.state::<local_data::LocalDataState>().store());

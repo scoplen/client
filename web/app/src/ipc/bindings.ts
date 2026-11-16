@@ -297,6 +297,34 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	chooseOpenSshConfig: () => typedError<string | null, Failure>(__TAURI_INVOKE("choose_open_ssh_config")),
 	/**  Opens the native private-key file picker; `null` means cancellation. */
 	chooseKeyFile: () => typedError<string | null, Failure>(__TAURI_INVOKE("choose_key_file")),
+	/**  Select a source or reread the selected file; no decrypted fields cross IPC. */
+	portableArchivePreview: (chooseFile: boolean, passphrase: string | null, locale: Locale) => typedError<{
+	/**  Opaque Rust review identifier. */
+	id: string,
+	/**  SHA-256 of the exact source bytes consumed. */
+	sourceRevision: string,
+	/**  Revision of the destination's inventory, receipts and Account context. */
+	destinationRevision: string,
+	/**  The explicitly selected destination namespace. */
+	destination: ArchiveDestination,
+	/**  Safe rows in source order. */
+	entries: ImportEntryPreview[],
+	/**  Every entry is eligible; required explicit choices remain separate. */
+	canImport: boolean,
+} | null, PortableArchiveError>(__TAURI_INVOKE("portable_archive_preview", { chooseFile, passphrase, locale })),
+	/**  Reopen the Rust-selected source and atomically apply exactly the reviewed import. */
+	portableArchiveImport: (previewId: string, passphrase: string | null, consent: ImportConsent) => typedError<ImportResult, PortableArchiveError>(__TAURI_INVOKE("portable_archive_import", { previewId, passphrase, consent })),
+	/**  Write only finalized output bytes to a new file selected by the user. */
+	portableArchiveExport: (options: ExportOptions, passphrase: string | null, locale: Locale) => typedError<{
+	/**  The selected authorized namespace. */
+	destination: ArchiveDestination,
+	/**  Number of live entries written. */
+	objects: number,
+	/**  The explicit export secret policy. */
+	secrets: ArchiveSecretMode,
+} | null, PortableArchiveError>(__TAURI_INVOKE("portable_archive_export", { options, passphrase, locale })),
+	/**  Drop an abandoned source and its safe confirmation metadata. */
+	portableArchiveDiscard: () => typedError<null, PortableArchiveError>(__TAURI_INVOKE("portable_archive_discard")),
 	/**  Where the local data stands. */
 	localDataStatus: () => typedError<Status, LocalDataError>(__TAURI_INVOKE("local_data_status")),
 	/**  Opens the store with the local passphrase. */
@@ -585,6 +613,24 @@ export type AppInfo = {
 	locale: Locale,
 };
 
+/**  The selected namespace; portable archives never authorize team inventory writes. */
+export type ArchiveDestination =
+/**  Device-local objects in the Local profile. */
+{ scope: "local" } |
+/**  The selected Account's Personal vault. */
+{ scope: "personal";
+/**  Current Account identity, never a file-supplied identity. */
+ownerId: string;
+/**  The current Account's Personal vault. */
+vaultId: string };
+
+/**  Including portable secrets requires an authenticated passphrase container. */
+export type ArchiveSecretMode =
+/**  Omit portable secrets and report their exact omission pointers. */
+"omitted" |
+/**  Include shared software keys, passwords and Snippet secret defaults. */
+"included";
+
 /**  Which parts of the inventory have content to show. */
 export type Areas = {
 	/**  At least one host is marked as a favorite. */
@@ -786,6 +832,22 @@ export type EditHostError =
 { kind: "failed";
 /**  A diagnostic reference safe to show for retryable failures. */
 reference: string };
+
+/**  Explicit export choices. The caller publishes its new output only after success. */
+export type ExportOptions = {
+	/**  Secrets are omitted by default. */
+	secrets: ArchiveSecretMode,
+};
+
+/**  A completed stream, after JSON and any encryption finalization. */
+export type ExportResult = {
+	/**  The selected authorized namespace. */
+	destination: ArchiveDestination,
+	/**  Number of live entries written. */
+	objects: number,
+	/**  The explicit export secret policy. */
+	secrets: ArchiveSecretMode,
+};
 
 /**  A failure that can be retried by the interface. */
 export type Failure =
@@ -1109,6 +1171,104 @@ export type HostSummary = {
 	groups: string[],
 	/**  Whether a later write resurrected it after deletion. */
 	restored: boolean,
+};
+
+/**  Complete-state effect of confirming an entry. */
+export type ImportAction =
+/**  Allocate a fresh destination UUIDv7. */
+"create" |
+/**  Replace the receipt-owned target's source-owned field state. */
+"replace" |
+/**  Preserve all destination fields and their clocks. */
+"unchanged" |
+/**  Repair the source or destination before confirming the whole archive. */
+"blocked";
+
+/**  Explicit per-source choices; unknown, duplicated or unnecessary choices are rejected. */
+export type ImportConsent = {
+	/**  Preserve only compatible omitted secrets already owned by these receipts. */
+	retainSecretSourceIds: string[],
+	/**  Accept the exact key fingerprint and state displayed for these source rows. */
+	trustSourceIds: string[],
+};
+
+/**  One safe display row, with no decrypted fields, passwords or keys. */
+export type ImportEntryPreview = {
+	/**  Original UUIDv7 used by the destination-bound durable receipt. */
+	sourceId: string,
+	/**  Existing receipt-owned destination, absent for a new source identity. */
+	targetId: string | null,
+	/**  Exact K-1 type name. */
+	objectType: string,
+	/**  Effect on this source identity. */
+	action: ImportAction,
+	/**  Redacted field pointers supplied by the codec. */
+	omittedSecrets: string[],
+	/**  Explicit choice may preserve compatible receipt-owned omitted secrets. */
+	retainSecretAvailable: boolean,
+	/**  Device bindings require setup on this device; no local secret is imported. */
+	requiresDeviceSetup: boolean,
+	/**  Verified algorithm and full fingerprint for a TrustRecord. */
+	trust: ImportTrustPreview | null,
+	/**  Whole-batch blocker, if present. */
+	problem: ImportProblem | null,
+};
+
+/**  A source- and destination-bound review retained by Rust until confirmation. */
+export type ImportPreview = {
+	/**  Opaque Rust review identifier. */
+	id: string,
+	/**  SHA-256 of the exact source bytes consumed. */
+	sourceRevision: string,
+	/**  Revision of the destination's inventory, receipts and Account context. */
+	destinationRevision: string,
+	/**  The explicitly selected destination namespace. */
+	destination: ArchiveDestination,
+	/**  Safe rows in source order. */
+	entries: ImportEntryPreview[],
+	/**  Every entry is eligible; required explicit choices remain separate. */
+	canImport: boolean,
+};
+
+/**  A fixed, input-free explanation for an entry which cannot be imported. */
+export type ImportProblem =
+/**  Include the referenced source object or restore its live receipt target. */
+"missingReference" |
+/**  A new or incompatible redacted shared Credential has no usable secret. */
+"missingSecret" |
+/**  The existing target has another type, binding or owner. */
+"incompatibleTarget" |
+/**  A deleted receipt-owned target cannot be resurrected by import. */
+"deletedTarget" |
+/**  Another destination Preference already owns this key. */
+"preferenceConflict" |
+/**  Managed/team inventory is outside this initial destination path. */
+"unsupportedData" |
+/**  The supplied host key or fingerprint cannot be verified. */
+"invalidTrust";
+
+/**  Counts are returned only after the entire SQLCipher transaction commits. */
+export type ImportResult = {
+	/**  New destination objects. */
+	created: number,
+	/**  Existing receipt targets changed. */
+	updated: number,
+	/**  Existing targets whose fields and clocks were preserved. */
+	unchanged: number,
+};
+
+/**  Only the algorithm and full computed fingerprint are projected from a public key. */
+export type ImportTrustPreview = {
+	/**  The parsed SSH public key algorithm. */
+	algorithm: string,
+	/**  The complete SHA-256 fingerprint calculated from the parsed key. */
+	fingerprint: string,
+	/**  Explicit acceptance of this source row is required. */
+	requiresConsent: boolean,
+	/**  This key remains a host CA rather than an ordinary host-specific key. */
+	isCa: boolean,
+	/**  The source explicitly marks this key as revoked. */
+	revoked: boolean,
 };
 
 /**  A failure of an operation on the local data, as shown to the user. */
@@ -1848,6 +2008,41 @@ export type Platform =
 "windows" |
 /**  Any other system; Phase 1 ships only macOS and Windows builds. */
 "other";
+
+/**  Archive failures do not embed private inputs or internal database messages. */
+export type PortableArchiveError =
+/**  The strict named archive profile failed validation. */
+"invalidArchive" |
+/**  Encryption or decryption needs the dedicated passphrase path. */
+"passphraseRequired" |
+/**  Secret-bearing plaintext cannot be imported by supplying a passphrase. */
+"unencryptedSecrets" |
+/**  Container authentication failed, including its final chunk. */
+"decryption" |
+/**  The encrypted output did not finalize successfully. */
+"encryption" |
+/**  Unknown or unsupported data must not be silently dropped. */
+"unsupportedData" |
+/**  This path supports only Local and the current Account's Personal inventory. */
+"unsupportedDestination" |
+/**  Reopen and preview in the current Account/profile. */
+"contextChanged" |
+/**  No Rust-owned review matches this request. */
+"previewExpired" |
+/**  The source bytes no longer match the preview. */
+"sourceChanged" |
+/**  A target, receipt or relevant local state changed after preview. */
+"destinationChanged" |
+/**  Confirm the exact listed trust and secret-retention choices. */
+"consentRequired" |
+/**  Resolve all preview problems before importing any entry. */
+"blocked" |
+/**  An encrypted local transaction failed and was rolled back. */
+"storage" |
+/**  A source/output stream could not be read/written completely. */
+"io" |
+/**  Native publication never overwrites an existing output file. */
+"destinationExists";
 
 /**  Safe identity shown on every progress event and prompt. */
 export type PreparationContext = {

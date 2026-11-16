@@ -111,6 +111,103 @@ export const en = {
   "settings.transfer.title": "Import and export",
   "settings.transfer.body":
     "Move hosts and logins between this profile and OpenSSH. Review changes before importing or exporting.",
+  "archive.title": "Scoplen backups",
+  "archive.body": "Import or export the selected Local or Personal inventory. Team assets are excluded.",
+  "archive.import": "Import Scoplen backup",
+  "archive.export": "Export Scoplen backup",
+  "archive.close": "Close backup review",
+  "archive.review": "Review Scoplen import",
+  "archive.reviewBody": "Review every change and the destination before importing the whole backup.",
+  "archive.destination.local": "Destination: Local",
+  "archive.destination.personal": "Destination: Personal",
+  "archive.destination.account": "Account ID",
+  "archive.destination.vault": "Personal vault ID",
+  "archive.source": "Source ID",
+  "archive.target": "Destination ID",
+  "archive.newTarget": "A new object will be created",
+  "archive.summary": "New: {created} · Updated: {updated} · Unchanged: {unchanged} · Blocked: {count}",
+  "archive.entries": "Backup entries",
+  "archive.action.create": "New",
+  "archive.action.replace": "Update existing",
+  "archive.action.unchanged": "Unchanged",
+  "archive.action.blocked": "Blocked",
+  "archive.omitted": "Secret fields omitted: {count}",
+  "archive.deviceSetup": "Set up this device-bound credential on the destination device before connecting.",
+  "archive.retainCredential": "Keep this existing credential’s secret. Required to import its other fields.",
+  "archive.retainSnippet": "Keep the existing defaults for this snippet’s omitted Secret variables.",
+  "archive.snippetOmission":
+    "Without this choice, omitted Secret defaults are cleared. You can enter them when running the snippet.",
+  "archive.snippetMissingDefaults": "This backup omits these Secret defaults. Enter them when running the snippet.",
+  "archive.trust.ca": "Certificate authority key",
+  "archive.trust.host": "Host key",
+  "archive.trust.revoked": "Revoked",
+  "archive.trust.active": "Not revoked",
+  "archive.acceptTrust": "Accept this exact fingerprint with the key type and revocation state shown above.",
+  "archive.blocked":
+    "Nothing can be imported until every blocked entry is resolved. Repair the source backup or destination, then refresh.",
+  "archive.reviewAgain": "The source or destination needs a fresh review. Refresh and confirm each choice again.",
+  "archive.chooseAnother": "Choose another file",
+  "archive.confirm": "Import reviewed backup",
+  "archive.unlock": "Preview encrypted backup",
+  "archive.unlockBody": "This backup is encrypted. Enter its export passphrase to preview it.",
+  "archive.passphrase": "Backup passphrase",
+  "archive.importPassphrase": "Use the passphrase set when this backup was exported.",
+  "archive.confirmPassphrase":
+    "Enter the backup passphrase again to import or refresh. It is cleared after each request.",
+  "archive.imported": "Imported: {created} new · {updated} updated · {unchanged} unchanged.",
+  "archive.importUnknown":
+    "The import result could not be confirmed. Check the destination and refresh the preview before trying again.",
+  "archive.exportTitle": "Export Scoplen backup",
+  "archive.exportBody": "Export all inventory from the selected Local or Personal profile.",
+  "archive.jsonDefault":
+    "The default JSON backup omits passwords, software private keys and Secret variable defaults. Other inventory data remains readable.",
+  "archive.includeSecrets": "Include passwords, software private keys and Secret defaults in an encrypted age backup.",
+  "archive.exportPassphrase":
+    "Choose a dedicated backup passphrase. You will need it to import this file; Scoplen cannot recover it.",
+  "archive.deviceExcluded":
+    "Device-bound secrets, account identity keys and team certificate caches are never exported.",
+  "archive.save": "Save backup",
+  "archive.exported": "Exported {count} objects.",
+  "archive.encryptedSaved": "Saved as an encrypted age backup with portable secrets included.",
+  "archive.jsonSaved": "Saved as JSON with portable secrets omitted.",
+  "archive.cancelled": "Save cancelled. No backup was published.",
+  "archive.problem.missingReference":
+    "A referenced object is missing. Include it in the source backup or restore its previously imported target.",
+  "archive.problem.missingSecret":
+    "This credential needs a secret. Export it with secrets included and age encryption.",
+  "archive.problem.incompatibleTarget": "The previously imported target has an incompatible type, binding or owner.",
+  "archive.problem.deletedTarget":
+    "The previously imported target was deleted. Import cannot restore it automatically.",
+  "archive.problem.preferenceConflict":
+    "An existing preference already uses this key. Resolve it in the destination before importing.",
+  "archive.problem.unsupportedData": "This entry is not supported in Local or Personal imports.",
+  "archive.problem.invalidTrust":
+    "The host key or its fingerprint could not be verified. Correct it in the source backup.",
+  "archive.error.invalidArchive":
+    "This backup is invalid or incomplete. Check the source file; no inventory was changed.",
+  "archive.error.passphraseRequired": "Enter the backup passphrase to continue.",
+  "archive.error.unencryptedSecrets":
+    "This plaintext file contains secrets. Use the original encrypted age archive; plaintext secret files cannot be imported.",
+  "archive.error.decryption":
+    "The backup could not be decrypted or verified. Check its passphrase and source file, then preview again.",
+  "archive.error.encryption": "The encrypted backup could not be completed. Choose a new filename and try again.",
+  "archive.error.unsupportedData": "This backup contains unsupported data. Its source file is unchanged.",
+  "archive.error.unsupportedDestination":
+    "Select Local or a Personal account before importing or exporting. Team assets are not supported here.",
+  "archive.error.contextChanged":
+    "The selected account or destination changed. Preview the backup again in the intended profile.",
+  "archive.error.previewExpired": "This preview is no longer available. Choose the file and review it again.",
+  "archive.error.sourceChanged":
+    "The backup file changed after preview. Refresh and review the changes before importing.",
+  "archive.error.destinationChanged":
+    "The destination changed after preview. Refresh and review the changes before importing.",
+  "archive.error.consentRequired": "Review each secret-retention choice and key fingerprint before importing.",
+  "archive.error.blocked": "Resolve all blocked entries and refresh the preview. No inventory was changed.",
+  "archive.error.storage":
+    "The backup could not be saved to your inventory. No inventory was changed. Refresh and try again.",
+  "archive.error.io": "The backup file could not be read or written completely. Check file access and try again.",
+  "archive.error.destinationExists":
+    "A file already exists at this destination. Choose a new filename; existing files are not overwritten.",
   "settings.section.personal": "Personal account",
   "settings.personal.title": "Personal account",
   "settings.personal.error.retiredEntry":
