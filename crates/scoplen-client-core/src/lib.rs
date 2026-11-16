@@ -14,6 +14,7 @@ pub mod local_key;
 pub mod locale;
 pub mod personal_inventory;
 pub mod personal_server;
+pub mod portable_archive;
 pub mod profiles;
 pub mod repository;
 pub mod session_directory_sync;

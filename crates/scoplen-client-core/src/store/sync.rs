@@ -526,7 +526,7 @@ fn cursor(conn: &Connection, vault: Uuid) -> Result<u64, StoreError> {
     sequence(&bytes)
 }
 
-fn object_vault(conn: &Connection, id: Uuid) -> Result<Option<Uuid>, StoreError> {
+pub(super) fn object_vault(conn: &Connection, id: Uuid) -> Result<Option<Uuid>, StoreError> {
     let bytes: Option<Vec<u8>> = conn
         .query_row(
             "SELECT vault FROM objects WHERE id = ?1",
