@@ -5,8 +5,9 @@ import { useI18n } from "./i18n";
 import { useInventory, type OpenSshExportPreview, type OpenSshImportPreview } from "./inventory/api";
 import { OpenSshExportDialog, openSshExportErrorText } from "./inventory/openssh-export";
 import { OpenSshImportDialog, openSshImportErrorText } from "./inventory/openssh-import";
+import { PortableTransferSettings } from "./inventory/portable-transfer";
 
-/** Reviewed OpenSSH migration for the current Local or Account profile. */
+/** Reviewed inventory migration for the current Local or Account profile. */
 export function InventoryTransferSettings() {
   const { t } = useI18n();
   const api = useInventory();
@@ -83,6 +84,7 @@ export function InventoryTransferSettings() {
         />
       ) : null}
       {exportPreview ? <OpenSshExportDialog initial={exportPreview} onClose={() => setExportPreview(null)} /> : null}
+      <PortableTransferSettings />
     </section>
   );
 }

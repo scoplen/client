@@ -14,6 +14,19 @@ function Listener({ onChange }: { onChange: (change: StoreChanged) => void }) {
 }
 
 describe("useStoreChanges", () => {
+  it.each(["trustRecord", "snippet", "workspace", "preference"] as const)(
+    "invalidates portable inventory reviews when %s changes",
+    async (recordType) => {
+      mockIPC(() => undefined, { shouldMockEvents: true });
+      const listener = vi.fn();
+      const stop = createInventoryApi().onChange(listener);
+      await waitFor(async () => {
+        await emit("store-changed", { recordType, ids: ["reviewed-object"] });
+        expect(listener).toHaveBeenCalled();
+      });
+      stop();
+    },
+  );
   it("refreshes inventory consumers after a saved Forward changes", async () => {
     mockIPC(() => undefined, { shouldMockEvents: true });
     const listener = vi.fn();

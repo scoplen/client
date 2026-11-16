@@ -75,7 +75,18 @@ import type {
 
 type Result<T, E> = { status: "ok"; data: T } | { status: "error"; error: E };
 
-const inventoryRecordTypes = new Set(["host", "accessProfile", "credential", "route", "hostGroup", "forward"]);
+const inventoryRecordTypes = new Set([
+  "host",
+  "accessProfile",
+  "credential",
+  "route",
+  "hostGroup",
+  "forward",
+  "trustRecord",
+  "snippet",
+  "workspace",
+  "preference",
+]);
 
 function failure(error: IpcFailure | unknown): Failure {
   if (typeof error === "object" && error !== null && "kind" in error && error.kind === "failed") {
@@ -271,6 +282,13 @@ export function createInventoryApi(commands = applicationCommands, profileGenera
       outcome(await commands.inventoryPreviewOpenSshExport(choices ?? null)),
     exportOpenSshConfig: async (preview, locale) =>
       outcome(await commands.inventoryExportOpenSshConfig(preview as IpcOpenSshExportPreview, locale)),
+    portableArchivePreview: async (chooseFile, passphrase, locale) =>
+      outcome(await commands.portableArchivePreview(chooseFile, passphrase, locale)),
+    portableArchiveImport: async (previewId, passphrase, consent) =>
+      outcome(await commands.portableArchiveImport(previewId, passphrase, consent)),
+    portableArchiveExport: async (options, passphrase, locale) =>
+      outcome(await commands.portableArchiveExport(options, passphrase, locale)),
+    portableArchiveDiscard: async () => outcome(await commands.portableArchiveDiscard()),
     onChange: (listener) => {
       let stopped = false;
       const unlisteners: (() => void | Promise<void>)[] = [];
