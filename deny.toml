@@ -38,6 +38,8 @@ exceptions = [
     # arboard's Windows text clipboard dependencies use the reviewed Boost license.
     { name = "clipboard-win", version = "=5.4.3", allow = ["BSL-1.0"] },
     { name = "error-code", version = "=3.4.0", allow = ["BSL-1.0"] },
+    # SQLCipher's reviewed source bundle includes SQLite and LibTomCrypt licenses.
+    { name = "sqlcipher-src", version = "=420.0.0", allow = ["blessing", "WTFPL"] },
 ]
 
 [bans]

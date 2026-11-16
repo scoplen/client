@@ -4,6 +4,9 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Update the encrypted local-store engine to SQLCipher 4.20.0 with SQLite 3.54.1,
+  fixing the WAL page-size memory disclosure covered by RUSTSEC-2026-0459.
+
 - Resolve validated team certificate revocation and issuance-limit refusals without silently
   replacing the original request. Retain uncertain results, and show localized next steps in
   the terminal and SSH setup before an explicit new connection.

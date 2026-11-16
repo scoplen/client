@@ -27,6 +27,19 @@ fn text(object: &Object, field: u64) -> &str {
 }
 
 #[test]
+fn bundled_encrypted_store_uses_a_patched_sqlite_engine() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("local.db"), &key(1)).unwrap();
+    let cipher: String =
+        store.conn().query_row("PRAGMA cipher_version", [], |row| row.get(0)).unwrap();
+    assert!(!cipher.is_empty(), "the local store must use SQLCipher");
+    assert!(
+        rusqlite::version_number() >= 3_054_000,
+        "the bundled engine must include the RUSTSEC-2026-0459 WAL page-size fix"
+    );
+}
+
+#[test]
 fn a_new_store_is_migrated_and_given_a_device_identity() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("local.db");
