@@ -211,13 +211,20 @@ fn shared_secrets_require_encryption_and_explicit_receipt_owned_retention() {
     assert_eq!(preview.entries[0].problem, Some(ImportProblem::MissingSecret));
     assert!(!preview.can_import);
     let plaintext = archive(std::slice::from_ref(&source), SecretMode::Included);
+    let password = PortableExportPassphrase::new("archive fixture passphrase".into()).unwrap();
+    for passphrase in [None, Some(&password)] {
+        assert_eq!(
+            service.preview(&destination, plaintext.as_slice(), passphrase),
+            Err(Error::UnencryptedSecrets)
+        );
+        assert_eq!(counts(&destination), (0, 0, 0));
+    }
+    let bytes = encrypted(std::slice::from_ref(&source), &password);
     assert_eq!(
-        service.preview(&destination, plaintext.as_slice(), None),
+        service.preview(&destination, bytes.as_slice(), None),
         Err(Error::PassphraseRequired)
     );
     assert_eq!(counts(&destination), (0, 0, 0));
-    let password = PortableExportPassphrase::new("archive fixture passphrase".into()).unwrap();
-    let bytes = encrypted(std::slice::from_ref(&source), &password);
     let preview = service.preview(&destination, bytes.as_slice(), Some(&password)).unwrap();
     service
         .import(
@@ -475,6 +482,52 @@ fn remaps_typed_references_and_group_defaults_without_changing_opaque_identities
     service
         .import(&destination, bytes.as_slice(), None, &preview.id, ImportConsent::default())
         .unwrap();
+}
+
+#[test]
+fn unresolved_trust_host_still_previews_the_complete_key_and_revocation_state() {
+    let (_dir, destination) = store();
+    let service = PortableArchives::default();
+    let missing_host = scoplen_model::new_uuid_v7().unwrap();
+    let key = ssh_key::PrivateKey::new(
+        ssh_key::private::Ed25519Keypair::from_seed(&[23; 32]).into(),
+        "fixture",
+    )
+    .unwrap();
+    let fingerprint = key.public_key().fingerprint(ssh_key::HashAlg::Sha256).to_string();
+    let trust = object(
+        ObjectType::TRUST_RECORD,
+        vec![
+            (1, Value::Bytes(missing_host.as_bytes().to_vec())),
+            (3, Value::Text(key.public_key().to_openssh().unwrap())),
+            (4, Value::Text(fingerprint.clone())),
+            (9, Value::Bool(true)),
+            (10, Value::Bool(true)),
+        ],
+    );
+    let bytes = archive(std::slice::from_ref(&trust), SecretMode::Omitted);
+    let preview = service.preview(&destination, bytes.as_slice(), None).unwrap();
+    assert!(!preview.can_import);
+    assert_eq!(preview.entries[0].action, ImportAction::Blocked);
+    assert_eq!(preview.entries[0].problem, Some(ImportProblem::MissingReference));
+    let key_preview = preview.entries[0].trust.as_ref().unwrap();
+    assert_eq!(key_preview.algorithm, "ssh-ed25519");
+    assert_eq!(key_preview.fingerprint, fingerprint);
+    assert!(key_preview.requires_consent && key_preview.is_ca && key_preview.revoked);
+    assert_eq!(
+        service.import(
+            &destination,
+            bytes.as_slice(),
+            None,
+            &preview.id,
+            ImportConsent {
+                retain_secret_source_ids: vec![],
+                trust_source_ids: vec![trust.id.to_string()],
+            },
+        ),
+        Err(Error::Blocked)
+    );
+    assert_eq!(counts(&destination), (0, 0, 0));
 }
 
 #[test]

@@ -177,9 +177,12 @@ pub enum PortableArchiveError {
     /// The strict named archive profile failed validation.
     #[error("The archive is invalid or incomplete. No inventory was changed.")]
     InvalidArchive,
-    /// Including or reading secrets needs the dedicated passphrase path.
+    /// Encryption or decryption needs the dedicated passphrase path.
     #[error("An export passphrase is required for this archive.")]
     PassphraseRequired,
+    /// Secret-bearing plaintext cannot be imported by supplying a passphrase.
+    #[error("This archive contains unencrypted secrets. Use the original encrypted age archive.")]
+    UnencryptedSecrets,
     /// Container authentication failed, including its final chunk.
     #[error("The archive could not be decrypted or verified. No inventory was changed.")]
     Decryption,

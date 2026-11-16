@@ -452,7 +452,7 @@ fn stage(
         return Err(Error::UnsupportedDestination);
     }
     if summary.header.secrets == SecretMode::Included && !encrypted {
-        return Err(Error::PassphraseRequired);
+        return Err(Error::UnencryptedSecrets);
     }
     Ok(hex(&reader.digest.finalize()))
 }
@@ -523,6 +523,7 @@ fn prepare(
     }
     let mut fields = entry.fields().clone();
     if let Err(problem) = remap(conn, context, entry.object_type(), &mut fields) {
+        fields = entry.fields().clone();
         preview.problem.get_or_insert(problem);
     }
     let retained = retain_secrets(entry, existing.as_ref(), &mut fields, retain);
