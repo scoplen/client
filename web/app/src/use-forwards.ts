@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useProfile, useProfileCommands } from "./account-profiles";
 import { createContext, useCallback, useEffect, useRef, useState } from "react";
-import { events, type ForwardIssue, type ForwardSnapshot, type SessionPreparationIntent } from "./ipc/bindings";
+import {
+  events,
+  type ForwardIssue,
+  type ForwardSnapshot,
+  type ForwardStartIntent,
+  type SessionPreparationIntent,
+} from "./ipc/bindings";
 
 export interface ForwardController {
   snapshots: ForwardSnapshot[];
   loading: boolean;
   issue: ForwardIssue | null;
   refresh: () => void;
-  start: (forwardId: string, profileId: string) => Promise<ForwardSnapshot | null>;
+  start: (intent: ForwardStartIntent) => Promise<ForwardSnapshot | null>;
   stop: (runId: string) => Promise<ForwardIssue | null>;
   respond: (runId: string, promptId: string, intent: SessionPreparationIntent) => Promise<ForwardIssue | null>;
 }
@@ -118,7 +124,7 @@ export function useForwards(): ForwardController {
       setLoading(true);
       setReload((value) => value + 1);
     },
-    start: async (forwardId, profileId) => {
+    start: async (intent) => {
       if (!mounted.current) return null;
       if (!ready.current) {
         setIssue("unavailable");
@@ -126,7 +132,7 @@ export function useForwards(): ForwardController {
       }
       const epoch = generation.current;
       try {
-        const result = await commands.forwardStart(forwardId, profileId);
+        const result = await commands.forwardStart(intent);
         if (!mounted.current || generation.current !== epoch) return null;
         if (result.status === "error") {
           setIssue(result.error);

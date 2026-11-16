@@ -3,7 +3,13 @@ import { Button, Confirm, Dialog, Field, IconButton, Select } from "@scoplen/ui"
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useContext, useEffect, useId, useRef, useState } from "react";
 import { useI18n } from "../i18n";
-import type { ForwardIssue, ForwardSnapshot, PreparationEvent, SessionPreparationIntent } from "../ipc/bindings";
+import type {
+  ForwardDefinition,
+  ForwardIssue,
+  ForwardSnapshot,
+  PreparationEvent,
+  SessionPreparationIntent,
+} from "../ipc/bindings";
 import { InteractiveDialog, PassphraseDialog, TrustDialog } from "../preparation-dialogs";
 import { ForwardsContext, isLiveForward } from "../use-forwards";
 import {
@@ -148,6 +154,9 @@ export function TunnelsHome() {
                 <li key={run.runId} className="min-w-0 py-4">
                   <div className="flex flex-wrap items-center gap-3">
                     <h3 className="m-0 min-w-0 flex-1 break-words text-sm font-medium">{configuration.name}</h3>
+                    {configuration.source.kind === "temporary" ? (
+                      <span className="text-xs text-muted-foreground">{t("tunnels.temporary")}</span>
+                    ) : null}
                     <span
                       className={run.phase === "failed" ? "text-xs text-attention" : "text-xs text-muted-foreground"}
                     >
@@ -234,7 +243,12 @@ export function TunnelsHome() {
           ) : (
             <ul aria-label={t("tunnels.saved")} className="m-0 mt-3 list-none divide-y divide-border p-0">
               {forwards.data.map((forward) => {
-                const live = runs.some((run) => run.configuration.forwardId === forward.id && isLiveForward(run));
+                const live = runs.some(
+                  (run) =>
+                    run.configuration.source.kind === "saved" &&
+                    run.configuration.source.forwardId === forward.id &&
+                    isLiveForward(run),
+                );
                 return (
                   <li key={forward.id} className="flex min-w-0 flex-wrap items-center gap-3 py-4">
                     <div className="min-w-0 flex-1 basis-52">
@@ -307,6 +321,15 @@ export function TunnelsHome() {
           finalFocus={() => (editorTrigger.current?.isConnected ? editorTrigger.current : addTrigger.current)}
           onClose={() => setEditing(null)}
           onSaved={() => setEditing(null)}
+          canStart={!!runtime && !runtime.loading && runtime.issue !== "unavailable" && profiles.state === "ready"}
+          startIssue={runtime?.issue ?? null}
+          onStart={async (definition, profileId) => {
+            const run = await runtime?.start({ kind: "temporary", profileId, definition });
+            if (run) {
+              setEditing(null);
+              setSelected(run.runId);
+            }
+          }}
         />
       ) : null}
       {starting && runtime ? (
@@ -315,7 +338,7 @@ export function TunnelsHome() {
           profiles={profileList}
           onClose={() => setStarting(null)}
           onStart={async (profileId) => {
-            const run = await runtime.start(starting.id, profileId);
+            const run = await runtime.start({ kind: "saved", forwardId: starting.id, profileId });
             if (run) {
               setStarting(null);
               setSelected(run.runId);
@@ -578,12 +601,18 @@ function TunnelEditor({
   finalFocus,
   onClose,
   onSaved,
+  canStart,
+  startIssue,
+  onStart,
 }: {
   existing: ForwardSummary | null;
   profiles: AccessProfileSummary[];
   finalFocus: () => HTMLElement | null;
   onClose: () => void;
   onSaved: () => void;
+  canStart: boolean;
+  startIssue: ForwardIssue | null;
+  onStart: (definition: ForwardDefinition, profileId: string) => Promise<void>;
 }) {
   const { t } = useI18n();
   const api = useInventory();
@@ -601,17 +630,22 @@ function TunnelEditor({
   });
   const [error, setError] = useState<ObjectEditError | null>(null);
   const [busy, setBusy] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [attemptedStart, setAttemptedStart] = useState(false);
   const field = (name: keyof typeof value) => ({
     value: value[name],
     disabled: busy,
-    onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
-      setValue((current) => ({ ...current, [name]: event.target.value })),
+    onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+      setAttemptedStart(false);
+      setValue((current) => ({ ...current, [name]: event.target.value }));
+    },
   });
   const invalid = error?.kind === "invalidForward" ? error.field : null;
   const address = value.bindAddress.trim();
   const save = async () => {
     if (busy) return;
     setError(null);
+    setAttemptedStart(false);
     setBusy(true);
     const input: ForwardInput = {
       ...value,
@@ -631,6 +665,24 @@ function TunnelEditor({
       setBusy(false);
     }
   };
+  const start = async () => {
+    if (busy || existing || !canStart || !value.profile) return;
+    setError(null);
+    setAttemptedStart(true);
+    setStarting(true);
+    setBusy(true);
+    const common = { name: value.name, bindAddress: value.bindAddress, bindPort: Number(value.bindPort) };
+    const definition: ForwardDefinition =
+      kind === "dynamic"
+        ? { kind, ...common }
+        : { kind, ...common, targetHost: value.targetHost, targetPort: Number(value.targetPort) };
+    try {
+      await onStart(definition, value.profile);
+    } finally {
+      setStarting(false);
+      setBusy(false);
+    }
+  };
   return (
     <Dialog
       open
@@ -638,7 +690,7 @@ function TunnelEditor({
         if (!open && !busy) onClose();
       }}
       title={existing ? t("tunnels.editTitle") : t("tunnels.newTitle")}
-      description={t("tunnels.editorBody")}
+      description={t(existing ? "tunnels.editorBody" : "tunnels.newBody")}
       finalFocus={finalFocus}
       closeLabel={t("objects.cancel")}
       footer={
@@ -646,9 +698,30 @@ function TunnelEditor({
           <Button variant="ghost" disabled={busy} onClick={onClose}>
             {t("objects.cancel")}
           </Button>
-          <Button variant="primary" type="submit" form={form} busy={busy}>
+          <Button
+            variant={existing ? "primary" : "secondary"}
+            type="submit"
+            name="action"
+            value="save"
+            form={form}
+            disabled={busy}
+            busy={busy && !starting}
+          >
             {t("objects.save")}
           </Button>
+          {!existing ? (
+            <Button
+              variant="primary"
+              type="submit"
+              name="action"
+              value="start"
+              form={form}
+              busy={starting}
+              disabled={busy || !canStart || !value.profile}
+            >
+              {t("tunnels.startTemporary")}
+            </Button>
+          ) : null}
         </>
       }
     >
@@ -657,7 +730,9 @@ function TunnelEditor({
         className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
-          void save();
+          const action = (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value");
+          if (action === "start") void start();
+          else void save();
         }}
       >
         <Field
@@ -680,6 +755,7 @@ function TunnelEditor({
             onValueChange={(next) => {
               setKind(next);
               setError(null);
+              setAttemptedStart(false);
             }}
             className={selectStyle}
             options={[
@@ -736,18 +812,21 @@ function TunnelEditor({
         ) : null}
         <div>
           <label htmlFor={select} className="block text-sm font-medium">
-            {t("tunnels.defaultLogin")}
+            {t(existing ? "tunnels.defaultLogin" : "tunnels.login")}
           </label>
           <Select
             id={select}
-            label={t("tunnels.defaultLogin")}
+            label={t(existing ? "tunnels.defaultLogin" : "tunnels.login")}
             size="field"
             value={value.profile}
             disabled={busy}
-            onValueChange={(next) => setValue((current) => ({ ...current, profile: next }))}
+            onValueChange={(next) => {
+              setAttemptedStart(false);
+              setValue((current) => ({ ...current, profile: next }));
+            }}
             className={selectStyle}
             options={[
-              { value: "", label: t("tunnels.chooseAtStart") },
+              { value: "", label: t(existing ? "tunnels.chooseAtStart" : "tunnels.chooseLogin") },
               ...(value.profile && !profiles.some((profile) => profile.id === value.profile)
                 ? [{ value: value.profile, label: t("tunnels.loginUnavailable") }]
                 : []),
@@ -758,7 +837,15 @@ function TunnelEditor({
               })),
             ]}
           />
+          {!existing && profiles.every((profile) => profile.orphaned) ? (
+            <p className="text-sm text-attention">{t("tunnels.noLogins")}</p>
+          ) : null}
         </div>
+        {!existing && attemptedStart && startIssue ? (
+          <p role="alert" className="text-sm text-attention">
+            {t(`tunnels.issue.${startIssue}`)}
+          </p>
+        ) : null}
         {error && !invalid && error.kind !== "emptyName" ? (
           <p role="alert" className="text-sm text-attention">
             {editError(t, error)}
