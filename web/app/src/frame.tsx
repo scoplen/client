@@ -47,6 +47,7 @@ export function Frame({
   onCloseTabs,
   onDuplicate,
   onWorkspaces,
+  workspacesBusy = false,
   children,
 }: {
   platform: Platform;
@@ -61,6 +62,7 @@ export function Frame({
   onDuplicate?: (id: string) => void;
   /** Manage saved tabs without changing the currently selected terminal. */
   onWorkspaces?: () => void;
+  workspacesBusy?: boolean;
   children: ReactNode;
 }) {
   const { t } = useI18n();
@@ -153,6 +155,7 @@ export function Frame({
             title={t("workspaces.title")}
             className="shrink-0 gap-1.5 px-2"
             onClick={onWorkspaces}
+            disabled={workspacesBusy}
           >
             <PanelsTopLeft aria-hidden="true" className="size-4" />
             <span className="hidden sm:inline">{t("workspaces.title")}</span>

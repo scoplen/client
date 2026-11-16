@@ -39,18 +39,20 @@ export function HostsHome({
   manage = false,
   onConnect,
   onViewOutput,
+  initialSection = null,
 }: {
   /** Whether the logins, keys, and routes editors are offered. */
   manage?: boolean;
   onConnect?: (target: SessionTarget, label: string) => void;
   onViewOutput?: (output: import("../ipc/bindings").SavedTerminalOutput) => void;
+  initialSection?: ManageSection | null;
 } = {}) {
   const { t } = useI18n();
   const api = useInventory();
   const [source, setSource] = useState<HostSource>({ kind: "all" });
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Id | null>(null);
-  const [objects, setObjects] = useState<ManageSection | null>(null);
+  const [objects, setObjects] = useState<ManageSection | null>(initialSection);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<HostSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);

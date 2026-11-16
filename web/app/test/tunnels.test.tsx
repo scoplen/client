@@ -900,7 +900,7 @@ it("rejects an old prompt before IPC after the current challenge changes", async
   expect(f.calls.some((call) => call.command === "forward_respond")).toBe(false);
 });
 
-it("discards an in-flight Start result after refreshing the observed store", async () => {
+it("retains the exact in-flight Start result across an observer refresh in the same profile", async () => {
   const pendingStart = deferred<ForwardSnapshot>();
   const f = fixture({ pendingStart });
   await waitFor(() => expect(f.controller.loading).toBe(false));
@@ -908,8 +908,8 @@ it("discards an in-flight Start result after refreshing the observed store", asy
   await act(() => f.controller.refresh());
   await waitFor(() => expect(f.calls.filter((call) => call.command === "forward_list")).toHaveLength(2));
   await act(() => pendingStart.resolve(snapshot()));
-  expect(await started).toBeNull();
-  expect(f.controller.snapshots).toEqual([]);
+  expect(await started).toEqual({ status: "ok", data: snapshot() });
+  expect(f.controller.snapshots).toEqual([snapshot()]);
   expect(f.controller.issue).toBeNull();
   expect(f.calls.some((call) => call.command === "forward_stop")).toBe(false);
 });

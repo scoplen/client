@@ -106,7 +106,7 @@ function fixture() {
     finish: ReturnType<typeof deferred<null>>;
   }> = [];
   const saveFailures = new Map<string, number>();
-  const saved = { id: "saved-workspace", name: "Operations", tabCount: 2, issue: null };
+  const saved = { id: "saved-workspace", name: "Operations", tabCount: 2, forwardCount: 0, issue: null };
   let workspaces: Array<typeof saved> = [];
   let opened: unknown;
   mockIPC(
@@ -151,6 +151,7 @@ function fixture() {
           recent: [],
         };
       if (command === "forward_list") return [];
+      if (command === "inventory_forwards" || command === "inventory_access_profiles") return [];
       if (command === "workspaces_list") return workspaces;
       if (command === "workspaces_create") {
         workspaces = [saved];
@@ -715,12 +716,13 @@ it("saves complete active and inactive trees and focus, then explicitly opens th
   await userEvent.click(screen.getByRole("button", { name: "Workspaces" }));
   await screen.findByText(/No saved workspaces/);
   await userEvent.type(screen.getByRole("textbox", { name: "Workspace name" }), "Operations");
-  await userEvent.click(screen.getByRole("button", { name: "Save current tabs" }));
+  await userEvent.click(screen.getByRole("button", { name: "Save workspace" }));
   await screen.findByText("Operations");
   const firstLeaf = { kind: "terminal", profileId: "login-first" };
   const secondLeaf = { kind: "terminal", profileId: "login-second" };
   expect(f.matching("workspaces_create")[0]!.args.input).toEqual({
     name: "Operations",
+    forwards: [],
     tabs: [
       {
         tree: {
@@ -753,6 +755,7 @@ it("saves complete active and inactive trees and focus, then explicitly opens th
     terminal: { sessionId: ids[index]!, profileId, label },
   });
   f.openWith({
+    forwards: [],
     tabs: [
       {
         tree: {
@@ -839,7 +842,7 @@ it.each(["en", "zh-Hans"] as const)(
     expect(f.connections).toHaveLength(1);
     expect(f.matching("session_reserve_transport")).toHaveLength(1);
     await userEvent.click(screen.getByRole("button", { name: locale === "en" ? "Workspaces" : "工作区" }));
-    const save = await screen.findByRole("button", { name: locale === "en" ? "Save current tabs" : "保存当前标签" });
+    const save = await screen.findByRole("button", { name: locale === "en" ? "Save workspace" : "保存工作区" });
     expect((save as HTMLButtonElement).disabled).toBe(true);
     await userEvent.click(save);
     expect(f.matching("workspaces_create")).toHaveLength(0);

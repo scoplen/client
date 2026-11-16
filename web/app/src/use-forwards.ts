@@ -9,12 +9,14 @@ import {
   type SessionPreparationIntent,
 } from "./ipc/bindings";
 
+export type ForwardStartResult = { status: "ok"; data: ForwardSnapshot } | { status: "error"; error: ForwardIssue };
+
 export interface ForwardController {
   snapshots: ForwardSnapshot[];
   loading: boolean;
   issue: ForwardIssue | null;
   refresh: () => void;
-  start: (intent: ForwardStartIntent) => Promise<ForwardSnapshot | null>;
+  start: (intent: ForwardStartIntent) => Promise<ForwardStartResult>;
   stop: (runId: string) => Promise<ForwardIssue | null>;
   respond: (runId: string, promptId: string, intent: SessionPreparationIntent) => Promise<ForwardIssue | null>;
 }
@@ -45,12 +47,20 @@ export function useForwards(): ForwardController {
   const mounted = useRef(false);
   const ready = useRef(false);
   const generation = useRef(0);
+  const profileLifetime = useRef(0);
   const current = useRef<ForwardSnapshot[]>([]);
   const receive = useCallback((snapshot: ForwardSnapshot) => {
     if (!mounted.current) return;
     current.current = merge(current.current, snapshot);
     setSnapshots(current.current);
   }, []);
+
+  useEffect(() => {
+    const epoch = ++profileLifetime.current;
+    return () => {
+      profileLifetime.current = epoch + 1;
+    };
+  }, [commands, profileGeneration]);
 
   useEffect(() => {
     mounted.current = true;
@@ -125,25 +135,28 @@ export function useForwards(): ForwardController {
       setReload((value) => value + 1);
     },
     start: async (intent) => {
-      if (!mounted.current) return null;
+      if (!mounted.current) return { status: "error", error: "expired" };
       if (!ready.current) {
         setIssue("unavailable");
-        return null;
+        return { status: "error", error: "unavailable" };
       }
-      const epoch = generation.current;
+      const epoch = profileLifetime.current;
       try {
         const result = await commands.forwardStart(intent);
-        if (!mounted.current || generation.current !== epoch) return null;
+        if (!mounted.current || profileLifetime.current !== epoch) return { status: "error", error: "expired" };
         if (result.status === "error") {
           setIssue(result.error);
-          return null;
+          return result;
         }
         receive(result.data);
         setIssue(null);
-        return result.data;
+        return result;
       } catch {
-        if (mounted.current && generation.current === epoch) setIssue("unavailable");
-        return null;
+        if (mounted.current && profileLifetime.current === epoch) setIssue("unavailable");
+        return {
+          status: "error",
+          error: mounted.current && profileLifetime.current === epoch ? "unavailable" : "expired",
+        };
       }
     },
     stop: async (runId) => {

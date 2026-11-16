@@ -13,6 +13,7 @@ import type {
   WorkspaceTree,
   WorkspaceTreeInput,
   SessionTarget,
+  OpenedWorkspace,
 } from "./ipc/bindings";
 import { Frame } from "./frame";
 import { HostsHome } from "./inventory/home";
@@ -20,7 +21,7 @@ import { InventoryContext } from "./inventory/api";
 import { createInventoryApi } from "./inventory/core-api";
 import { SessionTerminal, type SessionState } from "./session";
 import { SettingsView, type SettingsSection } from "./settings";
-import { ForwardsContext, useForwards } from "./use-forwards";
+import { ForwardsContext, useForwards, type ForwardStartResult } from "./use-forwards";
 import { useProfile, useProfileCommands } from "./account-profiles";
 import { WorkspacesDialog } from "./workspaces";
 import { canvasMinimum, paneDepth, paneOrder, paneRectangles } from "./terminal-layout";
@@ -108,6 +109,36 @@ export function Shell({
   const allowWindowClose = useRef(false);
   const [windowError, setWindowError] = useState(false);
   const [workspacesOpen, setWorkspacesOpen] = useState(false);
+  const [restoringForwards, setRestoringForwards] = useState(false);
+  const [restoreReport, setRestoreReport] = useState<Array<
+    OpenedWorkspace["forwards"][number] & { result: ForwardStartResult | null }
+  > | null>(null);
+  const [tunnelsRequest, setTunnelsRequest] = useState(0);
+  const alive = useRef(false);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  const restoreForwards = async (intents: OpenedWorkspace["forwards"]) => {
+    if (intents.length === 0) {
+      setRestoreReport(null);
+      return;
+    }
+    setRestoreReport(intents.map((intent) => ({ ...intent, result: null })));
+    setRestoringForwards(true);
+    for (const intent of intents) {
+      if (!alive.current) return;
+      const result = await forwards.start({ kind: "saved", forwardId: intent.forwardId, profileId: intent.profileId });
+      if (!alive.current) return;
+      setRestoreReport(
+        (current) => current?.map((row) => (row.forwardId === intent.forwardId ? { ...row, result } : row)) ?? null,
+      );
+    }
+    setRestoringForwards(false);
+  };
 
   const openSession = (target: SessionTarget, label: string) => {
     const id = `session-${crypto.randomUUID()}`;
@@ -269,6 +300,7 @@ export function Shell({
       }}
       settingsActive={view === "settings"}
       onWorkspaces={() => setWorkspacesOpen(true)}
+      workspacesBusy={restoringForwards}
       onCloseTabs={(ids) => {
         void closeSessions(ids.flatMap((id) => (layout.layouts[id] ? paneOrder(layout.layouts[id]) : [])));
       }}
@@ -277,180 +309,233 @@ export function Shell({
         if (session) openSession(session.target, session.label);
       }}
     >
-      {workspacesOpen ? (
-        <WorkspacesDialog
-          teamSessions={sessions.some((session) => session.target.kind === "organization")}
-          tabs={layout.tabs.map((tab) => ({
-            tree: savedTree(layout.layouts[tab.id]!, sessions),
-            focused: paneOrder(layout.layouts[tab.id]!).indexOf(layout.focusedPaneIds[tab.id]!),
-          }))}
-          active={activeTab === "hosts" ? null : layout.tabs.findIndex((tab) => tab.id === activeTab)}
-          onClose={() => setWorkspacesOpen(false)}
-          onOpen={(opened) => {
-            const added: OpenSession[] = [];
-            const ids = opened.tabs.map((tab) => {
-              const tree = restoredTree(tab.tree, added);
-              const id = `tab-${crypto.randomUUID()}`;
-              const first = added.find((session) => session.id === paneOrder(tree)[0])!;
-              return { id, title: first.label, tree, focused: tab.focusedSessionId };
-            });
-            for (const tab of ids) {
-              // The local model accepts only complete safe projections returned by Rust.
-              workspace.restoreTab({ id: tab.id, title: tab.title }, tab.tree, tab.focused);
-            }
-            setSessions((current) => [...current, ...added]);
-            setActiveTab(opened.active === null ? "hosts" : ids[opened.active]!.id);
-            setView("hosts");
-          }}
-        />
-      ) : null}
-      {windowError ? (
-        <p role="alert" className="m-0 px-4 py-2 text-sm text-attention">
-          {t("session.output.windowCloseFailed")}
-        </p>
-      ) : null}
-      {view === "settings" ? (
-        <InventoryContext.Provider value={inventory}>
-          <SettingsView
-            key={settingsSection}
-            status={status}
-            onStatus={onStatus}
-            section={settingsSection}
-            onConnect={(target) => openSession(target, target.profileId)}
-          />
-        </InventoryContext.Provider>
-      ) : activeTab !== "hosts" ? null : (
-        <InventoryContext.Provider value={inventory}>
-          <ForwardsContext.Provider value={forwards}>
-            <main id="main" tabIndex={-1} className="h-full min-h-0 focus:outline-none">
-              <HostsHome manage onConnect={openSession} onViewOutput={viewOutput} />
-            </main>
-          </ForwardsContext.Provider>
-        </InventoryContext.Provider>
-      )}
-      <main
-        hidden={view === "settings" || activeTab === "hosts"}
-        aria-label={t("panes.workspace")}
-        className="h-full min-h-0"
-      >
-        <div className="flex h-10 shrink-0 items-center justify-end gap-1 border-b border-border px-3">
-          <Button
-            variant="ghost"
-            disabled={currentIds.length < 2}
-            onClick={() => {
-              const id = workspace.moveFocus(-1);
-              if (id) selectPane(id, true);
-            }}
+      <div className="flex h-full min-h-0 flex-col">
+        {restoreReport ? (
+          <section
+            aria-label={t("workspaces.restoreTitle")}
+            className="max-h-48 shrink-0 overflow-y-auto border-b border-border bg-raised px-4 py-3 text-sm"
           >
-            {t("panes.previous")}
-          </Button>
-          <Button
-            variant="ghost"
-            disabled={currentIds.length < 2}
-            onClick={() => {
-              const id = workspace.moveFocus(1);
-              if (id) selectPane(id, true);
-            }}
-          >
-            {t("panes.next")}
-          </Button>
-        </div>
-        <div className="min-h-0 overflow-auto overscroll-contain" style={{ height: "calc(100% - 2.5rem)" }}>
-          <div className="relative h-full w-full" style={{ minWidth: minimum.width, minHeight: minimum.height }}>
-            {/* Stable siblings preserve terminal DOM and transport across layout changes. */}
-            {sessions.map((session) => {
-              const rectangle = rectangles[session.id];
-              const owner = layout.panes.find((pane) => pane.id === session.id)?.tabId;
-              const tree = owner ? layout.layouts[owner] : null;
-              const splitIssue = session.snapshot
-                ? t("panes.offline")
-                : closingPanes.includes(session.id)
-                  ? t("panes.closing")
-                  : tree && (paneOrder(tree).length >= 8 || paneDepth(tree, session.id) >= 3)
-                    ? t("panes.limit")
-                    : undefined;
-              return (
-                <div
-                  key={session.id}
-                  hidden={view === "settings" || !rectangle}
-                  data-pane-id={session.id}
-                  ref={(element) => {
-                    if (element) paneElements.current.set(session.id, element);
-                    else paneElements.current.delete(session.id);
-                  }}
-                  onPointerDownCapture={() => selectPane(session.id)}
-                  onFocusCapture={() => {
-                    if (rectangle && view !== "settings") selectPane(session.id);
-                  }}
-                  className={`absolute min-h-0 min-w-0 border border-border ${layout.activePaneId === session.id ? "ring-1 ring-primary ring-inset" : ""}`}
-                  style={
-                    rectangle
-                      ? {
-                          left: `${rectangle.left}%`,
-                          top: `${rectangle.top}%`,
-                          width: `${rectangle.width}%`,
-                          height: `${rectangle.height}%`,
-                        }
-                      : undefined
-                  }
-                >
-                  <SessionTerminal
-                    target={session.target}
-                    label={session.label}
-                    active={view !== "settings" && session.id === layout.activePaneId}
-                    savedOutput={session.snapshot}
-                    sessionId={session.sessionId}
-                    splitIssue={splitIssue}
-                    onSplit={(direction) => split(session.id, direction)}
-                    registerFocus={(focus) => {
-                      focusControllers.current.set(session.id, focus);
-                      return () => {
-                        if (focusControllers.current.get(session.id) === focus)
-                          focusControllers.current.delete(session.id);
-                      };
-                    }}
-                    registerSnippetTarget={(target) => {
-                      snippetTargets.current.set(session.id, target);
-                      return () => {
-                        if (snippetTargets.current.get(session.id) === target)
-                          snippetTargets.current.delete(session.id);
-                      };
-                    }}
-                    getSnippetTargets={() =>
-                      layout.tabs.flatMap((tab, tabIndex) =>
-                        paneOrder(layout.layouts[tab.id]!).flatMap((id, paneIndex) => {
-                          const target = snippetTargets.current.get(id)?.();
-                          return target ? [{ ...target, location: { tab: tabIndex + 1, pane: paneIndex + 1 } }] : [];
-                        }),
-                      )
-                    }
-                    onClose={(discard) => closeSession(session.id, discard)}
-                    registerClose={(close) => {
-                      closeControllers.current.set(session.id, close);
-                      return () => {
-                        if (closeControllers.current.get(session.id) === close)
-                          closeControllers.current.delete(session.id);
-                      };
-                    }}
-                    onStateChange={(state) => setStates((current) => ({ ...current, [session.id]: state }))}
-                    onLabelChange={(label) =>
-                      setSessions((current) =>
-                        current.map((pane) =>
-                          pane.id === session.id && pane.label !== label ? { ...pane, label } : pane,
-                        ),
-                      )
-                    }
-                    onOpenColors={() => {
-                      setSettingsSection("terminal");
-                      setView("settings");
-                    }}
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="m-0 min-w-0 flex-1 text-sm font-medium">{t("workspaces.restoreTitle")}</h2>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setActiveTab("hosts");
+                  setView("hosts");
+                  setTunnelsRequest((current) => current + 1);
+                }}
+              >
+                {t("workspaces.showTunnels")}
+              </Button>
+              <Button variant="ghost" onClick={() => setRestoreReport(null)}>
+                {t("workspaces.dismissReport")}
+              </Button>
+            </div>
+            <p className="mt-1 mb-2 text-xs text-muted-foreground">{t("workspaces.restoreHelp")}</p>
+            <ul aria-live="polite" aria-label={t("workspaces.restoreResults")} className="m-0 list-none space-y-1 p-0">
+              {restoreReport.map((row) => (
+                <li key={row.forwardId} className="flex flex-wrap gap-x-3 gap-y-1">
+                  <span className="min-w-0 flex-1 break-words">
+                    {row.name} · {row.label}
+                  </span>
+                  <span className={row.result?.status === "error" ? "text-attention" : "text-muted-foreground"}>
+                    {row.result === null
+                      ? t("workspaces.restorePending")
+                      : row.result.status === "ok"
+                        ? t("workspaces.restoreAccepted")
+                        : t(`tunnels.issue.${row.result.error}`)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          {workspacesOpen ? (
+            <WorkspacesDialog
+              teamSessions={sessions.some((session) => session.target.kind === "organization")}
+              tabs={layout.tabs.map((tab) => ({
+                tree: savedTree(layout.layouts[tab.id]!, sessions),
+                focused: paneOrder(layout.layouts[tab.id]!).indexOf(layout.focusedPaneIds[tab.id]!),
+              }))}
+              active={activeTab === "hosts" ? null : layout.tabs.findIndex((tab) => tab.id === activeTab)}
+              onClose={() => setWorkspacesOpen(false)}
+              onOpen={(opened) => {
+                const added: OpenSession[] = [];
+                const ids = opened.tabs.map((tab) => {
+                  const tree = restoredTree(tab.tree, added);
+                  const id = `tab-${crypto.randomUUID()}`;
+                  const first = added.find((session) => session.id === paneOrder(tree)[0])!;
+                  return { id, title: first.label, tree, focused: tab.focusedSessionId };
+                });
+                for (const tab of ids) {
+                  // The local model accepts only complete safe projections returned by Rust.
+                  workspace.restoreTab({ id: tab.id, title: tab.title }, tab.tree, tab.focused);
+                }
+                setSessions((current) => [...current, ...added]);
+                setActiveTab(opened.active === null ? "hosts" : ids[opened.active]!.id);
+                setView("hosts");
+                void restoreForwards(opened.forwards);
+              }}
+            />
+          ) : null}
+          {windowError ? (
+            <p role="alert" className="m-0 px-4 py-2 text-sm text-attention">
+              {t("session.output.windowCloseFailed")}
+            </p>
+          ) : null}
+          {view === "settings" ? (
+            <InventoryContext.Provider value={inventory}>
+              <SettingsView
+                key={settingsSection}
+                status={status}
+                onStatus={onStatus}
+                section={settingsSection}
+                onConnect={(target) => openSession(target, target.profileId)}
+              />
+            </InventoryContext.Provider>
+          ) : activeTab !== "hosts" ? null : (
+            <InventoryContext.Provider value={inventory}>
+              <ForwardsContext.Provider value={forwards}>
+                <main id="main" tabIndex={-1} className="h-full min-h-0 focus:outline-none">
+                  <HostsHome
+                    key={tunnelsRequest}
+                    initialSection={tunnelsRequest ? "tunnels" : null}
+                    manage
+                    onConnect={openSession}
+                    onViewOutput={viewOutput}
                   />
-                </div>
-              );
-            })}
-          </div>
+                </main>
+              </ForwardsContext.Provider>
+            </InventoryContext.Provider>
+          )}
+          <main
+            hidden={view === "settings" || activeTab === "hosts"}
+            aria-label={t("panes.workspace")}
+            className="h-full min-h-0"
+          >
+            <div className="flex h-10 shrink-0 items-center justify-end gap-1 border-b border-border px-3">
+              <Button
+                variant="ghost"
+                disabled={currentIds.length < 2}
+                onClick={() => {
+                  const id = workspace.moveFocus(-1);
+                  if (id) selectPane(id, true);
+                }}
+              >
+                {t("panes.previous")}
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={currentIds.length < 2}
+                onClick={() => {
+                  const id = workspace.moveFocus(1);
+                  if (id) selectPane(id, true);
+                }}
+              >
+                {t("panes.next")}
+              </Button>
+            </div>
+            <div className="min-h-0 overflow-auto overscroll-contain" style={{ height: "calc(100% - 2.5rem)" }}>
+              <div className="relative h-full w-full" style={{ minWidth: minimum.width, minHeight: minimum.height }}>
+                {/* Stable siblings preserve terminal DOM and transport across layout changes. */}
+                {sessions.map((session) => {
+                  const rectangle = rectangles[session.id];
+                  const owner = layout.panes.find((pane) => pane.id === session.id)?.tabId;
+                  const tree = owner ? layout.layouts[owner] : null;
+                  const splitIssue = session.snapshot
+                    ? t("panes.offline")
+                    : closingPanes.includes(session.id)
+                      ? t("panes.closing")
+                      : tree && (paneOrder(tree).length >= 8 || paneDepth(tree, session.id) >= 3)
+                        ? t("panes.limit")
+                        : undefined;
+                  return (
+                    <div
+                      key={session.id}
+                      hidden={view === "settings" || !rectangle}
+                      data-pane-id={session.id}
+                      ref={(element) => {
+                        if (element) paneElements.current.set(session.id, element);
+                        else paneElements.current.delete(session.id);
+                      }}
+                      onPointerDownCapture={() => selectPane(session.id)}
+                      onFocusCapture={() => {
+                        if (rectangle && view !== "settings") selectPane(session.id);
+                      }}
+                      className={`absolute min-h-0 min-w-0 border border-border ${layout.activePaneId === session.id ? "ring-1 ring-primary ring-inset" : ""}`}
+                      style={
+                        rectangle
+                          ? {
+                              left: `${rectangle.left}%`,
+                              top: `${rectangle.top}%`,
+                              width: `${rectangle.width}%`,
+                              height: `${rectangle.height}%`,
+                            }
+                          : undefined
+                      }
+                    >
+                      <SessionTerminal
+                        target={session.target}
+                        label={session.label}
+                        active={view !== "settings" && session.id === layout.activePaneId}
+                        savedOutput={session.snapshot}
+                        sessionId={session.sessionId}
+                        splitIssue={splitIssue}
+                        onSplit={(direction) => split(session.id, direction)}
+                        registerFocus={(focus) => {
+                          focusControllers.current.set(session.id, focus);
+                          return () => {
+                            if (focusControllers.current.get(session.id) === focus)
+                              focusControllers.current.delete(session.id);
+                          };
+                        }}
+                        registerSnippetTarget={(target) => {
+                          snippetTargets.current.set(session.id, target);
+                          return () => {
+                            if (snippetTargets.current.get(session.id) === target)
+                              snippetTargets.current.delete(session.id);
+                          };
+                        }}
+                        getSnippetTargets={() =>
+                          layout.tabs.flatMap((tab, tabIndex) =>
+                            paneOrder(layout.layouts[tab.id]!).flatMap((id, paneIndex) => {
+                              const target = snippetTargets.current.get(id)?.();
+                              return target
+                                ? [{ ...target, location: { tab: tabIndex + 1, pane: paneIndex + 1 } }]
+                                : [];
+                            }),
+                          )
+                        }
+                        onClose={(discard) => closeSession(session.id, discard)}
+                        registerClose={(close) => {
+                          closeControllers.current.set(session.id, close);
+                          return () => {
+                            if (closeControllers.current.get(session.id) === close)
+                              closeControllers.current.delete(session.id);
+                          };
+                        }}
+                        onStateChange={(state) => setStates((current) => ({ ...current, [session.id]: state }))}
+                        onLabelChange={(label) =>
+                          setSessions((current) =>
+                            current.map((pane) =>
+                              pane.id === session.id && pane.label !== label ? { ...pane, label } : pane,
+                            ),
+                          )
+                        }
+                        onOpenColors={() => {
+                          setSettingsSection("terminal");
+                          setView("settings");
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </main>
         </div>
-      </main>
+      </div>
     </Frame>
   );
 }
