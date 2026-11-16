@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import type { Channel } from "@tauri-apps/api/core";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode, type ComponentProps } from "react";
 import { AppearanceProvider } from "@scoplen/ui";
@@ -19,6 +20,7 @@ import type {
 import type { ScoplenTerminalElement } from "@scoplen/terminal";
 import { en } from "../src/messages/en";
 import { zhHans } from "../src/messages/zh-Hans";
+import { AccountProfilesBoundary } from "../src/account-profiles";
 
 afterEach(() => {
   cleanup();
@@ -1441,4 +1443,146 @@ it("discards a snippet preview on transport replacement and never sends it to th
   await userEvent.click(screen.getByRole("button", { name: "Snippets" }));
   await act(() => fresh.resolve([]));
   expect(screen.queryByRole("button", { name: "Send command" })).toBeNull();
+});
+
+describe("current-pane terminal Find", () => {
+  beforeEach(() => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("opens a visible nonmodal field without replacing the live terminal, connecting again or sending the query", async () => {
+    const f = fixture();
+    const view = render(sessionView());
+    const c = await connect(f);
+    await c.ready();
+    await c.output("retained Exact [text].*\r\n");
+    const element = view.container.querySelector("scoplen-terminal") as ScoplenTerminalElement;
+    await element.serialize();
+    const resizeCount = f.matching("session_resize").length;
+    await userEvent.click(screen.getByRole("button", { name: "Find" }));
+    expect(f.matching("session_resize")).toHaveLength(resizeCount);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const field = screen.getByRole("textbox", { name: "Find in terminal output" });
+    expect(document.activeElement).toBe(field);
+    await userEvent.type(field, "Exact [[text].*");
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByText("Match selected.")).toBeTruthy();
+    expect(view.container.querySelector("scoplen-terminal")).toBe(element);
+    expect(f.connections).toHaveLength(1);
+    expect(f.matching("session_close_transport")).toHaveLength(0);
+    expect(f.matching("session_input")).toHaveLength(0);
+    expect(f.matching("session_resize")).toHaveLength(resizeCount);
+    expect((await element.serialize()).data).not.toContain("Find in terminal output");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("search")).toBeNull();
+    expect(document.activeElement).toBe(element);
+    expect(element.shadowRoot?.activeElement?.classList.contains("xterm-helper-textarea")).toBe(true);
+    expect(view.container.querySelector("scoplen-terminal")).toBe(element);
+    expect(f.matching("session_resize")).toHaveLength(resizeCount);
+  });
+
+  it.each([
+    ["Win32", { ctrlKey: true, shiftKey: true }],
+    ["MacIntel", { metaKey: true }],
+  ])("handles the active-pane Find shortcut on %s while retaining ordinary remote Ctrl+F", async (platform, keys) => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+    const f = fixture();
+    const view = render(sessionView());
+    const c = await connect(f);
+    await c.ready();
+    const element = view.container.querySelector("scoplen-terminal") as ScoplenTerminalElement;
+    fireEvent.keyDown(element, { key: "f", ctrlKey: true });
+    await waitFor(() => expect(f.matching("session_input")).toHaveLength(1));
+    expect(f.matching("session_input")[0]?.args.data).toEqual([6]);
+    expect(screen.queryByRole("search")).toBeNull();
+    fireEvent.keyDown(element, { key: "f", ...keys });
+    expect(screen.getByRole("search", { name: "Find" })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Find in terminal output" }));
+    expect(f.matching("session_input")).toHaveLength(1);
+  });
+
+  it("ignores the hidden-pane shortcut and retains independent queries through pane selection", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+    const f = fixture();
+    const panes = (first: boolean) => (
+      <div>
+        <div data-testid="first">{sessionView("en", first)}</div>
+        <div data-testid="second">{sessionView("en", !first)}</div>
+      </div>
+    );
+    const view = render(panes(true));
+    await waitFor(() => expect(f.connections).toHaveLength(2));
+    const first = within(screen.getByTestId("first"));
+    const second = within(screen.getByTestId("second"));
+    const elements = view.container.querySelectorAll("scoplen-terminal");
+    fireEvent.keyDown(elements[1]!, { key: "f", ctrlKey: true, shiftKey: true });
+    expect(second.queryByRole("search")).toBeNull();
+    await userEvent.click(first.getByRole("button", { name: "Find" }));
+    await userEvent.type(first.getByRole("textbox"), "first query");
+    view.rerender(panes(false));
+    fireEvent.keyDown(elements[1]!, { key: "f", ctrlKey: true, shiftKey: true });
+    await userEvent.type(second.getByRole("textbox"), "second query");
+    view.rerender(panes(true));
+    expect(first.getByRole<HTMLInputElement>("textbox").value).toBe("first query");
+    expect(document.activeElement).toBe(first.getByRole("textbox"));
+    expect(second.getByRole<HTMLInputElement>("textbox").value).toBe("second query");
+    expect(view.container.querySelectorAll("scoplen-terminal")[0]).toBe(elements[0]);
+    expect(view.container.querySelectorAll("scoplen-terminal")[1]).toBe(elements[1]);
+    expect(f.connections).toHaveLength(2);
+    expect(f.matching("session_input")).toHaveLength(0);
+  });
+
+  it("searches read-only saved output and returns focus without opening a connection", async () => {
+    const f = fixture();
+    const view = render(
+      sessionView("en", true, vi.fn(), vi.fn(), {
+        savedOutput: { version: 1, columns: 80, rows: 24, data: "Offline Exact text" },
+      }),
+    );
+    const element = view.container.querySelector("scoplen-terminal") as ScoplenTerminalElement;
+    await waitFor(() => expect(element.findNext("Offline Exact text")).toBe(true));
+    await userEvent.click(screen.getByRole("button", { name: "Find" }));
+    await userEvent.type(screen.getByRole("textbox"), "Offline Exact text");
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByText("Match selected.")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Close find" }));
+    expect(document.activeElement).toBe(element);
+    expect(f.connections).toHaveLength(0);
+    expect(f.matching("session_reserve_transport")).toHaveLength(0);
+    expect(f.matching("session_input")).toHaveLength(0);
+    expect(element.readOnly).toBe(true);
+  });
+
+  it("discards Find state through the real Account generation boundary", async () => {
+    const f = fixture();
+    const snapshot = { generation: "1", selected: null, accounts: [], retainedProfile: false };
+    const pending = f.delay("account_profiles_snapshot");
+    const view = render(
+      <I18nProvider locale="en">
+        <AccountProfilesBoundary>{sessionView()}</AccountProfilesBoundary>
+      </I18nProvider>,
+    );
+    await act(() => pending.resolve(snapshot));
+    await connect(f);
+    const original = view.container.querySelector("scoplen-terminal");
+    await userEvent.click(screen.getByRole("button", { name: "Find" }));
+    await userEvent.type(screen.getByRole("textbox"), "transient previous account query");
+    await act(async () => emit("profile-changed", { snapshot: { ...snapshot, generation: "2" } }));
+    await waitFor(() => expect(f.connections).toHaveLength(2));
+    expect(screen.queryByRole("search")).toBeNull();
+    expect(view.container.querySelector("scoplen-terminal")).not.toBe(original);
+    await userEvent.click(screen.getByRole("button", { name: "Find" }));
+    expect(screen.getByRole<HTMLInputElement>("textbox").value).toBe("");
+    expect(f.matching("session_input")).toHaveLength(0);
+  });
 });

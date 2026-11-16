@@ -201,6 +201,15 @@ Interactive SSH sessions become ready after authentication and shell setup,
 even when the server sends no initial output. Terminal input and PTY resizing
 are available without waiting for a welcome message or prompt.
 
+Choose Find in a terminal's header to search that pane's retained output, including
+read-only output opened from Recent. Find matches exact, case-sensitive text. Use
+Next or Enter to move forward, and Previous or Shift+Enter to move backward. Escape
+or Close find clears the selection and returns focus to the same terminal. Windows
+Ctrl+Shift+F and macOS Command+F open Find in the active pane; ordinary Ctrl+F remains
+available to the remote application. Each pane retains its query across selection
+changes until it closes or the Account changes. Search keeps the connection and
+terminal grid intact; queries are transient and never sent to the remote host.
+
 Use Snippets to save single-line commands with Text, Integer and Choice variables,
 tags and an optional folder. From a connected terminal, choose a saved snippet, fill
 its values once and select up to 64 already-connected terminals in the current Account.

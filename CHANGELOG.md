@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Find exact case-sensitive text in each terminal's retained scrollback and read-only
+  saved output. Add Previous/Next, local keyboard shortcuts and focus return while
+  preserving the terminal, connection and independent pane queries.
+
 - Save and explicitly reopen mixed terminal/tunnel or tunnel-only Workspaces with
   selected saved Local, Remote and Dynamic definitions and their captured Logins.
   Validate every dependency before opening, preserve existing sessions and runs,
