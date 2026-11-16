@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Start temporary Local TCP, Remote TCP and Dynamic SOCKS tunnels without creating a saved
+  definition. Keep Start without saving separate from Save, show temporary runs with their
+  fixed Login and endpoints, and reuse ordinary SSH preparation, traffic counters and Stop.
+  Admit only the active Local/Personal inventory and its actual connection dependencies.
+
 - Add explicit generated OpenSSH configuration in Settings > Data with reviewed compatible
   Logins, friendly Host aliases and stable UUID aliases. Generate complete independent files,
   atomically publish a stable Include, and support regeneration and clearing the last entry.

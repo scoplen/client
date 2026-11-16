@@ -246,10 +246,13 @@ dependencies require repair before opening. Personal adoption, Files and tunnel
 restoration, divider dragging, detached windows and native restart acceptance remain
 separate work.
 
-Tunnels manages saved Local TCP, Remote TCP and Dynamic SOCKS forwards independently of terminal
-tabs. Local and Dynamic use a numeric local IPv4 or IPv6 address and a nonzero local
-port. Local also needs a destination hostname or address and nonzero destination
-port; Dynamic takes each destination from SOCKS4/4a or SOCKS5 CONNECT. New definitions
+Tunnels starts saved or temporary Local TCP, Remote TCP and Dynamic SOCKS forwards independently
+of terminal tabs. In New tunnel, choose a Login and Start without saving for a one-off run,
+or use Save changes to retain a definition without starting it. Save keeps its optional default
+Login. Temporary definitions are never added to inventory or synchronized; explicit host-key
+acceptance retains the normal trust behavior. Local and Dynamic use a numeric local IPv4
+or IPv6 address and a nonzero local port. Local also needs a destination hostname or address
+and nonzero destination port; Dynamic takes each destination from SOCKS4/4a or SOCKS5 CONNECT. New definitions
 use `127.0.0.1`. Dynamic provides no SOCKS authentication: devices able to reach its
 listener can request destinations through the selected SSH connection. Review that
 access before choosing a non-loopback listening address. Choose Start and an existing
@@ -258,14 +261,16 @@ The tunnel opens no terminal or shell. The SSH server resolves destination hostn
 
 Running tunnels show their fixed configuration, connection count and traffic.
 Leaving Tunnels keeps them running; editing or deleting a saved definition does
-not change an existing run. Stop closes its listener, peers and SSH route. At most
-16 tunnels and 32 peers per tunnel run at once, including SOCKS negotiation and
+not change an existing run. Saving an equivalent definition does not convert a temporary run.
+Stop closes its listener, peers and SSH route. At most 16 tunnels and 32 peers per tunnel
+run at once, including SOCKS negotiation and
 channel opening. Dynamic negotiation has an absolute 15-second deadline; channel
 opening and the final SOCKS response each have their own 15-second deadline. Traffic
 counts include only application bytes successfully written, excluding SOCKS messages.
 A failed run requires an explicit new Start; tunnels do not reconnect or start
-automatically. Application exit or local-store replacement stops every run. Unix-socket
-and ad-hoc forwarding remain incomplete.
+automatically. Temporary runs end on Stop, SSH loss, profile replacement or application exit,
+and are not restored after restart. Unix-socket forwarding and Workspace tunnel restoration
+remain incomplete.
 
 Remote requests a fixed nonzero listening port and numeric IPv4 or IPv6 address on the
 SSH server, and reaches a fixed local target whose hostname is resolved by this device.
@@ -725,28 +730,31 @@ restored terminals have fresh identities and no replayed commands. This verifies
 Rust session and persistence behavior; native pane focus and rendering need their
 separate platform acceptance.
 
-`scripts/test-ssh-local-forward.ps1` checks saved standalone TCP tunnels against
+`scripts/test-ssh-local-forward.ps1` checks saved and temporary standalone TCP tunnels against
 disposable OpenSSH listeners with session channels disabled. It exercises password,
 encrypted-key, Interactive and Jump preparation, concurrent binary streams, half-close,
 exact traffic counts, refusal, cancellation and SSH loss while another terminal stays
 usable. It requires PowerShell 7, Docker and `ssh-keygen`. Successful runs remove their
 owned resources; failed runs retain private diagnostics and stop their owned container.
+Temporary Direct and Jump runs verify that traffic and Stop do not create a saved definition.
 
-`scripts/test-ssh-dynamic-forward.ps1` checks saved SOCKS4a/5 tunnels through Direct
+`scripts/test-ssh-dynamic-forward.ps1` checks saved and temporary SOCKS4a/5 tunnels through Direct
 and Jump routes against disposable OpenSSH listeners with session channels disabled.
 It verifies literal destination names and server-side resolution, concurrent binary
 streams with coalesced application bytes, half-close, application-only counters,
 refusals, the absolute handshake deadline and cleanup during negotiation, channel
 opening and copying. Saved edits/deletion leave the running configuration fixed;
-an independent terminal remains usable. It uses the same prerequisites and fixture
+temporary Direct and Jump runs leave saved inventory unchanged, and an independent terminal
+remains usable. It uses the same prerequisites and fixture
 retention rules as the Local check.
 
-`scripts/test-ssh-remote-forward.ps1` checks saved Remote TCP tunnels with fixed local
+`scripts/test-ssh-remote-forward.ps1` checks saved and temporary Remote TCP tunnels with fixed local
 targets and no SSH session channels. It verifies Direct, encrypted-key, Interactive and
 Jump preparation, concurrent binary peers, both half-close directions, exact counters,
 local refusal/recovery, occupied and denied listeners, requested versus actual
 `GatewayPorts` scope, Stop, SSH loss and complete route cleanup while a separate terminal
-stays usable. It uses the same prerequisites and fixture retention rules as the Local check.
+stays usable. Temporary Direct and Jump runs retain only their runtime identity and leave
+saved inventory unchanged. It uses the same prerequisites and fixture retention rules as the Local check.
 
 With PowerShell 7, Docker, and `ssh-keygen` available, `scripts/test-ssh-private-key.ps1`
 starts disposable OpenSSH servers and verifies Ed25519, P-256/P-384/P-521, and RSA key

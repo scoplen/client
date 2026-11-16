@@ -23,8 +23,8 @@ use super::trust::TrustPolicy;
 use super::{
     ConnectionPlan, ConnectionRoute, HostKeyPresentation, HostKeyReview, HostKeyStatus,
     HostKeyTrustSource, MAX_PRIVATE_KEY_PASSPHRASE, SshConnection, SshConnectionError,
-    assess_host_key, private_key_passphrase_required, resolve_connection_plan, transport_route,
-    validate_credential,
+    assess_host_key, private_key_passphrase_required, resolve_identified_connection_plan,
+    transport_route, validate_credential,
 };
 use super::{SessionTarget, team::TeamConnectionSnapshot};
 use crate::personal_server::{PersonalServer, TeamSshError, TeamSshSource};
@@ -448,21 +448,34 @@ impl HostKeyVerifier for PresentedKey {
 
 struct Step {
     plan: ConnectionPlan,
+    credential_id: Option<Uuid>,
     context: PreparationContext,
     passphrase: bool,
     team: Option<Arc<TeamConnectionSnapshot>>,
 }
 
 /// Locally resolved immutable inputs; credentials remain inside Rust preparation.
-pub(crate) struct PreparationPlan(Vec<Step>);
+pub(crate) struct PreparationPlan {
+    steps: Vec<Step>,
+    // Some(None) admits Local trust only; outer None preserves ordinary preparation policy.
+    inventory_vault: Option<Option<Uuid>>,
+}
 
 impl PreparationPlan {
     pub(crate) fn target_context(&self) -> &PreparationContext {
-        &self.0.last().expect("target step exists").context
+        &self.steps.last().expect("target step exists").context
     }
 
     pub(crate) fn team(&self) -> Option<&TeamConnectionSnapshot> {
-        self.0.last().and_then(|step| step.team.as_deref())
+        self.steps.last().and_then(|step| step.team.as_deref())
+    }
+
+    pub(crate) fn local_inputs(&self) -> impl Iterator<Item = (&ConnectionPlan, Uuid)> {
+        self.steps.iter().filter_map(|step| step.credential_id.map(|id| (&step.plan, id)))
+    }
+
+    pub(crate) fn restrict_inventory(&mut self, vault: Option<Uuid>) {
+        self.inventory_vault = Some(vault);
     }
 }
 
@@ -497,16 +510,22 @@ pub(crate) fn resolve_target_preparation_plan(
             total,
             target: position == total,
         };
-        steps.push(Step { plan, context, passphrase: false, team: Some(snapshot.clone()) });
+        steps.push(Step {
+            plan,
+            credential_id: None,
+            context,
+            passphrase: false,
+            team: Some(snapshot.clone()),
+        });
     }
-    Ok(PreparationPlan(steps))
+    Ok(PreparationPlan { steps, inventory_vault: None })
 }
 
 pub(crate) fn resolve_preparation_plan(
     store: &Store,
     profile_id: Uuid,
 ) -> Result<PreparationPlan, PreparationError> {
-    Ok(PreparationPlan(resolve_steps(store, profile_id)?))
+    Ok(PreparationPlan { steps: resolve_steps(store, profile_id)?, inventory_vault: None })
 }
 
 struct ConnectionStack(Vec<SshConnection>);
@@ -518,7 +537,8 @@ impl Drop for ConnectionStack {
 }
 
 fn resolve_steps(store: &Store, target_id: Uuid) -> Result<Vec<Step>, String> {
-    let target = resolve_connection_plan(store, target_id).map_err(|e| e.to_string())?;
+    let (target, credential) =
+        resolve_identified_connection_plan(store, target_id).map_err(|e| e.to_string())?;
     let mut plans = Vec::new();
     if let ConnectionRoute::Jump { hops } = &target.route {
         if hops.is_empty() {
@@ -527,7 +547,7 @@ fn resolve_steps(store: &Store, target_id: Uuid) -> Result<Vec<Step>, String> {
         let mut profiles = HashSet::from([target.profile_id]);
         let mut hosts = HashSet::from([target.host_id]);
         for id in hops {
-            let plan = resolve_connection_plan(store, *id)
+            let (plan, credential) = resolve_identified_connection_plan(store, *id)
                 .map_err(|e| format!("jump Login could not be resolved: {e}"))?;
             if !profiles.insert(plan.profile_id) || !hosts.insert(plan.host_id) {
                 return Err("the jump route repeats a Login or Host, or returns to the target; edit the route before connecting".into());
@@ -535,17 +555,17 @@ fn resolve_steps(store: &Store, target_id: Uuid) -> Result<Vec<Step>, String> {
             if plan.route != ConnectionRoute::Direct {
                 return Err("a jump Login has its own non-Direct route; select Direct on each jump Login before connecting".into());
             }
-            plans.push(plan);
+            plans.push((plan, credential));
         }
         let mut target = target;
         target.route = ConnectionRoute::Direct;
-        plans.push(target);
+        plans.push((target, credential));
     } else {
-        plans.push(target);
+        plans.push((target, credential));
     }
     let total = u32::try_from(plans.len()).map_err(|_| "the jump route is too large")?;
     let mut steps = Vec::with_capacity(plans.len());
-    for (index, plan) in plans.into_iter().enumerate() {
+    for (index, (plan, credential)) in plans.into_iter().enumerate() {
         transport_route(&plan).map_err(|e| e.to_string())?;
         validate_credential(&plan.credential).map_err(|e| e.to_string())?;
         let passphrase =
@@ -571,18 +591,61 @@ fn resolve_steps(store: &Store, target_id: Uuid) -> Result<Vec<Step>, String> {
             total,
             target: index as u32 + 1 == total,
         };
-        steps.push(Step { plan, context, passphrase, team: None });
+        steps.push(Step { plan, credential_id: Some(credential), context, passphrase, team: None });
     }
     Ok(steps)
 }
 
-fn accept_key(store: &Store, host: Uuid, key: &HostKeyPresentation) -> Result<(), String> {
+fn inventory_trust_records(
+    store: &Store,
+    host: Uuid,
+    vault: Option<Option<Uuid>>,
+) -> Result<Vec<TrustRecord>, String> {
     let records = Repository::<TrustRecord>::new(store).list().map_err(|e| e.to_string())?;
+    let Some(vault) = vault else { return Ok(records) };
+    let mut owned = Vec::new();
+    for record in records.into_iter().filter(|record| record.host == Some(host)) {
+        if store
+            .object_vault(record.meta.id)
+            .map_err(|e| e.to_string())?
+            .is_none_or(|owner| Some(owner) == vault)
+        {
+            owned.push(record);
+        }
+    }
+    Ok(owned)
+}
+
+fn assess_key(
+    store: &Store,
+    host: Uuid,
+    key: &HostKeyPresentation,
+    vault: Option<Option<Uuid>>,
+) -> Result<super::HostKeyAssessment, String> {
+    if vault.is_none() {
+        return assess_host_key(store, host, key);
+    }
+    let records = inventory_trust_records(store, host, vault)?;
+    Ok(TrustPolicy::load(store, &records)?.assess(host, key, &records))
+}
+
+fn accept_key(
+    store: &Store,
+    host: Uuid,
+    key: &HostKeyPresentation,
+    vault: Option<Option<Uuid>>,
+) -> Result<(), String> {
+    let records = inventory_trust_records(store, host, vault)?;
+    let owned: HashSet<_> = records.iter().map(|record| record.meta.id).collect();
     let policy = TrustPolicy::load(store, &records)?;
     let account = policy.acceptance_account();
     store
         .write_batch_with_snapshot::<RecordError>(TrustRecord::TYPE, |objects| {
-            let records = objects.iter().map(TrustRecord::read).collect::<Result<Vec<_>, _>>()?;
+            let records = objects
+                .iter()
+                .filter(|object| vault.is_none() || owned.contains(&object.id))
+                .map(TrustRecord::read)
+                .collect::<Result<Vec<_>, _>>()?;
             if policy.assess(host, key, &records).status == HostKeyStatus::Trusted {
                 return Ok(Vec::new());
             }
@@ -685,7 +748,7 @@ async fn prepare_resolved_inner(
 ) -> Result<SshConnection, PreparationError> {
     let mut connections = ConnectionStack(Vec::new());
     let result = async {
-        for step in plan.0 {
+        for step in plan.steps {
             control.active(|| Ok(()))?;
             if let Some(team) = &step.team {
                 team.current(
@@ -749,7 +812,7 @@ async fn prepare_resolved_inner(
                 .ok_or("SSH server did not present a host key")?;
             let assessment = match &step.team {
                 Some(team) => team.assess(store, step.plan.host_id, &key)?,
-                None => assess_host_key(store, step.plan.host_id, &key)?,
+                None => assess_key(store, step.plan.host_id, &key, plan.inventory_vault)?,
             };
             let status = assessment.status;
             if status != HostKeyStatus::Trusted {
@@ -786,12 +849,12 @@ async fn prepare_resolved_inner(
                             )
                             .map_err(|_| "Team Host trust could not be saved.".into())
                     }
-                    None => accept_key(store, step.plan.host_id, &key),
+                    None => accept_key(store, step.plan.host_id, &key, plan.inventory_vault),
                 })?;
             }
             let confirmed = match &step.team {
                 Some(team) => team.assess(store, step.plan.host_id, &key)?,
-                None => assess_host_key(store, step.plan.host_id, &key)?,
+                None => assess_key(store, step.plan.host_id, &key, plan.inventory_vault)?,
             };
             if confirmed.status != HostKeyStatus::Trusted {
                 return Err(

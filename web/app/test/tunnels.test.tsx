@@ -31,7 +31,7 @@ function snapshot(overrides: Partial<ForwardSnapshot> = {}): ForwardSnapshot {
     runId: "run-1",
     configuration: {
       kind: "local",
-      forwardId: "f-db",
+      source: { kind: "saved", forwardId: "f-db" },
       name: "postgres-prod",
       profileId: "l-3",
       bindAddress: "127.0.0.1",
@@ -57,7 +57,7 @@ function dynamicSnapshot(overrides: Partial<ForwardSnapshot> = {}): ForwardSnaps
   return snapshot({
     configuration: {
       kind: "dynamic",
-      forwardId: "f-socks",
+      source: { kind: "saved", forwardId: "f-socks" },
       name: "staging-socks",
       profileId: "l-3",
       bindAddress: "::",
@@ -73,7 +73,7 @@ function remoteSnapshot(overrides: Partial<ForwardSnapshot> = {}): ForwardSnapsh
   return snapshot({
     configuration: {
       kind: "remote",
-      forwardId: "f-remote",
+      source: { kind: "saved", forwardId: "f-remote" },
       name: "metrics-remote",
       profileId: "l-5",
       bindAddress: "::",
@@ -83,6 +83,15 @@ function remoteSnapshot(overrides: Partial<ForwardSnapshot> = {}): ForwardSnapsh
       login: challenge("trust").context,
     },
     boundAddress: null,
+    ...overrides,
+  });
+}
+
+function temporarySnapshot(mode: "local" | "remote" | "dynamic", overrides: Partial<ForwardSnapshot> = {}) {
+  const saved = mode === "dynamic" ? dynamicSnapshot() : mode === "remote" ? remoteSnapshot() : snapshot();
+  return snapshot({
+    ...saved,
+    configuration: { ...saved.configuration, name: `one-off-${mode}`, source: { kind: "temporary" } },
     ...overrides,
   });
 }
@@ -135,6 +144,7 @@ function fixture(
     pendingList?: ReturnType<typeof deferred<ForwardSnapshot[]>>;
     pendingStart?: ReturnType<typeof deferred<ForwardSnapshot>>;
     startRun?: ForwardSnapshot;
+    startIssue?: ForwardIssue;
     listIssue?: ForwardIssue;
     locale?: "en" | "zh-Hans";
     home?: boolean;
@@ -149,12 +159,14 @@ function fixture(
       calls.push({ command, args: (args ?? {}) as Record<string, unknown> });
       if (command === "forward_list")
         return options.listIssue ? Promise.reject(options.listIssue) : (options.pendingList?.promise ?? listed);
-      if (command === "forward_start")
+      if (command === "forward_start") {
+        if (options.startIssue) return Promise.reject(options.startIssue);
         return (
           options.pendingStart?.promise ??
           options.startRun ??
           snapshot({ phase: "preparing", boundAddress: null, preparation: challenge("trust") })
         );
+      }
       if (command === "forward_respond") return respond.promise;
       return null;
     },
@@ -212,6 +224,7 @@ it("saves explicit local endpoints, discloses non-loopback access and never star
   await userEvent.click(screen.getByRole("button", { name: "Add tunnel" }));
   const dialog = screen.getByRole("dialog", { name: "New tunnel" });
   expect((within(dialog).getByLabelText("Bind address") as HTMLInputElement).value).toBe("127.0.0.1");
+  expect(within(dialog).getByRole("button", { name: "Start without saving" }).hasAttribute("disabled")).toBe(true);
   await userEvent.type(within(dialog).getByLabelText("Name"), "local-db");
   await userEvent.clear(within(dialog).getByLabelText("Bind address"));
   await userEvent.type(within(dialog).getByLabelText("Bind address"), "0.0.0.0");
@@ -231,6 +244,135 @@ it("saves explicit local endpoints, discloses non-loopback access and never star
   });
   expect(await screen.findByText("local-db")).toBeTruthy();
   expect(f.calls.some((call) => call.command === "forward_start" || call.command.startsWith("session_"))).toBe(false);
+});
+
+it.each(["local", "remote", "dynamic"] as const)(
+  "starts a temporary %s with the current fields and Login without creating inventory",
+  async (mode) => {
+    const f = fixture({ startRun: temporarySnapshot(mode) });
+    const create = vi.spyOn(f.api, "createForward");
+    const update = vi.spyOn(f.api, "updateForward");
+    const before = await f.api.forwards();
+    await screen.findByText("postgres-prod");
+    await waitFor(() => expect(f.controller.loading).toBe(false));
+    await userEvent.click(screen.getByRole("button", { name: "Add tunnel" }));
+    const dialog = screen.getByRole("dialog", { name: "New tunnel" });
+    if (mode !== "local")
+      await selectOption(within(dialog).getByLabelText("Mode"), mode === "remote" ? "Remote TCP" : "Dynamic SOCKS");
+    await userEvent.type(within(dialog).getByLabelText("Name"), `one-off-${mode}`);
+    await userEvent.type(within(dialog).getByLabelText(mode === "remote" ? "Remote port" : "Bind port"), "49152");
+    if (mode !== "dynamic") {
+      await userEvent.type(
+        within(dialog).getByLabelText(mode === "remote" ? "Local target host" : "Target host"),
+        "target.example",
+      );
+      await userEvent.type(
+        within(dialog).getByLabelText(mode === "remote" ? "Local target port" : "Target port"),
+        "9999",
+      );
+    }
+    const start = within(dialog).getByRole("button", { name: "Start without saving" });
+    expect(start.hasAttribute("disabled")).toBe(true);
+    await selectOption(within(dialog).getByLabelText("Login"), "prod-db-01 · dba");
+    expect(start.hasAttribute("disabled")).toBe(false);
+    expect(await violations(dialog)).toEqual([]);
+    await userEvent.click(start);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(f.calls.find((call) => call.command === "forward_start")?.args).toEqual({
+      intent: {
+        kind: "temporary",
+        profileId: "l-3",
+        definition: {
+          kind: mode,
+          name: `one-off-${mode}`,
+          bindAddress: "127.0.0.1",
+          bindPort: 49152,
+          ...(mode === "dynamic" ? {} : { targetHost: "target.example", targetPort: 9999 }),
+        },
+      },
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(await f.api.forwards()).toEqual(before);
+    expect(screen.getByText("Temporary")).toBeTruthy();
+    expect(
+      within(screen.getByText("postgres-prod").closest("li")!)
+        .getByRole("button", { name: "Start" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    f.hide();
+    f.reopen();
+    expect(await screen.findByText(`one-off-${mode}`)).toBeTruthy();
+    expect(f.calls.some((call) => call.command === "forward_stop")).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(f.calls.find((call) => call.command === "forward_stop")?.args).toEqual({ runId: "run-1" });
+    expect(f.calls.some((call) => call.command.startsWith("session_"))).toBe(false);
+  },
+);
+
+it("keeps temporary Start input after refusal and fences all form actions while it is pending", async () => {
+  const pendingStart = deferred<ForwardSnapshot>();
+  const f = fixture({ pendingStart });
+  const create = vi.spyOn(f.api, "createForward");
+  await screen.findByText("postgres-prod");
+  await waitFor(() => expect(f.controller.loading).toBe(false));
+  await userEvent.click(screen.getByRole("button", { name: "Add tunnel" }));
+  const dialog = screen.getByRole("dialog", { name: "New tunnel" });
+  await selectOption(within(dialog).getByLabelText("Mode"), "Dynamic SOCKS");
+  await userEvent.type(within(dialog).getByLabelText("Name"), "one-off-busy");
+  await userEvent.type(within(dialog).getByLabelText("Bind port"), "1081");
+  await selectOption(within(dialog).getByLabelText("Login"), "prod-db-01 · dba");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Start without saving" }));
+  expect(within(dialog).getByRole("button", { name: "Save changes" }).hasAttribute("disabled")).toBe(true);
+  expect(within(dialog).getByLabelText("Name").hasAttribute("disabled")).toBe(true);
+  expect(within(dialog).getByLabelText("Mode").hasAttribute("disabled")).toBe(true);
+  expect(within(dialog).getByLabelText("Login").hasAttribute("disabled")).toBe(true);
+  await userEvent.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "New tunnel" })).toBeTruthy();
+  await act(() => pendingStart.resolve(temporarySnapshot("dynamic")));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(f.calls.filter((call) => call.command === "forward_start")).toHaveLength(1);
+  expect(create).not.toHaveBeenCalled();
+});
+
+it("preserves current temporary endpoints after Start is refused and allows a separate Save", async () => {
+  const f = fixture({ startIssue: "invalidConfiguration" });
+  const create = vi.spyOn(f.api, "createForward");
+  await screen.findByText("postgres-prod");
+  await waitFor(() => expect(f.controller.loading).toBe(false));
+  await userEvent.click(screen.getByRole("button", { name: "Add tunnel" }));
+  const dialog = screen.getByRole("dialog", { name: "New tunnel" });
+  await selectOption(within(dialog).getByLabelText("Mode"), "Dynamic SOCKS");
+  await userEvent.type(within(dialog).getByLabelText("Name"), "keep-one-off");
+  await userEvent.type(within(dialog).getByLabelText("Bind port"), "1081");
+  await selectOption(within(dialog).getByLabelText("Login"), "prod-db-01 · dba");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Start without saving" }));
+  await within(dialog).findByRole("alert");
+  expect((within(dialog).getByLabelText("Name") as HTMLInputElement).value).toBe("keep-one-off");
+  expect((within(dialog).getByLabelText("Bind port") as HTMLInputElement).value).toBe("1081");
+  expect(create).not.toHaveBeenCalled();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(create).toHaveBeenCalledWith(
+    expect.objectContaining({ name: "keep-one-off", kind: "dynamic", profile: "l-3" }),
+  );
+  expect(f.calls.filter((call) => call.command === "forward_start")).toHaveLength(1);
+});
+
+it("saving an equivalent definition never replaces or relabels an existing temporary run", async () => {
+  const run = temporarySnapshot("dynamic");
+  const f = fixture({ runs: [run] });
+  await screen.findByText("Temporary");
+  await userEvent.click(screen.getByRole("button", { name: "Add tunnel" }));
+  const dialog = screen.getByRole("dialog", { name: "New tunnel" });
+  await selectOption(within(dialog).getByLabelText("Mode"), "Dynamic SOCKS");
+  await userEvent.type(within(dialog).getByLabelText("Name"), run.configuration.name);
+  await userEvent.type(within(dialog).getByLabelText("Bind port"), String(run.configuration.bindPort));
+  await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(f.controller.snapshots).toEqual([run]);
+  expect(screen.getByText("Temporary")).toBeTruthy();
+  expect(f.calls.some((call) => call.command === "forward_start" || call.command === "forward_stop")).toBe(false);
 });
 
 it("saves Dynamic with a loopback default, no fixed target and keyboard form submission", async () => {
@@ -253,7 +395,7 @@ it("saves Dynamic with a loopback default, no fixed target and keyboard form sub
   expect(within(dialog).queryByRole("note")).toBeNull();
   await userEvent.type(within(dialog).getByLabelText("Bind port"), "1081");
   await userEvent.tab();
-  expect(document.activeElement).toBe(within(dialog).getByRole("combobox", { name: "Default Login" }));
+  expect(document.activeElement).toBe(within(dialog).getByRole("combobox", { name: "Login" }));
   await userEvent.tab();
   await userEvent.tab();
   expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Save changes" }));
@@ -371,8 +513,7 @@ it("starts Remote with an explicit Login and retains its fixed endpoints and Sto
   await userEvent.click(within(dialog).getByRole("button", { name: "Start" }));
   await screen.findByText("Listening");
   expect(f.calls.find((call) => call.command === "forward_start")?.args).toEqual({
-    forwardId: "f-remote",
-    profileId: "l-3",
+    intent: { kind: "saved", forwardId: "f-remote", profileId: "l-3" },
   });
   const runs = screen.getByRole("list", { name: "Runs" });
   expect(within(runs).getByText("Requested remote listener")).toBeTruthy();
@@ -507,8 +648,7 @@ it("starts saved Dynamic with the selected Login through the existing commands a
   await userEvent.click(within(dialog).getByRole("button", { name: "Start" }));
   await screen.findByText("Listening");
   expect(f.calls.find((call) => call.command === "forward_start")?.args).toEqual({
-    forwardId: "f-socks",
-    profileId: "l-3",
+    intent: { kind: "saved", forwardId: "f-socks", profileId: "l-3" },
   });
   await userEvent.click(screen.getByRole("button", { name: "Stop" }));
   expect(f.calls.find((call) => call.command === "forward_stop")?.args).toEqual({ runId: "run-1" });
@@ -557,8 +697,7 @@ it("starts an independent run using a selected Login and retains its Stop after 
   const dialog = screen.getByRole("dialog", { name: "Start postgres-prod" });
   await userEvent.click(within(dialog).getByRole("button", { name: "Start" }));
   expect(f.calls.find((call) => call.command === "forward_start")?.args).toEqual({
-    forwardId: "f-db",
-    profileId: "l-3",
+    intent: { kind: "saved", forwardId: "f-db", profileId: "l-3" },
   });
   expect(await screen.findByRole("dialog", { name: "Host key changed" })).toBeTruthy();
   expect(f.calls.some((call) => call.command.startsWith("session_"))).toBe(false);
@@ -765,7 +904,7 @@ it("discards an in-flight Start result after refreshing the observed store", asy
   const pendingStart = deferred<ForwardSnapshot>();
   const f = fixture({ pendingStart });
   await waitFor(() => expect(f.controller.loading).toBe(false));
-  const started = f.controller.start("f-db", "l-3");
+  const started = f.controller.start({ kind: "saved", forwardId: "f-db", profileId: "l-3" });
   await act(() => f.controller.refresh());
   await waitFor(() => expect(f.calls.filter((call) => call.command === "forward_list")).toHaveLength(2));
   await act(() => pendingStart.resolve(snapshot()));

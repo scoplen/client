@@ -3,7 +3,7 @@
 //! Independent tunnel intents. Losing an event observer never closes a run.
 
 use crate::{profile_context::ProfileRequest as LocalDataState, ssh::SessionPreparationIntent};
-use scoplen_client_core::forward_manager::{ForwardIssue, ForwardSnapshot};
+use scoplen_client_core::forward_manager::{ForwardIssue, ForwardSnapshot, ForwardStartIntent};
 use serde::Serialize;
 use specta::Type;
 use tauri_specta::Event as _;
@@ -20,20 +20,19 @@ pub struct ForwardChanged {
     pub snapshot: ForwardSnapshot,
 }
 
-/// Start a saved tunnel using the explicitly selected Login.
+/// Start a saved or temporary tunnel using the explicitly selected Login.
 #[tauri::command]
 #[specta::specta]
 pub async fn forward_start(
     app: tauri::AppHandle,
     local: LocalDataState,
     manager: tauri::State<'_, ForwardManager>,
-    forward_id: String,
-    profile_id: String,
+    intent: ForwardStartIntent,
 ) -> Result<ForwardSnapshot, ForwardIssue> {
     let profile_generation = local.generation();
     local
         .with_store(|store| {
-            manager.start(store.clone(), &forward_id, &profile_id, move |snapshot| {
+            manager.start(store.clone(), intent, move |snapshot| {
                 let _ = ForwardChanged { profile_generation: profile_generation.clone(), snapshot }
                     .emit(&app);
             })

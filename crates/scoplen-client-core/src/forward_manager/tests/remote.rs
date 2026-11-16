@@ -214,6 +214,84 @@ async fn closed(channel: russh::Channel<russh::server::Msg>) {
 }
 
 #[tokio::test]
+async fn temporary_remote_acknowledges_transfers_and_cancels_without_a_saved_definition() {
+    let mut peer = RemotePeer::new(Decision::Accept, Decision::Accept).await;
+    let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = target.local_addr().unwrap();
+    let fixture = fixture(peer.port, address).await;
+    Repository::<Forward>::new(&fixture.store)
+        .delete(Uuid::parse_str(&fixture.forward).unwrap())
+        .unwrap();
+    let manager = ForwardManager::default();
+    let initial = fixture.temporary(
+        &manager,
+        ForwardDefinition::Remote {
+            name: "Temporary remote".into(),
+            bind_address: "127.0.0.1".into(),
+            bind_port: fixture.port,
+            target_host: "localhost".into(),
+            target_port: address.port(),
+        },
+    );
+    assert_eq!(initial.configuration.source(), &ForwardSource::Temporary);
+    phase(&manager, &fixture, &initial.run_id, ForwardPhase::Listening).await;
+    assert_eq!(peer.request().await, Request::Listen("127.0.0.1".into(), fixture.port.into()));
+    let service = tokio::spawn(async move {
+        let mut peers = JoinSet::new();
+        for _ in 0..2 {
+            let (mut socket, _) = target.accept().await.unwrap();
+            peers.spawn(async move {
+                let mut bytes = Vec::new();
+                socket.read_to_end(&mut bytes).await.unwrap();
+                socket.write_all(&bytes).await.unwrap();
+                socket.shutdown().await.unwrap();
+            });
+        }
+        while let Some(peer) = peers.join_next().await {
+            peer.unwrap();
+        }
+    });
+    let control = peer.control().await;
+    let mut remotes = JoinSet::new();
+    let payloads = [
+        vec![0xff; COPY_BUFFER * 2 + 19],
+        (0..COPY_BUFFER * 3 + 29).map(|i| (i % 256) as u8).collect(),
+    ];
+    for payload in payloads.clone() {
+        let channel = forwarded(&control, &fixture).await;
+        remotes.spawn(async move {
+            let mut stream = channel.into_stream();
+            stream.write_all(&payload).await.unwrap();
+            stream.shutdown().await.unwrap();
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).await.unwrap();
+            assert_eq!(response, payload);
+        });
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(remote) = remotes.join_next().await {
+            remote.unwrap();
+        }
+        service.await.unwrap();
+    })
+    .await
+    .unwrap();
+    let total: usize = payloads.iter().map(Vec::len).sum();
+    let final_counts = snapshot_when(&manager, &fixture, &initial.run_id, |snapshot| {
+        snapshot.active_connections == 0 && snapshot.uploaded_bytes == total.to_string()
+    })
+    .await;
+    assert_eq!(final_counts.downloaded_bytes, total.to_string());
+    assert_eq!(final_counts.configuration, initial.configuration);
+    assert_eq!(peer.sessions.load(Ordering::SeqCst), 0);
+    fixture.assert_no_forwards();
+    stop(&manager, &fixture, &initial.run_id).await;
+    assert_eq!(peer.request().await, Request::Cancel("127.0.0.1".into(), fixture.port.into()));
+    peer.wait_closed().await;
+    fixture.assert_no_forwards();
+}
+
+#[tokio::test]
 async fn remote_fixed_port_ack_preserves_snapshot_and_parallel_binary_half_close_counts() {
     let mut peer = RemotePeer::new(Decision::Accept, Decision::Accept).await;
     let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -535,19 +613,26 @@ async fn remote_registration_absolute_timeout_never_claims_listener_or_cleanup_c
     let owner = manager.clone();
     let store = fixture.store.clone();
     let initial = manager
-        .start(store.clone(), &fixture.forward, &fixture.profile, move |snapshot| {
-            if let Some(PreparationEvent::Trust { prompt_id, .. }) = &snapshot.preparation {
-                owner
-                    .respond(
-                        &store,
-                        &snapshot.run_id,
-                        prompt_id,
-                        PreparationResponse::AcceptHostKey,
-                    )
-                    .unwrap();
-            }
-            events.send(snapshot).unwrap();
-        })
+        .start(
+            store.clone(),
+            ForwardStartIntent::Saved {
+                forward_id: (fixture.forward).to_owned(),
+                profile_id: (fixture.profile).to_owned(),
+            },
+            move |snapshot| {
+                if let Some(PreparationEvent::Trust { prompt_id, .. }) = &snapshot.preparation {
+                    owner
+                        .respond(
+                            &store,
+                            &snapshot.run_id,
+                            prompt_id,
+                            PreparationResponse::AcceptHostKey,
+                        )
+                        .unwrap();
+                }
+                events.send(snapshot).unwrap();
+            },
+        )
         .unwrap();
     let _ = peer.request().await;
     let started = tokio::time::Instant::now();
@@ -656,9 +741,16 @@ async fn remote_stop_during_trust_fences_prompt_before_any_listener_request() {
     let manager = ForwardManager::default();
     let (events, mut receiver) = mpsc::unbounded_channel();
     let initial = manager
-        .start(fixture.store.clone(), &fixture.forward, &fixture.profile, move |snapshot| {
-            events.send(snapshot).unwrap();
-        })
+        .start(
+            fixture.store.clone(),
+            ForwardStartIntent::Saved {
+                forward_id: (fixture.forward).to_owned(),
+                profile_id: (fixture.profile).to_owned(),
+            },
+            move |snapshot| {
+                events.send(snapshot).unwrap();
+            },
+        )
         .unwrap();
     let prompt = tokio::time::timeout(Duration::from_secs(10), async {
         loop {

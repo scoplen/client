@@ -1307,12 +1307,14 @@ export const en = {
   "tunnels.name": "Name",
   "tunnels.runs": "Runs",
   "tunnels.saved": "Saved tunnels",
-  "tunnels.runs.empty": "No tunnel runs yet. Start a saved tunnel when you need it.",
+  "tunnels.runs.empty": "No tunnel runs yet. Start a saved tunnel or add one to start without saving.",
   "tunnels.saved.empty": "No saved tunnels yet. Add a local TCP, remote TCP or dynamic SOCKS tunnel.",
   "tunnels.desktopOnly": "Start and monitor tunnels in the desktop app.",
   "tunnels.loading": "Loading tunnels…",
   "tunnels.refresh": "Refresh runs",
   "tunnels.start": "Start",
+  "tunnels.startTemporary": "Start without saving",
+  "tunnels.temporary": "Temporary",
   "tunnels.stop": "Stop",
   "tunnels.running": "Running",
   "tunnels.continue": "Continue setup",
@@ -1338,6 +1340,8 @@ export const en = {
   "tunnels.startBody":
     "Use this Login for the tunnel's SSH connection. Review host keys and authentication when asked.",
   "tunnels.newTitle": "New tunnel",
+  "tunnels.newBody":
+    "Choose a Login to start without saving, or save a definition for later. Temporary tunnels end when you stop them or leave this profile.",
   "tunnels.editTitle": "Edit tunnel",
   "tunnels.editorBody":
     "Saving changes the definition for the next Start. Running tunnels keep their current configuration.",
@@ -1379,7 +1383,7 @@ export const en = {
   "tunnels.error.inUse": "A Login or Workspace still uses this tunnel. Remove those references before deleting it.",
   "tunnels.error.missingReference":
     "The tunnel or selected Login is no longer available. Reopen this editor to refresh it.",
-  "tunnels.issue.invalidConfiguration": "Check the saved tunnel endpoints and selected Login before starting again.",
+  "tunnels.issue.invalidConfiguration": "Check the tunnel endpoints and selected Login before starting again.",
   "tunnels.issue.notFound":
     "The tunnel or selected Login is no longer available. Choose an existing definition and Login.",
   "tunnels.issue.alreadyRunning": "This tunnel is already preparing, running or stopping.",

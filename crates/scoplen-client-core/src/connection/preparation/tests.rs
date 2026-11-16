@@ -2,6 +2,7 @@
 
 use super::super::evaluate_host_key;
 use super::*;
+use crate::connection::resolve_connection_plan;
 use crate::repository::{
     AccessProfileChange, Credential, CredentialBinding, CredentialChange, CredentialKind,
     HostChange, Route, RouteChange, RouteChoice, RouteKind,
@@ -945,7 +946,8 @@ async fn cancel_after_acceptance_blocks_trust_write_and_any_late_response() {
             .active(|| accept_key(
                 &store,
                 Uuid::now_v7(),
-                &HostKeyPresentation::from_host_key(&raw_key(1))
+                &HostKeyPresentation::from_host_key(&raw_key(1)),
+                None
             ))
             .is_err()
     );
@@ -958,8 +960,8 @@ fn trust_rotation_is_atomic_and_only_trusts_the_selected_host_key() {
     let host = Uuid::now_v7();
     let first = HostKeyPresentation::from_host_key(&raw_key(1));
     let second = HostKeyPresentation::from_host_key(&raw_key(2));
-    accept_key(&store, host, &first).unwrap();
-    accept_key(&store, host, &second).unwrap();
+    accept_key(&store, host, &first, None).unwrap();
+    accept_key(&store, host, &second, None).unwrap();
     let records = Repository::<TrustRecord>::new(&store).list().unwrap();
     assert_eq!(records.len(), 2);
     assert!(records.iter().all(|record| record.accepted_by_device == Some(store.device_id())));
@@ -990,7 +992,7 @@ fn concurrent_acceptance_leaves_only_one_active_raw_key() {
             let barrier = &barrier;
             scope.spawn(move || {
                 barrier.wait();
-                accept_key(store, host, &HostKeyPresentation::from_host_key(&raw_key(byte)))
+                accept_key(store, host, &HostKeyPresentation::from_host_key(&raw_key(byte)), None)
                     .unwrap();
             });
         }
@@ -1008,8 +1010,8 @@ fn failed_rotation_rolls_back_revocation_and_preserves_ca_and_other_hosts() {
     let host = Uuid::now_v7();
     let other = Uuid::now_v7();
     let first = HostKeyPresentation::from_host_key(&raw_key(1));
-    accept_key(&store, host, &first).unwrap();
-    accept_key(&store, other, &first).unwrap();
+    accept_key(&store, host, &first, None).unwrap();
+    accept_key(&store, other, &first, None).unwrap();
     let ca = Repository::<TrustRecord>::new(&store)
         .create(TrustRecordChange {
             host: Edit::Set(host),
@@ -1026,10 +1028,10 @@ fn failed_rotation_rolls_back_revocation_and_preserves_ca_and_other_hosts() {
     });
     let mut invalid = HostKeyPresentation::from_host_key(&raw_key(2));
     invalid.key = "x".repeat(scoplen_model::MAX_TEXT_BYTES + 1);
-    assert!(accept_key(&store, host, &invalid).is_err());
+    assert!(accept_key(&store, host, &invalid, None).is_err());
     assert_eq!(store.list(TrustRecord::TYPE).unwrap(), before);
     assert_eq!(notifications.load(Ordering::SeqCst), 0);
-    accept_key(&store, host, &HostKeyPresentation::from_host_key(&raw_key(2))).unwrap();
+    accept_key(&store, host, &HostKeyPresentation::from_host_key(&raw_key(2)), None).unwrap();
     assert!(!Repository::<TrustRecord>::new(&store).get(ca.meta.id).unwrap().unwrap().revoked);
     let records = Repository::<TrustRecord>::new(&store).list().unwrap();
     assert_eq!(records.iter().filter(|r| r.host == Some(host) && !r.revoked && !r.ca).count(), 1);
