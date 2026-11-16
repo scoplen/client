@@ -29,6 +29,7 @@ import { SessionFiles, type EnqueueFeedback, type FileOperationOutcome } from ".
 import { dismissUploadAttention, initialUploadAttention, recordUploadAttention } from "./session-upload-attention";
 import { useSessionTransfers } from "./use-session-transfers";
 import { SessionSnippetsButton, type SnippetTarget } from "./session-snippets";
+import { SessionSearch } from "./session-search";
 import {
   TrustDialog,
   PassphraseDialog,
@@ -144,6 +145,7 @@ export function SessionTerminal({
   const [verified, setVerified] = useState<Array<Extract<PreparationEvent, { kind: "verified" }>>>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
   const [enqueueIssue, setEnqueueIssue] = useState<SessionTransferIssue | null>(null);
   const latestEnqueue = useRef<string | null>(null);
   const [uploadAttention, setUploadAttention] = useState(initialUploadAttention);
@@ -412,6 +414,12 @@ export function SessionTerminal({
   );
   const { colors } = useTerminalColors();
   const terminal = useRef<ScoplenTerminalElement>(null);
+  const findInput = useRef<HTMLInputElement>(null);
+  const mac = /Mac/.test(navigator.platform);
+  const openFind = () => {
+    setFindOpen(true);
+    findInput.current?.focus();
+  };
   const selected = useRef(active);
   useEffect(() => {
     selected.current = active;
@@ -423,10 +431,12 @@ export function SessionTerminal({
   useEffect(
     () =>
       registerFocus?.(() => {
-        if (!["trusting", "passphrase", "keyboardInteractive"].includes(state) && !detailsOpen)
-          terminal.current?.focusInput();
+        if (!["trusting", "passphrase", "keyboardInteractive"].includes(state) && !detailsOpen) {
+          if (findOpen) findInput.current?.focus();
+          else terminal.current?.focusInput();
+        }
       }),
-    [registerFocus, state, detailsOpen],
+    [registerFocus, state, detailsOpen, findOpen],
   );
   useEffect(
     () =>
@@ -767,7 +777,27 @@ export function SessionTerminal({
     transfers.snapshot?.items.some((item) => item.stagingMayRemain) ||
     transfers.snapshot?.recent.some((item) => item.stagingMayRemain);
   return (
-    <section className="flex h-full min-h-0 flex-col bg-background text-foreground" aria-labelledby={titleId}>
+    <section
+      className="flex h-full min-h-0 flex-col bg-background text-foreground"
+      aria-labelledby={titleId}
+      onKeyDownCapture={(event) => {
+        if (
+          !active ||
+          event.defaultPrevented ||
+          event.nativeEvent.isComposing ||
+          !event.currentTarget.contains(event.target as Node)
+        )
+          return;
+        const modifier = mac
+          ? event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+          : event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey;
+        if (modifier && event.key.toLowerCase() === "f") {
+          event.preventDefault();
+          event.stopPropagation();
+          openFind();
+        }
+      }}
+    >
       <header className="flex shrink-0 flex-col gap-2 px-4 py-2.5">
         <div className="flex min-w-0 items-center gap-3">
           <HostEgg seed={profileId} size="1.75rem" mood={face.mood} active={face.active} attention={face.attention} />
@@ -790,6 +820,15 @@ export function SessionTerminal({
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+          <Button
+            variant="ghost"
+            aria-expanded={findOpen}
+            aria-keyshortcuts={mac ? "Meta+F" : "Control+Shift+F"}
+            title={mac ? "⌘F" : "Ctrl+Shift+F"}
+            onClick={openFind}
+          >
+            {t("session.find.open")}
+          </Button>
           {onSplit ? (
             <span className="flex flex-wrap gap-1" title={splitIssue ?? (closingView ? t("panes.closing") : undefined)}>
               <Button
@@ -952,48 +991,64 @@ export function SessionTerminal({
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div className="min-h-0 min-w-0 flex-1 px-3 pb-3">
           <div
-            onContextMenu={(event) =>
-              menu(event, [
-                {
-                  label: t("menu.copy"),
-                  shortcut: `${shortcutModifier}C`,
-                  onSelect: () => void terminal.current?.copySelection(),
-                },
-                {
-                  label: t("menu.paste"),
-                  shortcut: `${shortcutModifier}V`,
-                  disabled: state !== "connected",
-                  onSelect: () => void terminal.current?.paste(),
-                },
-                "separator",
-                { label: t("menu.copyAll"), onSelect: () => void terminal.current?.copyAll() },
-                { label: t("menu.clear"), onSelect: () => terminal.current?.clearOutput() },
-                ...(onOpenColors ? ["separator" as const, { label: t("session.colors"), onSelect: onOpenColors }] : []),
-              ])
-            }
             className="relative h-full min-h-0 overflow-hidden rounded-xl border-(length:--scoplen-border-width) border-border p-3 shadow-(--scoplen-shadow-card) transition-colors duration-(--duration-state)"
             style={{ background: colors.background }}
           >
-            <Terminal
-              ref={terminal}
-              source={source}
-              sink={state === "connected" ? inputSink : null}
-              readOnly={offline || closingView || state !== "connected"}
-              aria-label={t("session.output")}
-              className={`h-full min-h-0 transition-opacity duration-(--duration-overlay) ${state === "connected" || hasOutput ? "opacity-100" : "opacity-40"}`}
-              profile={terminalProfile}
-              onTerminalResize={(next) => {
-                size.current = next;
-                if (state === "connected") sendSize();
-              }}
-              onTerminalError={(terminalError) => {
-                if (!mounted.current) return;
-                interruptTransport(true, terminalError.message);
+            <SessionSearch
+              open={findOpen}
+              active={active}
+              terminal={terminal}
+              input={findInput}
+              onClose={() => {
+                setFindOpen(false);
+                if (selected.current) terminal.current?.focusInput();
               }}
             />
-            {state !== "connected" && !hasOutput ? (
-              <Stage state={state} seed={profileId} label={label} status={status} error={error} context={context} />
-            ) : null}
+            <div
+              className="relative h-full min-h-0"
+              onContextMenu={(event) =>
+                menu(event, [
+                  {
+                    label: t("menu.copy"),
+                    shortcut: `${shortcutModifier}C`,
+                    onSelect: () => void terminal.current?.copySelection(),
+                  },
+                  {
+                    label: t("menu.paste"),
+                    shortcut: `${shortcutModifier}V`,
+                    disabled: state !== "connected",
+                    onSelect: () => void terminal.current?.paste(),
+                  },
+                  "separator",
+                  { label: t("menu.copyAll"), onSelect: () => void terminal.current?.copyAll() },
+                  { label: t("menu.clear"), onSelect: () => terminal.current?.clearOutput() },
+                  ...(onOpenColors
+                    ? ["separator" as const, { label: t("session.colors"), onSelect: onOpenColors }]
+                    : []),
+                ])
+              }
+            >
+              <Terminal
+                ref={terminal}
+                source={source}
+                sink={state === "connected" ? inputSink : null}
+                readOnly={offline || closingView || state !== "connected"}
+                aria-label={t("session.output")}
+                className={`h-full min-h-0 transition-opacity duration-(--duration-overlay) ${state === "connected" || hasOutput ? "opacity-100" : "opacity-40"}`}
+                profile={terminalProfile}
+                onTerminalResize={(next) => {
+                  size.current = next;
+                  if (state === "connected") sendSize();
+                }}
+                onTerminalError={(terminalError) => {
+                  if (!mounted.current) return;
+                  interruptTransport(true, terminalError.message);
+                }}
+              />
+              {state !== "connected" && !hasOutput ? (
+                <Stage state={state} seed={profileId} label={label} status={status} error={error} context={context} />
+              ) : null}
+            </div>
           </div>
         </div>
         {filesOpen && !offline && !closingView ? (
