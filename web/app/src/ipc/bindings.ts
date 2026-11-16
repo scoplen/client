@@ -83,8 +83,8 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	discardPasswordSignIn: (operationId: string) => typedError<null, string>(__TAURI_INVOKE("discard_password_sign_in", { operationId })),
 	/**  Install exact confirmed admission only after fresh normal Device authentication and complete K-4. */
 	installPasswordSignInProfile: (generation: string, ticket: string, operationId: string, localPassphrase: string | null) => typedError<ProfileSnapshot, string>(__TAURI_INVOKE("install_password_sign_in_profile", { generation, ticket, operationId, localPassphrase })),
-	/**  Start a saved tunnel using the explicitly selected Login. */
-	forwardStart: (forwardId: string, profileId: string) => typedError<ForwardSnapshot, ForwardIssue>(__TAURI_INVOKE("forward_start", { forwardId, profileId })),
+	/**  Start a saved or temporary tunnel using the explicitly selected Login. */
+	forwardStart: (intent: ForwardStartIntent) => typedError<ForwardSnapshot, ForwardIssue>(__TAURI_INVOKE("forward_start", { intent })),
 	/**  List the current store's live runs and retained terminal snapshots. */
 	forwardList: () => typedError<ForwardSnapshot[], ForwardIssue>(__TAURI_INVOKE("forward_list")),
 	/**  Read a run without changing its lifetime. */
@@ -891,21 +891,21 @@ export type ForwardChanged = {
 	snapshot: ForwardSnapshot,
 };
 
-/**  Immutable saved endpoints selected for one explicit execution. */
+/**  Immutable endpoints selected for one explicit execution. */
 export type ForwardConfiguration =
 /**  A fixed TCP destination reached through the selected Login. */
 { kind: "local";
-/**  Saved Forward identity. */
-forwardId: string;
-/**  Saved display label. */
+/**  Saved or temporary source of this run. */
+source: ForwardSource;
+/**  Display label captured at Start. */
 name: string;
 /**  Explicitly selected existing Login. */
 profileId: string;
 /**  Login identity from the immutable preparation plan. */
 login: PreparationContext;
-/**  Exact saved IPv4 or IPv6 listening address. */
+/**  Exact IPv4 or IPv6 listening address captured at Start. */
 bindAddress: string;
-/**  Exact nonzero saved local port. */
+/**  Exact nonzero local port captured at Start. */
 bindPort: number;
 /**  Exact remote target, resolved by the SSH server. */
 targetHost: string;
@@ -913,9 +913,9 @@ targetHost: string;
 targetPort: number } |
 /**  A requested remote TCP listener reaching one fixed destination on this client. */
 { kind: "remote";
-/**  Saved Forward identity. */
-forwardId: string;
-/**  Saved display label. */
+/**  Saved or temporary source of this run. */
+source: ForwardSource;
+/**  Display label captured at Start. */
 name: string;
 /**  Explicitly selected existing Login. */
 profileId: string;
@@ -931,18 +931,27 @@ targetHost: string;
 targetPort: number } |
 /**  An unauthenticated SOCKS4/4a/5 CONNECT proxy through the selected Login. */
 { kind: "dynamic";
-/**  Saved Forward identity. */
-forwardId: string;
-/**  Saved display label. */
+/**  Saved or temporary source of this run. */
+source: ForwardSource;
+/**  Display label captured at Start. */
 name: string;
 /**  Explicitly selected existing Login. */
 profileId: string;
 /**  Login identity from the immutable preparation plan. */
 login: PreparationContext;
-/**  Exact saved IPv4 or IPv6 listening address. */
+/**  Exact IPv4 or IPv6 listening address captured at Start. */
 bindAddress: string;
-/**  Exact nonzero saved local port. */
+/**  Exact nonzero local port captured at Start. */
 bindPort: number };
+
+/**  Mode-specific unsaved configuration, with no persistent identity or default Login. */
+export type ForwardDefinition =
+/**  A local TCP listener reaching a remote TCP target. */
+{ kind: "local"; name: string; bindAddress: string; bindPort: number; targetHost: string; targetPort: number } |
+/**  A requested remote TCP listener reaching a local TCP target. */
+{ kind: "remote"; name: string; bindAddress: string; bindPort: number; targetHost: string; targetPort: number } |
+/**  An unauthenticated local SOCKS4/4a/5 CONNECT proxy. */
+{ kind: "dynamic"; name: string; bindAddress: string; bindPort: number };
 
 /**  Complete replacement of a saved Local, Remote or Dynamic definition. */
 export type ForwardInput = {
@@ -964,7 +973,7 @@ export type ForwardInput = {
 
 /**  Fixed failure categories; native errors and connection secrets are never exposed. */
 export type ForwardIssue =
-/**  Saved fields or identifiers are invalid for this tunnel mode. */
+/**  Fields or identifiers are invalid for this tunnel mode. */
 "invalidConfiguration" |
 /**  The saved tunnel or selected Login no longer exists. */
 "notFound" |
@@ -978,7 +987,7 @@ export type ForwardIssue =
 "expired" |
 /**  Existing SSH preparation rejected the configuration, trust or authentication. */
 "preparationFailed" |
-/**  The saved listening endpoint could not be admitted or its listener failed. */
+/**  The listening endpoint could not be admitted or its listener failed. */
 "listenFailed" |
 /**  The remote listener request was not acknowledged within its complete budget. */
 "listenTimedOut" |
@@ -1027,7 +1036,7 @@ export type ForwardPhase =
 export type ForwardSnapshot = {
 	/**  Fresh execution identity; an earlier run can never control a later one. */
 	runId: string,
-	/**  Immutable saved forwarding configuration. */
+	/**  Immutable forwarding configuration captured at Start. */
 	configuration: ForwardConfiguration,
 	/**  Current Rust-owned phase. */
 	phase: ForwardPhase,
@@ -1048,6 +1057,30 @@ export type ForwardSnapshot = {
 	/**  Strictly increasing per-run snapshot revision. */
 	revision: string,
 };
+
+/**  The inventory source of an independent run. Temporary runs have only their runtime id. */
+export type ForwardSource =
+/**  An actual saved Forward. */
+{ kind: "saved";
+/**  Saved definition identity. */
+forwardId: string } |
+/**  An unsaved definition retained only by this process-local run. */
+{ kind: "temporary" };
+
+/**  Explicitly start a saved or unsaved tunnel through the same preparation and owner. */
+export type ForwardStartIntent =
+/**  Resolve the current saved definition. */
+{ kind: "saved";
+/**  Saved Forward identity. */
+forwardId: string;
+/**  Explicitly selected current Login. */
+profileId: string } |
+/**  Use the submitted definition without creating inventory. */
+{ kind: "temporary";
+/**  Explicitly selected current Login. */
+profileId: string;
+/**  Mode-specific endpoints captured for this run. */
+definition: ForwardDefinition };
 
 /**  A redacted saved tunnel that can be attached to an access profile. */
 export type ForwardSummary = {

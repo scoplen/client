@@ -521,6 +521,94 @@ mod tests {
     }
 
     #[test]
+    fn saved_and_temporary_tunnel_intents_use_only_the_bound_store() {
+        use scoplen_client_core::forward_manager::{
+            ForwardDefinition, ForwardManager, ForwardPhase, ForwardSource, ForwardStartIntent,
+        };
+        use scoplen_client_core::inventory::{
+            ForwardInput, ForwardKindInput, Inventory, NewHost, SignIn,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        tauri::async_runtime::block_on(async {
+            let local = Arc::new(LocalData::start(directory.path(), None).unwrap());
+            local.create("native tunnel fixture").unwrap();
+            let store = local.store().unwrap();
+            let inventory = Inventory::new(store.clone());
+            let host = inventory
+                .add_host(NewHost {
+                    name: Some("Native tunnel fixture".into()),
+                    address: "host.example".into(),
+                    port: Some(22),
+                    username: "operator".into(),
+                    sign_in: SignIn::KeyboardInteractive,
+                })
+                .unwrap();
+            let forward = inventory
+                .create_forward(ForwardInput {
+                    name: "Saved native tunnel".into(),
+                    kind: ForwardKindInput::Dynamic,
+                    bind_address: "127.0.0.1".into(),
+                    bind_port: 1080,
+                    target_host: None,
+                    target_port: None,
+                    profile: None,
+                })
+                .unwrap();
+            let intents = [
+                ForwardStartIntent::Saved {
+                    forward_id: forward.id.clone(),
+                    profile_id: host.logins[0].id.clone(),
+                },
+                ForwardStartIntent::Temporary {
+                    profile_id: host.logins[0].id.clone(),
+                    definition: ForwardDefinition::Dynamic {
+                        name: "Temporary native tunnel".into(),
+                        bind_address: "127.0.0.1".into(),
+                        bind_port: 1081,
+                    },
+                },
+            ];
+            let request = workspace_request(local.clone(), store.clone());
+            let manager = ForwardManager::default();
+            for intent in &intents {
+                let run = request
+                    .with_store(|store| manager.start(store.clone(), intent.clone(), |_| {}))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(run.phase, ForwardPhase::Preparing);
+                match intent {
+                    ForwardStartIntent::Saved { forward_id, .. } => assert_eq!(
+                        run.configuration.source(),
+                        &ForwardSource::Saved { forward_id: forward_id.clone() }
+                    ),
+                    ForwardStartIntent::Temporary { .. } => {
+                        assert_eq!(run.configuration.source(), &ForwardSource::Temporary)
+                    }
+                }
+            }
+            manager.stop_all().await.unwrap();
+            assert_eq!(inventory.forwards_objects().unwrap().len(), 1);
+            let unbound = Arc::new(
+                Store::open(
+                    &directory.path().join("unbound.db"),
+                    &scoplen_crypto::LocalDatabaseKey::new([3; 32]),
+                )
+                .unwrap(),
+            );
+            let unbound_request = workspace_request(local, unbound.clone());
+            for intent in intents {
+                assert!(
+                    unbound_request
+                        .with_store(|store| manager.start(store.clone(), intent, |_| {}))
+                        .is_none()
+                );
+            }
+            assert!(manager.list(&unbound).unwrap().is_empty());
+        });
+    }
+
+    #[test]
     fn stop_before_dispatch_and_unknown_stop_cannot_cancel_another_run() {
         let profiles = Arc::new(NativeProfiles::default());
         profiles.cancel_operation(Some("not-dispatched"));

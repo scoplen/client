@@ -14,7 +14,7 @@ use std::{
 };
 
 use scoplen_ssh::{ClientChannel, ClientError, SocksReply};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -32,7 +32,7 @@ use crate::{
             PreparationResponse, prepare_resolved_connection, resolve_preparation_plan,
         },
     },
-    repository::{AccessProfile, Forward, ForwardKind, Repository},
+    repository::{AccessProfile, Forward, ForwardKind, Repository, Route, RouteChoice, RouteKind},
     store::Store,
 };
 
@@ -50,23 +50,81 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(35);
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
 const COPY_BUFFER: usize = 32 * 1024;
 
-/// Immutable saved endpoints selected for one explicit execution.
+/// The inventory source of an independent run. Temporary runs have only their runtime id.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum ForwardSource {
+    /// An actual saved Forward.
+    Saved {
+        /// Saved definition identity.
+        forward_id: String,
+    },
+    /// An unsaved definition retained only by this process-local run.
+    Temporary,
+}
+
+/// Explicitly start a saved or unsaved tunnel through the same preparation and owner.
+#[derive(Clone, Debug, Deserialize, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum ForwardStartIntent {
+    /// Resolve the current saved definition.
+    Saved {
+        /// Saved Forward identity.
+        forward_id: String,
+        /// Explicitly selected current Login.
+        profile_id: String,
+    },
+    /// Use the submitted definition without creating inventory.
+    Temporary {
+        /// Explicitly selected current Login.
+        profile_id: String,
+        /// Mode-specific endpoints captured for this run.
+        definition: ForwardDefinition,
+    },
+}
+
+/// Mode-specific unsaved configuration, with no persistent identity or default Login.
+#[derive(Clone, Debug, Deserialize, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[allow(missing_docs)]
+pub enum ForwardDefinition {
+    /// A local TCP listener reaching a remote TCP target.
+    Local {
+        name: String,
+        bind_address: String,
+        bind_port: u16,
+        target_host: String,
+        target_port: u16,
+    },
+    /// A requested remote TCP listener reaching a local TCP target.
+    Remote {
+        name: String,
+        bind_address: String,
+        bind_port: u16,
+        target_host: String,
+        target_port: u16,
+    },
+    /// An unauthenticated local SOCKS4/4a/5 CONNECT proxy.
+    Dynamic { name: String, bind_address: String, bind_port: u16 },
+}
+
+/// Immutable endpoints selected for one explicit execution.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ForwardConfiguration {
     /// A fixed TCP destination reached through the selected Login.
     Local {
-        /// Saved Forward identity.
-        forward_id: String,
-        /// Saved display label.
+        /// Saved or temporary source of this run.
+        source: ForwardSource,
+        /// Display label captured at Start.
         name: String,
         /// Explicitly selected existing Login.
         profile_id: String,
         /// Login identity from the immutable preparation plan.
         login: PreparationContext,
-        /// Exact saved IPv4 or IPv6 listening address.
+        /// Exact IPv4 or IPv6 listening address captured at Start.
         bind_address: String,
-        /// Exact nonzero saved local port.
+        /// Exact nonzero local port captured at Start.
         bind_port: u16,
         /// Exact remote target, resolved by the SSH server.
         target_host: String,
@@ -75,9 +133,9 @@ pub enum ForwardConfiguration {
     },
     /// A requested remote TCP listener reaching one fixed destination on this client.
     Remote {
-        /// Saved Forward identity.
-        forward_id: String,
-        /// Saved display label.
+        /// Saved or temporary source of this run.
+        source: ForwardSource,
+        /// Display label captured at Start.
         name: String,
         /// Explicitly selected existing Login.
         profile_id: String,
@@ -94,29 +152,29 @@ pub enum ForwardConfiguration {
     },
     /// An unauthenticated SOCKS4/4a/5 CONNECT proxy through the selected Login.
     Dynamic {
-        /// Saved Forward identity.
-        forward_id: String,
-        /// Saved display label.
+        /// Saved or temporary source of this run.
+        source: ForwardSource,
+        /// Display label captured at Start.
         name: String,
         /// Explicitly selected existing Login.
         profile_id: String,
         /// Login identity from the immutable preparation plan.
         login: PreparationContext,
-        /// Exact saved IPv4 or IPv6 listening address.
+        /// Exact IPv4 or IPv6 listening address captured at Start.
         bind_address: String,
-        /// Exact nonzero saved local port.
+        /// Exact nonzero local port captured at Start.
         bind_port: u16,
     },
 }
 
 impl ForwardConfiguration {
-    /// The saved definition that owns this execution.
+    /// The saved definition or process-local temporary source of this execution.
     #[must_use]
-    pub fn forward_id(&self) -> &str {
+    pub fn source(&self) -> &ForwardSource {
         match self {
-            Self::Local { forward_id, .. }
-            | Self::Remote { forward_id, .. }
-            | Self::Dynamic { forward_id, .. } => forward_id,
+            Self::Local { source, .. }
+            | Self::Remote { source, .. }
+            | Self::Dynamic { source, .. } => source,
         }
     }
 
@@ -165,8 +223,8 @@ impl ForwardPhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 pub enum ForwardIssue {
-    /// Saved fields or identifiers are invalid for this tunnel mode.
-    #[error("save valid tunnel endpoints and select a Login")]
+    /// Fields or identifiers are invalid for this tunnel mode.
+    #[error("enter valid tunnel endpoints and select a Login")]
     InvalidConfiguration,
     /// The saved tunnel or selected Login no longer exists.
     #[error("the saved tunnel or Login is no longer available")]
@@ -186,7 +244,7 @@ pub enum ForwardIssue {
     /// Existing SSH preparation rejected the configuration, trust or authentication.
     #[error("SSH preparation failed; check the selected Login and connect again")]
     PreparationFailed,
-    /// The saved listening endpoint could not be admitted or its listener failed.
+    /// The listening endpoint could not be admitted or its listener failed.
     #[error("the listening endpoint is unavailable")]
     ListenFailed,
     /// The remote listener request was not acknowledged within its complete budget.
@@ -227,7 +285,7 @@ pub enum ForwardIssue {
 pub struct ForwardSnapshot {
     /// Fresh execution identity; an earlier run can never control a later one.
     pub run_id: String,
-    /// Immutable saved forwarding configuration.
+    /// Immutable forwarding configuration captured at Start.
     pub configuration: ForwardConfiguration,
     /// Current Rust-owned phase.
     pub phase: ForwardPhase,
@@ -346,20 +404,19 @@ struct Registry {
 }
 
 impl ForwardManager {
-    /// Validate and snapshot a saved Forward, then spawn its independent owner.
+    /// Validate and snapshot one definition, then spawn its independent owner.
     ///
     /// The observer is optional notification only: losing a renderer never stops a tunnel.
     /// `list` and `snapshot` retain pending preparation prompts for a new observer.
     pub fn start(
         &self,
         store: Arc<Store>,
-        forward_id: &str,
-        profile_id: &str,
+        intent: ForwardStartIntent,
         emit: impl Fn(ForwardSnapshot) + Send + Sync + 'static,
     ) -> Result<ForwardSnapshot, ForwardIssue> {
         let runtime =
             tokio::runtime::Handle::try_current().map_err(|_| ForwardIssue::Unavailable)?;
-        let (configuration, plan) = saved_configuration(&store, forward_id, profile_id)?;
+        let (configuration, plan) = start_configuration(&store, intent)?;
         let mut registry = self.registry.lock().map_err(|_| ForwardIssue::Unavailable)?;
         if registry.closed {
             return Err(ForwardIssue::Unavailable);
@@ -367,7 +424,8 @@ impl ForwardManager {
         for run in registry.runs.values() {
             let snapshot = run.snapshot()?;
             if snapshot.phase.live()
-                && snapshot.configuration.forward_id() == configuration.forward_id()
+                && matches!(configuration.source(), ForwardSource::Saved { .. })
+                && snapshot.configuration.source() == configuration.source()
             {
                 return Err(ForwardIssue::AlreadyRunning);
             }
@@ -552,40 +610,58 @@ impl ForwardManager {
     }
 }
 
-fn saved_configuration(
+fn start_configuration(
     store: &Store,
-    forward_id: &str,
-    profile_id: &str,
+    intent: ForwardStartIntent,
 ) -> Result<(ForwardConfiguration, PreparationPlan), ForwardIssue> {
-    let forward = Uuid::parse_str(forward_id).map_err(|_| ForwardIssue::InvalidConfiguration)?;
-    let profile = Uuid::parse_str(profile_id).map_err(|_| ForwardIssue::InvalidConfiguration)?;
-    let forward = Repository::<Forward>::new(store)
-        .get(forward)
+    let vault = store
+        .personal_record()
         .map_err(|_| ForwardIssue::Unavailable)?
-        .ok_or(ForwardIssue::NotFound)?;
-    let bind_address = forward.bind_address.ok_or(ForwardIssue::InvalidConfiguration)?;
-    let bind_port = forward.bind_port.ok_or(ForwardIssue::InvalidConfiguration)?;
-    if forward.name.trim().is_empty()
-        || forward.name.len() > scoplen_model::MAX_TEXT_BYTES
+        .map(|record| record.personal_vault_id);
+    let (source, profile_id, definition) = match intent {
+        ForwardStartIntent::Saved { forward_id, profile_id } => {
+            let id =
+                Uuid::parse_str(&forward_id).map_err(|_| ForwardIssue::InvalidConfiguration)?;
+            inventory_owner(store, id, vault)?;
+            let forward = Repository::<Forward>::new(store)
+                .get(id)
+                .map_err(|_| ForwardIssue::Unavailable)?
+                .ok_or(ForwardIssue::NotFound)?;
+            let definition = saved_definition(forward)?;
+            (ForwardSource::Saved { forward_id: id.to_string() }, profile_id, definition)
+        }
+        ForwardStartIntent::Temporary { profile_id, definition } => {
+            (ForwardSource::Temporary, profile_id, definition)
+        }
+    };
+    let profile = Uuid::parse_str(&profile_id).map_err(|_| ForwardIssue::InvalidConfiguration)?;
+    inventory_owner(store, profile, vault)?;
+    let (name, bind_address, bind_port, target, kind) = match definition {
+        ForwardDefinition::Local { name, bind_address, bind_port, target_host, target_port } => {
+            (name, bind_address, bind_port, Some((target_host, target_port)), ForwardKind::Local)
+        }
+        ForwardDefinition::Remote { name, bind_address, bind_port, target_host, target_port } => {
+            (name, bind_address, bind_port, Some((target_host, target_port)), ForwardKind::Remote)
+        }
+        ForwardDefinition::Dynamic { name, bind_address, bind_port } => {
+            (name, bind_address, bind_port, None, ForwardKind::Dynamic)
+        }
+    };
+    if name.trim().is_empty()
+        || name.len() > scoplen_model::MAX_TEXT_BYTES
         || bind_address.parse::<IpAddr>().is_err()
         || bind_port == 0
     {
         return Err(ForwardIssue::InvalidConfiguration);
     }
-    let target = if matches!(forward.kind, ForwardKind::Local | ForwardKind::Remote) {
-        let host = forward.target_host.ok_or(ForwardIssue::InvalidConfiguration)?;
-        let port = forward.target_port.ok_or(ForwardIssue::InvalidConfiguration)?;
-        if port == 0
+    if let Some((host, port)) = &target
+        && (*port == 0
             || host.is_empty()
             || host.len() > 1024
-            || host.chars().any(|c| c.is_control() || c.is_whitespace())
-        {
-            return Err(ForwardIssue::InvalidConfiguration);
-        }
-        Some((host, port))
-    } else {
-        None
-    };
+            || host.chars().any(|c| c.is_control() || c.is_whitespace()))
+    {
+        return Err(ForwardIssue::InvalidConfiguration);
+    }
     if Repository::<AccessProfile>::new(store)
         .get(profile)
         .map_err(|_| ForwardIssue::Unavailable)?
@@ -593,13 +669,35 @@ fn saved_configuration(
     {
         return Err(ForwardIssue::NotFound);
     }
-    let plan =
+    let mut plan =
         resolve_preparation_plan(store, profile).map_err(|_| ForwardIssue::PreparationFailed)?;
+    for (connection, credential) in plan.local_inputs() {
+        for id in [connection.profile_id, connection.host_id, credential] {
+            inventory_owner(store, id, vault)?;
+        }
+        let profile = Repository::<AccessProfile>::new(store)
+            .get(connection.profile_id)
+            .map_err(|_| ForwardIssue::Unavailable)?
+            .ok_or(ForwardIssue::NotFound)?;
+        if let RouteChoice::Route(route) = profile.route {
+            inventory_owner(store, route, vault)?;
+            let route = Repository::<Route>::new(store)
+                .get(route)
+                .map_err(|_| ForwardIssue::Unavailable)?
+                .ok_or(ForwardIssue::NotFound)?;
+            if let RouteKind::Socks5 { credential: Some(id), .. }
+            | RouteKind::HttpConnect { credential: Some(id), .. } = route.kind
+            {
+                inventory_owner(store, id, vault)?;
+            }
+        }
+    }
+    plan.restrict_inventory(vault);
     let configuration = match target {
-        Some((target_host, target_port)) if forward.kind == ForwardKind::Remote => {
+        Some((target_host, target_port)) if kind == ForwardKind::Remote => {
             ForwardConfiguration::Remote {
-                forward_id: forward.meta.id.to_string(),
-                name: forward.name,
+                source,
+                name,
                 profile_id: profile.to_string(),
                 login: plan.target_context().clone(),
                 bind_address,
@@ -609,8 +707,8 @@ fn saved_configuration(
             }
         }
         Some((target_host, target_port)) => ForwardConfiguration::Local {
-            forward_id: forward.meta.id.to_string(),
-            name: forward.name,
+            source,
+            name,
             profile_id: profile.to_string(),
             login: plan.target_context().clone(),
             bind_address,
@@ -619,8 +717,8 @@ fn saved_configuration(
             target_port,
         },
         None => ForwardConfiguration::Dynamic {
-            forward_id: forward.meta.id.to_string(),
-            name: forward.name,
+            source,
+            name,
             profile_id: profile.to_string(),
             login: plan.target_context().clone(),
             bind_address,
@@ -628,6 +726,40 @@ fn saved_configuration(
         },
     };
     Ok((configuration, plan))
+}
+
+fn inventory_owner(store: &Store, id: Uuid, vault: Option<Uuid>) -> Result<(), ForwardIssue> {
+    if store
+        .object_vault(id)
+        .map_err(|_| ForwardIssue::Unavailable)?
+        .is_some_and(|owner| Some(owner) != vault)
+    {
+        return Err(ForwardIssue::NotFound);
+    }
+    Ok(())
+}
+
+fn saved_definition(forward: Forward) -> Result<ForwardDefinition, ForwardIssue> {
+    let name = forward.name;
+    let bind_address = forward.bind_address.ok_or(ForwardIssue::InvalidConfiguration)?;
+    let bind_port = forward.bind_port.ok_or(ForwardIssue::InvalidConfiguration)?;
+    Ok(match forward.kind {
+        ForwardKind::Local => ForwardDefinition::Local {
+            name,
+            bind_address,
+            bind_port,
+            target_host: forward.target_host.ok_or(ForwardIssue::InvalidConfiguration)?,
+            target_port: forward.target_port.ok_or(ForwardIssue::InvalidConfiguration)?,
+        },
+        ForwardKind::Remote => ForwardDefinition::Remote {
+            name,
+            bind_address,
+            bind_port,
+            target_host: forward.target_host.ok_or(ForwardIssue::InvalidConfiguration)?,
+            target_port: forward.target_port.ok_or(ForwardIssue::InvalidConfiguration)?,
+        },
+        ForwardKind::Dynamic => ForwardDefinition::Dynamic { name, bind_address, bind_port },
+    })
 }
 
 async fn execute(
