@@ -826,4 +826,33 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         PRIMARY KEY(source,source_key)
     ) STRICT, WITHOUT ROWID;
     "#,
+    // 23: portable receipts use destination ownership and original object identity.
+    r#"
+    -- Receipts outlive targets purged by Personal reconciliation; reimport must not recreate them.
+    CREATE TABLE portable_import_receipts (
+        context BLOB NOT NULL,
+        source_id BLOB NOT NULL CHECK(length(source_id)=16),
+        object_id BLOB NOT NULL CHECK(length(object_id)=16),
+        object_type INTEGER NOT NULL,
+        PRIMARY KEY(context,source_id),
+        UNIQUE(context,object_id)
+    ) STRICT, WITHOUT ROWID;
+    -- Streaming imports stage one entry at a time inside the encrypted main database.
+    -- Preview rolls back; confirmation clears the stage before committing any inventory.
+    CREATE TABLE portable_import_stage (
+        source_id BLOB PRIMARY KEY CHECK(length(source_id)=16),
+        ordinal INTEGER NOT NULL UNIQUE,
+        object_type INTEGER NOT NULL,
+        entry BLOB NOT NULL,
+        target_id BLOB NOT NULL CHECK(length(target_id)=16),
+        existing INTEGER NOT NULL CHECK(existing IN(0,1)),
+        preference_key TEXT
+    ) STRICT, WITHOUT ROWID;
+    CREATE INDEX portable_stage_preferences ON portable_import_stage(preference_key);
+    CREATE TABLE portable_import_preferences (
+        object_id BLOB PRIMARY KEY CHECK(length(object_id)=16),
+        key TEXT NOT NULL
+    ) STRICT, WITHOUT ROWID;
+    CREATE INDEX portable_destination_preferences ON portable_import_preferences(key);
+    "#,
 ];

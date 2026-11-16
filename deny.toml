@@ -13,10 +13,14 @@ ignore = [
     # macro used by `specta`, which generates the IPC bindings; no `paste` code
     # runs in the application. Remove when specta drops it.
     { id = "RUSTSEC-2024-0436", reason = "unmaintained compile-time macro via specta; no runtime code" },
-    # The shared russh stack currently requires rsa 0.10.0-rc.18. No patched
-    # release exists; this client uses RSA only through the bounded SSH adapter,
-    # and the exception is tracked with the shared protocol dependency audit.
-    { id = "RUSTSEC-2023-0071", reason = "no patched rsa release; bounded SSH adapter dependency is tracked as an explicit exception" },
+    # The pinned shared SSH stack still uses pre-release RSA. Patched RSA 0.10.0
+    # requires the matching ssh-key feature/API upgrade. Remove this existing
+    # exception with that coordinated shared dependency update.
+    { id = "RUSTSEC-2023-0071", reason = "tracked pre-release RSA dependency in the bounded SSH adapter; stable-RSA migration remains pending" },
+    # age uses these only for translation proc-macro configuration and diagnostics.
+    # Neither advisory reports a vulnerability; remove when age replaces the macros.
+    { id = "RUSTSEC-2026-0374", reason = "unmaintained basic-toml is used only by age's translation proc-macro build configuration" },
+    { id = "RUSTSEC-2026-0173", reason = "unmaintained proc-macro-error2 supplies only age's translation compile-time diagnostics" },
 ]
 
 [licenses]

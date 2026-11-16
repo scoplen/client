@@ -4,6 +4,11 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Add reviewed Local/Personal Scoplen JSON/age import and export in Settings > Data.
+  Omit secrets by default; encrypt explicitly included passwords, software keys and Snippet
+  defaults with a confirmed passphrase. Remap references, retain destination-bound source
+  receipts, require imported-trust consent and commit inventory/ownership/sync changes atomically.
+
 - Update the encrypted local-store engine to SQLCipher 4.20.0 with SQLite 3.54.1,
   fixing the WAL page-size memory disclosure covered by RUSTSEC-2026-0459.
 

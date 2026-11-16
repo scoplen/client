@@ -12,6 +12,7 @@ pub mod device;
 mod migrations;
 pub(crate) mod openssh;
 pub(crate) mod personal;
+pub(crate) mod portable;
 pub(crate) mod profiles;
 pub(crate) mod sync;
 pub(crate) mod team_assets;
