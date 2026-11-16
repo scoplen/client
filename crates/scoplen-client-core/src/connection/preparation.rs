@@ -27,7 +27,7 @@ use super::{
     validate_credential,
 };
 use super::{SessionTarget, team::TeamConnectionSnapshot};
-use crate::personal_server::{PersonalServer, TeamSshSource};
+use crate::personal_server::{PersonalServer, TeamSshError, TeamSshSource};
 use crate::repository::{
     AccessProfile, Change, Edit, Host, Provenance, Record, RecordError, Repository, TrustRecord,
     TrustRecordChange,
@@ -201,6 +201,9 @@ pub enum PreparationError {
     /// Typed transport, authentication, or protocol failure.
     #[error(transparent)]
     Connection(#[from] SshConnectionError),
+    /// Source-bound team certificate failure retained for localized terminal guidance.
+    #[error(transparent)]
+    TeamSsh(#[from] TeamSshError),
     /// Local configuration, cancellation, prompt, or frontend failure.
     #[error("{0}")]
     Local(String),
@@ -813,17 +816,16 @@ async fn prepare_resolved_inner(
                 let authentication = async {
                     let certificate = control
                         .run(async {
-                            personal
+                            Ok(personal
                                 .team_ssh_certificate(
                                     (*owner).clone(),
                                     &team.source,
                                     step.plan.host_id,
                                     &step.plan.username,
                                 )
-                                .await
-                                .map_err(|error| error.to_string())
+                                .await)
                         })
-                        .await?;
+                        .await??;
                     team.current(store, personal)?;
                     certificate.current(store).map_err(|error| error.to_string())?;
                     control

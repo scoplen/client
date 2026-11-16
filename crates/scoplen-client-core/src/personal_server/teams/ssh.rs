@@ -88,6 +88,16 @@ pub enum TeamSshFailure {
         "The certificate request may have completed. Confirm the original request before trying again."
     )]
     IssuanceUnknown,
+    /// Authenticated original-request confirmation established that its serial was revoked.
+    #[error(
+        "The original SSH certificate was revoked. Review current access and explicitly start a new connection."
+    )]
+    CertificateRevoked,
+    /// Authenticated issuance refusal established that this CA's unexpired quota is full.
+    #[error(
+        "The team's SSH certificate issuance limit is full. Wait for certificates to expire before explicitly starting a new connection."
+    )]
+    CertificateQuotaExceeded,
     /// A dispatched CA provisioning operation needs explicit original-request confirmation.
     #[error(
         "The SSH CA may have been created. Confirm the original setup request before creating another."

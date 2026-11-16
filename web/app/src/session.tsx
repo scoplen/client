@@ -333,7 +333,16 @@ export function SessionTerminal({
               setAutomatic(false);
               setRetry(null);
               setState(localEnd.current?.state ?? event.kind);
-              setError(localEnd.current?.message ?? (event.kind === "failed" ? event.error : null));
+              setError(
+                localEnd.current?.message ??
+                  (event.kind === "failed"
+                    ? event.teamSshFailure === "certificateRevoked"
+                      ? translate.current("teams.ssh.revoked")
+                      : event.teamSshFailure === "certificateQuotaExceeded"
+                        ? translate.current("teams.ssh.quotaExceeded")
+                        : event.error
+                    : null),
+              );
               break;
           }
         });

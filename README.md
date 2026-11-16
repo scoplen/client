@@ -487,6 +487,11 @@ local SSH user, scoped principal, CA file and principals file. Install the shown
 principal mapping manually, review the displayed sshd settings, and validate with `sshd -t` before
 reloading sshd. The client never changes remote configuration. An unknown request can only be
 confirmed with its original identity; confirming an old certificate does not renew it or connect.
+An authenticated, validated revoked-certificate or issuance-limit refusal clears only that
+original pending certificate request. The terminal and SSH setup show guidance in the selected
+language: review current access after revocation, or wait for certificate expiry after a full
+issuance limit, then explicitly start a new connection. Uncertain results retain their original
+request and key; the client never silently replaces them.
 
 Connect on a visible team Login carries its exact deployment, Account, Organization and Device
 through Direct, Jump, credential-free proxy or explicitly reviewed local Command preparation.

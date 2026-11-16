@@ -1836,6 +1836,10 @@ export const en = {
   "teams.ssh.sourceChanged": "The selected Account or device changed. Close this dialog and reopen the team's setup.",
   "teams.ssh.pending":
     "The original request is retained. Confirm that request before creating a replacement. Confirmation never renews an old certificate.",
+  "teams.ssh.revoked":
+    "The original SSH certificate was revoked. Review current access, then start a new connection explicitly.",
+  "teams.ssh.quotaExceeded":
+    "The team's SSH certificate issuance limit is full. Wait for certificates to expire, then start a new connection explicitly.",
   "teams.ssh.expired":
     "The confirmation period ended. Refresh and review this team's SSH setup before archiving the original request.",
   "teams.ssh.confirmed":

@@ -1598,6 +1598,8 @@ export const zhHans: Messages = {
   "teams.ssh.failed": "无法加载或确认 SSH 设置。请检查连接并刷新。",
   "teams.ssh.sourceChanged": "当前账号或设备已变化。请关闭此窗口，再重新打开团队设置。",
   "teams.ssh.pending": "原始请求已保留。请先确认此请求，再创建替代请求。确认不会续期旧证书。",
+  "teams.ssh.revoked": "原始 SSH 证书已撤销。请检查当前访问权限，再主动发起新连接。",
+  "teams.ssh.quotaExceeded": "团队的 SSH 证书签发额度已满。请等待证书到期，再主动发起新连接。",
   "teams.ssh.expired": "确认期限已结束。请刷新并检查此团队的 SSH 设置，再归档原始请求。",
   "teams.ssh.confirmed": "服务端已确认原始请求。请回到团队的 Login 发起连接；确认操作不会自动连接。",
   "teams.ssh.caOperation": "原始 CA 设置请求",

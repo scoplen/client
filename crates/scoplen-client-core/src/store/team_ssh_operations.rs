@@ -154,6 +154,24 @@ impl Store {
         )? == 1)
     }
 
+    pub(crate) fn terminate_team_certificate_operation(
+        &self,
+        owner: &TeamSshOwner,
+        operation: &TeamSshOperationRecord,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn();
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        Ok(conn.execute(
+            "DELETE FROM team_ssh_operations WHERE origin=?1 AND account_id=?2 AND organization_id=?3
+                AND device_id=?4 AND kind=1 AND kind=?5 AND operation_id=?6 AND payload=?7
+                AND phase=1 AND phase=?9 AND first_attempt IS ?8 AND response IS NULL",
+            params![owner.origin, owner.account.as_bytes().as_slice(),
+                owner.organization.as_bytes().as_slice(), owner.device.as_bytes().as_slice(),
+                operation.kind, operation.id.as_bytes().as_slice(), operation.payload.as_bytes(),
+                operation.first_attempt.map(|time| time as i64), operation.phase],
+        )? == 1)
+    }
+
     pub(crate) fn discard_team_ssh_operation(
         &self,
         owner: &TeamSshOwner,
