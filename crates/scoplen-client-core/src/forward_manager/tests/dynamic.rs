@@ -99,6 +99,52 @@ async fn snapshot_when(
 }
 
 #[tokio::test]
+async fn temporary_dynamic_uses_socks4a_and_socks5_without_persisting_a_definition() {
+    let peer = ForwardPeer::new(PeerMode::Echo).await;
+    let fixture = fixture(peer.port).await;
+    Repository::<Forward>::new(&fixture.store)
+        .delete(Uuid::parse_str(&fixture.forward).unwrap())
+        .unwrap();
+    let manager = ForwardManager::default();
+    let initial = fixture.temporary(
+        &manager,
+        ForwardDefinition::Dynamic {
+            name: "Temporary SOCKS".into(),
+            bind_address: "127.0.0.1".into(),
+            bind_port: fixture.port,
+        },
+    );
+    assert_eq!(initial.configuration.source(), &ForwardSource::Temporary);
+    let serialized = serde_json::to_value(&initial.configuration).unwrap();
+    assert!(serialized.get("targetHost").is_none());
+    assert!(serialized.get("targetPort").is_none());
+    assert!(serialized.get("forwardId").is_none());
+    phase(&manager, &fixture, &initial.run_id, ForwardPhase::Listening).await;
+    let first = vec![0xff; COPY_BUFFER * 2 + 7];
+    let second: Vec<_> = (0..COPY_BUFFER * 3 + 29).map(|i| (i % 256) as u8).collect();
+    let first_peer =
+        socks5_open(fixture.port, &domain_request(b"temporary-v5.invalid", 4242)).await;
+    let mut second_peer = TcpStream::connect(("127.0.0.1", fixture.port)).await.unwrap();
+    second_peer.write_all(&socks4_request(Some(b"temporary-v4.invalid"))).await.unwrap();
+    assert_eq!(read_exact::<8>(&mut second_peer).await, [0, 90, 0, 0, 0, 0, 0, 0]);
+    let (one, two) =
+        tokio::join!(exchange_socket(first_peer, &first), exchange_socket(second_peer, &second));
+    assert_eq!(one, first);
+    assert_eq!(two, second);
+    let uploaded = (first.len() + second.len()).to_string();
+    let final_counts = snapshot_when(&manager, &fixture, &initial.run_id, |snapshot| {
+        snapshot.active_connections == 0 && snapshot.uploaded_bytes == uploaded
+    })
+    .await;
+    assert_eq!(final_counts.downloaded_bytes, uploaded);
+    assert_eq!(final_counts.rejected_connections, "0");
+    assert_eq!(peer.sessions.load(Ordering::SeqCst), 0);
+    fixture.assert_no_forwards();
+    stop(&manager, &fixture, &initial.run_id).await;
+    fixture.assert_no_forwards();
+}
+
+#[tokio::test]
 async fn dynamic_socks_versions_targets_trailing_and_application_counters() {
     let peer = ForwardPeer::new(PeerMode::Trailer).await;
     let fixture = fixture(peer.port).await;
@@ -449,9 +495,16 @@ async fn dynamic_stop_during_trust_fences_prompt_and_releases_store_owner() {
     let manager = ForwardManager::default();
     let (tx, mut rx) = mpsc::unbounded_channel();
     let initial = manager
-        .start(fixture.store.clone(), &fixture.forward, &fixture.profile, move |snapshot| {
-            tx.send(snapshot).unwrap();
-        })
+        .start(
+            fixture.store.clone(),
+            ForwardStartIntent::Saved {
+                forward_id: (fixture.forward).to_owned(),
+                profile_id: (fixture.profile).to_owned(),
+            },
+            move |snapshot| {
+                tx.send(snapshot).unwrap();
+            },
+        )
         .unwrap();
     let prompt = tokio::time::timeout(Duration::from_secs(10), async {
         loop {

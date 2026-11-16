@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Saved standalone local TCP tunnels against disposable OpenSSH with MaxSessions 0.
+//! Saved and temporary local TCP tunnels against disposable OpenSSH with MaxSessions 0.
 
 use std::{
     collections::BTreeSet,
@@ -16,7 +16,8 @@ use std::{
 use scoplen_client_core::{
     connection::preparation::{PreparationEvent, PreparationResponse},
     forward_manager::{
-        ForwardConfiguration, ForwardIssue, ForwardManager, ForwardPhase, ForwardSnapshot,
+        ForwardConfiguration, ForwardDefinition, ForwardIssue, ForwardManager, ForwardPhase,
+        ForwardSnapshot, ForwardSource, ForwardStartIntent,
     },
     inventory::{Inventory, NewHost, SignIn},
     repository::{
@@ -51,7 +52,7 @@ struct Fixture {
 
 struct Running {
     id: String,
-    forward: Uuid,
+    forward: Option<Uuid>,
     port: u16,
     updates: mpsc::UnboundedReceiver<ForwardSnapshot>,
 }
@@ -60,6 +61,7 @@ struct Running {
 struct Prompts {
     ids: BTreeSet<String>,
     trust: Vec<u32>,
+    verified: BTreeSet<u32>,
     passphrases: usize,
     interactive: Vec<u32>,
     revision: u64,
@@ -72,7 +74,7 @@ fn main() -> Result<()> {
     }
     let directory = tempfile::tempdir()?;
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    runtime.block_on(run(&args, directory.path()))
+    runtime.block_on(Box::pin(run(&args, directory.path())))
 }
 
 async fn run(args: &[String], directory: &Path) -> Result<()> {
@@ -90,7 +92,7 @@ async fn run(args: &[String], directory: &Path) -> Result<()> {
     terminal.reserve("independent-terminal", true)?;
     let (ready_tx, mut ready_rx) = mpsc::unbounded_channel();
     let (output_tx, mut output_rx) = mpsc::unbounded_channel();
-    let session = terminal.run(
+    let session = Box::pin(terminal.run(
         "independent-terminal",
         &terminal_profile,
         None,
@@ -118,11 +120,11 @@ async fn run(args: &[String], directory: &Path) -> Result<()> {
         },
         |_, bytes| output_tx.send(bytes).map_err(|_| "terminal output receiver closed".into()),
         |_, _| {},
-    );
-    let exercise = async {
+    ));
+    let exercise = Box::pin(async {
         let result = async {
             let transport = ready_rx.recv().await.ok_or("independent terminal did not start")?;
-            exercise(&fixture, &terminal, &transport, &mut output_rx).await
+            Box::pin(exercise(&fixture, &terminal, &transport, &mut output_rx)).await
         }
         .await;
         let cleanup = fixture.manager.stop_all().await;
@@ -131,14 +133,14 @@ async fn run(args: &[String], directory: &Path) -> Result<()> {
         cleanup?;
         closed?;
         Ok::<(), Box<dyn std::error::Error>>(())
-    };
+    });
     let (session, exercise) =
         tokio::time::timeout(Duration::from_secs(180), async { tokio::join!(session, exercise) })
             .await?;
     exercise?;
     session?;
     println!(
-        "standalone OpenSSH forwarding: password/key/Interactive/Jump, concurrent binary half-close/counters, independent terminal, refusal, stop and disconnect passed"
+        "standalone OpenSSH forwarding: saved/temporary Direct/Jump, password/key/Interactive, concurrent binary half-close/counters, unchanged temporary inventory, independent terminal, refusal, stop and disconnect passed"
     );
     Ok(())
 }
@@ -157,6 +159,23 @@ impl Fixture {
             sign_in,
         })?;
         Ok(host.logins[0].id.clone())
+    }
+
+    fn jump_profile(&self, relay_port: u16) -> Result<String> {
+        let hop = self.profile("127.0.0.1", relay_port, SignIn::KeyboardInteractive)?;
+        let target = self.profile("localhost", 2223, SignIn::KeyText { key: self.key.clone() })?;
+        let route = Repository::<Route>::new(&self.store).create(RouteChange {
+            name: Some("disposable Interactive jump".into()),
+            kind: Some(RouteKind::Jump { hops: vec![Uuid::parse_str(&hop)?] }),
+        })?;
+        Repository::<AccessProfile>::new(&self.store).update(
+            Uuid::parse_str(&target)?,
+            AccessProfileChange {
+                route: Some(RouteChoice::Route(route.meta.id)),
+                ..Default::default()
+            },
+        )?;
+        Ok(target)
     }
 
     async fn start(&self, profile: &str, target_port: u16) -> Result<Running> {
@@ -183,15 +202,46 @@ impl Fixture {
     }
 
     fn begin(&self, profile: &str, forward: Uuid, port: u16) -> Result<Running> {
-        let (send, updates) = mpsc::unbounded_channel();
-        let initial = self.manager.start(
-            self.store.clone(),
-            &forward.to_string(),
-            profile,
-            move |snapshot| {
-                let _ = send.send(snapshot);
+        self.begin_intent(
+            ForwardStartIntent::Saved {
+                forward_id: forward.to_string(),
+                profile_id: profile.to_owned(),
             },
-        )?;
+            Some(forward),
+            port,
+        )
+    }
+
+    async fn temporary(&self, profile: &str, target_port: u16) -> Result<Running> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        drop(listener);
+        self.begin_intent(
+            ForwardStartIntent::Temporary {
+                profile_id: profile.to_owned(),
+                definition: ForwardDefinition::Local {
+                    name: "disposable temporary local tunnel".into(),
+                    bind_address: "127.0.0.1".into(),
+                    bind_port: port,
+                    target_host: "scoplen-forward-target.invalid".into(),
+                    target_port,
+                },
+            },
+            None,
+            port,
+        )
+    }
+
+    fn begin_intent(
+        &self,
+        intent: ForwardStartIntent,
+        forward: Option<Uuid>,
+        port: u16,
+    ) -> Result<Running> {
+        let (send, updates) = mpsc::unbounded_channel();
+        let initial = self.manager.start(self.store.clone(), intent, move |snapshot| {
+            let _ = send.send(snapshot);
+        })?;
         assert_eq!(initial.phase, ForwardPhase::Preparing);
         assert!(initial.bound_address.is_none());
         assert!(matches!(
@@ -233,10 +283,13 @@ impl Fixture {
                             PreparationResponse::AcceptHostKey,
                         )?;
                     }
+                    Some(PreparationEvent::Verified { context, .. }) => {
+                        prompts.verified.insert(context.position);
+                    }
                     Some(PreparationEvent::Passphrase { context, prompt_id, incorrect })
                         if prompts.ids.insert(prompt_id.clone()) =>
                     {
-                        assert!(prompts.trust.contains(&context.position));
+                        assert!(prompts.verified.contains(&context.position));
                         prompts.passphrases += 1;
                         self.manager.respond(
                             &self.store,
@@ -255,7 +308,7 @@ impl Fixture {
                         prompts: questions,
                         ..
                     }) if prompts.ids.insert(prompt_id.clone()) => {
-                        assert!(prompts.trust.contains(&context.position));
+                        assert!(prompts.verified.contains(&context.position));
                         let answers = if questions.is_empty() {
                             Vec::new()
                         } else {
@@ -323,7 +376,14 @@ async fn exercise(
     assert_eq!(prompts.passphrases, 0);
     assert!(prompts.interactive.is_empty());
     assert_eq!(
-        fixture.manager.start(fixture.store.clone(), &run.forward.to_string(), &direct, |_| {}),
+        fixture.manager.start(
+            fixture.store.clone(),
+            ForwardStartIntent::Saved {
+                forward_id: run.forward.unwrap().to_string(),
+                profile_id: (direct).to_owned()
+            },
+            |_| {}
+        ),
         Err(ForwardIssue::AlreadyRunning),
     );
     let first = binary_payload(0, 262_149);
@@ -350,9 +410,11 @@ async fn exercise(
         .await?;
     assert_eq!(counts.rejected_connections, "0");
 
-    Repository::<Forward>::new(&fixture.store)
-        .update(run.forward, ForwardChange { target_port: Edit::Set(1), ..Default::default() })?;
-    Repository::<Forward>::new(&fixture.store).delete(run.forward)?;
+    Repository::<Forward>::new(&fixture.store).update(
+        run.forward.unwrap(),
+        ForwardChange { target_port: Edit::Set(1), ..Default::default() },
+    )?;
+    Repository::<Forward>::new(&fixture.store).delete(run.forward.unwrap())?;
     assert!(matches!(
         fixture.manager.snapshot(&fixture.store, &run.id)?.configuration,
         ForwardConfiguration::Local { target_port: 2300, .. }
@@ -366,6 +428,8 @@ async fn exercise(
         (downloaded + after_delete.len() + TRAILER.len()).to_string()
     );
     terminal_probe(terminal, transport, output, "AFTER-STOP").await?;
+    let temporary_direct = fixture.profile("127.0.0.1", fixture.direct_port, fixture.password())?;
+    temporary_traffic(fixture, &temporary_direct, &[1], terminal, transport, output).await?;
 
     for (sign_in, port, keys, interactive) in [
         (SignIn::KeyText { key: fixture.key.clone() }, fixture.direct_port, 2, vec![]),
@@ -382,20 +446,7 @@ async fn exercise(
     }
 
     let jump_relay = Relay::start(fixture.interactive_port).await?;
-    let hop = fixture.profile("127.0.0.1", jump_relay.port, SignIn::KeyboardInteractive)?;
-    let target =
-        fixture.profile("localhost", 2223, SignIn::KeyText { key: fixture.key.clone() })?;
-    let route = Repository::<Route>::new(&fixture.store).create(RouteChange {
-        name: Some("disposable Interactive jump".into()),
-        kind: Some(RouteKind::Jump { hops: vec![Uuid::parse_str(&hop)?] }),
-    })?;
-    Repository::<AccessProfile>::new(&fixture.store).update(
-        Uuid::parse_str(&target)?,
-        AccessProfileChange {
-            route: Some(RouteChoice::Route(route.meta.id)),
-            ..Default::default()
-        },
-    )?;
+    let target = fixture.jump_profile(jump_relay.port)?;
     let mut jumped = fixture.start(&target, 2300).await?;
     let prompts = fixture.prepare(&mut jumped, ForwardPhase::Listening).await?;
     assert_eq!(prompts.trust, vec![1, 2]);
@@ -403,11 +454,75 @@ async fn exercise(
     assert_eq!(prompts.passphrases, 2);
     echo(jumped.port, b"independently prepared jump target\0\xff").await?;
     fixture.stop(&jumped).await?;
+    let temporary_target = fixture.jump_profile(jump_relay.port)?;
+    temporary_traffic(fixture, &temporary_target, &[1, 2], terminal, transport, output).await?;
     jump_relay.wait_closed().await?;
 
     refusal_and_stop(fixture, &direct).await?;
     disconnected(fixture).await?;
     terminal_probe(terminal, transport, output, "AFTER-DISCONNECT").await?;
+    Ok(())
+}
+
+async fn temporary_traffic(
+    fixture: &Fixture,
+    profile: &str,
+    expected_trust: &[u32],
+    terminal: &SessionManager,
+    transport: &str,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<()> {
+    let before = Repository::<Forward>::new(&fixture.store).list()?;
+    let mut run = fixture.temporary(profile, 2300).await?;
+    assert!(run.forward.is_none());
+    let prompts = fixture.prepare(&mut run, ForwardPhase::Listening).await?;
+    assert_eq!(prompts.trust, expected_trust);
+    assert_eq!(prompts.verified, expected_trust.iter().copied().collect());
+    let snapshot = fixture.manager.snapshot(&fixture.store, &run.id)?;
+    assert_eq!(snapshot.configuration.source(), &ForwardSource::Temporary);
+    let mut refused = fixture.begin_intent(
+        ForwardStartIntent::Temporary {
+            profile_id: profile.to_owned(),
+            definition: ForwardDefinition::Local {
+                name: "disposable temporary conflicting listener".into(),
+                bind_address: "127.0.0.1".into(),
+                bind_port: run.port,
+                target_host: "scoplen-forward-target.invalid".into(),
+                target_port: 2300,
+            },
+        },
+        None,
+        run.port,
+    )?;
+    let cached = fixture.prepare(&mut refused, ForwardPhase::Failed).await?;
+    assert!(cached.trust.is_empty());
+    assert_eq!(cached.verified, expected_trust.iter().copied().collect());
+    assert_eq!(
+        fixture.manager.snapshot(&fixture.store, &refused.id)?.last_issue,
+        Some(ForwardIssue::ListenFailed)
+    );
+    let first = binary_payload(23, 131_079);
+    let second = binary_payload(191, 196_613);
+    let (one, two, alive) = tokio::join!(
+        echo(run.port, &first),
+        echo(run.port, &second),
+        terminal_probe(terminal, transport, output, "TEMPORARY-LOCAL"),
+    );
+    one?;
+    two?;
+    alive?;
+    let total = first.len() + second.len();
+    fixture
+        .wait(&run, |state| {
+            state.active_connections == 0
+                && state.uploaded_bytes == total.to_string()
+                && state.downloaded_bytes == (total + 2 * TRAILER.len()).to_string()
+        })
+        .await?;
+    let stopped = fixture.stop(&run).await?;
+    assert_eq!(stopped.configuration, snapshot.configuration);
+    assert_eq!(stopped.rejected_connections, "0");
+    assert_eq!(Repository::<Forward>::new(&fixture.store).list()?, before);
     Ok(())
 }
 

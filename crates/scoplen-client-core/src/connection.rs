@@ -424,6 +424,13 @@ pub fn resolve_connection_plan(
     store: &Store,
     profile_id: Uuid,
 ) -> Result<ConnectionPlan, ConnectionPlanError> {
+    resolve_identified_connection_plan(store, profile_id).map(|(plan, _)| plan)
+}
+
+pub(crate) fn resolve_identified_connection_plan(
+    store: &Store,
+    profile_id: Uuid,
+) -> Result<(ConnectionPlan, Uuid), ConnectionPlanError> {
     let profiles = Repository::<AccessProfile>::new(store).list().map_err(store_error)?;
     let profile = profiles
         .into_iter()
@@ -440,12 +447,14 @@ pub fn resolve_connection_plan(
                 .iter()
                 .find(|candidate| candidate.meta.id == id)
                 .ok_or(ConnectionPlanError::CredentialNotFound)?;
-            resolve_credential(store, record)?
+            (resolve_credential(store, record)?, record.meta.id)
         }
         None => credentials
             .iter()
             .filter(|record| record.kind != CredentialKind::KeyboardInteractive)
-            .filter_map(|record| resolve_credential(store, record).ok())
+            .filter_map(|record| {
+                resolve_credential(store, record).ok().map(|material| (material, record.meta.id))
+            })
             .next()
             .ok_or(ConnectionPlanError::CredentialUnavailable)?,
     };
@@ -459,15 +468,18 @@ pub fn resolve_connection_plan(
             resolve_route(store, &route, &credentials)?
         }
     };
-    Ok(ConnectionPlan {
-        profile_id,
-        host_id: host.meta.id,
-        address: host.address,
-        port: host.port,
-        username: profile.username,
-        route,
-        credential,
-    })
+    Ok((
+        ConnectionPlan {
+            profile_id,
+            host_id: host.meta.id,
+            address: host.address,
+            port: host.port,
+            username: profile.username,
+            route,
+            credential: credential.0,
+        },
+        credential.1,
+    ))
 }
 
 fn resolve_route(
