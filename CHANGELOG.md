@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Save and explicitly reopen mixed terminal/tunnel or tunnel-only Workspaces with
+  selected saved Local, Remote and Dynamic definitions and their captured Logins.
+  Validate every dependency before opening, preserve existing sessions and runs,
+  and show independent tunnel start results through the existing Tunnels owner.
+  New version-three layouts leave earlier definitions unavailable and deletable;
+  temporary runs, Files and native restart acceptance remain separate work.
+
 - Start temporary Local TCP, Remote TCP and Dynamic SOCKS tunnels without creating a saved
   definition. Keep Start without saving separate from Save, show temporary runs with their
   fixed Login and endpoints, and reuse ordinary SSH preparation, traffic counters and Stop.

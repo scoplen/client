@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Device-local terminal layouts. Opening only validates and projects intent.
+//! Device-local terminal and saved-tunnel layouts. Opening only projects intent.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use uuid::Uuid;
 
+use crate::forward_manager::{ForwardConfiguration, ForwardStartIntent, start_configuration};
 use crate::repository::{
     AccessProfile, Credential, Edit, Host, Record, RecordError, Repository, Route, RouteChoice,
     RouteKind, SessionKind, SessionSpec, Workspace, WorkspaceChange,
@@ -61,7 +62,17 @@ pub struct WorkspaceTabInput {
     pub focused: u32,
 }
 
-/// The ordered tab intent; no output, connection state or commands are accepted.
+/// An explicitly selected saved tunnel and its current Login.
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceForwardInput {
+    /// Saved Forward identifier; temporary runs cannot be captured.
+    pub forward_id: String,
+    /// Login retained independently of the Forward's default.
+    pub profile_id: String,
+}
+
+/// Ordered terminal and saved-tunnel intent, without live state or commands.
 #[derive(Clone, Debug, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInput {
@@ -71,6 +82,8 @@ pub struct WorkspaceInput {
     pub tabs: Vec<WorkspaceTabInput>,
     /// Selected tab index, or Hosts when absent.
     pub active: Option<u32>,
+    /// Explicitly selected saved definitions, in restoration order.
+    pub forwards: Vec<WorkspaceForwardInput>,
 }
 
 /// One saved definition, including retained unsupported and orphaned objects.
@@ -83,6 +96,8 @@ pub struct WorkspaceView {
     pub name: String,
     /// Number of saved terminal tabs, when readable.
     pub tab_count: u32,
+    /// Number of saved tunnels, when readable.
+    pub forward_count: u32,
     /// A fixed reason Open is unavailable; Delete remains explicit.
     pub issue: Option<WorkspaceIssue>,
 }
@@ -129,7 +144,21 @@ pub struct WorkspaceTab {
     pub focused_session_id: String,
 }
 
-/// A complete tab set that the shell appends only after successful validation.
+/// A validated saved-tunnel start projection, without reserving a run.
+#[derive(Clone, Debug, Serialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceForward {
+    /// Current saved Forward identifier.
+    pub forward_id: String,
+    /// Explicitly retained Login identifier.
+    pub profile_id: String,
+    /// Current saved tunnel name.
+    pub name: String,
+    /// Current Host and selected Login display text.
+    pub label: String,
+}
+
+/// A complete opening intent returned only after all dependencies are valid.
 #[derive(Clone, Debug, Serialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenedWorkspace {
@@ -137,6 +166,8 @@ pub struct OpenedWorkspace {
     pub tabs: Vec<WorkspaceTab>,
     /// Selected tab index, or Hosts when absent.
     pub active: Option<u32>,
+    /// Saved starts dispatched through the ordinary forwarding owner, in order.
+    pub forwards: Vec<WorkspaceForward>,
 }
 
 /// Content-free failures suitable for localized interface messages.
@@ -155,8 +186,8 @@ pub enum WorkspaceIssue {
     /// The supplied name is blank or exceeds the existing text bound.
     #[error("enter a nonempty workspace name within the text limit")]
     InvalidName,
-    /// At least one ordinary terminal is required.
-    #[error("open a terminal tab before saving a workspace")]
+    /// At least one ordinary terminal or saved tunnel is required.
+    #[error("include a terminal or saved tunnel before saving a workspace")]
     EmptyTabs,
     /// Saving the complete tab set would convert offline output into SSH intent.
     #[error("close saved-output tabs before saving a workspace")]
@@ -231,8 +262,11 @@ impl Workspaces {
         if input.name.trim().is_empty() || input.name.len() > MAX_TEXT_BYTES {
             return Err(WorkspaceIssue::InvalidName);
         }
-        if input.tabs.is_empty() {
+        if input.tabs.is_empty() && input.forwards.is_empty() {
             return Err(WorkspaceIssue::EmptyTabs);
+        }
+        if input.forwards.len() > 16 {
+            return Err(WorkspaceIssue::DefinitionTooLarge);
         }
         if input.active.is_some_and(|index| index as usize >= input.tabs.len()) {
             return Err(WorkspaceIssue::InvalidActive);
@@ -246,7 +280,31 @@ impl Workspaces {
             let focused = *leaves.get(tab.focused as usize).ok_or(WorkspaceIssue::InvalidActive)?;
             order.push(SavedTab { tree, focused });
         }
-        let layout = encode_layout(&order, input.active)?;
+        let mut forwards = Vec::with_capacity(input.forwards.len());
+        let mut selected = BTreeSet::new();
+        for forward in input.forwards {
+            if sessions.len() >= 64 {
+                return Err(WorkspaceIssue::DefinitionTooLarge);
+            }
+            let id = identifier(&forward.forward_id)?;
+            let profile = identifier(&forward.profile_id)?;
+            if !selected.insert(id) {
+                return Err(WorkspaceIssue::UnsupportedLayout);
+            }
+            self.forward(id, profile, vault)?;
+            let slot = Uuid::now_v7();
+            forwards.push(slot);
+            sessions.insert(
+                slot,
+                Some(SessionSpec {
+                    profile,
+                    kind: SessionKind::Forward,
+                    forward: Some(id),
+                    working_directory: None,
+                }),
+            );
+        }
+        let layout = encode_layout(&order, input.active, &forwards)?;
         let record = Repository::<Workspace>::new(&self.store).create(WorkspaceChange {
             name: Some(input.name),
             layout: Edit::Set(layout),
@@ -256,6 +314,7 @@ impl Workspaces {
             id: record.meta.id.to_string(),
             name: record.name,
             tab_count: order.len() as u32,
+            forward_count: forwards.len() as u32,
             issue: None,
         })
     }
@@ -265,10 +324,13 @@ impl Workspaces {
         let object = self.object(id)?;
         let vault = self.personal_vault()?;
         self.ownership(object.id, vault)?;
-        let (record, order, active) = definition(&object)?;
+        let (record, layout) = definition(&object)?;
         // Resolve the entire definition before returning any ordinary-session intent.
         let mut terminals = BTreeMap::new();
         for (slot, session) in &record.sessions {
+            if session.kind != SessionKind::Terminal {
+                continue;
+            }
             let label = self.login(session.profile, vault)?;
             terminals.insert(
                 *slot,
@@ -279,14 +341,22 @@ impl Workspaces {
                 },
             );
         }
-        let mut tabs = Vec::with_capacity(order.len());
-        for tab in order {
+        let forwards = layout
+            .forwards
+            .iter()
+            .map(|slot| {
+                let session = &record.sessions[slot];
+                self.forward(session.forward.unwrap(), session.profile, vault)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut tabs = Vec::with_capacity(layout.tabs.len());
+        for tab in layout.tabs {
             tabs.push(WorkspaceTab {
                 focused_session_id: terminals[&tab.focused].session_id.clone(),
                 tree: tab.tree.open(&terminals),
             });
         }
-        Ok(OpenedWorkspace { tabs, active })
+        Ok(OpenedWorkspace { tabs, active: layout.active, forwards })
     }
 
     fn capture_tree(
@@ -422,17 +492,63 @@ impl Workspaces {
             .ok_or(WorkspaceIssue::MissingDependency)
     }
 
+    fn forward(
+        &self,
+        id: Uuid,
+        profile: Uuid,
+        vault: Option<Uuid>,
+    ) -> Result<WorkspaceForward, WorkspaceIssue> {
+        self.ownership(id, vault)?;
+        self.ownership(profile, vault)?;
+        // The selected Start plan excludes an unused saved default Login.
+        let (configuration, _) = start_configuration(
+            &self.store,
+            ForwardStartIntent::Saved {
+                forward_id: id.to_string(),
+                profile_id: profile.to_string(),
+            },
+        )
+        .map_err(|_| WorkspaceIssue::MissingDependency)?;
+        let name = match &configuration {
+            ForwardConfiguration::Local { name, .. }
+            | ForwardConfiguration::Remote { name, .. }
+            | ForwardConfiguration::Dynamic { name, .. } => name.clone(),
+        };
+        let login = configuration.login();
+        Ok(WorkspaceForward {
+            forward_id: id.to_string(),
+            profile_id: profile.to_string(),
+            name,
+            label: format!("{} · {}", login.host, login.login),
+        })
+    }
+
     fn view(&self, object: &Object, vault: Option<Uuid>) -> Result<WorkspaceView, WorkspaceIssue> {
         let name = match object.set_field(1).map(|field| &field.value) {
             Some(Value::Text(name)) => name.clone(),
             _ => String::new(),
         };
-        let mut view = WorkspaceView { id: object.id.to_string(), name, tab_count: 0, issue: None };
+        let mut view = WorkspaceView {
+            id: object.id.to_string(),
+            name,
+            tab_count: 0,
+            forward_count: 0,
+            issue: None,
+        };
         let result = (|| {
-            let (record, order, _) = definition(object)?;
-            view.tab_count = order.len() as u32;
+            let (record, layout) = definition(object)?;
+            view.tab_count = layout.tabs.len() as u32;
+            view.forward_count = layout.forwards.len() as u32;
             for session in record.sessions.values() {
-                self.login(session.profile, vault)?;
+                match session.kind {
+                    SessionKind::Terminal => {
+                        self.login(session.profile, vault)?;
+                    }
+                    SessionKind::Forward => {
+                        self.forward(session.forward.unwrap(), session.profile, vault)?;
+                    }
+                    _ => return Err(WorkspaceIssue::UnsupportedLayout),
+                }
             }
             Ok(())
         })();
@@ -472,6 +588,12 @@ struct SavedTab {
     focused: Uuid,
 }
 
+struct SavedLayout {
+    tabs: Vec<SavedTab>,
+    active: Option<u32>,
+    forwards: Vec<Uuid>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SavedTree {
     Leaf(Uuid),
@@ -505,9 +627,13 @@ impl SavedTree {
     }
 }
 
-fn encode_layout(order: &[SavedTab], active: Option<u32>) -> Result<Vec<u8>, WorkspaceIssue> {
+fn encode_layout(
+    order: &[SavedTab],
+    active: Option<u32>,
+    forwards: &[Uuid],
+) -> Result<Vec<u8>, WorkspaceIssue> {
     let bytes = cbor::encode(&Value::Map(vec![
-        (Value::UInt(1), Value::UInt(2)),
+        (Value::UInt(1), Value::UInt(3)),
         (
             Value::UInt(2),
             Value::Array(
@@ -523,6 +649,10 @@ fn encode_layout(order: &[SavedTab], active: Option<u32>) -> Result<Vec<u8>, Wor
             ),
         ),
         (Value::UInt(3), active.map_or(Value::Null, |index| Value::UInt(u64::from(index)))),
+        (
+            Value::UInt(4),
+            Value::Array(forwards.iter().map(|id| Value::Bytes(id.as_bytes().to_vec())).collect()),
+        ),
     ]))
     .map_err(|_| WorkspaceIssue::DefinitionTooLarge)?;
     if bytes.len() > MAX_WORKSPACE_LAYOUT_BYTES {
@@ -563,7 +693,7 @@ fn read_tree(
     ))
 }
 
-fn definition(object: &Object) -> Result<(Workspace, Vec<SavedTab>, Option<u32>), WorkspaceIssue> {
+fn definition(object: &Object) -> Result<(Workspace, SavedLayout), WorkspaceIssue> {
     let unsupported = || WorkspaceIssue::UnsupportedLayout;
     let record = Workspace::read(object).map_err(|_| unsupported())?;
     let bytes = record.layout.as_deref().ok_or_else(unsupported)?;
@@ -574,9 +704,10 @@ fn definition(object: &Object) -> Result<(Workspace, Vec<SavedTab>, Option<u32>)
         return Err(unsupported());
     };
     let [
-        (Value::UInt(1), Value::UInt(2)),
+        (Value::UInt(1), Value::UInt(3)),
         (Value::UInt(2), Value::Array(order)),
         (Value::UInt(3), active),
+        (Value::UInt(4), Value::Array(forwards)),
     ] = fields.as_slice()
     else {
         return Err(unsupported());
@@ -596,14 +727,35 @@ fn definition(object: &Object) -> Result<(Workspace, Vec<SavedTab>, Option<u32>)
             Ok(SavedTab { tree, focused })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if order.is_empty()
-        || unique.len() > 64
-        || unique != record.sessions.keys().copied().collect()
-        || record.sessions.values().any(|session| {
+    if unique.iter().any(|slot| {
+        record.sessions.get(slot).is_none_or(|session| {
             session.kind != SessionKind::Terminal
                 || session.forward.is_some()
                 || session.working_directory.is_some()
         })
+    }) {
+        return Err(unsupported());
+    }
+    if forwards.len() > 16 {
+        return Err(unsupported());
+    }
+    let mut selected = BTreeSet::new();
+    let forwards = forwards
+        .iter()
+        .map(|value| {
+            let slot = slot(value)?;
+            let session = record.sessions.get(&slot).ok_or_else(unsupported)?;
+            if !unique.insert(slot)
+                || session.kind != SessionKind::Forward
+                || session.working_directory.is_some()
+                || !selected.insert(session.forward.ok_or_else(unsupported)?)
+            {
+                return Err(unsupported());
+            }
+            Ok(slot)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if unique.is_empty() || unique.len() > 64 || unique != record.sessions.keys().copied().collect()
     {
         return Err(unsupported());
     }
@@ -612,7 +764,7 @@ fn definition(object: &Object) -> Result<(Workspace, Vec<SavedTab>, Option<u32>)
         Value::UInt(index) if *index < order.len() as u64 => Some(*index as u32),
         _ => return Err(unsupported()),
     };
-    Ok((record, order, active))
+    Ok((record, SavedLayout { tabs: order, active, forwards }))
 }
 
 #[cfg(test)]

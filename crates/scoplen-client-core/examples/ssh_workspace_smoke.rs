@@ -1,20 +1,158 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Independent ordinary SSH panes and explicit saved split restoration through public facades.
+//! Explicit mixed Workspace restoration against owned disposable OpenSSH peers.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use scoplen_client_core::connection::preparation::{PreparationEvent, PreparationResponse};
+use scoplen_client_core::forward_manager::{
+    ForwardDefinition, ForwardIssue, ForwardManager, ForwardPhase, ForwardSnapshot,
+    ForwardStartIntent,
+};
 use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
+use scoplen_client_core::repository::{
+    AccessProfile, AccessProfileChange, Edit, Forward, ForwardChange, ForwardKind, Repository,
+    Route, RouteChange, RouteChoice, RouteKind,
+};
 use scoplen_client_core::session_manager::{SessionEvent, SessionManager};
 use scoplen_client_core::store::Store;
 use scoplen_client_core::workspaces::{
-    WorkspaceInput, WorkspaceSplitDirection, WorkspaceTabInput, WorkspaceTerminal, WorkspaceTree,
-    WorkspaceTreeInput, Workspaces,
+    WorkspaceForwardInput, WorkspaceInput, WorkspaceSplitDirection, WorkspaceTabInput,
+    WorkspaceTerminal, WorkspaceTree, WorkspaceTreeInput, Workspaces,
 };
 use scoplen_crypto::LocalDatabaseKey;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
+use uuid::Uuid;
+
+type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
+
+struct Tunnel {
+    id: String,
+    events: mpsc::UnboundedReceiver<ForwardSnapshot>,
+}
+
+impl Tunnel {
+    fn start(
+        manager: &ForwardManager,
+        store: Arc<Store>,
+        intent: ForwardStartIntent,
+    ) -> Result<Self> {
+        let (send, events) = mpsc::unbounded_channel();
+        let run = manager.start(store, intent, move |snapshot| {
+            let _ = send.send(snapshot);
+        })?;
+        assert_eq!(run.phase, ForwardPhase::Preparing);
+        Ok(Self { id: run.run_id, events })
+    }
+
+    async fn ready(
+        &mut self,
+        manager: &ForwardManager,
+        store: &Arc<Store>,
+    ) -> Result<BTreeSet<u32>> {
+        tokio::time::timeout(Duration::from_secs(38), async {
+            let mut prompts = BTreeSet::new();
+            let mut trusted = BTreeSet::new();
+            while let Some(state) = self.events.recv().await {
+                if let Some(event) = state.preparation {
+                    match event {
+                        PreparationEvent::Trust { prompt_id, context, .. } => {
+                            if prompts.insert(prompt_id.clone()) {
+                                trusted.insert(context.position);
+                                manager.respond(
+                                    store,
+                                    &self.id,
+                                    &prompt_id,
+                                    PreparationResponse::AcceptHostKey,
+                                )?;
+                            }
+                        }
+                        PreparationEvent::Progress { .. } | PreparationEvent::Verified { .. } => {}
+                        _ => return Err("password tunnel requested unexpected input".into()),
+                    }
+                }
+                match state.phase {
+                    ForwardPhase::Listening => return Ok(trusted),
+                    ForwardPhase::Failed | ForwardPhase::Stopped => {
+                        return Err(format!(
+                            "workspace tunnel failed before listening: {:?}",
+                            state.last_issue
+                        )
+                        .into());
+                    }
+                    _ => {}
+                }
+            }
+            Err("workspace tunnel events ended before listening".into())
+        })
+        .await?
+    }
+
+    async fn counters(
+        &self,
+        manager: &ForwardManager,
+        store: &Arc<Store>,
+        count: usize,
+    ) -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let state = manager.snapshot(store, &self.id)?;
+                if state.active_connections == 0
+                    && state.uploaded_bytes == count.to_string()
+                    && state.downloaded_bytes == count.to_string()
+                {
+                    assert_eq!(state.phase, ForwardPhase::Listening);
+                    assert_eq!(state.rejected_connections, "0");
+                    return Ok::<_, Box<dyn std::error::Error>>(());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await?
+    }
+}
+
+async fn unused_port() -> Result<u16> {
+    Ok(TcpListener::bind("127.0.0.1:0").await?.local_addr()?.port())
+}
+
+async fn traffic(port: u16, socks: bool) -> Result<usize> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await?;
+        if socks {
+            stream.write_all(&[5, 1, 0]).await?;
+            let mut selected = [0; 2];
+            stream.read_exact(&mut selected).await?;
+            assert_eq!(selected, [5, 0]);
+            let mut request = vec![5, 1, 0, 3, 9];
+            request.extend_from_slice(b"localhost");
+            request.extend_from_slice(&2300u16.to_be_bytes());
+            stream.write_all(&request).await?;
+            let mut reply = [0; 4];
+            stream.read_exact(&mut reply).await?;
+            assert_eq!(&reply[..3], &[5, 0, 0]);
+            let length = match reply[3] {
+                1 => 4,
+                4 => 16,
+                3 => usize::from(stream.read_u8().await?),
+                _ => return Err("unexpected SOCKS address kind".into()),
+            };
+            stream.read_exact(&mut vec![0; length + 2]).await?;
+        }
+        let payload: Vec<_> = (0..8192).map(|i| (i % 256) as u8).collect();
+        stream.write_all(&payload).await?;
+        let mut echoed = vec![0; payload.len()];
+        stream.read_exact(&mut echoed).await?;
+        assert_eq!(echoed, payload);
+        stream.shutdown().await?;
+        Ok::<_, Box<dyn std::error::Error>>(payload.len())
+    })
+    .await?
+}
 
 struct Pane {
     terminal: WorkspaceTerminal,
@@ -158,10 +296,13 @@ impl Pane {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 4 {
-        return Err("usage: ssh_workspace_smoke <host> <port> <password-file>".into());
+    if args.len() != 6 {
+        return Err("usage: ssh_workspace_smoke <host> <terminal-port> <password-file> <tunnel-port> <remote-published-port>".into());
     }
-    tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(run(&args))
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(Box::pin(run(&args)))
 }
 
 async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -177,6 +318,81 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         sign_in: SignIn::Password { password: std::fs::read_to_string(&args[3])? },
     })?;
     let profile_id = host.logins[0].id.clone();
+    let jump = Inventory::new(store.clone()).add_host(NewHost {
+        name: Some("Workspace Jump".into()),
+        address: args[1].clone(),
+        port: Some(args[4].parse()?),
+        username: "smoke".into(),
+        sign_in: SignIn::Password { password: std::fs::read_to_string(&args[3])? },
+    })?;
+    let target = Inventory::new(store.clone()).add_host(NewHost {
+        name: Some("Workspace tunnel target".into()),
+        address: "127.0.0.1".into(),
+        port: Some(2223),
+        username: "smoke".into(),
+        sign_in: SignIn::Password { password: std::fs::read_to_string(&args[3])? },
+    })?;
+    let route = Repository::<Route>::new(&store).create(RouteChange {
+        name: Some("Workspace Jump route".into()),
+        kind: Some(RouteKind::Jump { hops: vec![Uuid::parse_str(&jump.logins[0].id)?] }),
+    })?;
+    let tunnel_profile = Uuid::parse_str(&target.logins[0].id)?;
+    Repository::<AccessProfile>::new(&store).update(
+        tunnel_profile,
+        AccessProfileChange {
+            route: Some(RouteChoice::Route(route.meta.id)),
+            ..Default::default()
+        },
+    )?;
+    let direct_tunnel = Inventory::new(store.clone()).add_host(NewHost {
+        name: Some("Workspace direct tunnel".into()),
+        address: args[1].clone(),
+        port: Some(args[4].parse()?),
+        username: "smoke".into(),
+        sign_in: SignIn::Password { password: std::fs::read_to_string(&args[3])? },
+    })?;
+    let local_port = unused_port().await?;
+    let dynamic_port = unused_port().await?;
+    let echo = TcpListener::bind("127.0.0.1:0").await?;
+    let echo_port = echo.local_addr()?.port();
+    let echo_task = tokio::spawn(async move {
+        while let Ok((stream, _)) = echo.accept().await {
+            tokio::spawn(async move {
+                let (mut read, mut write) = stream.into_split();
+                let _ = tokio::io::copy(&mut read, &mut write).await;
+            });
+        }
+    });
+    let mut selected = Vec::new();
+    for (kind, port) in [
+        (ForwardKind::Local, local_port),
+        (ForwardKind::Remote, 2302),
+        (ForwardKind::Dynamic, dynamic_port),
+    ] {
+        let forward = Repository::<Forward>::new(&store).create(ForwardChange {
+            name: Some(format!("Workspace {kind:?}")),
+            kind: Some(kind),
+            bind_address: Edit::Set(
+                if kind == ForwardKind::Remote { "0.0.0.0" } else { "127.0.0.1" }.into(),
+            ),
+            bind_port: Edit::Set(port),
+            target_host: if kind == ForwardKind::Dynamic {
+                Edit::Clear
+            } else {
+                Edit::Set("127.0.0.1".into())
+            },
+            target_port: if kind == ForwardKind::Dynamic {
+                Edit::Clear
+            } else {
+                Edit::Set(if kind == ForwardKind::Remote { echo_port } else { 2300 })
+            },
+            profile: Edit::Clear,
+        })?;
+        selected.push(WorkspaceForwardInput {
+            forward_id: forward.meta.id.to_string(),
+            profile_id: tunnel_profile.to_string(),
+        });
+    }
     let terminal = |id: &str| WorkspaceTerminal {
         session_id: id.into(),
         profile_id: profile_id.clone(),
@@ -200,16 +416,17 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     second.grid(&manager, &second_transport, "second-unchanged", 18, 60).await?;
     let workspaces = Workspaces::new(store.clone());
     let saved = workspaces.create(WorkspaceInput {
-        name: "Two terminals".into(),
+        name: "Terminals and selected tunnels".into(),
         tabs: vec![WorkspaceTabInput {
             tree: WorkspaceTreeInput::Split {
                 direction: WorkspaceSplitDirection::Horizontal,
                 first: Box::new(WorkspaceTreeInput::Terminal { profile_id: profile_id.clone() }),
-                second: Box::new(WorkspaceTreeInput::Terminal { profile_id }),
+                second: Box::new(WorkspaceTreeInput::Terminal { profile_id: profile_id.clone() }),
             },
             focused: 1,
         }],
         active: Some(0),
+        forwards: selected,
     })?;
     first.close(&manager).await?;
     second.marker(&manager, &second_transport, "surviving").await?;
@@ -217,7 +434,56 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     drop(workspaces);
     drop(store);
     let reopened = Arc::new(Store::open(&path, &key)?);
-    let opened = Workspaces::new(reopened.clone()).open(&saved.id)?;
+    let forward_manager = ForwardManager::default();
+    let workspaces = Workspaces::new(reopened.clone());
+    assert_eq!(workspaces.list()?.len(), 1);
+    assert!(forward_manager.list(&reopened)?.is_empty());
+    let saved_bytes = reopened.get(Uuid::parse_str(&saved.id)?)?.unwrap().encode()?;
+    let opened = workspaces.open(&saved.id)?;
+    assert!(forward_manager.list(&reopened)?.is_empty());
+    assert_eq!(opened.forwards.len(), 3);
+    let mut unrelated = Pane::start(manager.clone(), reopened.clone(), terminal("unrelated-pane"))?;
+    let unrelated_transport = unrelated.ready(&manager).await?;
+    let mut temporary = Tunnel::start(
+        &forward_manager,
+        reopened.clone(),
+        ForwardStartIntent::Temporary {
+            profile_id: direct_tunnel.logins[0].id.clone(),
+            definition: ForwardDefinition::Dynamic {
+                name: "Pre-existing temporary run".into(),
+                bind_address: "127.0.0.1".into(),
+                bind_port: unused_port().await?,
+            },
+        },
+    )?;
+    temporary.ready(&forward_manager, &reopened).await?;
+    let mut runs = Vec::new();
+    for forward in &opened.forwards {
+        let intent = ForwardStartIntent::Saved {
+            forward_id: forward.forward_id.clone(),
+            profile_id: forward.profile_id.clone(),
+        };
+        let mut run = Tunnel::start(&forward_manager, reopened.clone(), intent.clone())?;
+        let trusted = run.ready(&forward_manager, &reopened).await?;
+        if runs.is_empty() {
+            assert_eq!(trusted, BTreeSet::from([1, 2]));
+        }
+        assert_eq!(
+            forward_manager.start(reopened.clone(), intent, |_| {}),
+            Err(ForwardIssue::AlreadyRunning)
+        );
+        runs.push(run);
+    }
+    let local_bytes = traffic(local_port, false).await?;
+    let remote_bytes = traffic(args[5].parse()?, false).await?;
+    let dynamic_bytes = traffic(dynamic_port, true).await?;
+    for (run, count) in runs.iter().zip([local_bytes, remote_bytes, dynamic_bytes]) {
+        run.counters(&forward_manager, &reopened, count).await?;
+    }
+    assert_eq!(forward_manager.snapshot(&reopened, &temporary.id)?.phase, ForwardPhase::Listening);
+    unrelated.marker(&manager, &unrelated_transport, "existing-during-restore").await?;
+    assert_eq!(reopened.list(scoplen_model::ObjectType::FORWARD)?.len(), 3);
+    assert_eq!(reopened.get(Uuid::parse_str(&saved.id)?)?.unwrap().encode()?, saved_bytes);
     assert_eq!(opened.active, Some(0));
     let WorkspaceTree::Split { direction, first, second } = &opened.tabs[0].tree else {
         return Err("saved split was not restored".into());
@@ -237,7 +503,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .all(|pane| pane.session_id != "first-pane" && pane.session_id != "second-pane")
     );
     let mut one = Pane::start(manager.clone(), reopened.clone(), one.clone())?;
-    let mut two = Pane::start(manager.clone(), reopened, two.clone())?;
+    let mut two = Pane::start(manager.clone(), reopened.clone(), two.clone())?;
     let one_transport = one.ready(&manager).await?;
     let two_transport = two.ready(&manager).await?;
     assert_eq!(one.marker_count("SCOPLEN-WORKSPACE:first\r\n"), 0);
@@ -246,8 +512,18 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     two.marker(&manager, &two_transport, "reopened-second").await?;
     one.close(&manager).await?;
     two.close(&manager).await?;
+    forward_manager.stop_all().await?;
+    for run in runs.iter().chain(std::iter::once(&temporary)) {
+        assert_eq!(forward_manager.snapshot(&reopened, &run.id)?.phase, ForwardPhase::Stopped);
+    }
+    assert!(TcpStream::connect(("127.0.0.1", local_port)).await.is_err());
+    assert!(TcpStream::connect(("127.0.0.1", dynamic_port)).await.is_err());
+    unrelated.marker(&manager, &unrelated_transport, "existing-after-stop").await?;
+    unrelated.close(&manager).await?;
+    echo_task.abort();
+    let _ = echo_task.await;
     println!(
-        "Real OpenSSH split panes kept independent output, resize and close; explicit saved reopen created fresh ordinary shells without replay."
+        "Real OpenSSH mixed Workspace restored fresh independent terminals and saved Local/Remote/Dynamic traffic through Jump trust/authentication; exact duplicate refusals preserved existing sessions/runs, binary counters and Stop."
     );
     Ok(())
 }
