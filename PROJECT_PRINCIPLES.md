@@ -65,8 +65,12 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   The editor and run view disclose that server policy controls the actual listening scope,
   including overrides of loopback requests. Start without saving retains only a runtime run;
   the separate Save action creates inventory without starting or converting an existing run.
-  Temporary definitions are not synchronized or restored after restart. Native rendered
-  acceptance, Unix-socket forwarding, Workspace tunnel restoration and the complete C7 gate
+  Temporary definitions are not synchronized or restored after restart. Workspaces retain
+  complete terminal trees and explicitly selected saved tunnels with their chosen Logins.
+  Complete preflight precedes fresh terminal projections and independent ordinary Saved
+  Starts; exact refusals preserve other runs. Listing never connects and temporary runs
+  are excluded. Native rendered
+  acceptance, Unix-socket forwarding and the complete C7 gate
   remain incomplete.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization
   workflows remain incomplete. The canonical roadmap records their implementation evidence.

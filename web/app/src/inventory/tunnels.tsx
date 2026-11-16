@@ -325,9 +325,9 @@ export function TunnelsHome() {
           startIssue={runtime?.issue ?? null}
           onStart={async (definition, profileId) => {
             const run = await runtime?.start({ kind: "temporary", profileId, definition });
-            if (run) {
+            if (run?.status === "ok") {
               setEditing(null);
-              setSelected(run.runId);
+              setSelected(run.data.runId);
             }
           }}
         />
@@ -339,11 +339,11 @@ export function TunnelsHome() {
           onClose={() => setStarting(null)}
           onStart={async (profileId) => {
             const run = await runtime.start({ kind: "saved", forwardId: starting.id, profileId });
-            if (run) {
+            if (run.status === "ok") {
               setStarting(null);
-              setSelected(run.runId);
+              setSelected(run.data.runId);
             }
-            return run !== null;
+            return run.status === "ok";
           }}
           issue={runtime.issue}
         />

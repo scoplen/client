@@ -235,16 +235,25 @@ smaller windows scroll inside the workspace. Closing a pane checkpoints its outp
 before removing it; failed checkpoints retain the pane for retry or explicit discard.
 
 Use Workspaces in the tab bar to save all terminal trees, each tab's focused pane,
-tab order and selection as a new device-local definition. Explicit Open appends
-fresh SSH sessions using current saved Logins and normal host-key and authentication
-review, preserving existing connections. Saving includes failed or closed ordinary
-panes, but refuses the entire definition if any pane contains saved output. Loading
-or listing never connects. Output, directories, commands and remote processes are
-not restored. Older tab-only layouts and other unsupported definitions remain
-byte-identical in Unavailable workspaces with explicit Delete. Missing inventory
-dependencies require repair before opening. Personal adoption, Files and tunnel
-restoration, divider dragging, detached windows and native restart acceptance remain
-separate work.
+tab order and selection, plus explicitly selected saved tunnels. Choose a Login for
+each included tunnel. Save tunnel-only Workspaces from Hosts. Each definition contains
+at most 64 terminal panes and tunnels combined, including at most 16 saved tunnels.
+Temporary runs are not captured.
+
+Explicit Open validates the complete definition before appending fresh SSH terminals
+and starting each saved tunnel through its ordinary preparation. It preserves existing
+connections and shows each tunnel's accepted run or exact start refusal. Acceptance
+may still require trust or authentication in Tunnels; another tunnel's refusal does
+not stop accepted runs. Open uses the captured Login even if a saved default changes.
+Saving includes failed or closed ordinary panes, but refuses the entire definition
+if any pane contains saved output or unsupported team intent. Save creates a new local
+object without starting connections; Personal adoption stays separate.
+
+Loading or listing never connects. Output, directories, commands and remote processes
+are not restored. Earlier tab-only and split-only layouts and other unsupported
+definitions remain byte-identical in Unavailable workspaces with explicit Delete.
+Missing inventory dependencies require repair before opening. Files restoration,
+divider dragging, detached windows and native restart acceptance remain separate work.
 
 Tunnels starts saved or temporary Local TCP, Remote TCP and Dynamic SOCKS forwards independently
 of terminal tabs. In New tunnel, choose a Login and Start without saving for a one-off run,
@@ -269,8 +278,8 @@ opening and the final SOCKS response each have their own 15-second deadline. Tra
 counts include only application bytes successfully written, excluding SOCKS messages.
 A failed run requires an explicit new Start; tunnels do not reconnect or start
 automatically. Temporary runs end on Stop, SSH loss, profile replacement or application exit,
-and are not restored after restart. Unix-socket forwarding and Workspace tunnel restoration
-remain incomplete.
+and are not restored after restart. Saved tunnels can be explicitly selected in a Workspace;
+Unix-socket forwarding remains incomplete.
 
 Remote requests a fixed nonzero listening port and numeric IPv4 or IPv6 address on the
 SSH server, and reaches a fixed local target whose hostname is resolved by this device.
@@ -725,10 +734,12 @@ checks stop their owned container and retain temporary evidence.
 
 `scripts/test-ssh-workspace.ps1` connects two independent ordinary terminals to an
 owned OpenSSH fixture, checks separate marker output, resize and close while the
-other pane stays usable, then reopens a saved split after SQLCipher reopen. The
-restored terminals have fresh identities and no replayed commands. This verifies
-Rust session and persistence behavior; native pane focus and rendering need their
-separate platform acceptance.
+other pane stays usable, then reopens a mixed Workspace after SQLCipher reopen.
+Fresh terminals replay no commands. Explicit saved Local, Remote and Dynamic starts
+use ordinary Jump trust/authentication, binary traffic, counters and complete Stop.
+Duplicate refusals preserve the other accepted tunnels and pre-existing ordinary
+terminal and temporary run. Listing and core Open return intent without starting
+connections. Native pane focus and rendering need separate platform acceptance.
 
 `scripts/test-ssh-local-forward.ps1` checks saved and temporary standalone TCP tunnels against
 disposable OpenSSH listeners with session channels disabled. It exercises password,

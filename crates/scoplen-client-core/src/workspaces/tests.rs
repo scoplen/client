@@ -9,6 +9,8 @@ use crate::store::LocalWrite;
 use scoplen_crypto::LocalDatabaseKey;
 use scoplen_model::{FieldPath, MapKey};
 
+mod forwards;
+
 fn fixture() -> (tempfile::TempDir, Arc<Store>, Workspaces, Uuid) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(
@@ -58,6 +60,7 @@ fn input(profiles: &[Uuid], active: Option<u32>) -> WorkspaceInput {
             })
             .collect(),
         active,
+        forwards: vec![],
     }
 }
 
@@ -108,13 +111,14 @@ fn split_trees_keep_both_directions_all_tab_focus_and_fresh_sessions_after_reope
                 WorkspaceTabInput { tree: balanced(profile, 1), focused: 1 },
             ],
             active: Some(0),
+            forwards: vec![],
         })
         .unwrap();
     let record = store.get(Uuid::parse_str(&saved.id).unwrap()).unwrap().unwrap();
-    let (workspace, tabs, active) = definition(&record).unwrap();
+    let (workspace, SavedLayout { tabs, active, .. }) = definition(&record).unwrap();
     assert_eq!(active, Some(0));
     assert_eq!(workspace.sessions.len(), 6);
-    assert_eq!(workspace.layout.as_ref().unwrap(), &encode_layout(&tabs, active).unwrap());
+    assert_eq!(workspace.layout.as_ref().unwrap(), &encode_layout(&tabs, active, &[]).unwrap());
     let first = workspaces.open(&saved.id).unwrap();
     let panes = terminals(&first);
     assert_eq!(first.tabs[0].focused_session_id, panes[2].session_id);
@@ -159,6 +163,7 @@ fn pane_depth_count_focus_and_definition_bounds_are_enforced_before_persistence(
             name: "Full".into(),
             tabs: vec![full_tab.clone(); 8],
             active: Some(7),
+            forwards: vec![],
         })
         .unwrap();
     assert_eq!(terminals(&workspaces.open(&full.id).unwrap()).len(), 64);
@@ -166,7 +171,8 @@ fn pane_depth_count_focus_and_definition_bounds_are_enforced_before_persistence(
         workspaces.create(WorkspaceInput {
             name: "Too many".into(),
             tabs: vec![full_tab.clone(); 9],
-            active: None
+            active: None,
+            forwards: vec![],
         }),
         Err(WorkspaceIssue::DefinitionTooLarge)
     );
@@ -174,7 +180,8 @@ fn pane_depth_count_focus_and_definition_bounds_are_enforced_before_persistence(
         workspaces.create(WorkspaceInput {
             name: "Too deep".into(),
             tabs: vec![WorkspaceTabInput { tree: balanced(profile, 4), focused: 0 }],
-            active: None
+            active: None,
+            forwards: vec![],
         }),
         Err(WorkspaceIssue::DefinitionTooLarge)
     );
@@ -182,7 +189,8 @@ fn pane_depth_count_focus_and_definition_bounds_are_enforced_before_persistence(
         workspaces.create(WorkspaceInput {
             name: "Bad focus".into(),
             tabs: vec![WorkspaceTabInput { focused: 8, ..full_tab }],
-            active: None
+            active: None,
+            forwards: vec![],
         }),
         Err(WorkspaceIssue::InvalidActive)
     );
@@ -190,23 +198,29 @@ fn pane_depth_count_focus_and_definition_bounds_are_enforced_before_persistence(
 }
 
 #[test]
-fn exact_v2_shapes_and_old_v1_layouts_remain_unchanged_unavailable_and_deletable() {
+fn exact_v3_shapes_and_old_v1_v2_layouts_remain_unchanged_unavailable_and_deletable() {
     let (_directory, store, workspaces, profile) = fixture();
     let saved = workspaces.create(input(&[profile], None)).unwrap();
     let id = Uuid::parse_str(&saved.id).unwrap();
     let object = store.get(id).unwrap().unwrap();
-    let (_, tabs, _) = definition(&object).unwrap();
+    let (_, SavedLayout { tabs, .. }) = definition(&object).unwrap();
     let slot = tabs[0].focused;
     let leaf = Value::Bytes(slot.as_bytes().to_vec());
     let foreign = Value::Bytes(Uuid::now_v7().as_bytes().to_vec());
     let envelope = |tab: Value, active: Value| {
         Value::Map(vec![
-            (Value::UInt(1), Value::UInt(2)),
+            (Value::UInt(1), Value::UInt(3)),
             (Value::UInt(2), Value::Array(vec![tab])),
             (Value::UInt(3), active),
+            (Value::UInt(4), Value::Array(vec![])),
         ])
     };
     let mut layouts = vec![
+        Value::Map(vec![
+            (Value::UInt(1), Value::UInt(2)),
+            (Value::UInt(2), Value::Array(vec![Value::Array(vec![leaf.clone(), leaf.clone()])])),
+            (Value::UInt(3), Value::Null),
+        ]),
         Value::Map(vec![
             (Value::UInt(1), Value::UInt(1)),
             (Value::UInt(2), Value::Array(vec![leaf.clone()])),
@@ -254,7 +268,7 @@ fn stored_complete_definitions_enforce_depth_and_total_leaf_limits() {
     let (_directory, store, workspaces, profile) = fixture();
     let deep = workspaces.create(input(&[profile; 8], None)).unwrap();
     let object = store.get(Uuid::parse_str(&deep.id).unwrap()).unwrap().unwrap();
-    let (_, tabs, _) = definition(&object).unwrap();
+    let (_, SavedLayout { tabs, .. }) = definition(&object).unwrap();
     let focused = tabs[0].focused;
     let mut skewed = tabs[7].tree.clone();
     for tab in tabs[..7].iter().rev() {
@@ -269,21 +283,21 @@ fn stored_complete_definitions_enforce_depth_and_total_leaf_limits() {
         &deep.id,
         vec![(
             FieldPath::Field(2),
-            Value::Bytes(encode_layout(&[SavedTab { tree: skewed, focused }], None).unwrap()),
+            Value::Bytes(encode_layout(&[SavedTab { tree: skewed, focused }], None, &[]).unwrap()),
         )],
     );
     assert_eq!(workspaces.open(&deep.id), Err(WorkspaceIssue::UnsupportedLayout));
 
     let full = workspaces.create(input(&[profile; 64], None)).unwrap();
     let object = store.get(Uuid::parse_str(&full.id).unwrap()).unwrap().unwrap();
-    let (_, mut tabs, _) = definition(&object).unwrap();
+    let (_, SavedLayout { mut tabs, .. }) = definition(&object).unwrap();
     let extra = Uuid::now_v7();
     tabs.push(saved_leaf(extra));
     Repository::<Workspace>::new(&store)
         .update(
             object.id,
             WorkspaceChange {
-                layout: Edit::Set(encode_layout(&tabs, None).unwrap()),
+                layout: Edit::Set(encode_layout(&tabs, None, &[]).unwrap()),
                 sessions: BTreeMap::from([(
                     extra,
                     Some(SessionSpec {
@@ -319,7 +333,7 @@ fn facade_retains_order_duplicates_and_hosts_selection_across_sqlcipher_reopen()
     let saved = workspaces.create(input(&[second, first, second], Some(1))).unwrap();
     let hosts = workspaces.create(input(&[first], None)).unwrap();
     let object = store.get(Uuid::parse_str(&saved.id).unwrap()).unwrap().unwrap();
-    let (record, order, active) = definition(&object).unwrap();
+    let (record, SavedLayout { tabs: order, active, .. }) = definition(&object).unwrap();
     let slots = order.iter().map(|tab| tab.focused).collect::<Vec<_>>();
     assert_eq!(active, Some(1));
     assert_eq!(
@@ -327,8 +341,8 @@ fn facade_retains_order_duplicates_and_hosts_selection_across_sqlcipher_reopen()
         [second, first, second]
     );
     let encoded = record.layout.unwrap();
-    assert_eq!(encoded, encode_layout(&order, active).unwrap());
-    assert_eq!(&encoded[..7], &[0xa3, 0x01, 0x02, 0x02, 0x83, 0x82, 0x50]);
+    assert_eq!(encoded, encode_layout(&order, active, &[]).unwrap());
+    assert_eq!(&encoded[..7], &[0xa4, 0x01, 0x03, 0x02, 0x83, 0x82, 0x50]);
     let before = workspaces.open(&saved.id).unwrap();
     assert_eq!(before.active, Some(1));
     assert_eq!(terminals(&before)[0].label, "Staging · operator");
@@ -386,7 +400,7 @@ fn save_refuses_offline_output_empty_tabs_bad_indices_names_ids_and_existing_lim
     }];
     assert_eq!(workspaces.create(draft), Err(WorkspaceIssue::InvalidId));
     assert_eq!(
-        encode_layout(&vec![saved_leaf(profile); MAX_WORKSPACE_LAYOUT_BYTES / 16], None),
+        encode_layout(&vec![saved_leaf(profile); MAX_WORKSPACE_LAYOUT_BYTES / 16], None, &[]),
         Err(WorkspaceIssue::DefinitionTooLarge)
     );
     assert!(store.list(ObjectType::WORKSPACE).unwrap().is_empty());
@@ -398,23 +412,23 @@ fn unsupported_layouts_stay_byte_identical_and_deletable_without_hiding_good_ent
     let good = workspaces.create(input(&[profile], None)).unwrap();
     let bad = workspaces.create(input(&[profile], None)).unwrap();
     let valid = store.get(Uuid::parse_str(&bad.id).unwrap()).unwrap().unwrap();
-    let (_, slots, _) = definition(&valid).unwrap();
+    let (_, SavedLayout { tabs: slots, .. }) = definition(&valid).unwrap();
     let Value::Bytes(layout_bytes) = &valid.set_field(2).unwrap().value else { panic!() };
     let canonical = cbor::decode(layout_bytes).unwrap();
     let Value::Map(mut future) = canonical.clone() else { panic!() };
-    future[0].1 = Value::UInt(3);
+    future[0].1 = Value::UInt(4);
     let Value::Map(mut unknown) = canonical.clone() else { panic!() };
-    unknown.push((Value::UInt(4), Value::Null));
+    unknown.push((Value::UInt(5), Value::Null));
     let mut cases = vec![
         Value::Null,
         Value::Bytes(Vec::new()),
         Value::Bytes(vec![0xff]),
         Value::Bytes(cbor::encode(&Value::Map(future)).unwrap()),
         Value::Bytes(cbor::encode(&Value::Map(unknown)).unwrap()),
-        Value::Bytes(encode_layout(&[slots[0].clone(), slots[0].clone()], None).unwrap()),
-        Value::Bytes(encode_layout(&[saved_leaf(Uuid::now_v7())], None).unwrap()),
-        Value::Bytes(encode_layout(&slots, Some(1)).unwrap()),
-        Value::Bytes(encode_layout(&[], None).unwrap()),
+        Value::Bytes(encode_layout(&[slots[0].clone(), slots[0].clone()], None, &[]).unwrap()),
+        Value::Bytes(encode_layout(&[saved_leaf(Uuid::now_v7())], None, &[]).unwrap()),
+        Value::Bytes(encode_layout(&slots, Some(1), &[]).unwrap()),
+        Value::Bytes(encode_layout(&[], None, &[]).unwrap()),
     ];
     for layout in cases.drain(..) {
         rewrite(&store, &bad.id, vec![(FieldPath::Field(2), layout)]);
@@ -444,7 +458,7 @@ fn session_kinds_and_any_forward_or_cwd_are_retained_unavailable() {
     ] {
         let saved = workspaces.create(input(&[profile], None)).unwrap();
         let object = store.get(Uuid::parse_str(&saved.id).unwrap()).unwrap().unwrap();
-        let (_, slots, _) = definition(&object).unwrap();
+        let (_, SavedLayout { tabs: slots, .. }) = definition(&object).unwrap();
         let mut fields = vec![
             (Value::UInt(1), Value::Bytes(profile.as_bytes().to_vec())),
             (Value::UInt(2), Value::UInt(kind as u64)),
