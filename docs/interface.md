@@ -16,6 +16,13 @@ reached — is the core's.
 
 ## Look and feel
 
+Team certificate refusal reaches the renderer as a typed failure only after the Rust core
+validates the exact problem classification, authenticated source and HTTP metadata. Revoked
+and issuance-limit outcomes clear only the captured original pending request and show
+localized guidance in both the terminal and SSH setup. A replacement requires an explicit
+new connection. Uncertain outcomes keep the original request; message text and HTTP status
+alone never establish either definite refusal.
+
 Windows uses the tab strip as its title bar, with themed minimize, maximize/restore and
 close buttons on the right. Empty strip space drags the window and double-clicks toggle
 maximize. Close follows the ordinary terminal-save and application shutdown path. Startup

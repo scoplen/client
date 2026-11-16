@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "../src/i18n";
 import { TeamSshSetup } from "../src/team-ssh-setup";
 import { violations } from "../../ui/test/axe";
+import { en } from "../src/messages/en";
+import { zhHans } from "../src/messages/zh-Hans";
 
 const commands = vi.hoisted(() => ({
   teamAssets: vi.fn(),
@@ -47,9 +49,9 @@ beforeEach(() => {
   commands.discardTeamSshOperation.mockResolvedValue({ status: "ok", data: null });
 });
 afterEach(cleanup);
-function fixture() {
+function fixture(locale: "en" | "zh-Hans" = "en") {
   return render(
-    <I18nProvider locale="en">
+    <I18nProvider locale={locale}>
       <TeamSshSetup team={team} onClose={vi.fn()} />
     </I18nProvider>,
   );
@@ -129,6 +131,34 @@ it("retains unknown issuance and confirms only its original id without automatic
     ),
   );
   expect(commands.prepareTeamUserCa).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["en", "certificateRevoked", "teams.ssh.revoked"],
+  ["en", "certificateQuotaExceeded", "teams.ssh.quotaExceeded"],
+  ["zh-Hans", "certificateRevoked", "teams.ssh.revoked"],
+  ["zh-Hans", "certificateQuotaExceeded", "teams.ssh.quotaExceeded"],
+] as const)("shows %s guidance for %s and removes only the resolved original", async (locale, failure, key) => {
+  const catalog = locale === "en" ? en : zhHans;
+  const issuance = { ...operation, kind: "certificate", phase: "unknown", hostId: "host-1", remoteUser: "deploy" };
+  commands.teamSshOperations
+    .mockResolvedValueOnce({ status: "ok", data: [issuance] })
+    .mockResolvedValue({ status: "ok", data: [] });
+  commands.confirmTeamSshOperation.mockResolvedValue({ status: "error", error: failure });
+  fixture(locale);
+  const confirm = await screen.findByRole("button", { name: catalog["teams.authoring.confirm"] });
+  await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(false));
+  expect(commands.confirmTeamSshOperation).not.toHaveBeenCalled();
+  await userEvent.click(confirm);
+  expect((await screen.findByRole("alert")).textContent).toBe(catalog[key]);
+  expect(screen.queryByRole("button", { name: catalog["teams.authoring.confirm"] })).toBeNull();
+  expect(commands.confirmTeamSshOperation).toHaveBeenCalledExactlyOnceWith(
+    source,
+    "certificate",
+    operation.operationId,
+  );
+  expect(commands.prepareTeamUserCa).not.toHaveBeenCalled();
+  expect(commands.discardTeamSshOperation).not.toHaveBeenCalled();
 });
 
 it("requires explicit successful refresh before archiving expired uncertainty", async () => {

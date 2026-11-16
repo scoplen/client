@@ -151,19 +151,23 @@ export function TeamSshSetup({ team, onClose }: { team: TeamSummary; onClose: ()
       else await readOperations(captured);
     });
   const error =
-    failed === "permissionDenied"
-      ? "teams.error.accessDenied"
-      : failed === "authenticationRequired" || failed === "membershipScopeRequired"
-        ? "teams.error.authentication"
-        : failed === "invalidSource"
-          ? "teams.ssh.sourceChanged"
-          : failed === "caUnknown" || failed === "issuanceUnknown" || failed === "preparationPending"
-            ? "teams.ssh.pending"
-            : failed === "viewRequired" || failed === "authorityChanged"
-              ? "teams.assets.stale"
-              : failed === "operationExpired"
-                ? "teams.ssh.expired"
-                : "teams.ssh.failed";
+    failed === "certificateRevoked"
+      ? "teams.ssh.revoked"
+      : failed === "certificateQuotaExceeded"
+        ? "teams.ssh.quotaExceeded"
+        : failed === "permissionDenied"
+          ? "teams.error.accessDenied"
+          : failed === "authenticationRequired" || failed === "membershipScopeRequired"
+            ? "teams.error.authentication"
+            : failed === "invalidSource"
+              ? "teams.ssh.sourceChanged"
+              : failed === "caUnknown" || failed === "issuanceUnknown" || failed === "preparationPending"
+                ? "teams.ssh.pending"
+                : failed === "viewRequired" || failed === "authorityChanged"
+                  ? "teams.assets.stale"
+                  : failed === "operationExpired"
+                    ? "teams.ssh.expired"
+                    : "teams.ssh.failed";
   const caPending = operations.some((operation) => operation.kind === "userCa");
   const setup = ca?.setups.find((item) => item.profileId === profile) ?? ca?.setups[0];
 

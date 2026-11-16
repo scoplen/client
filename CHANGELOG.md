@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Resolve validated team certificate revocation and issuance-limit refusals without silently
+  replacing the original request. Retain uncertain results, and show localized next steps in
+  the terminal and SSH setup before an explicit new connection.
+
 - Extend real team SSH/SFTP acceptance across mixed Owner/Member roles with independent CAs,
   source-bound certificate caches and connect-permission withdrawal. The remaining team's
   certificate still opens SSH and transfers files after the other team's access is removed.

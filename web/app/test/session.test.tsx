@@ -17,6 +17,8 @@ import type {
   SessionTarget,
 } from "../src/ipc/bindings";
 import type { ScoplenTerminalElement } from "@scoplen/terminal";
+import { en } from "../src/messages/en";
+import { zhHans } from "../src/messages/zh-Hans";
 
 afterEach(() => {
   cleanup();
@@ -140,6 +142,35 @@ function outputFrame(transportId: string, text: string): ArrayBuffer {
   bytes.set(data, 16);
   return bytes.buffer;
 }
+
+it.each([
+  ["en", "certificateRevoked", "teams.ssh.revoked"],
+  ["en", "certificateQuotaExceeded", "teams.ssh.quotaExceeded"],
+  ["zh-Hans", "certificateRevoked", "teams.ssh.revoked"],
+  ["zh-Hans", "certificateQuotaExceeded", "teams.ssh.quotaExceeded"],
+] as const)("localizes %s terminal refusal %s and waits for an explicit reconnect", async (locale, failure, key) => {
+  const f = fixture();
+  const catalog = locale === "en" ? en : zhHans;
+  render(sessionView(locale));
+  const c = await connect(f);
+  await c.emit({ kind: "failed", error: "backend fallback", exhausted: false, teamSshFailure: failure });
+  expect(screen.getByRole("alert").textContent).toContain(catalog[key]);
+  expect(screen.queryByText("backend fallback")).toBeNull();
+  expect(f.matching("session_retry_transport")).toHaveLength(0);
+  expect(f.connections).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: catalog["session.reconnect"] }));
+  expect(f.matching("session_retry_transport")).toHaveLength(1);
+});
+
+it("does not infer a definite certificate refusal from an untyped message", async () => {
+  const f = fixture();
+  render(sessionView());
+  const c = await connect(f);
+  await c.emit({ kind: "failed", error: "certificate.revoked", exhausted: false, teamSshFailure: null });
+  expect(screen.getByRole("alert").textContent).toContain("certificate.revoked");
+  expect(screen.queryByText(en["teams.ssh.revoked"])).toBeNull();
+  expect(f.matching("session_retry_transport")).toHaveLength(0);
+});
 
 function interactive(
   promptId = "challenge-1",
@@ -972,7 +1003,9 @@ it.each(["closed", "failed"] as const)(
     await c.ready();
     await c.output("first session\r\n");
     await c.emit(
-      ending === "closed" ? { kind: "closed" } : { kind: "failed", error: "disconnected", exhausted: false },
+      ending === "closed"
+        ? { kind: "closed" }
+        : { kind: "failed", error: "disconnected", exhausted: false, teamSshFailure: null },
     );
     await c.ready();
     await c.output("stale");
@@ -1197,7 +1230,7 @@ it("clears one-time passphrases, handles incorrect replies, and asks again on a 
       intent: { kind: "passphrase", value },
     });
   }
-  await c.emit({ kind: "failed", error: "connection lost", exhausted: false });
+  await c.emit({ kind: "failed", error: "connection lost", exhausted: false, teamSshFailure: null });
   await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
   const second = await c.start();
   await second.prepare(passphrase(3));
@@ -1288,7 +1321,7 @@ it("waits for renderer failure cleanup and rejects late readiness", async () => 
   expect(screen.getByRole("button", { name: "Reconnect" })).toHaveProperty("disabled", true);
   await c.ready();
   expect(screen.getByRole("status").textContent).toContain("failed");
-  await c.emit({ kind: "failed", error: "terminal unusable", exhausted: false });
+  await c.emit({ kind: "failed", error: "terminal unusable", exhausted: false, teamSshFailure: null });
   expect(screen.getByRole("alert").textContent).toBe("write failed");
   await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
   expect(f.matching("session_retry_transport")).toHaveLength(1);

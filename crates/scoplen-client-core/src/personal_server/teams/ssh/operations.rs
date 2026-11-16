@@ -333,6 +333,27 @@ impl PersonalServer {
                 .ok_or_else(|| TeamSshFailure::OperationMissing.into());
         }
         let problem = super::super::problem(&response).map_err(|_| unknown(pending.kind))?;
+        let definite = match (
+            sent.kind,
+            problem.status,
+            problem.code.as_str(),
+            problem.changed,
+            problem.retryable,
+        ) {
+            (1, 409, "certificate.revoked", false, false) => {
+                Some(TeamSshFailure::CertificateRevoked)
+            }
+            (1, 413, "certificate.quota_exceeded", false, false) => {
+                Some(TeamSshFailure::CertificateQuotaExceeded)
+            }
+            _ => None,
+        };
+        if let Some(failure) = definite {
+            if !store.terminate_team_certificate_operation(&owner, &sent).map_err(storage)? {
+                return Err(unknown(sent.kind));
+            }
+            return Err(failure.into());
+        }
         if pending.phase == 0
             && !problem.changed
             && problem.code.as_str() != "organization.conflict"

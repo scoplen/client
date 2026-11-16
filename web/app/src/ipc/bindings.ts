@@ -2512,7 +2512,9 @@ error: string } |
 /**  Actionable error, without credential or helper output. */
 error: string;
 /**  All five automatic attempts have been consumed. */
-exhausted: boolean };
+exhausted: boolean;
+/**  Validated definite certificate refusal; never inferred from a message or status alone. */
+teamSshFailure: TeamSshFailure | null };
 
 /**  Application-owned drag feedback; framework path-bearing drag events are never subscribed to. */
 export type SessionFileDrag = {
@@ -3661,6 +3663,10 @@ export type TeamSshFailure =
 "invalidCertificate" |
 /**  A dispatched issuance needs explicit confirmation using its original request. */
 "issuanceUnknown" |
+/**  Authenticated original-request confirmation established that its serial was revoked. */
+"certificateRevoked" |
+/**  Authenticated issuance refusal established that this CA's unexpired quota is full. */
+"certificateQuotaExceeded" |
 /**  A dispatched CA provisioning operation needs explicit original-request confirmation. */
 "caUnknown" |
 /**  Another original request must be resolved before preparing its replacement. */

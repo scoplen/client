@@ -26,7 +26,7 @@ use crate::connection::{
     MAX_SSH_INPUT, SessionTarget, SshConnectionError, SshSession, terminal_size,
 };
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
-use crate::personal_server::PersonalServer;
+use crate::personal_server::{PersonalServer, TeamSshError, TeamSshFailure};
 use crate::session_files::{
     self, DownloadCheckpoint, DownloadExecution, DownloadInput, FileTransferProgress,
     MutationPreflight, RemoteDirectory, RemoteMutation, RemoteTextPreview, RemoteTextPreviewIssue,
@@ -93,6 +93,8 @@ pub enum SessionEvent {
         error: String,
         /// All five automatic attempts have been consumed.
         exhausted: bool,
+        /// Validated definite certificate refusal; never inferred from a message or status alone.
+        team_ssh_failure: Option<TeamSshFailure>,
     },
 }
 
@@ -426,6 +428,16 @@ enum AttemptError {
 }
 
 impl AttemptError {
+    fn team_ssh_failure(&self) -> Option<TeamSshFailure> {
+        match self {
+            Self::Preparation(PreparationError::TeamSsh(TeamSshError::Ssh(
+                failure @ (TeamSshFailure::CertificateRevoked
+                | TeamSshFailure::CertificateQuotaExceeded),
+            ))) => Some(*failure),
+            _ => None,
+        }
+    }
+
     fn retryable(&self) -> bool {
         match self {
             Self::Connection(error) => retryable_connection(error),
@@ -1579,7 +1591,11 @@ impl SessionManager {
                 }
                 Some(Err(error)) => {
                     if command.is_some() {
-                        emit(SessionEvent::Failed { error: error.to_string(), exhausted: false })?;
+                        emit(SessionEvent::Failed {
+                            error: error.to_string(),
+                            exhausted: false,
+                            team_ssh_failure: error.team_ssh_failure(),
+                        })?;
                         return Err(error.to_string());
                     }
                     let delay =
@@ -1598,6 +1614,7 @@ impl SessionManager {
                     } else {
                         emit(SessionEvent::Failed {
                             error: error.to_string(),
+                            team_ssh_failure: error.team_ssh_failure(),
                             exhausted: error.retryable()
                                 && budget.ever_ready
                                 && budget.attempts == RETRY_DELAYS.len(),
@@ -1633,6 +1650,7 @@ impl SessionManager {
                     error: "The terminal could not continue. Reconnect to start a new shell."
                         .into(),
                     exhausted: false,
+                    team_ssh_failure: None,
                 })?;
             } else {
                 emit(SessionEvent::Closed)?;

@@ -1612,6 +1612,29 @@ fn failed_send_keeps_unknown_none_and_other_errors_nonretryable() {
         assert_eq!(send_failure_event(event, &mut false), SendFailureEvent::Original);
     }
 }
+
+#[test]
+fn definite_team_certificate_failures_keep_their_code_and_never_qualify_for_auto_reconnect() {
+    for failure in [TeamSshFailure::CertificateRevoked, TeamSshFailure::CertificateQuotaExceeded] {
+        let error = AttemptError::Preparation(PreparationError::TeamSsh(failure.into()));
+        assert!(!error.retryable());
+        assert_eq!(error.team_ssh_failure(), Some(failure));
+        let event = SessionEvent::Failed {
+            error: error.to_string(),
+            exhausted: false,
+            team_ssh_failure: error.team_ssh_failure(),
+        };
+        let wire = serde_json::to_value(event).unwrap();
+        assert_eq!(wire["teamSshFailure"], serde_json::to_value(failure).unwrap());
+        assert_eq!(wire["exhausted"], false);
+    }
+    let ambiguous = AttemptError::Preparation(PreparationError::TeamSsh(
+        TeamSshFailure::IssuanceUnknown.into(),
+    ));
+    assert_eq!(ambiguous.team_ssh_failure(), None);
+    assert!(!ambiguous.retryable());
+    assert_eq!(AttemptError::Local("certificate.revoked".into()).team_ssh_failure(), None);
+}
 #[tokio::test]
 async fn pending_stop_fail_and_close_win_before_automatic_or_manual_attempt_registration() {
     for previous in [Intent::None, Intent::Retry] {
