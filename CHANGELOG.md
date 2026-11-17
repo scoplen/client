@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Adopt the published `proto@93053d4` incoming SSH channel receiver ownership API,
+  keeping all shared libraries and dependency patches on that revision. This upgrade
+  does not enable desktop agent forwarding.
+
 - Preserve an authenticated team SSH policy refusal while closing its failed transport,
   so Review access can use the original Host and username. Authority withdrawal still
   interrupts pending connection preparation.
