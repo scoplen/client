@@ -2281,7 +2281,7 @@ export type PreparationContext = {
 
 /**  Typed progress and current user intent requested by Rust. */
 export type PreparationEvent =
-/**  Review the exact connection or password program before creating its local process. */
+/**  Review the exact connection or credential program before creating its local process. */
 { kind: "commandExecution";
 /**  Exact source and target selected by this preparation. */
 context: PreparationContext;
