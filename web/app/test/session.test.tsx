@@ -494,7 +494,7 @@ it("keeps the complete team source across IPC and requires a separate exact comm
     program: "<script>local-helper</script>",
     arguments: ["--host=team.example.test", ""],
   });
-  const dialog = screen.getByRole("dialog", { name: "Run this team's local connection command?" });
+  const dialog = screen.getByRole("dialog", { name: "Run this local connection command?" });
   expect(within(dialog).getByText("https://team.example.test", { exact: false })).toBeTruthy();
   expect(within(dialog).getByText("<script>local-helper</script>")).toBeTruthy();
   expect(dialog.querySelector("script")).toBeNull();
@@ -505,7 +505,7 @@ it("keeps the complete team source across IPC and requires a separate exact comm
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(f.connections).toHaveLength(1);
   view.rerender(sessionView("en", true, undefined, undefined, { target }));
-  await userEvent.click(screen.getByRole("button", { name: "Run and connect" }));
+  await userEvent.click(screen.getByRole("button", { name: "Run and continue" }));
   expect(f.matching("session_respond").at(-1)?.args).toEqual({
     sessionId: connection.sessionId,
     transportId: connection.transportId,
