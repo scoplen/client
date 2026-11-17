@@ -260,6 +260,14 @@ struct TargetCheckpoint {
 }
 
 #[derive(Serialize)]
+struct UnrelatedCheckpoint {
+    session_id: String,
+    transport_id: String,
+    marker_count: usize,
+    barrier_confirmed: bool,
+}
+
+#[derive(Serialize)]
 struct Checkpoint<'a> {
     phase: &'a str,
     descriptor_sha256: &'a str,
@@ -271,6 +279,7 @@ struct Checkpoint<'a> {
     origin: &'a SnippetTerminal,
     targets: Vec<TargetCheckpoint>,
     old_preparation_refused: bool,
+    unrelated: UnrelatedCheckpoint,
 }
 
 fn hash(bytes: &[u8]) -> String {
@@ -464,6 +473,16 @@ async fn roundtrip(directory: &Path) {
         targets.push(terminal.ready(&sessions).await);
         terminals.push(terminal);
     }
+    let mut unrelated = Terminal::start(
+        sessions.clone(),
+        personal.clone(),
+        store.clone(),
+        "snippet-unrelated",
+        source.clone(),
+        initial.host_id.clone(),
+        initial.profile_id.clone(),
+    );
+    let unrelated_target = unrelated.ready(&sessions).await;
     let origin = targets[0].clone();
     let mut captured = Vec::<PreparedTeamSnippet>::new();
     let mut last_command_hash = String::new();
@@ -479,6 +498,7 @@ async fn roundtrip(directory: &Path) {
         current.same_owner(&initial);
         let before_counts: Vec<_> =
             terminals.iter().map(|terminal| terminal.count(&current.output_marker)).collect();
+        let unrelated_before = unrelated.count(&current.output_marker);
         if ordinal > 0 {
             let refreshed =
                 personal.refresh_team_assets(store.clone(), &current.organization_id).await;
@@ -506,6 +526,11 @@ async fn roundtrip(directory: &Path) {
         let mut checkpoints = Vec::new();
         let library = if matches!(phase, "published" | "replaced" | "restored") {
             let (library, prepared) = review(&sessions, &store, &origin, &targets, &current);
+            assert_eq!(prepared.targets.len(), 3);
+            assert!(prepared.targets.iter().all(|target| {
+                target.session_id != unrelated_target.session_id
+                    && target.transport_id != unrelated_target.transport_id
+            }));
             if phase == "published" {
                 let old = terminals.remove(1);
                 old.close(&sessions).await;
@@ -567,6 +592,10 @@ async fn roundtrip(directory: &Path) {
             }
             library
         };
+        // The original exact transport must remain usable without receiving any Snippet input.
+        unrelated.barrier(&sessions, &unrelated_target).await;
+        let unrelated_count = unrelated.count(&current.output_marker) - unrelated_before;
+        assert_eq!(unrelated_count, 0, "an unrelated terminal must never receive the Snippet");
         publish_checkpoint(
             directory,
             &Checkpoint {
@@ -580,6 +609,12 @@ async fn roundtrip(directory: &Path) {
                 origin: &origin,
                 targets: checkpoints,
                 old_preparation_refused: old_refused,
+                unrelated: UnrelatedCheckpoint {
+                    session_id: unrelated_target.session_id.clone(),
+                    transport_id: unrelated_target.transport_id.clone(),
+                    marker_count: unrelated_count,
+                    barrier_confirmed: true,
+                },
             },
         );
         let complete = directory.join(format!("snippet-client-{phase}.complete"));
@@ -588,6 +623,7 @@ async fn roundtrip(directory: &Path) {
     for terminal in terminals {
         terminal.close(&sessions).await;
     }
+    unrelated.close(&sessions).await;
     drop(store);
     drop(lease);
     drop(device);
