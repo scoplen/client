@@ -431,6 +431,41 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	deleteTeamAuthoring: (organizationId: string, collection: TeamAuthoringCollection, resourceId: string, etag: string) => typedError<null, TeamError>(__TAURI_INVOKE("delete_team_authoring", { organizationId, collection, resourceId, etag })),
 	/**  Preview one shared-generated independent view/connect rule without granting access. */
 	previewTeamSimpleRule: (organizationId: string, input: TeamSimpleRuleInput) => typedError<TeamSimpleRulePreview, TeamError>(__TAURI_INVOKE("preview_team_simple_rule", { organizationId, input })),
+	/**  Check only a retained, authenticated policy refusal belonging to this terminal. */
+	checkTeamAccessRequest: (sessionId: string, draft: TeamAccessRequestDraft) => typedError<TeamAccessRequestCheckView, TeamAccessRequestError>(__TAURI_INVOKE("check_team_access_request", { sessionId, draft })),
+	/**  Read one real current Mine or Approvals page. */
+	teamAccessRequestPage: (organizationId: string, view: TeamAccessRequestList, cursor: string | null) => typedError<TeamAccessRequestPageView, TeamAccessRequestError>(__TAURI_INVOKE("team_access_request_page", { organizationId, view, cursor })),
+	/**  GET and retain the original Resource version for an explicit action. */
+	reviewTeamAccessRequest: (organizationId: string, requestId: string) => typedError<TeamAccessRequestReviewView, TeamAccessRequestError>(__TAURI_INVOKE("review_team_access_request", { organizationId, requestId })),
+	/**  Retain one canonical Create using only the exact Rust-owned successful check. */
+	prepareTeamAccessRequest: (checkId: string) => typedError<TeamAccessRequestOperationView, TeamAccessRequestError>(__TAURI_INVOKE("prepare_team_access_request", { checkId })),
+	/**  Retain one whole action using only the complete reviewed original Resource and ETag. */
+	prepareTeamAccessRequestAction: (intentId: string, action: TeamAccessRequestAction) => typedError<TeamAccessRequestOperationView, TeamAccessRequestError>(__TAURI_INVOKE("prepare_team_access_request_action", { intentId, action })),
+	/**  Inspect retained local state without a network request or automatic replay. */
+	pendingTeamAccessRequest: (organizationId: string) => typedError<{
+	/**  Complete original deployment, Account, Organization and Device. */
+	source: TeamSshSource,
+	/**  Original Idempotency-Key, used only as this local operation's identity. */
+	operationId: string,
+	/**  Exact original resource identifier. */
+	requestId: string,
+	/**  Original immutable mutation kind. */
+	action: TeamAccessRequestAction,
+	/**  Only Unknown enables explicit original-request confirmation. */
+	phase: TeamCreationPhase,
+	/**  Original receipt deadline in Unix milliseconds, without number precision loss. */
+	retryUntil: string | null,
+	/**  Original immutable application values, for explicit review. */
+	fields: TeamAccessRequestFields,
+	/**  Original successful response, not a current read or new connection authority. */
+	result: TeamAccessRequestResourceView | null,
+} | null, TeamAccessRequestError>(__TAURI_INVOKE("pending_team_access_request", { organizationId })),
+	/**  Submit or explicitly confirm exactly the original operation; never replace its precondition. */
+	submitTeamAccessRequest: (organizationId: string, operationId: string) => typedError<TeamAccessRequestOperationView, TeamAccessRequestError>(__TAURI_INVOKE("submit_team_access_request", { organizationId, operationId })),
+	/**  Complete retained prepared/confirmed state, or explicitly archive expired uncertainty. */
+	discardTeamAccessRequest: (organizationId: string, operationId: string) => typedError<null, TeamAccessRequestError>(__TAURI_INVOKE("discard_team_access_request", { organizationId, operationId })),
+	/**  Offer a separate ordinary Connect for an exact approved original Host and username. */
+	teamAccessRequestLogins: (intentId: string) => typedError<TeamAccessRequestLogin[], TeamAccessRequestError>(__TAURI_INVOKE("team_access_request_logins", { intentId })),
 	/**  Read safe local recovery state without starting or retrying a server request. */
 	teamSshOperations: (source: TeamSshSource) => typedError<TeamSshOperationView[], TeamSshError>(__TAURI_INVOKE("team_ssh_operations", { source })),
 	/**  Fetch only this team's current authenticated public user CA. */
@@ -3075,7 +3110,17 @@ profileId: string } |
 /**  Captured deployment, Account, Organization and Device. */
 source: TeamSshSource;
 /**  Login identifier in that Organization alone. */
-profileId: string };
+profileId: string } |
+/**  An explicit ordinary Connect retaining an approved request's concrete target. */
+{ kind: "organizationAccessRequest";
+/**  Captured deployment, Account, Organization and Device. */
+source: TeamSshSource;
+/**  A currently visible matching Login. */
+profileId: string;
+/**  Original request Host, checked again during preparation. */
+hostId: string;
+/**  Exact original username, checked again during preparation. */
+remoteUser: string };
 
 /**  The direction of a terminal-owned transfer. */
 export type SessionTransferDirection =
@@ -3398,6 +3443,192 @@ export type StoreChanged = {
 	recordType: RecordType,
 	/**  Their identifiers, as lowercase hyphenated UUIDs. */
 	ids: string[],
+};
+
+/**  A single original mutation, never an editable decision or partial approval. */
+export type TeamAccessRequestAction =
+/**  Create the checked original application. */
+"create" |
+/**  Approve the reviewed pending request. */
+"approve" |
+/**  Deny the reviewed pending request. */
+"deny" |
+/**  Cancel the requester's reviewed pending request. */
+"cancel";
+
+/**  The side-effect-free answer for one exact Rust-owned input. */
+export type TeamAccessRequestCheckView = {
+	/**  Complete authenticated deployment and Account source. */
+	source: TeamSshSource,
+	/**  Exact checked values, including the original denial target. */
+	fields: TeamAccessRequestFields,
+	/**  A complete current permit, never a connection permit or reservation. */
+	allowed: boolean,
+	/**  Opaque Rust intent, present only for a permitted exact input. */
+	checkId: string | null,
+};
+
+/**  A historical attributable approval or denial. */
+export type TeamAccessRequestDecisionView = {
+	/**  Known approve or deny outcome. */
+	outcome: string,
+	/**  Historical actor, without implying current membership. */
+	actorAccountId: string,
+	/**  Exact server metadata timestamp. */
+	decidedAt: string,
+};
+
+/**  Editable text for one concrete connection-policy denial; Rust supplies its target. */
+export type TeamAccessRequestDraft = {
+	/**  Requested finite duration, validated by the shared codec. */
+	durationSeconds: number,
+	/**  Exact review text, without trimming or normalization. */
+	reason: string,
+};
+
+/**  Existing authenticated Account/team failures and narrow access-request failures. */
+export type TeamAccessRequestError =
+/**  Account or encrypted local-store failure. */
+PersonalServerError |
+/**  Current team authority failure. */
+TeamFailure |
+/**  Exact request or original-operation recovery failure. */
+TeamAccessRequestFailure;
+
+/**  Fixed, safe errors specific to access-request intent and recovery. */
+export type TeamAccessRequestFailure =
+/**  Shared input profile was not satisfied. */
+"invalidInput" |
+/**  Exact input or its captured authenticated context changed. */
+"checkRequired" |
+/**  The reviewed original version or source is no longer retained. */
+"reviewRequired" |
+/**  Another original mutation must be resolved first. */
+"operationPending" |
+/**  No matching original local operation remains. */
+"operationMissing" |
+/**  Its fixed original confirmation deadline has ended. */
+"operationExpired" |
+/**  An attempted mutation may have committed. */
+"outcomeUnknown" |
+/**  Response shape, HTTP metadata or original tuple did not validate. */
+"invalidResponse" |
+/**  The original reviewed precondition no longer matches. */
+"staleVersion" |
+/**  No current visible Login retains the original Host and remote user. */
+"loginRequired";
+
+/**  Original request fields, containing no current inventory or permission projection. */
+export type TeamAccessRequestFields = {
+	/**  Original same-team Host identifier. */
+	hostId: string,
+	/**  Exact remote username, retained without normalization. */
+	remoteUser: string,
+	/**  Original finite interval length. */
+	durationSeconds: number,
+	/**  Exact reason, shown only on the explicit request surface. */
+	reason: string,
+};
+
+/**  The original finite approval interval, not evidence of current access. */
+export type TeamAccessRequestGrantView = {
+	/**  Server-generated original Grant identifier. */
+	id: string,
+	/**  Inclusive original whole-second UTC start. */
+	validFrom: string,
+	/**  Exclusive original whole-second UTC end. */
+	validUntil: string,
+};
+
+/**  One explicit, ascending server list view. */
+export type TeamAccessRequestList =
+/**  Only the current Account's requests. */
+"mine" |
+/**  Only currently routed, unexpired pending requests. */
+"approvals";
+
+/**  One currently visible ordinary Login retaining the approved exact target. */
+export type TeamAccessRequestLogin = {
+	/**  Current Login display label. */
+	name: string,
+	/**  A separate explicit ordinary connection intent, never an approval permit. */
+	target: SessionTarget,
+};
+
+/**  Durable recovery state, without proofs, tokens or a caller-selectable precondition. */
+export type TeamAccessRequestOperationView = {
+	/**  Complete original deployment, Account, Organization and Device. */
+	source: TeamSshSource,
+	/**  Original Idempotency-Key, used only as this local operation's identity. */
+	operationId: string,
+	/**  Exact original resource identifier. */
+	requestId: string,
+	/**  Original immutable mutation kind. */
+	action: TeamAccessRequestAction,
+	/**  Only Unknown enables explicit original-request confirmation. */
+	phase: TeamCreationPhase,
+	/**  Original receipt deadline in Unix milliseconds, without number precision loss. */
+	retryUntil: string | null,
+	/**  Original immutable application values, for explicit review. */
+	fields: TeamAccessRequestFields,
+	/**  Original successful response, not a current read or new connection authority. */
+	result: TeamAccessRequestResourceView | null,
+};
+
+/**  One validated page; a continuation is only a locator for another authorized read. */
+export type TeamAccessRequestPageView = {
+	/**  Exact captured source of this page. */
+	source: TeamSshSource,
+	/**  Exact read view, never mixed while appending pages. */
+	view: TeamAccessRequestList,
+	/**  At most the shared bounded page size. */
+	items: TeamAccessRequestResourceView[],
+	/**  Ascending request locator, if another page is available. */
+	nextCursor: string | null,
+};
+
+/**  One validated server record, bound to the captured read source. */
+export type TeamAccessRequestResourceView = {
+	/**  Owning deployment, Account, Organization and Device. */
+	source: TeamSshSource,
+	/**  Original request identifier. */
+	id: string,
+	/**  Persisted server version, never replaced during confirmation. */
+	etag: string,
+	/**  Original server creation timestamp. */
+	createdAt: string,
+	/**  Last persisted mutation timestamp. */
+	updatedAt: string,
+	/**  Original requester attribution. */
+	requesterAccountId: string,
+	/**  Exact original Membership, never substituted after rejoining. */
+	requesterMembershipId: string,
+	/**  Original application text and concrete target. */
+	fields: TeamAccessRequestFields,
+	/**  Original fixed pending deadline, including any fractional seconds. */
+	expiresAt: string,
+	/**  Exact persisted status, including bounded unknown future values. */
+	status: string,
+	/**  Local deadline observation; pending alone never enables an action. */
+	deadlinePassed: boolean,
+	/**  Current source may review its own pending cancellation. */
+	canCancel: boolean,
+	/**  This non-requester read may review an unexpired pending decision. */
+	canDecide: boolean,
+	/**  Own approved history can offer a separate normal connection intent. */
+	canConnect: boolean,
+	/**  Original historical decision, if present. */
+	decision: TeamAccessRequestDecisionView | null,
+	/**  Original historical Grant, if present. */
+	grant: TeamAccessRequestGrantView | null,
+};
+
+/**  The exact GET response held by Rust for an explicit decision or cancellation. */
+export type TeamAccessRequestReviewView = {
+	/**  Opaque one-use reviewed intent; never a caller-authored ETag or Resource. */
+	intentId: string,
+	/**  Current complete server projection reviewed by the person. */
+	resource: TeamAccessRequestResourceView,
 };
 
 /**  Safe inventory metadata from this exact Organization, without secret fields or references. */
@@ -4050,7 +4281,9 @@ export type TeamSimplePermission =
 /**  View selected typed assets without implicit dependencies. */
 "view" |
 /**  Connect to selected Hosts/groups as one exact SSH user. */
-"connect";
+"connect" |
+/**  Request temporary access to selected Hosts for independent review. */
+"requestAccess";
 
 /**  Input for the shared generator; one subject and one independent permission. */
 export type TeamSimpleRuleInput = {
@@ -4058,7 +4291,7 @@ export type TeamSimpleRuleInput = {
 	membershipId: string | null,
 	/**  One local Group subject, exclusive with membership_id. */
 	groupId: string | null,
-	/**  Exactly one independent view or connect grant. */
+	/**  Exactly one independent view, connect or request-access permission. */
 	permission: TeamSimplePermission,
 	/**  Explicit typed resources selected for this rule. */
 	resources: TeamSimpleRuleResource[],

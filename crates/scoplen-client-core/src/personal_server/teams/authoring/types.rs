@@ -409,7 +409,7 @@ pub struct TeamSimpleRuleInput {
     pub membership_id: Option<String>,
     /// One local Group subject, exclusive with membership_id.
     pub group_id: Option<String>,
-    /// Exactly one independent view or connect grant.
+    /// Exactly one independent view, connect or request-access permission.
     pub permission: TeamSimplePermission,
     /// Explicit typed resources selected for this rule.
     pub resources: Vec<TeamSimpleRuleResource>,
@@ -425,6 +425,8 @@ pub enum TeamSimplePermission {
     View,
     /// Connect to selected Hosts/groups as one exact SSH user.
     Connect,
+    /// Request temporary access to selected Hosts for independent review.
+    RequestAccess,
 }
 
 /// One exact typed inventory selector.

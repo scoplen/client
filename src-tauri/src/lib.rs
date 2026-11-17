@@ -25,6 +25,7 @@ pub mod session_transfers;
 mod smoke;
 pub mod snippets;
 pub mod ssh;
+pub mod team_access_requests;
 pub mod team_authoring;
 pub mod team_ssh;
 pub mod teams;
@@ -201,6 +202,15 @@ pub fn ipc() -> Builder<tauri::Wry> {
             team_authoring::update_team_authoring,
             team_authoring::delete_team_authoring,
             team_authoring::preview_team_simple_rule,
+            team_access_requests::check_team_access_request,
+            team_access_requests::team_access_request_page,
+            team_access_requests::review_team_access_request,
+            team_access_requests::prepare_team_access_request,
+            team_access_requests::prepare_team_access_request_action,
+            team_access_requests::pending_team_access_request,
+            team_access_requests::submit_team_access_request,
+            team_access_requests::discard_team_access_request,
+            team_access_requests::team_access_request_logins,
             team_ssh::team_ssh_operations,
             team_ssh::team_user_ca,
             team_ssh::prepare_team_user_ca,
@@ -291,6 +301,7 @@ pub fn run() {
             app.manage(std::sync::Arc::new(portable_archives::PortableArchiveState::default()));
             app.manage(std::sync::Arc::new(generated_open_ssh::GeneratedOpenSshState::default()));
             app.manage(scoplen_client_core::personal_server::PersonalServer::default());
+            app.manage(scoplen_client_core::personal_server::TeamAccessRequests::default());
             let background = std::sync::Arc::new(scoplen_client_core::personal_server::PersonalSyncRuntime::default());
             background.set_store(app.state::<local_data::LocalDataState>().store());
             let owner = background.clone();

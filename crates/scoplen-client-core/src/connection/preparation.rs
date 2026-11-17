@@ -488,11 +488,23 @@ pub(crate) fn resolve_target_preparation_plan(
 ) -> Result<PreparationPlan, PreparationError> {
     let profile =
         Uuid::parse_str(target.profile_id()).map_err(|_| "The Login identifier is invalid.")?;
-    let SessionTarget::Organization { source, .. } = target else {
-        return resolve_preparation_plan(store, profile);
+    let source = match target {
+        SessionTarget::Organization { source, .. }
+        | SessionTarget::OrganizationAccessRequest { source, .. } => source,
+        SessionTarget::Personal { .. } => return resolve_preparation_plan(store, profile),
     };
     let snapshot = Arc::new(TeamConnectionSnapshot::load(store, personal, source)?);
     let plans = snapshot.plans(profile)?;
+    if let SessionTarget::OrganizationAccessRequest { host_id, remote_user, .. } = target
+        && plans.last().is_none_or(|(plan, _, _)| {
+            plan.host_id.to_string() != *host_id || plan.username != *remote_user
+        })
+    {
+        return Err(
+            "The Login changed. Review a Login for the original request Host and SSH username."
+                .into(),
+        );
+    }
     let total = u32::try_from(plans.len()).map_err(|_| "The team Jump route is too large.")?;
     let mut steps = Vec::with_capacity(plans.len());
     for (index, (plan, profile, host)) in plans.into_iter().enumerate() {

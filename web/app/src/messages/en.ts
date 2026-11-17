@@ -2115,6 +2115,12 @@ export const en = {
   "teams.authoring.permission": "Permission",
   "teams.authoring.view": "May view assets",
   "teams.authoring.connect": "May connect",
+  "teams.authoring.requestAccess": "May request temporary access",
+  "teams.authoring.requestAccessNotice":
+    "Select 1–64 Hosts. Members can request any valid SSH username for review. This rule grants no visibility, connection or approval.",
+  "teams.authoring.requestAccessPoliciesNotice":
+    "Other permits still apply beyond this rule's scope. Explicit denials still block access.",
+  "teams.authoring.requestAccessLimit": "Select at most 64 Hosts for this request rule.",
   "teams.authoring.ruleAssets": "Selected assets",
   "teams.authoring.ruleName": "Rule name",
   "teams.authoring.preview": "Preview rule",
