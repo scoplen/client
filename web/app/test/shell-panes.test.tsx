@@ -37,25 +37,26 @@ vi.mock("../src/inventory/home", () => ({
       <button onClick={() => onConnect({ kind: "personal", profileId: "login-second" }, "Second host")}>
         Start second
       </button>
-      <button
-        onClick={() =>
-          onConnect(
-            {
-              kind: "organization",
-              profileId: "login-first",
-              source: {
-                origin: "https://team.example.test",
-                accountId: "account-one",
-                organizationId: "team-one",
-                deviceId: "device-one",
-              },
-            },
-            "Team host",
-          )
-        }
-      >
-        Start team
-      </button>
+      {(["organization", "organizationAccessRequest"] as const).map((kind) => (
+        <button
+          key={kind}
+          onClick={() => {
+            const source = {
+              origin: "https://team.example.test",
+              accountId: "account-one",
+              organizationId: "team-one",
+              deviceId: "device-one",
+            };
+            const target: SessionTarget =
+              kind === "organization"
+                ? { kind, profileId: "login-first", source }
+                : { kind, profileId: "login-first", source, hostId: "approved-host", remoteUser: "Exact.User" };
+            onConnect(target, "Team host");
+          }}
+        >
+          {kind === "organization" ? "Start team" : "Start approved team"}
+        </button>
+      ))}
       <button
         onClick={() =>
           onViewOutput({
@@ -268,30 +269,47 @@ async function focusPane(button: "Previous pane" | "Next pane", terminal: Scople
   await waitFor(() => expect(document.activeElement).toBe(terminal));
 }
 
-it("preserves the complete team source when splitting and opening another session", async () => {
+it.each(["organization", "organizationAccessRequest"] as const)(
+  "preserves the complete %s source and exact target when splitting and opening another session",
+  async (kind) => {
+    const f = fixture();
+    shell();
+    await userEvent.click(
+      screen.getByRole("button", { name: kind === "organization" ? "Start team" : "Start approved team" }),
+    );
+    await connect(f, 0);
+    await userEvent.click(screen.getByRole("button", { name: "Split right" }));
+    await connect(f, 1);
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /Team host/ }), { clientX: 10, clientY: 10 });
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Open another session" }));
+    await connect(f, 2);
+    const targets = f.matching("session_connect").map((call) => call.args.target);
+    expect(targets).toEqual(
+      Array.from({ length: 3 }, () => ({
+        kind,
+        profileId: "login-first",
+        source: {
+          origin: "https://team.example.test",
+          accountId: "account-one",
+          organizationId: "team-one",
+          deviceId: "device-one",
+        },
+        ...(kind === "organizationAccessRequest" ? { hostId: "approved-host", remoteUser: "Exact.User" } : {}),
+      })),
+    );
+    expect(new Set(f.connections.map((connection) => connection.sessionId)).size).toBe(3);
+  },
+);
+
+it("keeps an approved team session out of Personal saved workspaces", async () => {
   const f = fixture();
   shell();
-  await userEvent.click(screen.getByRole("button", { name: "Start team" }));
+  await userEvent.click(screen.getByRole("button", { name: "Start approved team" }));
   await connect(f, 0);
-  await userEvent.click(screen.getByRole("button", { name: "Split right" }));
-  await connect(f, 1);
-  fireEvent.contextMenu(screen.getByRole("tab", { name: /Team host/ }), { clientX: 10, clientY: 10 });
-  await userEvent.click(await screen.findByRole("menuitem", { name: "Open another session" }));
-  await connect(f, 2);
-  const targets = f.matching("session_connect").map((call) => call.args.target);
-  expect(targets).toEqual(
-    Array.from({ length: 3 }, () => ({
-      kind: "organization",
-      profileId: "login-first",
-      source: {
-        origin: "https://team.example.test",
-        accountId: "account-one",
-        organizationId: "team-one",
-        deviceId: "device-one",
-      },
-    })),
-  );
-  expect(new Set(f.connections.map((connection) => connection.sessionId)).size).toBe(3);
+  await userEvent.click(screen.getByRole("button", { name: "Workspaces" }));
+  expect(await screen.findByText(/Team terminals cannot be saved/)).toBeTruthy();
+  expect((screen.getByRole("button", { name: "Save workspace" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(f.matching("workspaces_create")).toHaveLength(0);
 });
 
 it("maps attached runtime identities to each exact tab and pane without remounting terminals", async () => {

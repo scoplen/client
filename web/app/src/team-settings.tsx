@@ -8,6 +8,7 @@ import { TeamMembership } from "./team-membership";
 import { TeamAssets } from "./team-assets";
 import { TeamAuthoring } from "./team-authoring";
 import { TeamSshSetup } from "./team-ssh-setup";
+import { TeamAccessRequests } from "./team-access-requests";
 
 export function TeamSettings({
   authenticated,
@@ -40,6 +41,8 @@ export function TeamSettings({
   const [accessRules, setAccessRules] = useState<TeamSummary | null>(null);
   const accessOpener = useRef<HTMLButtonElement | null>(null);
   const [sshSetup, setSshSetup] = useState<TeamSummary | null>(null);
+  const [requests, setRequests] = useState<TeamSummary | null>(null);
+  const requestsOpener = useRef<HTMLButtonElement | null>(null);
   const sshOpener = useRef<HTMLButtonElement | null>(null);
   const assetsOpener = useRef<HTMLButtonElement | null>(null);
   const editRevision = useRef(0);
@@ -374,6 +377,17 @@ export function TeamSettings({
                 >
                   {t("teams.ssh.open")}
                 </Button>
+                <Button
+                  className="mt-3 ml-2"
+                  variant="secondary"
+                  disabled={locked || !authenticated}
+                  onClick={(event) => {
+                    requestsOpener.current = event.currentTarget;
+                    setRequests(team);
+                  }}
+                >
+                  {t("teams.requests.open")}
+                </Button>
               </li>
             ))}
           </ul>
@@ -409,6 +423,17 @@ export function TeamSettings({
           onClose={() => {
             setAccessRules(null);
             accessOpener.current?.focus();
+          }}
+        />
+      ) : null}
+      {requests && authenticated && !disabled ? (
+        <TeamAccessRequests
+          organizationId={requests.id}
+          name={requests.name}
+          onConnect={onConnect}
+          onClose={() => {
+            setRequests(null);
+            requestsOpener.current?.focus();
           }}
         />
       ) : null}

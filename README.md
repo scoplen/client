@@ -583,9 +583,38 @@ resource and uses its captured version. A conflict or uncertain change requires 
 
 Access rules manages local member groups and policies. Group members are current team memberships;
 identity-provider groups are read-only. Create access rule selects one member or local group and
-either May view assets or May connect. Connecting names an exact SSH username and selected Hosts
-or Host groups. Preview uses the shared Cedar generator and never grants dependent assets
-automatically. Advanced Cedar policy offers the supported single-policy source editor.
+May view assets, May connect or May request access. Connecting names an exact SSH username and
+selected Hosts or Host groups. Request permission selects individual Hosts only; it does not
+grant visibility, connection or approval permission. Preview uses the shared Cedar generator
+and never grants dependent assets automatically. Advanced Cedar policy offers the supported
+single-policy source editor.
+
+After a verified team connection-policy refusal, Review access opens the original Host and
+exact SSH username. Enter a duration of 1 to 86,400 seconds and a reason, then choose Check
+request. Only a permitted check for those exact details offers Request access. Editing the
+input or changing the session/team discards that check. Other connection failures do not
+offer this form, and the server rechecks current eligibility when the application is sent.
+
+Settings -> Personal account -> Teams -> Access requests provides My requests and the current
+Approvals inbox. Both refresh when opened, every minute while open, after a confirmed action,
+and through Refresh and review. Review shows the original requester, membership, Host ID,
+username, duration, reason and pending deadline before separate Approve, Deny or Cancel
+actions. An independent authorized teammate must approve; pending requests expire after
+24 hours. This first profile requests one Host and one exact username, with one approval.
+
+Approval records the original finite Grant interval; it is not proof of current access.
+Reviewing an approved request offers a separate Connect using a currently visible Login
+matching that exact Host and username. It opens an independent ordinary terminal with current
+certificate acquisition and Host-key review, without automatically connecting or selecting a
+different target. A missing matching Login explains how to refresh team assets.
+
+Rust retains each original request/action and its recovery state in the encrypted local store.
+An uncertain result offers only explicit Confirm original result with the original payload,
+identity and precondition. No refresh automatically repeats a mutation. After the confirmation
+window expires, explicitly refresh and review current requests before archiving uncertainty;
+archiving does not undo a completed action. Stale reviews require a fresh read. Unknown future
+request statuses remain visible without actions. Native desktop interaction and independent
+request-to-SSH deployment acceptance are recorded separately in the roadmap.
 
 SSH CA setup shows the team's authenticated public user CA and retained setup/certificate requests.
 An administrator can explicitly create the CA. Select a visible Login to inspect its exact Host,

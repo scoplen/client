@@ -3,6 +3,77 @@
 // Messages use ICU MessageFormat.
 
 export const en = {
+  "teams.requests.title": "Access requests",
+  "teams.requests.close": "Close access requests",
+  "teams.requests.reviewAccess": "Review access",
+  "teams.requests.open": "Access requests",
+  "teams.requests.mine": "My requests",
+  "teams.requests.approvals": "Approvals",
+  "teams.requests.view": "Request view",
+  "teams.requests.refresh": "Refresh and review",
+  "teams.requests.refreshNotice": "This view refreshes every minute while open. Refresh to review the latest state.",
+  "teams.requests.emptyMine": "No requests yet. You can review access after a team SSH connection is denied by policy.",
+  "teams.requests.emptyApprovals":
+    "No pending requests currently require your approval. This inbox will keep refreshing.",
+  "teams.requests.review": "Review request",
+  "teams.requests.details": "Request details",
+  "teams.requests.host": "Host ID",
+  "teams.requests.user": "SSH username",
+  "teams.requests.duration": "Duration in seconds (1–86,400)",
+  "teams.requests.reason": "Reason",
+  "teams.requests.requester": "Requester account ID",
+  "teams.requests.membership": "Original membership ID",
+  "teams.requests.deadline": "Pending deadline (UTC)",
+  "teams.requests.actor": "Decision account ID",
+  "teams.requests.decidedAt": "Decision time (UTC)",
+  "teams.requests.grant": "Original grant ID",
+  "teams.requests.validFrom": "Approved from (UTC)",
+  "teams.requests.validUntil": "Approved until (UTC)",
+  "teams.requests.historyNotice":
+    "This is the original approval history. Current access may have changed or been withdrawn.",
+  "teams.requests.checkNotice":
+    "Check these exact details before requesting access. Approval is separate and does not connect automatically.",
+  "teams.requests.eligible": "You can request access with these details. An authorized teammate must approve it.",
+  "teams.requests.ineligible":
+    "Your current team policy does not allow this request. Ask an administrator to review your access.",
+  "teams.requests.check": "Check request",
+  "teams.requests.create": "Request access",
+  "teams.requests.approve": "Approve request",
+  "teams.requests.deny": "Deny request",
+  "teams.requests.cancel": "Cancel request",
+  "teams.requests.connect": "Connect",
+  "teams.requests.login": "Login for this host and username",
+  "teams.requests.connectNotice": "Connect separately using the current team policy, certificate and host-key review.",
+  "teams.requests.status.pending": "Pending approval",
+  "teams.requests.status.approved": "Approved",
+  "teams.requests.status.denied": "Denied",
+  "teams.requests.status.expired": "Expired",
+  "teams.requests.status.cancelled": "Cancelled",
+  "teams.requests.status.deadline": "Pending deadline passed; no further action is available.",
+  "teams.requests.status.unknown": "Unrecognized status: {status}. Refresh before continuing.",
+  "teams.requests.operation.title": "Retained operation",
+  "teams.requests.operation.prepared": "These original details are ready to send. Sending requires your confirmation.",
+  "teams.requests.operation.unknown":
+    "The original action may have completed. Confirm its result using the retained operation before preparing another.",
+  "teams.requests.operation.confirmed":
+    "The original action is confirmed. The list refreshes separately to show current state.",
+  "teams.requests.operation.expired":
+    "The confirmation window ended. Refresh and review current requests, then explicitly archive this uncertainty. Archiving does not undo a completed action.",
+  "teams.requests.confirm": "Confirm original result",
+  "teams.requests.sendOriginal": "Send original action",
+  "teams.requests.archive": "Archive uncertain operation",
+  "teams.requests.finish": "Clear retained operation",
+  "teams.requests.error.unknown": "Resolve the retained original operation before preparing another action.",
+  "teams.requests.error.stale":
+    "These details or permissions changed. Refresh and review the request, or check your input again.",
+  "teams.requests.error.input":
+    "Use a whole duration from 1 to 86,400 seconds and a reason of at most 2,048 UTF-8 bytes with visible text. Only tabs and line breaks are allowed as control characters.",
+  "teams.requests.error.denied":
+    "Your current team policy does not allow this action. Refresh or ask an administrator to review access.",
+  "teams.requests.error.login":
+    "No visible Login matches this exact host and SSH username. Refresh team assets before connecting.",
+  "teams.requests.error.failed":
+    "The request could not be verified or loaded. Refresh and review current state; retain any uncertain original operation.",
   "terminalProfiles.title": "Terminal profiles",
   "terminalProfiles.body":
     "Save font, cursor and scrollback settings for this Local or Account profile on this device. Choose a profile in each Login. Colors below apply to every terminal.",

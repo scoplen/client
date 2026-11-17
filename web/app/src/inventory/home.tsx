@@ -419,7 +419,7 @@ function RecentSessionRow({
   const status = session.outcome === null ? "open" : session.outcome;
   const date = new Date(Number(session.startedAt));
   const formatted = Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
-  const team = session.target.kind === "organization" ? session.target.source : null;
+  const team = session.target.kind !== "personal" ? session.target.source : null;
   const content = (
     <>
       <span className="flex min-w-0 items-center justify-between gap-3">
