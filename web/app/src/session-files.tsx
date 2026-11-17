@@ -22,6 +22,7 @@ import {
   type SessionFileMutationResult,
   type SessionTransferIssue,
   type SessionTransferQueueSnapshot,
+  type WorkspaceDirectory,
 } from "./ipc/bindings";
 import { SessionTransferQueue } from "./session-transfer-queue";
 import { SessionFilePreview } from "./session-file-preview";
@@ -64,6 +65,8 @@ export function SessionFiles({
   onEnqueueFeedback,
   queue,
   queueIssue,
+  initialDirectory,
+  onDirectoryChange,
 }: {
   sessionId: string;
   transportId: string | null;
@@ -71,6 +74,8 @@ export function SessionFiles({
   active: boolean;
   queue: SessionTransferQueueSnapshot | null;
   queueIssue: SessionTransferIssue | null;
+  initialDirectory?: WorkspaceDirectory | null;
+  onDirectoryChange?: (path: number[]) => void;
   onClose: () => void;
   onFileOutcome: (outcome: FileOperationOutcome) => void;
   onEnqueueFeedback: (feedback: EnqueueFeedback) => void;
@@ -78,7 +83,12 @@ export function SessionFiles({
   const commands = useProfileCommands();
   const { t, locale } = useI18n();
   const formId = useId();
-  const [locations, setLocations] = useState<Location[]>([{ name: "", path: [46] }]);
+  const [locations, setLocations] = useState<Location[]>(() => {
+    const home = { name: "", path: [46] };
+    return initialDirectory && !(initialDirectory.path.length === 1 && initialDirectory.path[0] === 46)
+      ? [home, { name: initialDirectory.label, path: initialDirectory.path }]
+      : [home];
+  });
   const [entries, setEntries] = useState<RemoteFileEntry[]>([]);
   const [loadedLocation, setLoadedLocation] = useState<string | null>(null);
   const [activity, setActivity] = useState<Activity>(null);
@@ -109,6 +119,9 @@ export function SessionFiles({
   const dropList = useRef<HTMLDivElement>(null);
   const translator = useRef(t);
   const currentPath = locations[locations.length - 1]!.path;
+  useEffect(() => {
+    onDirectoryChange?.(currentPath);
+  }, [currentPath, onDirectoryChange]);
   const previewOwner = `${sessionId}:${transportId}:${currentPath.join(",")}`;
   if (preview && (!active || preview.owner !== previewOwner)) setPreview(null);
   if (editDialog && (!active || editDialog.owner !== previewOwner)) setEditDialog(null);

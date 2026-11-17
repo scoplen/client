@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Profile-bound saved terminal/tunnel intents. Validation never opens a connection.
+//! Profile-bound saved terminal/Files/tunnel intents. Validation never opens a connection.
 
 use crate::profile_context::ProfileRequest;
 use scoplen_client_core::workspaces::{
@@ -27,7 +27,7 @@ pub async fn workspaces_list(local: ProfileRequest) -> Result<Vec<WorkspaceView>
     operation(local, |workspaces| workspaces.list()).await
 }
 
-/// Save complete terminal trees and explicitly selected saved tunnels as a local object.
+/// Save complete terminal trees, Files intent and selected saved tunnels as a local object.
 #[tauri::command]
 #[specta::specta]
 pub async fn workspaces_create(
@@ -37,7 +37,7 @@ pub async fn workspaces_create(
     operation(local, move |workspaces| workspaces.create(input)).await
 }
 
-/// Preflight all slots, then project fresh terminal trees and ordered saved-tunnel starts.
+/// Preflight all slots and Files paths, then project fresh terminal and saved-tunnel intents.
 #[tauri::command]
 #[specta::specta]
 pub async fn workspaces_open(

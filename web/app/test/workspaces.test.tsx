@@ -52,12 +52,12 @@ vi.mock("../src/session", () => ({
 
 const saved: WorkspaceView = { id: "saved-workspace", name: "Operations", tabCount: 2, forwardCount: 0, issue: null };
 const tabs: WorkspaceInput["tabs"] = [
-  { tree: { kind: "terminal", profileId: "login-first" }, focused: 0 },
-  { tree: { kind: "terminal", profileId: "login-second" }, focused: 0 },
+  { tree: { kind: "terminal", profileId: "login-first", files: { kind: "closed" } }, focused: 0 },
+  { tree: { kind: "terminal", profileId: "login-second", files: { kind: "closed" } }, focused: 0 },
 ];
 
 const openedTab = (sessionId: string, profileId: string, label: string) => ({
-  tree: { kind: "terminal", terminal: { sessionId, profileId, label } },
+  tree: { kind: "terminal", terminal: { sessionId, profileId, label, files: null } },
   focusedSessionId: sessionId,
 });
 

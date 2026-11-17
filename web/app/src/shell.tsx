@@ -14,6 +14,8 @@ import type {
   WorkspaceTreeInput,
   SessionTarget,
   OpenedWorkspace,
+  WorkspaceFilesInput,
+  WorkspaceDirectory,
 } from "./ipc/bindings";
 import { Frame } from "./frame";
 import { HostsHome } from "./inventory/home";
@@ -36,6 +38,8 @@ type OpenSession = {
   snapshot?: TerminalSnapshot;
   terminalProfile?: string | null;
   sessionId?: string;
+  files: WorkspaceFilesInput;
+  initialFiles?: WorkspaceDirectory | null;
 };
 
 function savedTree(node: TerminalLayoutNode, sessions: OpenSession[]): WorkspaceTreeInput {
@@ -43,7 +47,7 @@ function savedTree(node: TerminalLayoutNode, sessions: OpenSession[]): Workspace
     const session = sessions.find((entry) => entry.id === node.paneId)!;
     return session.snapshot || session.target.kind !== "personal"
       ? { kind: "savedOutput" }
-      : { kind: "terminal", profileId: session.target.profileId };
+      : { kind: "terminal", profileId: session.target.profileId, files: session.files };
   }
   return {
     kind: "split",
@@ -61,6 +65,8 @@ function restoredTree(tree: WorkspaceTree, sessions: OpenSession[]): TerminalLay
       sessionId: terminal.sessionId,
       target: { kind: "personal", profileId: terminal.profileId },
       label: terminal.label,
+      files: terminal.files ? { kind: "open", path: terminal.files.path } : { kind: "closed" },
+      initialFiles: terminal.files,
     });
     return { type: "pane", paneId: terminal.sessionId };
   }
@@ -144,7 +150,7 @@ export function Shell({
   const openSession = (target: SessionTarget, label: string) => {
     const id = `session-${crypto.randomUUID()}`;
     workspace.restoreTab({ id, title: label }, { type: "pane", paneId: id }, id);
-    setSessions((current) => [...current, { id, target, label }]);
+    setSessions((current) => [...current, { id, target, label, files: { kind: "closed" } }]);
     setActiveTab(id);
     setView("hosts");
   };
@@ -161,6 +167,7 @@ export function Shell({
         label: `${target.hostName} · ${target.loginName}`,
         snapshot,
         terminalProfile: target.terminalProfile,
+        files: { kind: "closed" },
       },
     ]);
     setActiveTab(id);
@@ -192,7 +199,10 @@ export function Shell({
       return;
     const paneId = `pane-${crypto.randomUUID()}`;
     workspace.splitPane(id, direction, paneId);
-    setSessions((current) => [...current, { id: paneId, target: session.target, label: session.label }]);
+    setSessions((current) => [
+      ...current,
+      { id: paneId, target: session.target, label: session.label, files: { kind: "closed" } },
+    ]);
     setFocusRequest({ id: paneId });
   };
 
@@ -502,6 +512,12 @@ export function Shell({
                         savedOutput={session.snapshot}
                         savedTerminalProfile={session.terminalProfile}
                         sessionId={session.sessionId ?? session.id}
+                        initialFiles={session.initialFiles}
+                        onFilesChange={(files) =>
+                          setSessions((current) =>
+                            current.map((pane) => (pane.id === session.id ? { ...pane, files } : pane)),
+                          )
+                        }
                         forwardRuntime={forwards}
                         splitIssue={splitIssue}
                         onSplit={(direction) => split(session.id, direction)}

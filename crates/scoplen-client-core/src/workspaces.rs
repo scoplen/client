@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Device-local terminal and saved-tunnel layouts. Opening only projects intent.
+//! Device-local terminal, Files and saved-tunnel layouts. Opening only projects intent.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -18,6 +18,29 @@ use crate::repository::{
     RouteKind, SessionKind, SessionSpec, Workspace, WorkspaceChange,
 };
 use crate::store::{Store, StoreError};
+
+/// Complete Files intent for one terminal, including an explicitly closed panel.
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum WorkspaceFilesInput {
+    /// Do not open Files or retain a directory.
+    Closed,
+    /// Open Files on the terminal's new authenticated connection.
+    Open {
+        /// Original opaque SFTP directory request bytes.
+        path: Vec<u8>,
+    },
+}
+
+/// A saved directory projected with bounded literal display text.
+#[derive(Clone, Debug, Serialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceDirectory {
+    /// Original opaque SFTP directory request bytes.
+    pub path: Vec<u8>,
+    /// Safe bounded text; never use it to form a file request.
+    pub label: String,
+}
 
 /// Equal-half terminal split direction.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Type, PartialEq, Eq)]
@@ -38,6 +61,8 @@ pub enum WorkspaceTreeInput {
         /// Canonical Login object identifier.
         #[serde(rename = "profileId")]
         profile_id: String,
+        /// Complete panel and directory intent for this terminal.
+        files: WorkspaceFilesInput,
     },
     /// Offline output must not silently become a new SSH connection.
     SavedOutput,
@@ -112,6 +137,8 @@ pub struct WorkspaceTerminal {
     pub profile_id: String,
     /// Current Host and Login display text.
     pub label: String,
+    /// Initial Files intent; absent means a closed panel.
+    pub files: Option<WorkspaceDirectory>,
 }
 
 /// A restored tree using fresh ordinary runtime session identities.
@@ -272,11 +299,13 @@ impl Workspaces {
             return Err(WorkspaceIssue::InvalidActive);
         }
         let mut sessions = BTreeMap::new();
+        let mut files = BTreeMap::new();
         let mut order = Vec::with_capacity(input.tabs.len());
         let vault = self.personal_vault()?;
         for tab in input.tabs {
             let mut leaves = Vec::new();
-            let tree = self.capture_tree(tab.tree, 0, vault, &mut sessions, &mut leaves)?;
+            let tree =
+                self.capture_tree(tab.tree, 0, vault, &mut sessions, &mut leaves, &mut files)?;
             let focused = *leaves.get(tab.focused as usize).ok_or(WorkspaceIssue::InvalidActive)?;
             order.push(SavedTab { tree, focused });
         }
@@ -304,7 +333,7 @@ impl Workspaces {
                 }),
             );
         }
-        let layout = encode_layout(&order, input.active, &forwards)?;
+        let layout = encode_layout(&order, input.active, &forwards, &files)?;
         let record = Repository::<Workspace>::new(&self.store).create(WorkspaceChange {
             name: Some(input.name),
             layout: Edit::Set(layout),
@@ -338,6 +367,10 @@ impl Workspaces {
                     session_id: Uuid::now_v7().to_string(),
                     profile_id: session.profile.to_string(),
                     label,
+                    files: layout.files[slot].as_ref().map(|path| WorkspaceDirectory {
+                        path: path.clone(),
+                        label: crate::session_files::display_remote_path(path),
+                    }),
                 },
             );
         }
@@ -366,20 +399,30 @@ impl Workspaces {
         vault: Option<Uuid>,
         sessions: &mut BTreeMap<Uuid, Option<SessionSpec>>,
         leaves: &mut Vec<Uuid>,
+        files: &mut BTreeMap<Uuid, Option<Vec<u8>>>,
     ) -> Result<SavedTree, WorkspaceIssue> {
         if depth > 3 {
             return Err(WorkspaceIssue::DefinitionTooLarge);
         }
         match input {
             WorkspaceTreeInput::SavedOutput => Err(WorkspaceIssue::SavedOutputUnsupported),
-            WorkspaceTreeInput::Terminal { profile_id } => {
+            WorkspaceTreeInput::Terminal { profile_id, files: intent } => {
                 if leaves.len() >= 8 || sessions.len() >= 64 {
                     return Err(WorkspaceIssue::DefinitionTooLarge);
                 }
                 let profile = identifier(&profile_id)?;
+                let path = match intent {
+                    WorkspaceFilesInput::Closed => None,
+                    WorkspaceFilesInput::Open { path } => {
+                        crate::session_files::validate_path(&path)
+                            .map_err(|_| WorkspaceIssue::UnsupportedLayout)?;
+                        Some(path)
+                    }
+                };
                 self.login(profile, vault)?;
                 let slot = Uuid::now_v7();
                 leaves.push(slot);
+                files.insert(slot, path);
                 sessions.insert(
                     slot,
                     Some(SessionSpec {
@@ -393,8 +436,8 @@ impl Workspaces {
             }
             WorkspaceTreeInput::Split { direction, first, second } => Ok(SavedTree::Split(
                 direction,
-                Box::new(self.capture_tree(*first, depth + 1, vault, sessions, leaves)?),
-                Box::new(self.capture_tree(*second, depth + 1, vault, sessions, leaves)?),
+                Box::new(self.capture_tree(*first, depth + 1, vault, sessions, leaves, files)?),
+                Box::new(self.capture_tree(*second, depth + 1, vault, sessions, leaves, files)?),
             )),
         }
     }
@@ -592,6 +635,7 @@ struct SavedLayout {
     tabs: Vec<SavedTab>,
     active: Option<u32>,
     forwards: Vec<Uuid>,
+    files: BTreeMap<Uuid, Option<Vec<u8>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -631,9 +675,10 @@ fn encode_layout(
     order: &[SavedTab],
     active: Option<u32>,
     forwards: &[Uuid],
+    files: &BTreeMap<Uuid, Option<Vec<u8>>>,
 ) -> Result<Vec<u8>, WorkspaceIssue> {
     let bytes = cbor::encode(&Value::Map(vec![
-        (Value::UInt(1), Value::UInt(3)),
+        (Value::UInt(1), Value::UInt(4)),
         (
             Value::UInt(2),
             Value::Array(
@@ -652,6 +697,20 @@ fn encode_layout(
         (
             Value::UInt(4),
             Value::Array(forwards.iter().map(|id| Value::Bytes(id.as_bytes().to_vec())).collect()),
+        ),
+        (
+            Value::UInt(5),
+            Value::Map(
+                files
+                    .iter()
+                    .map(|(id, path)| {
+                        (
+                            Value::Bytes(id.as_bytes().to_vec()),
+                            path.as_ref().map_or(Value::Null, |path| Value::Bytes(path.clone())),
+                        )
+                    })
+                    .collect(),
+            ),
         ),
     ]))
     .map_err(|_| WorkspaceIssue::DefinitionTooLarge)?;
@@ -704,10 +763,11 @@ fn definition(object: &Object) -> Result<(Workspace, SavedLayout), WorkspaceIssu
         return Err(unsupported());
     };
     let [
-        (Value::UInt(1), Value::UInt(3)),
+        (Value::UInt(1), Value::UInt(4)),
         (Value::UInt(2), Value::Array(order)),
         (Value::UInt(3), active),
         (Value::UInt(4), Value::Array(forwards)),
+        (Value::UInt(5), Value::Map(files)),
     ] = fields.as_slice()
     else {
         return Err(unsupported());
@@ -734,6 +794,24 @@ fn definition(object: &Object) -> Result<(Workspace, SavedLayout), WorkspaceIssu
                 || session.working_directory.is_some()
         })
     }) {
+        return Err(unsupported());
+    }
+    let mut directories = BTreeMap::new();
+    for (id, value) in files {
+        let id = slot(id)?;
+        let path = match value {
+            Value::Null => None,
+            Value::Bytes(path) => {
+                crate::session_files::validate_path(path).map_err(|_| unsupported())?;
+                Some(path.clone())
+            }
+            _ => return Err(unsupported()),
+        };
+        if !unique.contains(&id) || directories.insert(id, path).is_some() {
+            return Err(unsupported());
+        }
+    }
+    if directories.keys().copied().collect::<BTreeSet<_>>() != unique {
         return Err(unsupported());
     }
     if forwards.len() > 16 {
@@ -764,7 +842,7 @@ fn definition(object: &Object) -> Result<(Workspace, SavedLayout), WorkspaceIssu
         Value::UInt(index) if *index < order.len() as u64 => Some(*index as u32),
         _ => return Err(unsupported()),
     };
-    Ok((record, SavedLayout { tabs: order, active, forwards }))
+    Ok((record, SavedLayout { tabs: order, active, forwards, files: directories }))
 }
 
 #[cfg(test)]

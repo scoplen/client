@@ -751,21 +751,27 @@ connected during these changes and while another tab or Settings is shown.
 
 **Workspaces** in the tab bar opens the saved-definition dialog from Hosts or a
 terminal. Save captures every terminal tab's complete tree, remembered focused
-pane and the active tab or Hosts selection. It requires a name and at least one
-terminal, and refuses the complete save if any pane contains saved output.
+pane, Files panel state and selected directory, and the active tab or Hosts selection.
+Saved Local/Remote/Dynamic tunnels are selected explicitly with their Logins; tunnel-only
+definitions are allowed. Save requires a name and at least one terminal or selected
+tunnel, and refuses the complete save if any pane contains saved output or team intent.
 The dialog separates available definitions from unavailable ones, explains fixed
 failure categories, offers Refresh after a failure and confirms Delete.
 
 | Generated command | What the core does |
 | --- | --- |
-| `workspacesCreate(input)` | Validates all trees and current Login dependencies, then creates one new local Workspace. It stores no output, commands, authentication answers or connection state. |
+| `workspacesCreate(input)` | Validates complete trees, Files paths and selected tunnel/Login dependencies, then creates one new local version-four Workspace. Every terminal supplies explicit Closed or Open Files intent. It stores no output, commands, authentication answers or connection state. |
 | `workspacesList()` | Lists current-profile definitions and their availability without reserving or connecting sessions. Unsupported definitions remain visible and deletable. |
-| `workspacesOpen(id)` | Validates the complete saved definition and returns fresh runtime identities and current Login labels. Only a successful explicit Open appends the new trees through the normal connection owner, preserving existing tabs. |
+| `workspacesOpen(id)` | Validates the complete saved definition and returns fresh runtime identities, current Login labels, initial Files directories and ordered saved-tunnel intents. Only a successful explicit Open appends the new trees through the normal connection owner, preserving existing tabs and runs. |
 | `workspacesDelete(id)` | Tombstones the selected definition after ownership checks, including definitions this build cannot open. It does not close live sessions. |
 
 Loading the dialog, startup and unlock never connect automatically. Open starts
 fresh shells with current trust and authentication; it does not replay commands
-or restore remote processes, Files views or tunnels. Retained version-one layouts
+or restore remote processes or transfer jobs. Open Files panels list the saved opaque
+directory bytes only after their terminal is ready, on that same SSH connection.
+Listing errors keep their directory selected with Try again, explicit Home and Close files.
+Reconnect retains the ordinary closed-panel behavior. Selected tunnels start through
+the existing Tunnels owner with per-start results. Retained versions one through three
 appear unavailable without conversion. Native interaction and restart acceptance
 remain unverified in the roadmap.
 
