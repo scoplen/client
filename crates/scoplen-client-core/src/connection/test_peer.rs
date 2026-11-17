@@ -68,7 +68,11 @@ impl server::Handler for Handler {
         Ok(if user == "trust-fixture" && password == "disposable-trust-password" {
             if matches!(self.mode, Authentication::Password | Authentication::Forwarding) {
                 server::Auth::Accept
-            } else if self.mode == Authentication::PasswordThenInteractive {
+            } else if matches!(
+                self.mode,
+                Authentication::PasswordThenInteractive
+                    | Authentication::UnsupportedAfterInteractive
+            ) {
                 self.factor_accepted = true;
                 remaining(russh::MethodKind::KeyboardInteractive, true)
             } else {

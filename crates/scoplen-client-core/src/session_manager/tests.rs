@@ -1497,6 +1497,13 @@ fn only_typed_network_causes_qualify_for_automatic_reconnect() {
     for error in [
         SshConnectionError::InvalidPrivateKey,
         SshConnectionError::AgentCancelled,
+        SshConnectionError::InvalidCommandPassword,
+        SshConnectionError::CommandPasswordUnavailable,
+        SshConnectionError::CommandPasswordFailed,
+        SshConnectionError::CommandPasswordEmpty,
+        SshConnectionError::CommandPasswordTooLarge,
+        SshConnectionError::CommandPasswordTimeout,
+        SshConnectionError::CommandPasswordAuthenticationRejected,
         SshConnectionError::InvalidUsername,
         SshConnectionError::OutputTooLarge { limit: 1 },
         SshConnectionError::Engine(ClientError::Protocol),

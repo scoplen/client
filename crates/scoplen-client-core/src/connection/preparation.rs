@@ -22,10 +22,10 @@ use super::agent_forwarding::ForwardedAgent;
 use super::trust::TrustPolicy;
 
 use super::{
-    ConnectionPlan, ConnectionRoute, HostKeyPresentation, HostKeyReview, HostKeyStatus,
-    HostKeyTrustSource, MAX_PRIVATE_KEY_PASSPHRASE, SshConnection, SshConnectionError,
-    assess_host_key, private_key_passphrase_required, resolve_identified_connection_plan,
-    transport_route, validate_credential,
+    ConnectionPlan, ConnectionRoute, CredentialMaterial, HostKeyPresentation, HostKeyReview,
+    HostKeyStatus, HostKeyTrustSource, MAX_PRIVATE_KEY_PASSPHRASE, SshConnection,
+    SshConnectionError, assess_host_key, private_key_passphrase_required,
+    resolve_identified_connection_plan, transport_route, validate_credential,
 };
 use super::{SessionTarget, team::TeamConnectionSnapshot};
 use crate::personal_server::{PersonalServer, TeamSshError, TeamSshSource};
@@ -110,7 +110,7 @@ pub enum PreparationPhase {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum PreparationEvent {
-    /// Review an Organization-authored program before creating any local process.
+    /// Review the exact connection or password program before creating its local process.
     CommandExecution {
         /// Exact source and target selected by this preparation.
         context: PreparationContext,
@@ -932,6 +932,29 @@ async fn prepare_resolved_inner(
             }
             let authentication_deadline = Instant::now() + AUTHENTICATION_TIMEOUT;
             let authentication = async {
+                if let CredentialMaterial::External { provider } = &step.plan.credential {
+                    let command = super::command_password::CommandPassword::parse(provider)?;
+                    control
+                        .prompt_until(
+                            PromptKind::Command,
+                            |prompt_id| PreparationEvent::CommandExecution {
+                                context: step.context.clone(),
+                                prompt_id,
+                                program: command.program.clone(),
+                                arguments: command.arguments.clone(),
+                            },
+                            &emit,
+                            Some(authentication_deadline),
+                            None,
+                        )
+                        .await?;
+                    emit(PreparationEvent::Progress {
+                        context: step.context.clone(),
+                        phase: PreparationPhase::Authenticating,
+                    })?;
+                    let password = control.run(async { Ok(command.password().await) }).await??;
+                    connection.credential = Some(CredentialMaterial::Password(password));
+                }
                 let mut incorrect = false;
                 loop {
                     let passphrase = if step.passphrase {
@@ -1001,6 +1024,20 @@ async fn prepare_resolved_inner(
                         return Err(PreparationError::Local(error));
                     }
                     match authenticated {
+                        Err(
+                            SshConnectionError::Engine(ClientError::AuthenticationRejected {
+                                ..
+                            })
+                            | SshConnectionError::UnsupportedAuthenticationFactor,
+                        ) if matches!(
+                            step.plan.credential,
+                            CredentialMaterial::External { .. }
+                        ) =>
+                        {
+                            return Err(
+                                SshConnectionError::CommandPasswordAuthenticationRejected.into()
+                            );
+                        }
                         Err(SshConnectionError::InvalidPrivateKeyPassphrase) if step.passphrase => {
                             incorrect = true
                         }
@@ -1060,5 +1097,7 @@ async fn prepare_resolved_inner(
     Ok(target)
 }
 
+#[cfg(test)]
+mod command_password_tests;
 #[cfg(test)]
 mod tests;
