@@ -420,6 +420,31 @@ preview requires comparison again; an uncertain Apply requires reviewing the tra
 Local files remain outside encrypted application storage. Native folder-picker and rendered
 Windows/macOS interaction remain separate acceptance.
 
+Upload folder copies a native-selected source folder into a new root in the current remote
+directory. A remote folder's Download folder action selects a native destination parent.
+Review the source, destination parent and editable new root name before adding one queue
+item for the complete tree. The prepared selection reserves one slot and expires after five
+minutes; an invalid root name can be corrected within that same review. An admitted selection
+cannot be used again. The destination root must not already exist: copies never merge with
+or replace an existing directory.
+
+The complete source is scanned before creating the root, with limits of 10,000 entries
+including the root, depth 32, 16 MiB retained metadata and 300 seconds of enumeration.
+Links, reparse points, special entries, incomplete listings and invalid or colliding names
+refuse the copy before creation. Download names use the same UTF-8 and conservative native
+equivalence rules as folder comparison, across both files and directories. Complete directory
+enumeration supports flat sources beyond the Files browser's 1,024-entry display limit.
+
+Copies preserve ordinary file contents and directory structure, including empty files and
+folders. They do not preserve metadata or provide a source snapshot. The queue shows scanning,
+copying and finalizing, total bytes and entries, confirmed completed entries and whether the
+new root was created. Cancel is unavailable during a dispatched mkdir or file publication
+and becomes available again between confirmed steps. Failure or cancellation preserves
+completed files and directories and cleans up only the current owned staging file. An unknown
+mkdir or publication result requires manual review and is never retried automatically.
+Folder copies have no Pause/Resume or process recovery. Native picker and rendered platform
+interaction remain separate acceptance.
+
 When a session closes or fails, choose Reconnect in its header to connect again
 in the same tab. Its displayed terminal output stays available. Reconnect waits
 for the previous connection task to finish, rechecks the host key, resolves the

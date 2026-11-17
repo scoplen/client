@@ -629,6 +629,41 @@ the public queue with later queued work, terminal input/resize and exact saved b
 These checks do not establish cross-transport or process recovery, immutable source/staging
 files, inode identity, or physical-platform UI acceptance.
 
+## Recursive directory-copy checks
+
+```text
+cargo test --locked -p scoplen-client-core --lib directory_copy
+cargo test --locked -p scoplen-client-core --lib session_transfers::tests
+pwsh -NoProfile -File scripts/test-ssh-session-files.ps1
+```
+
+Folder copies reuse the original terminal's authenticated connection and one FIFO item.
+The complete source scan has independent tree limits: 10,000 entries including root, depth
+32, 16 MiB retained metadata, and a 300-second absolute deadline. Remote enumeration reads
+to EOF without inheriting the browser's entry, metadata or batch limits. The manifest retains
+parent indices, individual remote/native names and bounded metadata rather than complete
+paths per entry. Native collision keys apply to files and directories together.
+
+The core tests cover manifest/path budgets, 1,100-entry flat scans, local nested enumeration,
+file/directory case and normalization collisions, selection reservation and expiry, invalid
+name correction, abandoned picker completion, single-use admission and transport replacement.
+Faulted SFTP peers cover an incomplete listing, the absolute enumeration deadline despite
+responsive individual requests, changed source metadata after a confirmed file, lost mkdir
+and child-publication acknowledgements, and write refusal with only owned staging cleanup.
+Queue regressions retain one identity and capacity slot across 32 child publications, reject
+Pause/Resume and reopen cancellation only after a confirmed effect. The OpenSSH Files fixture
+uses the public queue for binary, Unicode-name and empty-file/folder/root copies in both
+directions, a file larger than the shallow comparison's 64 MiB hash cap with bounded-buffer
+byte verification, terminal input/resize during the active folder upload, more than sixteen
+children, existing-root refusals, link refusal and a 1,025-file flat download.
+
+Only the current file owns staging. Known failures preserve previous files and directories;
+cleanup never recursively removes the new root. A lost mkdir or publication acknowledgement
+retains Unknown for explicit review without replay. Blocking local publication clears its
+effect fence only after the original owner observes the result; losing that observation
+retains Unknown. These checks do not establish source snapshots, ancestor confinement,
+native folder-picker or rendered Windows/macOS acceptance.
+
 ## Standalone tunnel checks
 
 ```text

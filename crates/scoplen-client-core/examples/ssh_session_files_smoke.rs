@@ -10,6 +10,9 @@ use std::time::Duration;
 
 use scoplen_client_core::connection::preparation::{PreparationEvent, PreparationResponse};
 use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
+use scoplen_client_core::session_directory_copy::{
+    SessionDirectoryCopyIssue, SessionDirectoryCopyPhase, SessionDirectoryCopyPrepareResult,
+};
 use scoplen_client_core::session_directory_sync::{
     SessionDirectorySyncApplyResult, SessionDirectorySyncChange, SessionDirectorySyncIssue,
     SessionDirectorySyncPlan, SessionDirectorySyncPrepareResult,
@@ -94,7 +97,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         result
     };
     let (terminal, exercise) =
-        tokio::time::timeout(Duration::from_secs(120), async { tokio::join!(terminal, exercise) })
+        tokio::time::timeout(Duration::from_secs(360), async { tokio::join!(terminal, exercise) })
             .await?;
     exercise?;
     terminal?;
@@ -156,6 +159,7 @@ async fn exercise(
     exercise_preview(manager, &transport, local, output).await?;
     exercise_editor(manager, &transport, local, output).await?;
     exercise_directory_sync(manager, &transport, local, output).await?;
+    exercise_directory_copy(manager, &transport, local, output).await?;
 
     let destination = local.join("downloaded.bin");
     fs::write(&destination, b"original")?;
@@ -1827,6 +1831,233 @@ async fn assert_drop_bytes(
         .await?;
     assert_eq!(result.status, SessionDownloadStatus::Saved);
     assert_eq!(fs::read(destination)?, expected);
+    Ok(())
+}
+
+async fn directory_copy(
+    manager: &SessionManager,
+    transport: &str,
+    local: std::path::PathBuf,
+    remote: &[u8],
+    direction: SessionTransferDirection,
+    root_name: &str,
+) -> Result<SessionTransferItem, Box<dyn std::error::Error>> {
+    let SessionDirectoryCopyPrepareResult::Prepared { selection } = manager
+        .prepare_directory_copy_with_picker(
+            "fixture-terminal",
+            transport,
+            remote.to_vec(),
+            direction,
+            move || async move { Ok(Some(local)) },
+        )
+        .await?
+    else {
+        return Err("directory fixture selection was cancelled".into());
+    };
+    let admitted = manager.enqueue_directory_copy(
+        "fixture-terminal",
+        transport,
+        &selection.selection_id,
+        root_name,
+    )?;
+    let (_, item, execution) = queue_identity(&admitted);
+    tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+            if let Some(row) = snapshot.recent.into_iter().find(|row| row.item_id == item) {
+                assert_eq!(row.execution_id, execution);
+                return Ok::<_, Box<dyn std::error::Error>>(row);
+            }
+            let row = snapshot
+                .items
+                .iter()
+                .find(|row| row.item_id == item)
+                .ok_or("directory item disappeared")?;
+            assert_eq!(row.execution_id, execution);
+            assert!(!row.can_pause && !row.can_resume);
+            assert_eq!(snapshot.outstanding, 1);
+            if row.state == SessionTransferState::Unknown {
+                return Err("directory result unknown; no replay attempted".into());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?
+}
+
+async fn exercise_directory_copy(
+    manager: &SessionManager,
+    transport: &str,
+    local: &std::path::Path,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read as _, Seek as _, Write as _};
+
+    let source = local.join("recursive-source");
+    fs::create_dir_all(source.join("nested/empty"))?;
+    fs::create_dir_all(source.join("empty"))?;
+    for index in 0..24 {
+        fs::write(source.join("nested").join(format!("file-{index:02}")), [0, 255, index])?;
+    }
+    fs::write(source.join("zero"), b"")?;
+    let unicode_name = "\u{6587}\u{4ef6}-\u{e9}.bin";
+    fs::write(source.join(unicode_name), [255, 0, 3, 7])?;
+    let large_size = 64 * 1024 * 1024 + 1;
+    let mut large = fs::File::create(source.join("large.bin"))?;
+    large.set_len(large_size)?;
+    large.seek(std::io::SeekFrom::End(-4))?;
+    large.write_all(&[255, 0, 7, 3])?;
+    drop(large);
+    let total_bytes = (large_size + 76).to_string();
+    let upload = directory_copy(
+        manager,
+        transport,
+        source.clone(),
+        b"./.scoplen-files-smoke",
+        SessionTransferDirection::Upload,
+        "recursive-upload",
+    );
+    let terminal = async {
+        loop {
+            let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+            if snapshot.items.iter().any(|row| {
+                row.directory_copy
+                    .as_ref()
+                    .is_some_and(|progress| progress.phase == SessionDirectoryCopyPhase::Copying)
+            }) {
+                break;
+            }
+            if snapshot.recent.iter().any(|row| row.name == "recursive-upload") {
+                return Err("folder settled before the terminal liveness probe".into());
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        manager.input(
+            "fixture-terminal",
+            transport,
+            b"printf '%s%s\\n' SCOPLEN- DIRECTORY-ALIVE\n".to_vec(),
+        )?;
+        manager.resize("fixture-terminal", transport, 112, 36)?;
+        wait_for(output, b"SCOPLEN-DIRECTORY-ALIVE").await
+    };
+    let (saved, ()) = tokio::try_join!(upload, terminal)?;
+    assert_eq!(saved.state, SessionTransferState::Saved);
+    assert_eq!(saved.transferred_bytes, total_bytes);
+    let progress = saved.directory_copy.as_ref().unwrap();
+    assert_eq!((progress.files_completed, progress.directories_created), (27, 4));
+    assert!(progress.root_created && !progress.root_creation_unknown);
+    let download = local.join("recursive-download-parent");
+    fs::create_dir(&download)?;
+    let saved = directory_copy(
+        manager,
+        transport,
+        download.clone(),
+        b"./.scoplen-files-smoke/recursive-upload",
+        SessionTransferDirection::Download,
+        "recursive-download",
+    )
+    .await?;
+    assert_eq!(saved.state, SessionTransferState::Saved);
+    assert_eq!(saved.transferred_bytes, total_bytes);
+    let destination = download.join("recursive-download");
+    assert!(destination.join("nested/empty").is_dir() && destination.join("empty").is_dir());
+    assert_eq!(fs::read(destination.join("zero"))?, b"");
+    assert_eq!(fs::read(destination.join(unicode_name))?, [255, 0, 3, 7]);
+    {
+        let mut source_large = fs::File::open(source.join("large.bin"))?;
+        let mut copied_large = fs::File::open(destination.join("large.bin"))?;
+        assert_eq!(copied_large.metadata()?.len(), large_size);
+        let mut expected = vec![0; 64 * 1024];
+        let mut actual = vec![0; 64 * 1024];
+        loop {
+            let count = source_large.read(&mut expected)?;
+            copied_large.read_exact(&mut actual[..count])?;
+            assert_eq!(&actual[..count], &expected[..count]);
+            if count == 0 {
+                break;
+            }
+        }
+    }
+    for index in 0..24 {
+        assert_eq!(
+            fs::read(destination.join("nested").join(format!("file-{index:02}")))?,
+            [0, 255, index]
+        );
+    }
+    let empty = local.join("empty-source-tree");
+    fs::create_dir(&empty)?;
+    for direction in [SessionTransferDirection::Upload, SessionTransferDirection::Download] {
+        let (selected, remote, name) = match direction {
+            SessionTransferDirection::Upload => {
+                (empty.clone(), b"./.scoplen-files-smoke".as_slice(), "empty-tree-upload")
+            }
+            SessionTransferDirection::Download => (
+                download.clone(),
+                b"./.scoplen-files-smoke/empty-tree-upload".as_slice(),
+                "empty-tree-download",
+            ),
+        };
+        let saved = directory_copy(manager, transport, selected, remote, direction, name).await?;
+        assert_eq!(saved.state, SessionTransferState::Saved);
+        assert_eq!(
+            (saved.transferred_bytes.as_str(), saved.total_bytes.as_deref()),
+            ("0", Some("0"))
+        );
+        let progress = saved.directory_copy.as_ref().unwrap();
+        assert_eq!((progress.files_total, progress.files_completed), (Some(0), 0));
+        assert_eq!((progress.directories_total, progress.directories_created), (Some(1), 1));
+        assert!(progress.root_created && !progress.root_creation_unknown);
+    }
+    assert_eq!(fs::read_dir(download.join("empty-tree-download"))?.count(), 0);
+    for direction in [SessionTransferDirection::Upload, SessionTransferDirection::Download] {
+        let (selected, remote, name) = match direction {
+            SessionTransferDirection::Upload => {
+                (source.clone(), b"./.scoplen-files-smoke".as_slice(), "recursive-upload")
+            }
+            SessionTransferDirection::Download => (
+                download.clone(),
+                b"./.scoplen-files-smoke/recursive-upload".as_slice(),
+                "recursive-download",
+            ),
+        };
+        let refused = directory_copy(manager, transport, selected, remote, direction, name).await?;
+        assert_eq!(refused.state, SessionTransferState::Conflict);
+        let progress = refused.directory_copy.as_ref().unwrap();
+        assert_eq!(progress.issue, Some(SessionDirectoryCopyIssue::DestinationExists));
+        assert!(!progress.root_created && !progress.root_creation_unknown);
+    }
+    let refused = directory_copy(
+        manager,
+        transport,
+        download.clone(),
+        b"./.scoplen-files-smoke/sync-links",
+        SessionTransferDirection::Download,
+        "links-refused",
+    )
+    .await?;
+    assert_eq!(
+        refused.directory_copy.as_ref().unwrap().issue,
+        Some(SessionDirectoryCopyIssue::UnsupportedEntry)
+    );
+    assert!(!download.join("links-refused").exists());
+    manager.input("fixture-terminal", transport, b"mkdir .scoplen-files-smoke/recursive-flat; i=0; while test $i -lt 1025; do : > .scoplen-files-smoke/recursive-flat/file-$i; i=$((i+1)); done; printf '%s%s\\n' SCOPLEN- RECURSIVE-FLAT-READY\n".to_vec())?;
+    wait_for(output, b"SCOPLEN-RECURSIVE-FLAT-READY").await?;
+    let flat = directory_copy(
+        manager,
+        transport,
+        download.clone(),
+        b"./.scoplen-files-smoke/recursive-flat",
+        SessionTransferDirection::Download,
+        "flat",
+    )
+    .await?;
+    assert_eq!(flat.state, SessionTransferState::Saved);
+    assert_eq!(flat.transferred_bytes, "0");
+    assert_eq!(flat.directory_copy.as_ref().unwrap().files_completed, 1025);
+    assert_eq!(fs::read_dir(download.join("flat"))?.count(), 1025);
+    println!(
+        "OpenSSH recursive upload/download: binary/Unicode, >64MiB file, empty files/folders/root, >16 children, 1025 flat files, new-root refusal, link refusal"
+    );
     Ok(())
 }
 

@@ -225,7 +225,7 @@ async fn remote_files(
     Ok((files, excluded))
 }
 
-fn native_child(name: &[u8]) -> Result<OsString, Issue> {
+pub(super) fn native_child(name: &[u8]) -> Result<OsString, Issue> {
     if name.is_empty() || name == b"." || name == b".." || name.contains(&0) || name.contains(&b'/')
     {
         return Err(Issue::UnsupportedName);
@@ -260,6 +260,15 @@ fn native_child(name: &[u8]) -> Result<OsString, Issue> {
         return Err(Issue::UnsupportedName);
     }
     Ok(native)
+}
+
+pub(super) fn destination_key(name: &[u8]) -> Result<String, Issue> {
+    Ok(std::str::from_utf8(name)
+        .map_err(|_| Issue::UnsupportedName)?
+        .nfd()
+        .flat_map(char::to_uppercase)
+        .nfd()
+        .collect())
 }
 
 fn stable_attributes(before: &SftpAttributes, after: &SftpAttributes) -> bool {
@@ -413,12 +422,7 @@ pub(crate) async fn compare(
             }
             SessionTransferDirection::Download => {
                 let native = native_child(&name)?;
-                let key = std::str::from_utf8(&name)
-                    .map_err(|_| Issue::UnsupportedName)?
-                    .nfd()
-                    .flat_map(char::to_uppercase)
-                    .nfd()
-                    .collect::<String>();
+                let key = destination_key(&name)?;
                 if !targets.insert(key) {
                     return Err(Issue::UnsupportedName);
                 }

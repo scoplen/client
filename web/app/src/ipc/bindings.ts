@@ -174,6 +174,12 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	sessionApplyDirectorySync: (sessionId: string, transportId: string, planId: string, locale: Locale) => typedError<SessionDirectorySyncApplyResult, SessionDirectorySyncIssue>(__TAURI_INVOKE("session_apply_directory_sync", { sessionId, transportId, planId, locale })),
 	/**  Discard one unapplied comparison without changing admitted queue rows. */
 	sessionDiscardDirectorySync: (sessionId: string, planId: string) => typedError<null, SessionDirectorySyncIssue>(__TAURI_INVOKE("session_discard_directory_sync", { sessionId, planId })),
+	/**  Select a native source folder or destination parent without starting a copy. */
+	sessionPrepareDirectoryCopy: (sessionId: string, transportId: string, remotePath: number[], direction: SessionTransferDirection, locale: Locale) => typedError<SessionDirectoryCopyPrepareResult, SessionDirectoryCopyIssue>(__TAURI_INVOKE("session_prepare_directory_copy", { sessionId, transportId, remotePath, direction, locale })),
+	/**  Admit a reviewed new-root copy once through the existing transfer queue. */
+	sessionEnqueueDirectoryCopy: (sessionId: string, transportId: string, selectionId: string, rootName: string) => typedError<SessionTransferEnqueueResult, SessionDirectoryCopyIssue>(__TAURI_INVOKE("session_enqueue_directory_copy", { sessionId, transportId, selectionId, rootName })),
+	/**  Release an unapplied native selection and its reserved queue slot. */
+	sessionDiscardDirectoryCopy: (sessionId: string, selectionId: string) => typedError<null, SessionDirectoryCopyIssue>(__TAURI_INVOKE("session_discard_directory_copy", { sessionId, selectionId })),
 	/**  Read a complete queue snapshot without changing any transfer's lifetime. */
 	sessionTransferQueue: (sessionId: string) => typedError<SessionTransferQueueSnapshot, SessionTransferIssue>(__TAURI_INVOKE("session_transfer_queue", { sessionId })),
 	/**  Select a local source, then leave its transfer owned by the logical session. */
@@ -2638,6 +2644,107 @@ export type SessionChanged = {
 	change: SessionChangeKind,
 };
 
+/**  Fixed operational categories; native paths and peer errors remain in Rust. */
+export type SessionDirectoryCopyIssue =
+/**  The original session, account or transport is no longer current. */
+"unavailable" |
+/**  Choose an existing ordinary source directory or destination parent. */
+"invalidSelection" |
+/**  The prepared native selection expired. */
+"selectionExpired" |
+/**  Links, reparse points and special entries cannot be copied. */
+"unsupportedEntry" |
+/**  A name is invalid, cannot map losslessly or collides at the destination. */
+"unsupportedName" |
+/**  A new root is required; existing destinations are never adopted. */
+"destinationExists" |
+/**  The source contains more than the bounded entry count. */
+"tooManyEntries" |
+/**  The source exceeds the maximum directory depth. */
+"tooDeep" |
+/**  The retained tree metadata exceeds its bound. */
+"tooMuchMetadata" |
+/**  Enumeration or an existing request deadline expired. */
+"timeout" |
+/**  Explicit cancellation settled before the next publication. */
+"cancelled" |
+/**  A source stopped matching the admitted ordinary file. */
+"sourceChanged" |
+/**  The destination stopped matching the admitted new target. */
+"targetChanged" |
+/**  There is no outstanding transfer slot available. */
+"queueFull" |
+/**  Another native selection or confirmation still owns the dialog permit. */
+"nativeDialogBusy" |
+/**  A native filesystem operation failed. */
+"localIo" |
+/**  The peer explicitly rejected an operation. */
+"remoteDenied" |
+/**  Cleanup of the current owned staging file could not be confirmed. */
+"cleanupIncomplete" |
+/**  A dispatched mkdir or file publication has an unknown result. */
+"publicationUnknown" |
+/**  The copy could not complete. */
+"failed";
+
+/**  Phase within one queue-owned recursive copy. */
+export type SessionDirectoryCopyPhase =
+/**  Complete source enumeration precedes root creation. */
+"scanning" |
+/**  Creating directories or copying ordinary file contents. */
+"copying" |
+/**  Verifying and publishing the current ordinary file. */
+"finalizing";
+
+/**  Selection does not scan or create a destination. */
+export type SessionDirectoryCopyPrepareResult =
+/**  Ready for explicit review of the new destination root. */
+{ kind: "prepared";
+/**  Bounded display-only selection. */
+selection: SessionDirectoryCopySelection } |
+/**  The native folder picker was closed. */
+{ kind: "cancelled" };
+
+/**  Aggregate tree progress for one stable queue item and execution. */
+export type SessionDirectoryCopyProgress = {
+	/**  Current tree phase; a phase alone never implies success. */
+	phase: SessionDirectoryCopyPhase,
+	/**  Complete source-file count, after enumeration. */
+	filesTotal: number | null,
+	/**  Complete directory count including the source root, after enumeration. */
+	directoriesTotal: number | null,
+	/**  Files with confirmed publication. */
+	filesCompleted: number,
+	/**  Directories with confirmed successful creation. */
+	directoriesCreated: number,
+	/**  Safe bounded relative display name for the current entry. */
+	currentName: string | null,
+	/**  The new root's creation was acknowledged. */
+	rootCreated: boolean,
+	/**  The root may exist, but its creation acknowledgement was lost. */
+	rootCreationUnknown: boolean,
+	/**  Specific directory-copy failure, when present. */
+	issue: SessionDirectoryCopyIssue | null,
+};
+
+/**  Native paths stay with the prepared Rust owner. */
+export type SessionDirectoryCopySelection = {
+	/**  Single-use, short-lived selection identity. */
+	selectionId: string,
+	/**  Original logical terminal. */
+	sessionId: string,
+	/**  Original authenticated SSH transport. */
+	transportId: string,
+	/**  Explicit source-to-destination direction. */
+	direction: SessionTransferDirection,
+	/**  Safe bounded source basename. */
+	sourceName: string,
+	/**  Safe bounded destination-parent basename. */
+	destinationParentName: string,
+	/**  Lossless valid source basename, when available. */
+	defaultRootName: string | null,
+};
+
 /**  Explicit Apply either queued its complete changes or had nothing to write. */
 export type SessionDirectorySyncApplyResult =
 /**  The existing queue owns progress and per-file results. */
@@ -2970,9 +3077,9 @@ profileId: string };
 
 /**  The direction of a terminal-owned transfer. */
 export type SessionTransferDirection =
-/**  Publish one native-selected local file on the remote host. */
+/**  Copy a native-selected local source to the remote host. */
 "upload" |
-/**  Save one remote file to a native-selected local destination. */
+/**  Save a remote source to a native-selected local destination. */
 "download";
 
 /**  Native selection either queued a Rust-owned item or was cancelled. */
@@ -3057,6 +3164,8 @@ export type SessionTransferItem = {
 	issue: SessionTransferIssue | null,
 	/**  Temporary-file cleanup could not be confirmed. */
 	stagingMayRemain: boolean,
+	/**  Whole-tree progress, or None for an ordinary file transfer. */
+	directoryCopy: SessionDirectoryCopyProgress | null,
 };
 
 /**  A complete on-demand snapshot of one logical session's transfer queue. */
