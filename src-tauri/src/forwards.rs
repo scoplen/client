@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Independent tunnel intents. Losing an event observer never closes a run.
+//! Independent and terminal-attached tunnel intents.
 
 use crate::{profile_context::ProfileRequest as LocalDataState, ssh::SessionPreparationIntent};
-use scoplen_client_core::forward_manager::{ForwardIssue, ForwardSnapshot, ForwardStartIntent};
+use scoplen_client_core::forward_manager::{
+    ForwardIssue, ForwardSnapshot, ForwardStartIntent, SessionForwardSnapshot,
+};
 use serde::Serialize;
 use specta::Type;
 use tauri_specta::Event as _;
@@ -16,7 +18,7 @@ pub use scoplen_client_core::forward_manager::ForwardManager;
 pub struct ForwardChanged {
     /// Source profile opening.
     pub profile_generation: String,
-    /// The latest revision of the independent run.
+    /// The latest revision of the registered run.
     pub snapshot: ForwardSnapshot,
 }
 
@@ -79,7 +81,7 @@ pub async fn forward_respond(
         .unwrap_or(Err(ForwardIssue::Unavailable))
 }
 
-/// Fence new accepts immediately and begin cancelling one independent run.
+/// Fence new accepts immediately and begin cancelling one run.
 #[tauri::command]
 #[specta::specta]
 pub async fn forward_stop(
@@ -88,4 +90,33 @@ pub async fn forward_stop(
     run_id: String,
 ) -> Result<(), ForwardIssue> {
     local.with_store(|store| manager.stop(store, &run_id)).unwrap_or(Err(ForwardIssue::Unavailable))
+}
+
+/// Read every selected attachment result for the exact current terminal transport.
+#[tauri::command]
+#[specta::specta]
+pub async fn session_forward_list(
+    local: LocalDataState,
+    manager: tauri::State<'_, crate::ssh::SessionManager>,
+    session_id: String,
+    transport_id: String,
+) -> Result<Vec<SessionForwardSnapshot>, ForwardIssue> {
+    local
+        .with_store(|store| manager.forward_list(store, &session_id, &transport_id))
+        .unwrap_or(Err(ForwardIssue::Expired))
+}
+
+/// Suppress one attachment for this logical terminal without closing its SSH connection.
+#[tauri::command]
+#[specta::specta]
+pub async fn session_forward_stop(
+    local: LocalDataState,
+    manager: tauri::State<'_, crate::ssh::SessionManager>,
+    session_id: String,
+    transport_id: String,
+    forward_id: String,
+) -> Result<(), ForwardIssue> {
+    local
+        .with_store(|store| manager.forward_stop(store, &session_id, &transport_id, &forward_id))
+        .unwrap_or(Err(ForwardIssue::Expired))
 }

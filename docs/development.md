@@ -665,6 +665,43 @@ requested versus actual `GatewayPorts` scope, Stop, SSH loss, complete parent re
 an independent terminal. Only the fixture's container/listeners and private scratch files
 are inspected or changed; it needs Docker and `ssh-keygen` in addition to the Rust toolchain.
 
+## Login-attached tunnel checks
+
+```text
+cargo test --locked -p scoplen-client-core --lib session_manager::forwards::tests
+pwsh -File scripts/test-ssh-attached-forwards.ps1
+```
+
+The target Local or Personal Login's selected Local TCP and Dynamic SOCKS definitions run on
+its authenticated terminal transport. Their default Logins and Jump-hop attachments do not
+select another connection. The independent run registry still owns admission and traffic
+snapshots; attached snapshots additionally identify their terminal and transport. Missing,
+unsupported, busy and refused definitions have separate results while the terminal remains
+usable. Remote tunnels can still be started independently.
+
+`session_forward_list` and `session_forward_stop` require the current profile, terminal and
+transport. Stopping an attachment releases only its listener and peers, and suppresses that
+definition across reconnects of the same logical terminal. Closing the terminal discards this
+process-local choice. Transport replacement settles old attached resources before starting
+eligible definitions again. Existing independently started tunnels keep their own lifetime.
+
+The Docker fixture exercises public `run_target` with Direct and Jump routes, with binary SFTP,
+Local TCP and SOCKS roundtrips alongside the shell. It verifies per-entry failures, ignored
+Forward defaults and Jump-hop attachments, both Stop paths, old listener/peer release,
+eligible recreation on Direct and independent-run survival. The owned target's OpenSSH log must
+show exactly five authentications: two independent runs, two Direct terminal transports separated
+by a forced network interruption and one Jump terminal transport. Its container and successful
+temporary data are removed.
+
+The current shared SSH byte-stream adapter can lose the confirmed network-failure cause when
+a parent Jump connection disappears. That path can end the terminal without automatic retry;
+use manual Reconnect. This fixture establishes Jump transport sharing and Stop separately from
+Direct automatic reconnect. Propagating the parent's confirmed cause requires a separate shared
+SSH contract outcome.
+
+Core tests and generated-command checks do not establish rendered or native Windows/macOS
+interaction acceptance.
+
 ## Generated files
 
 | File | Regenerate with | When |

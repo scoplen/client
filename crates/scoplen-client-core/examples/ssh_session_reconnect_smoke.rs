@@ -205,6 +205,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                         failed.store(true, Ordering::SeqCst);
                         manager.close("fixture-terminal")?;
                     }
+                    SessionEvent::Forwards { .. } => {}
                 }
                 Ok(())
             },

@@ -280,15 +280,27 @@ The tunnel opens no terminal or shell. The SSH server resolves destination hostn
 Running tunnels show their fixed configuration, connection count and traffic.
 Leaving Tunnels keeps them running; editing or deleting a saved definition does
 not change an existing run. Saving an equivalent definition does not convert a temporary run.
-Stop closes its listener, peers and SSH route. At most 16 tunnels and 32 peers per tunnel
+For an independent run, Stop closes its listener, peers and SSH route. At most 16 tunnels and 32 peers per tunnel
 run at once, including SOCKS negotiation and
 channel opening. Dynamic negotiation has an absolute 15-second deadline; channel
 opening and the final SOCKS response each have their own 15-second deadline. Traffic
 counts include only application bytes successfully written, excluding SOCKS messages.
-A failed run requires an explicit new Start; tunnels do not reconnect or start
+A failed independent run requires an explicit new Start; independent tunnels do not reconnect
 automatically. Temporary runs end on Stop, SSH loss, profile replacement or application exit,
 and are not restored after restart. Saved tunnels can be explicitly selected in a Workspace;
 Unix-socket forwarding remains incomplete.
+
+A Local or Personal Login's selected saved Local TCP and Dynamic SOCKS tunnels also start
+with its terminal, sharing that target's authenticated SSH connection and Jump route with
+the shell and SFTP. A Forward's default Login and a Jump-hop Login's own attachments do not
+change this selection. Per-entry failures leave the terminal and other tunnels usable.
+Attached runs identify their terminal; Stop releases only that tunnel's listener and peers.
+It stays stopped across reconnects of the same tab; closing the tab discards that choice.
+Reconnect releases old resources before starting eligible current definitions. Independently
+running tunnels retain their own lifetime. Attached Remote and Unix-socket forwarding remain
+unsupported. Direct automatic reconnect and Jump sharing/Stop have separate real OpenSSH checks.
+A lost parent Jump connection can currently end the terminal without an automatic retry;
+choose Reconnect manually. Native Windows/macOS interaction remains unverified.
 
 Remote requests a fixed nonzero listening port and numeric IPv4 or IPv6 address on the
 SSH server, and reaches a fixed local target whose hostname is resolved by this device.
@@ -757,6 +769,11 @@ use ordinary Jump trust/authentication, binary traffic, counters and complete St
 Duplicate refusals preserve the other accepted tunnels and pre-existing ordinary
 terminal and temporary run. Listing and core Open return intent without starting
 connections. Native pane focus and rendering need separate platform acceptance.
+
+`scripts/test-ssh-attached-forwards.ps1` uses public `run_target` with owned Direct and Jump
+OpenSSH peers. It checks shared shell/SFTP/Local/SOCKS binary traffic, per-entry failures,
+both Stop paths, Direct reconnect and independent-run survival. Target logs prove there is
+one authentication per terminal transport. Jump parent-loss propagation remains separate.
 
 `scripts/test-ssh-local-forward.ps1` checks saved and temporary standalone TCP tunnels against
 disposable OpenSSH listeners with session channels disabled. It exercises password,

@@ -98,6 +98,9 @@ jobs:
       - name: Independent terminal panes and explicit saved split workspace restoration
         shell: pwsh
         run: ./scripts/test-ssh-workspace.ps1
+      - name: Login-attached Local and SOCKS share terminal SSH, SFTP, Stop, and reconnect
+        shell: pwsh
+        run: ./scripts/test-ssh-attached-forwards.ps1
       - name: Terminal-owned SFTP browse, transfer, remote changes, refusal, and cancellation
         shell: pwsh
         run: ./scripts/test-ssh-session-files.ps1

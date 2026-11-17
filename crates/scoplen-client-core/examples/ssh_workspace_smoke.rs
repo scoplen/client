@@ -228,6 +228,7 @@ impl Pane {
                             return Err("fixture must not reconnect automatically".to_owned());
                         }
                     }
+                    SessionEvent::Forwards { .. } => {}
                 }
             }
             Err("fixture connection ended before ready".to_owned())

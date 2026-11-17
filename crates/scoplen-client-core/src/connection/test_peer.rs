@@ -17,6 +17,7 @@ use super::HostKeyPresentation;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Authentication {
     Password,
+    Forwarding,
     Interactive,
     PasswordThenInteractive,
     KeyThenInteractive,
@@ -65,7 +66,7 @@ impl server::Handler for Handler {
     ) -> Result<server::Auth, Self::Error> {
         self.authentications.fetch_add(1, Ordering::SeqCst);
         Ok(if user == "trust-fixture" && password == "disposable-trust-password" {
-            if self.mode == Authentication::Password {
+            if matches!(self.mode, Authentication::Password | Authentication::Forwarding) {
                 server::Auth::Accept
             } else if self.mode == Authentication::PasswordThenInteractive {
                 self.factor_accepted = true;
@@ -187,6 +188,48 @@ impl server::Handler for Handler {
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         session.data(channel, b"\x1b[32mactual SSH saved-output fixture\x1b[0m\r\n".to_vec())?;
+        Ok(())
+    }
+
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        _channel: russh::Channel<server::Msg>,
+        host: &str,
+        _port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: server::ChannelOpenHandle,
+        _session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if self.mode == Authentication::Forwarding && host != "refused.example" {
+            reply.accept().await;
+        } else {
+            reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
+        }
+        Ok(())
+    }
+
+    async fn data(
+        &mut self,
+        channel: russh::ChannelId,
+        bytes: &[u8],
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if self.mode == Authentication::Forwarding {
+            session.data(channel, bytes.to_vec())?;
+        }
+        Ok(())
+    }
+
+    async fn channel_eof(
+        &mut self,
+        channel: russh::ChannelId,
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if self.mode == Authentication::Forwarding {
+            session.eof(channel)?;
+            session.close(channel)?;
+        }
         Ok(())
     }
 }
