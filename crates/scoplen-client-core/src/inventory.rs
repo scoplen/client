@@ -1868,7 +1868,7 @@ impl Inventory {
             return Err(ObjectEditError::SecretNotAllowed);
         }
         if kind == CredentialKind::ExternalProvider {
-            crate::connection::command_password::CommandPassword::parse(&provider)
+            crate::connection::command_credential::CommandCredential::parse(&provider)
                 .map_err(|_| ObjectEditError::InvalidCredential)?;
         }
         if kind == CredentialKind::Certificate && certificate_scope.is_none() {
@@ -3452,7 +3452,7 @@ mod tests {
             crate::repository::credential_secret(&inventory.store, credential).unwrap().is_none()
         );
         assert!(inventory.store.device_credential(credential).unwrap().is_none());
-        let mut invalid = input;
+        let mut invalid = input.clone();
         invalid.provider.insert("field".into(), "private-key".into());
         assert_eq!(
             inventory.update_credential(saved.id.clone(), invalid),
@@ -3468,6 +3468,11 @@ mod tests {
                 .provider,
             saved.provider
         );
+        let mut key_input = input;
+        key_input.provider.insert("field".into(), "private_key".into());
+        let key = inventory.update_credential(saved.id, key_input).unwrap();
+        assert_eq!(key.provider.get("field").map(String::as_str), Some("private_key"));
+        assert!(!key.has_secret);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::connection::{
-    command_password::CommandPassword,
+    command_credential::CommandCredential,
     resolve_connection_plan,
     test_peer::{Authentication, Peer},
 };
@@ -16,7 +16,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-fn login(store: &Store, port: u16, path: String, explicit: bool) -> (Uuid, Uuid) {
+pub(super) fn login(store: &Store, port: u16, path: String, explicit: bool) -> (Uuid, Uuid) {
     let host = Repository::<Host>::new(store)
         .create(HostChange {
             name: Some("External password target".into()),
@@ -85,7 +85,7 @@ async fn command_password_requires_explicit_selection_then_retained_trust_and_ex
         assert!(!marker.exists(), "local resolution/probe executed the helper");
         assert_eq!(peer.authentications.load(Ordering::SeqCst), 0);
         let CredentialMaterial::External { provider } = &plan.credential else { unreachable!() };
-        let command = CommandPassword::parse(provider).unwrap();
+        let command = CommandCredential::parse(provider).unwrap();
         let control = PreparationControl::default();
         let verified = AtomicBool::new(false);
         let approvals = AtomicUsize::new(0);
@@ -148,7 +148,7 @@ async fn command_password_requires_explicit_selection_then_retained_trust_and_ex
             assert!(matches!(
                 result,
                 Err(PreparationError::Connection(
-                    SshConnectionError::CommandPasswordAuthenticationRejected
+                    SshConnectionError::CommandCredentialAuthenticationRejected
                 ))
             ));
             assert_eq!(std::fs::read(&marker).unwrap(), b"+");

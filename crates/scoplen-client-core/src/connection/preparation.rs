@@ -110,7 +110,7 @@ pub enum PreparationPhase {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum PreparationEvent {
-    /// Review the exact connection or password program before creating its local process.
+    /// Review the exact connection or credential program before creating its local process.
     CommandExecution {
         /// Exact source and target selected by this preparation.
         context: PreparationContext,
@@ -932,8 +932,9 @@ async fn prepare_resolved_inner(
             }
             let authentication_deadline = Instant::now() + AUTHENTICATION_TIMEOUT;
             let authentication = async {
+                let mut passphrase_required = step.passphrase;
                 if let CredentialMaterial::External { provider } = &step.plan.credential {
-                    let command = super::command_password::CommandPassword::parse(provider)?;
+                    let command = super::command_credential::CommandCredential::parse(provider)?;
                     control
                         .prompt_until(
                             PromptKind::Command,
@@ -952,12 +953,14 @@ async fn prepare_resolved_inner(
                         context: step.context.clone(),
                         phase: PreparationPhase::Authenticating,
                     })?;
-                    let password = control.run(async { Ok(command.password().await) }).await??;
-                    connection.credential = Some(CredentialMaterial::Password(password));
+                    let credential =
+                        control.run(async { Ok(command.credential().await) }).await??;
+                    passphrase_required = private_key_passphrase_required(&credential)?;
+                    connection.credential = Some(credential);
                 }
                 let mut incorrect = false;
                 loop {
-                    let passphrase = if step.passphrase {
+                    let passphrase = if passphrase_required {
                         match control
                             .prompt_until(
                                 PromptKind::Passphrase,
@@ -1035,10 +1038,12 @@ async fn prepare_resolved_inner(
                         ) =>
                         {
                             return Err(
-                                SshConnectionError::CommandPasswordAuthenticationRejected.into()
+                                SshConnectionError::CommandCredentialAuthenticationRejected.into(),
                             );
                         }
-                        Err(SshConnectionError::InvalidPrivateKeyPassphrase) if step.passphrase => {
+                        Err(SshConnectionError::InvalidPrivateKeyPassphrase)
+                            if passphrase_required =>
+                        {
                             incorrect = true
                         }
                         result => {
@@ -1099,5 +1104,7 @@ async fn prepare_resolved_inner(
 
 #[cfg(test)]
 mod command_password_tests;
+#[cfg(test)]
+mod command_private_key_tests;
 #[cfg(test)]
 mod tests;

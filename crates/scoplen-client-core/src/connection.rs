@@ -41,7 +41,7 @@ use crate::store::Store;
 
 mod agent;
 pub(crate) mod agent_forwarding;
-pub(crate) mod command_password;
+pub(crate) mod command_credential;
 pub mod preparation;
 pub(crate) mod proxy_command;
 pub(crate) mod team;
@@ -749,41 +749,41 @@ pub enum SshConnectionError {
     /// The saved credential cannot be used by this concrete engine slice.
     #[error("SSH credential kind is not supported by the concrete client engine")]
     UnsupportedCredential,
-    /// The command password descriptor cannot be interpreted without changing its meaning.
+    /// The command credential descriptor cannot be interpreted without changing its meaning.
     #[error(
-        "The external credential is invalid. Use type=command, path=<program and arguments>, and field=password with no other entries, then reconnect."
+        "The external credential is invalid. Use type=command, path=<program and arguments>, and field=password or field=private_key with no other entries, then reconnect."
     )]
-    InvalidCommandPassword,
+    InvalidCommandCredential,
     /// The configured helper could not be launched.
     #[error(
-        "The password command could not start. Check that the configured program is installed and accessible, then reconnect."
+        "The credential command could not start. Check that the configured program is installed and accessible, then reconnect."
     )]
-    CommandPasswordUnavailable,
+    CommandCredentialUnavailable,
     /// The helper failed or its complete output could not be read.
     #[error(
-        "The password command failed. Check the helper's setup and access to its secret service, then reconnect."
+        "The credential command failed. Check the helper's setup and access to its secret service, then reconnect."
     )]
-    CommandPasswordFailed,
-    /// The helper returned no password after removing its one optional line ending.
+    CommandCredentialFailed,
+    /// The helper returned no material after removing its one optional line ending.
     #[error(
-        "The password command returned an empty password. Update the helper to return a password, then reconnect."
+        "The credential command returned empty output. Update the helper to return the selected credential material, then reconnect."
     )]
-    CommandPasswordEmpty,
-    /// The helper exceeded the bounded password output profile.
+    CommandCredentialEmpty,
+    /// The helper exceeded the bounded credential output profile.
     #[error(
-        "The password command returned too much output. Return only a password of at most 16384 bytes, then reconnect."
+        "The credential command returned too much output. Return only credential material of at most 16384 bytes, then reconnect."
     )]
-    CommandPasswordTooLarge,
+    CommandCredentialTooLarge,
     /// The helper did not complete within its own authentication budget.
     #[error(
-        "The password command timed out. Check the helper's setup and access to its secret service, then reconnect."
+        "The credential command timed out. Check the helper's setup and access to its secret service, then reconnect."
     )]
-    CommandPasswordTimeout,
+    CommandCredentialTimeout,
     /// The server refused this credential or its additional authentication factors.
     #[error(
-        "SSH authentication with the password command was rejected. Check the Login, helper and any additional factors, then reconnect."
+        "SSH authentication with the credential command was rejected. Check the Login, helper and any additional factors, then reconnect."
     )]
-    CommandPasswordAuthenticationRejected,
+    CommandCredentialAuthenticationRejected,
     /// An agent credential must select a valid, supported raw public identity.
     #[error("save a valid OpenSSH public key in this agent credential before connecting")]
     InvalidAgentPublicKey,
@@ -1000,7 +1000,7 @@ pub(crate) fn validate_credential(
             agent::parse_public_key(public_key.as_deref()).map(|_| ())
         }
         CredentialMaterial::External { provider } => {
-            command_password::CommandPassword::parse(provider).map(|_| ())
+            command_credential::CommandCredential::parse(provider).map(|_| ())
         }
         _ => Err(SshConnectionError::UnsupportedCredential),
     }
@@ -1059,6 +1059,18 @@ pub fn private_key_passphrase_required(
 ) -> Result<bool, SshConnectionError> {
     if let CredentialMaterial::PrivateKey(material) = credential {
         let key = read_software_key(material)?;
+        if !matches!(
+            key.algorithm(),
+            ssh_key::Algorithm::Ed25519
+                | ssh_key::Algorithm::Ecdsa {
+                    curve: ssh_key::EcdsaCurve::NistP256
+                        | ssh_key::EcdsaCurve::NistP384
+                        | ssh_key::EcdsaCurve::NistP521
+                }
+                | ssh_key::Algorithm::Rsa { .. }
+        ) {
+            return Err(SshConnectionError::UnsupportedPrivateKey);
+        }
         if key.is_encrypted() {
             validate_private_key_kdf(key.kdf())?;
         }

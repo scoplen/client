@@ -141,7 +141,7 @@ Each hop has five minutes for authentication, including key passphrase entry,
 and each server request has at most two minutes for a reply. Cancellation or
 expiry closes that connection attempt; reconnect starts with blank inputs.
 
-To fetch an SSH password from an existing desktop helper, create an External
+To fetch an SSH password or software private key from an existing desktop helper, create an External
 Credential with binding None and these provider entries, then explicitly assign
 it to a Local or Personal Login:
 
@@ -151,20 +151,29 @@ path=secret-helper read ssh-password
 field=password
 ```
 
+For an OpenSSH-format software key, use `field=private_key` and a command that
+returns that key. Ed25519, ECDSA P-256/P-384/P-521 and RSA use the existing SSH
+signers. Encrypted keys ask for a one-time passphrase after format, algorithm and
+KDF checks. An incorrect passphrase retries local decryption on the same reviewed
+SSH connection with the same fetched key; it does not run or confirm the helper
+again. Fetching, passphrase entry and any additional factors share the original
+five-minute authentication deadline.
+
 The helper must already have access to its secret service. The descriptor contains
 only references and nonsecret arguments. Each connection verifies that hop's Host
 key, then asks you to approve the exact program and arguments before running it.
 Jump Logins fetch independently. Reconnect requires fresh approval and output.
-Plan resolution and Host-key probes never start a password helper.
+Plan resolution and Host-key probes never start a credential helper.
 
 The command uses the quoting and backslash rules below, but percent, environment,
 home, wildcard, pipeline and redirection characters stay literal. It inherits the
 environment, receives no standard input, and discards standard error. Windows
 helpers create no console window. Output is held only in zeroizing authentication
-memory. The helper must exit successfully within 30 seconds and return a password
+memory. The helper must exit successfully within 30 seconds and return credential material
 of 1 to 16,384 bytes, optionally followed by one LF or CRLF; other bytes, including
 spaces, are preserved. Failure does not select another credential or rerun the
-helper. Organization certificates, proxy passwords, private keys and other provider
+helper. Fetched keys, their public identities and passphrases are not saved to
+inventory or history. Organization certificates, proxy passwords and other provider
 types are separate features. Native confirmation and editor interaction remain
 unverified by the command-line acceptance suite.
 
@@ -847,6 +856,15 @@ journeys retain binary SFTP and require fresh approval and fetching after reconn
 Stop and store replacement release pending helpers. Successful runs remove their
 owned container and temporary files. Native confirmation and macOS process behavior
 require separate platform acceptance.
+
+`scripts/test-ssh-command-private-key.ps1` exercises the same command runner with
+OpenSSH-generated Ed25519, ECDSA P-256/P-384/P-521 and RSA keys. It verifies encrypted
+key retry on one retained connection, independent Jump keys, binary command/SFTP,
+fresh approval and fetching after reconnect, and passphrase cancellation. Malformed,
+unsupported and excessive-KDF output fails before a secret prompt or signing.
+The shared helper leases, trust/command refusal and bounded-output failure controls
+also run for private-key output. Native interaction and macOS process acceptance
+remain separate.
 
 `scripts/test-ssh-keyboard-interactive.ps1` uses PowerShell 7 and Docker to start
 disposable OpenSSH 9.9/PAM listeners with exact package versions. Through public
