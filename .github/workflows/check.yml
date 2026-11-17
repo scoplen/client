@@ -89,6 +89,9 @@ jobs:
       - name: Saved Interactive PAM, accepted factors, refusal, cancellation, reconnect, and Jump
         shell: pwsh
         run: ./scripts/test-ssh-keyboard-interactive.ps1
+      - name: Command password provider, per-hop confirmation, failures, cancellation, and reconnect
+        shell: pwsh
+        run: ./scripts/test-ssh-command-password.ps1
       - name: Rust terminal reconnect, normal exit, cancellation, current credentials, and exhaustion
         shell: pwsh
         run: ./scripts/test-ssh-session-reconnect.ps1
