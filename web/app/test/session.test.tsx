@@ -379,7 +379,13 @@ it.each([
   const catalog = locale === "en" ? en : zhHans;
   render(sessionView(locale));
   const c = await connect(f);
-  await c.emit({ kind: "failed", error: "backend fallback", exhausted: false, teamSshFailure: failure });
+  await c.emit({
+    kind: "failed",
+    error: "backend fallback",
+    exhausted: false,
+    teamSshFailure: failure,
+    teamSshPolicyDenial: null,
+  });
   expect(screen.getByRole("alert").textContent).toContain(catalog[key]);
   expect(screen.queryByText("backend fallback")).toBeNull();
   expect(f.matching("session_retry_transport")).toHaveLength(0);
@@ -392,10 +398,38 @@ it("does not infer a definite certificate refusal from an untyped message", asyn
   const f = fixture();
   render(sessionView());
   const c = await connect(f);
-  await c.emit({ kind: "failed", error: "certificate.revoked", exhausted: false, teamSshFailure: null });
+  await c.emit({
+    kind: "failed",
+    error: "certificate.revoked",
+    exhausted: false,
+    teamSshFailure: null,
+    teamSshPolicyDenial: null,
+  });
   expect(screen.getByRole("alert").textContent).toContain("certificate.revoked");
   expect(screen.queryByText(en["teams.ssh.revoked"])).toBeNull();
   expect(f.matching("session_retry_transport")).toHaveLength(0);
+});
+
+it.each(["en", "zh-Hans"] as const)("localizes %s typed team policy denial without reconnecting", async (locale) => {
+  const f = fixture();
+  const catalog = locale === "en" ? en : zhHans;
+  render(sessionView(locale));
+  const c = await connect(f);
+  await c.emit({
+    kind: "failed",
+    error: "backend fallback",
+    exhausted: false,
+    teamSshFailure: null,
+    teamSshPolicyDenial: {
+      source: { origin: "https://sync.example", accountId: "account", organizationId: "team", deviceId: "device" },
+      hostId: "host",
+      remoteUser: "deploy",
+    },
+  });
+  expect(screen.getByRole("alert").textContent).toContain(catalog["teams.error.accessDenied"]);
+  expect(screen.queryByText("backend fallback")).toBeNull();
+  expect(f.matching("session_retry_transport")).toHaveLength(0);
+  expect(f.connections).toHaveLength(1);
 });
 
 function interactive(
@@ -1233,7 +1267,7 @@ it.each(["closed", "failed"] as const)(
     await c.emit(
       ending === "closed"
         ? { kind: "closed" }
-        : { kind: "failed", error: "disconnected", exhausted: false, teamSshFailure: null },
+        : { kind: "failed", error: "disconnected", exhausted: false, teamSshFailure: null, teamSshPolicyDenial: null },
     );
     await c.ready();
     await c.output("stale");
@@ -1458,7 +1492,13 @@ it("clears one-time passphrases, handles incorrect replies, and asks again on a 
       intent: { kind: "passphrase", value },
     });
   }
-  await c.emit({ kind: "failed", error: "connection lost", exhausted: false, teamSshFailure: null });
+  await c.emit({
+    kind: "failed",
+    error: "connection lost",
+    exhausted: false,
+    teamSshFailure: null,
+    teamSshPolicyDenial: null,
+  });
   await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
   const second = await c.start();
   await second.prepare(passphrase(3));
@@ -1549,7 +1589,13 @@ it("waits for renderer failure cleanup and rejects late readiness", async () => 
   expect(screen.getByRole("button", { name: "Reconnect" })).toHaveProperty("disabled", true);
   await c.ready();
   expect(screen.getByRole("status").textContent).toContain("failed");
-  await c.emit({ kind: "failed", error: "terminal unusable", exhausted: false, teamSshFailure: null });
+  await c.emit({
+    kind: "failed",
+    error: "terminal unusable",
+    exhausted: false,
+    teamSshFailure: null,
+    teamSshPolicyDenial: null,
+  });
   expect(screen.getByRole("alert").textContent).toBe("write failed");
   await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
   expect(f.matching("session_retry_transport")).toHaveLength(1);

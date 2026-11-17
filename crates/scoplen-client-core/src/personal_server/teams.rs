@@ -14,7 +14,7 @@ pub use membership::{
 pub(crate) use ssh::TeamSshAuthority;
 pub use ssh::{
     TeamSshCertificate, TeamSshError, TeamSshFailure, TeamSshHostSetup, TeamSshOperationKind,
-    TeamSshOperationView, TeamSshSource, TeamUserCaView,
+    TeamSshOperationView, TeamSshPolicyDenial, TeamSshSource, TeamUserCaView,
 };
 
 use std::{fmt, sync::Arc};

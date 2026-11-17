@@ -30,7 +30,7 @@ use crate::forward_manager::{
     ForwardManager, SessionForwardSnapshot,
 };
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
-use crate::personal_server::{PersonalServer, TeamSshError, TeamSshFailure};
+use crate::personal_server::{PersonalServer, TeamSshError, TeamSshFailure, TeamSshPolicyDenial};
 use crate::session_files::{
     self, DownloadCheckpoint, DownloadExecution, DownloadInput, FileTransferProgress,
     MutationPreflight, RemoteDirectory, RemoteMutation, RemoteTextPreview, RemoteTextPreviewIssue,
@@ -108,6 +108,8 @@ pub enum SessionEvent {
         exhausted: bool,
         /// Validated definite certificate refusal; never inferred from a message or status alone.
         team_ssh_failure: Option<TeamSshFailure>,
+        /// Authenticated connection-policy denial and its original exact target.
+        team_ssh_policy_denial: Option<TeamSshPolicyDenial>,
     },
 }
 
@@ -458,6 +460,15 @@ enum AttemptError {
 }
 
 impl AttemptError {
+    fn team_ssh_policy_denial(&self) -> Option<TeamSshPolicyDenial> {
+        match self {
+            Self::Preparation(PreparationError::TeamSsh(TeamSshError::PolicyDenied(denial))) => {
+                Some(denial.as_ref().clone())
+            }
+            _ => None,
+        }
+    }
+
     fn team_ssh_failure(&self) -> Option<TeamSshFailure> {
         match self {
             Self::Preparation(PreparationError::TeamSsh(TeamSshError::Ssh(
@@ -1633,6 +1644,7 @@ impl SessionManager {
                             error: error.to_string(),
                             exhausted: false,
                             team_ssh_failure: error.team_ssh_failure(),
+                            team_ssh_policy_denial: error.team_ssh_policy_denial(),
                         })?;
                         return Err(error.to_string());
                     }
@@ -1653,6 +1665,7 @@ impl SessionManager {
                         emit(SessionEvent::Failed {
                             error: error.to_string(),
                             team_ssh_failure: error.team_ssh_failure(),
+                            team_ssh_policy_denial: error.team_ssh_policy_denial(),
                             exhausted: error.retryable()
                                 && budget.ever_ready
                                 && budget.attempts == RETRY_DELAYS.len(),
@@ -1689,6 +1702,7 @@ impl SessionManager {
                         .into(),
                     exhausted: false,
                     team_ssh_failure: None,
+                    team_ssh_policy_denial: None,
                 })?;
             } else {
                 emit(SessionEvent::Closed)?;

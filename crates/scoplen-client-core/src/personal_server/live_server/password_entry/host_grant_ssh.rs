@@ -153,7 +153,10 @@ async fn consume(deployment: GrantTeamDeployment, ssh: SshFixture, directory: &P
                         "smoke",
                     )
                     .await,
-                Err(TeamSshError::Personal(PersonalServerError::PermissionDenied)),
+                Err(TeamSshError::PolicyDenied(denial))
+                    if denial.source == member_source
+                        && denial.host_id == deployment.host_id
+                        && denial.remote_user == "smoke",
             ));
             let operations = member.team_ssh_operations(&member_store, &member_source).unwrap();
             let [attempt] = operations.as_slice() else {

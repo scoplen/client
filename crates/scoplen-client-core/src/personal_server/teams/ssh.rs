@@ -117,7 +117,7 @@ pub enum TeamSshFailure {
 }
 
 /// Existing Account/team failures and safe Organization SSH failure codes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type, thiserror::Error)]
 #[serde(untagged)]
 pub enum TeamSshError {
     /// Authenticated Account or local-store failure.
@@ -129,6 +129,41 @@ pub enum TeamSshError {
     /// Certificate or source-specific failure.
     #[error(transparent)]
     Ssh(#[from] TeamSshFailure),
+    /// An authenticated certificate policy refusal for its exact original target.
+    #[error(transparent)]
+    PolicyDenied(Box<TeamSshPolicyDenial>),
+}
+
+/// Validated certificate-policy refusal, without granting any request or connection authority.
+#[derive(Clone, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamSshPolicyDenial {
+    /// Exact authenticated origin, Account, Organization and Device of this issuance.
+    pub source: TeamSshSource,
+    /// Single Host from the original certificate request.
+    pub host_id: String,
+    /// Exact unnormalized remote username from that same request.
+    pub remote_user: String,
+}
+
+impl std::fmt::Display for TeamSshPolicyDenial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Team policy denied SSH access for this Host and remote user.")
+    }
+}
+
+impl std::error::Error for TeamSshPolicyDenial {}
+
+impl From<TeamSshPolicyDenial> for TeamSshError {
+    fn from(denial: TeamSshPolicyDenial) -> Self {
+        Self::PolicyDenied(Box::new(denial))
+    }
+}
+
+impl std::fmt::Debug for TeamSshPolicyDenial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TeamSshPolicyDenial").finish_non_exhaustive()
+    }
 }
 
 impl From<TeamError> for TeamSshError {

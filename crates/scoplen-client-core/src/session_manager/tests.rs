@@ -1623,6 +1623,7 @@ fn definite_team_certificate_failures_keep_their_code_and_never_qualify_for_auto
             error: error.to_string(),
             exhausted: false,
             team_ssh_failure: error.team_ssh_failure(),
+            team_ssh_policy_denial: error.team_ssh_policy_denial(),
         };
         let wire = serde_json::to_value(event).unwrap();
         assert_eq!(wire["teamSshFailure"], serde_json::to_value(failure).unwrap());
@@ -1635,6 +1636,50 @@ fn definite_team_certificate_failures_keep_their_code_and_never_qualify_for_auto
     assert!(!ambiguous.retryable());
     assert_eq!(AttemptError::Local("certificate.revoked".into()).team_ssh_failure(), None);
 }
+#[test]
+fn only_a_typed_authenticated_policy_denial_exposes_its_original_team_target() {
+    let denial = TeamSshPolicyDenial {
+        source: crate::personal_server::TeamSshSource {
+            origin: "https://example.com".into(),
+            account_id: Uuid::now_v7().to_string(),
+            organization_id: Uuid::now_v7().to_string(),
+            device_id: Uuid::now_v7().to_string(),
+        },
+        host_id: Uuid::now_v7().to_string(),
+        remote_user: " e\u{301} ".into(),
+    };
+    let error = AttemptError::Preparation(PreparationError::TeamSsh(denial.clone().into()));
+    assert!(!error.retryable());
+    assert_eq!(error.team_ssh_failure(), None);
+    assert_eq!(error.team_ssh_policy_denial(), Some(denial.clone()));
+    let event = SessionEvent::Failed {
+        error: error.to_string(),
+        exhausted: false,
+        team_ssh_failure: error.team_ssh_failure(),
+        team_ssh_policy_denial: error.team_ssh_policy_denial(),
+    };
+    let wire = serde_json::to_value(event).unwrap();
+    assert_eq!(wire["teamSshPolicyDenial"], serde_json::to_value(&denial).unwrap());
+    assert!(!format!("{error:?}").contains(&denial.remote_user));
+    for error in [
+        AttemptError::Local("policy.denied".into()),
+        AttemptError::Preparation(PreparationError::TeamSsh(
+            crate::personal_server::PersonalServerError::PermissionDenied.into(),
+        )),
+        AttemptError::Preparation(PreparationError::TeamSsh(
+            crate::personal_server::TeamFailure::MembershipScopeRequired.into(),
+        )),
+        AttemptError::Preparation(PreparationError::TeamSsh(
+            crate::personal_server::PersonalServerError::AuthenticationRequired.into(),
+        )),
+        AttemptError::Preparation(PreparationError::TeamSsh(
+            TeamSshFailure::IssuanceUnknown.into(),
+        )),
+    ] {
+        assert_eq!(error.team_ssh_policy_denial(), None);
+    }
+}
+
 #[tokio::test]
 async fn pending_stop_fail_and_close_win_before_automatic_or_manual_attempt_registration() {
     for previous in [Intent::None, Intent::Retry] {

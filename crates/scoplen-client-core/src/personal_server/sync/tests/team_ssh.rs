@@ -11,7 +11,7 @@ use super::*;
 use crate::{
     personal_server::{
         TeamAuthoringCollection, TeamAuthoringData, TeamCreationPhase, TeamSshError,
-        TeamSshFailure, TeamSshOperationKind, TeamSshSource,
+        TeamSshFailure, TeamSshOperationKind, TeamSshPolicyDenial, TeamSshSource,
     },
     store::{team_assets::TeamAssetPublication, team_ssh::TeamSshOwner},
 };
@@ -516,6 +516,97 @@ async fn definite_certificate_refusal_terminates_only_the_original_pending_witho
 }
 
 #[tokio::test]
+async fn certificate_policy_denial_binds_the_authenticated_original_target() {
+    for previously_unknown in [false, true] {
+        let (peer, _dir, store, manager, source, host) = setup().await;
+        create_ca(&manager, &store, &source).await;
+        let owner = source.owner(&store).unwrap();
+        let remote_user = " e\u{301} ";
+        if previously_unknown {
+            peer.state.lock().unwrap().team_ssh.as_mut().unwrap().unknown_once = true;
+            assert_eq!(
+                manager.team_ssh_certificate(store.clone(), &source, host, remote_user).await,
+                Err(TeamSshFailure::IssuanceUnknown.into())
+            );
+        }
+        let original = store.team_ssh_operation(&owner, 1).unwrap();
+        peer.state.lock().unwrap().team_ssh.as_mut().unwrap().certificate_reply =
+            Some(problem("policy.denied", 403, false, false));
+        let result = if let Some(original) = &original {
+            manager
+                .confirm_team_ssh_operation(
+                    store.clone(),
+                    &source,
+                    TeamSshOperationKind::Certificate,
+                    &original.id.to_string(),
+                )
+                .await
+                .map(|_| ())
+        } else {
+            manager
+                .team_ssh_certificate(store.clone(), &source, host, remote_user)
+                .await
+                .map(|_| ())
+        };
+        let denial = TeamSshPolicyDenial {
+            source: source.clone(),
+            host_id: host.to_string(),
+            remote_user: remote_user.into(),
+        };
+        assert_eq!(result, Err(denial.into()));
+        let retained = store.team_ssh_operation(&owner, 1).unwrap().unwrap();
+        assert_eq!(retained.phase, i64::from(previously_unknown));
+        if let Some(original) = original {
+            assert_eq!(retained.id, original.id);
+            assert_eq!(retained.payload, original.payload);
+            assert_eq!(retained.first_attempt, original.first_attempt);
+        }
+        let state = peer.state.lock().unwrap();
+        let fixture = state.team_ssh.as_ref().unwrap();
+        let (_, body) = fixture.requests.last().unwrap();
+        let request = CertificateIssuanceRequest::from_json(body).unwrap();
+        assert_eq!(request.targets, CertificateTargets::Hosts(vec![host]));
+        assert_eq!(request.remote_user, remote_user);
+        assert!(store.team_ssh_certificate(&owner, host, remote_user).unwrap().is_none());
+        drop(state);
+        peer.assert_healthy();
+    }
+}
+
+#[tokio::test]
+async fn missing_certificate_scope_and_ca_policy_denial_are_not_connection_policy_denials() {
+    let (peer, _dir, store, manager, source, host) = setup().await;
+    create_ca(&manager, &store, &source).await;
+    let scope = scoplen_api::auth::INITIAL_DEVICE_ACCESS_SCOPE.replace(" certificates:issue", "");
+    peer.install_token(&store, |claims| claims.scope = scope.clone(), None);
+    let mut identity = record(&store).unwrap();
+    identity.auth_scope = Some(scope);
+    store.set_personal_session_metadata_for_test(&identity).unwrap();
+    assert_eq!(
+        manager.team_ssh_certificate(store.clone(), &source, host, "root").await,
+        Err(crate::personal_server::TeamFailure::MembershipScopeRequired.into())
+    );
+    assert!(!peer.state.lock().unwrap().paths.iter().any(|path| path.ends_with("/certificates")));
+    peer.assert_healthy();
+
+    let (peer, _dir, store, manager, source, _) = setup().await;
+    let prepared = manager.prepare_team_user_ca(&store, &source).unwrap();
+    peer.state.lock().unwrap().team_ssh.as_mut().unwrap().denied = true;
+    assert_eq!(
+        manager
+            .confirm_team_ssh_operation(
+                store.clone(),
+                &source,
+                TeamSshOperationKind::UserCa,
+                &prepared.operation_id,
+            )
+            .await,
+        Err(PersonalServerError::PermissionDenied.into())
+    );
+    peer.assert_healthy();
+}
+
+#[tokio::test]
 async fn ambiguous_certificate_problems_preserve_the_original_key_body_and_unknown_phase() {
     for (code, status, changed, retryable) in [
         ("certificate.revoked", 400, false, false),
@@ -539,17 +630,16 @@ async fn ambiguous_certificate_problems_preserve_the_original_key_body_and_unkno
         let original = store.team_ssh_operation(&owner, 1).unwrap().unwrap();
         peer.state.lock().unwrap().team_ssh.as_mut().unwrap().certificate_reply =
             Some(problem(code, status, changed, retryable));
-        assert!(
-            manager
-                .confirm_team_ssh_operation(
-                    store.clone(),
-                    &source,
-                    TeamSshOperationKind::Certificate,
-                    &original.id.to_string(),
-                )
-                .await
-                .is_err()
-        );
+        let result = manager
+            .confirm_team_ssh_operation(
+                store.clone(),
+                &source,
+                TeamSshOperationKind::Certificate,
+                &original.id.to_string(),
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(!matches!(result, Err(TeamSshError::PolicyDenied(_))));
         let retained = store.team_ssh_operation(&owner, 1).unwrap().unwrap();
         assert_eq!(retained.id, original.id);
         assert_eq!(retained.payload, original.payload);
@@ -566,67 +656,91 @@ async fn ambiguous_certificate_problems_preserve_the_original_key_body_and_unkno
 }
 
 #[tokio::test]
-async fn certificate_refusal_requires_complete_validated_http_problem_metadata() {
-    for defect in 0..7 {
+async fn other_certificate_problem_shapes_never_become_connection_policy_denials() {
+    for (code, status, changed, retryable) in [
+        ("policy.denied", 400, false, false),
+        ("policy.denied", 403, true, false),
+        ("policy.denied", 403, false, true),
+        ("auth.authentication_required", 401, false, false),
+    ] {
         let (peer, _dir, store, manager, source, host) = setup().await;
         create_ca(&manager, &store, &source).await;
-        let mut reply = problem("certificate.revoked", 409, false, false);
-        match defect {
-            0 => reply.content_type = "application/json",
-            1 => reply.headers.retain(|(name, _)| *name != "x-request-id"),
-            2 => reply.headers.push(("pragma", "no-cache".into())),
-            3 => reply.headers.push(("set-cookie", "fixture=ignored".into())),
-            4 => reply.headers.retain(|(name, _)| *name != "cache-control"),
-            5 => {
-                reply.body =
-                    vec![b' '; scoplen_api::organization::MAX_ORGANIZATION_PROBLEM_BYTES + 1]
-            }
-            _ => reply.body = b"{\"status\":413}".to_vec(),
-        }
-        peer.state.lock().unwrap().team_ssh.as_mut().unwrap().certificate_reply = Some(reply);
-        assert_eq!(
-            manager.team_ssh_certificate(store.clone(), &source, host, "root").await,
-            Err(TeamSshFailure::IssuanceUnknown.into())
-        );
-        let retained =
-            store.team_ssh_operation(&source.owner(&store).unwrap(), 1).unwrap().unwrap();
-        assert_eq!(retained.phase, 1);
-        let state = peer.state.lock().unwrap();
-        let requests = &state.team_ssh.as_ref().unwrap().requests;
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[1].0, retained.id);
-        assert_eq!(requests[1].1, retained.payload.as_bytes());
-        drop(state);
+        peer.state.lock().unwrap().team_ssh.as_mut().unwrap().certificate_reply =
+            Some(problem(code, status, changed, retryable));
+        let result = manager.team_ssh_certificate(store.clone(), &source, host, "root").await;
+        assert!(result.is_err());
+        assert!(!matches!(result, Err(TeamSshError::PolicyDenied(_))));
         peer.assert_healthy();
     }
 }
 
 #[tokio::test]
+async fn certificate_refusal_requires_complete_validated_http_problem_metadata() {
+    for (code, status) in [("certificate.revoked", 409), ("policy.denied", 403)] {
+        for defect in 0..7 {
+            let (peer, _dir, store, manager, source, host) = setup().await;
+            create_ca(&manager, &store, &source).await;
+            let mut reply = problem(code, status, false, false);
+            match defect {
+                0 => reply.content_type = "application/json",
+                1 => reply.headers.retain(|(name, _)| *name != "x-request-id"),
+                2 => reply.headers.push(("pragma", "no-cache".into())),
+                3 => reply.headers.push(("set-cookie", "fixture=ignored".into())),
+                4 => reply.headers.retain(|(name, _)| *name != "cache-control"),
+                5 => {
+                    reply.body =
+                        vec![b' '; scoplen_api::organization::MAX_ORGANIZATION_PROBLEM_BYTES + 1]
+                }
+                _ => reply.body = b"{\"status\":413}".to_vec(),
+            }
+            peer.state.lock().unwrap().team_ssh.as_mut().unwrap().certificate_reply = Some(reply);
+            assert_eq!(
+                manager.team_ssh_certificate(store.clone(), &source, host, "root").await,
+                Err(TeamSshFailure::IssuanceUnknown.into())
+            );
+            let retained =
+                store.team_ssh_operation(&source.owner(&store).unwrap(), 1).unwrap().unwrap();
+            assert_eq!(retained.phase, 1);
+            let state = peer.state.lock().unwrap();
+            let requests = &state.team_ssh.as_ref().unwrap().requests;
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[1].0, retained.id);
+            assert_eq!(requests[1].1, retained.payload.as_bytes());
+            drop(state);
+            peer.assert_healthy();
+        }
+    }
+}
+
+#[tokio::test]
 async fn certificate_refusal_from_a_stale_authenticated_session_cannot_clear_pending() {
-    let (peer, _dir, store, manager, source, host) = setup().await;
-    create_ca(&manager, &store, &source).await;
-    peer.state.lock().unwrap().team_ssh.as_mut().unwrap().certificate_reply =
-        Some(problem("certificate.revoked", 409, false, false));
-    let reached = Arc::new(tokio::sync::Notify::new());
-    let resume = Arc::new(tokio::sync::Notify::new());
-    peer.state.lock().unwrap().pause = Some((
-        format!("/api/v1/orgs/{}/certificates", source.organization_id),
-        reached.clone(),
-        resume.clone(),
-    ));
-    let pending = manager.team_ssh_certificate(store.clone(), &source, host, "root");
-    let mutate = async {
-        reached.notified().await;
-        let identity = record(&store).unwrap();
-        let access = store.personal_access_token(now().unwrap()).unwrap().unwrap();
-        store.invalidate_personal_session(&identity, &access).unwrap();
-        resume.notify_one();
-    };
-    let (result, ()) = tokio::join!(pending, mutate);
-    assert_eq!(result, Err(PersonalServerError::AuthenticationRequired.into()));
-    let retained = store.team_ssh_operation(&source.owner(&store).unwrap(), 1).unwrap().unwrap();
-    assert_eq!(retained.phase, 1);
-    peer.assert_healthy();
+    for (code, status) in [("certificate.revoked", 409), ("policy.denied", 403)] {
+        let (peer, _dir, store, manager, source, host) = setup().await;
+        create_ca(&manager, &store, &source).await;
+        peer.state.lock().unwrap().team_ssh.as_mut().unwrap().certificate_reply =
+            Some(problem(code, status, false, false));
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let resume = Arc::new(tokio::sync::Notify::new());
+        peer.state.lock().unwrap().pause = Some((
+            format!("/api/v1/orgs/{}/certificates", source.organization_id),
+            reached.clone(),
+            resume.clone(),
+        ));
+        let pending = manager.team_ssh_certificate(store.clone(), &source, host, "root");
+        let mutate = async {
+            reached.notified().await;
+            let identity = record(&store).unwrap();
+            let access = store.personal_access_token(now().unwrap()).unwrap().unwrap();
+            store.invalidate_personal_session(&identity, &access).unwrap();
+            resume.notify_one();
+        };
+        let (result, ()) = tokio::join!(pending, mutate);
+        assert_eq!(result, Err(PersonalServerError::AuthenticationRequired.into()));
+        let retained =
+            store.team_ssh_operation(&source.owner(&store).unwrap(), 1).unwrap().unwrap();
+        assert_eq!(retained.phase, 1);
+        peer.assert_healthy();
+    }
 }
 
 #[tokio::test]

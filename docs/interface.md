@@ -23,6 +23,11 @@ localized guidance in both the terminal and SSH setup. A replacement requires an
 new connection. Uncertain outcomes keep the original request; message text and HTTP status
 alone never establish either definite refusal.
 
+An authenticated certificate `policy.denied` retains its original deployment, Account,
+Organization, Device, Host and exact remote username as separate typed context. It grants
+no access and does not submit an access request. Local scope failures, authentication errors,
+CA provisioning refusals and unverified responses never produce this connection-policy context.
+
 Windows uses the tab strip as its title bar, with themed minimize, maximize/restore and
 close buttons on the right. Empty strip space drags the window and double-clicks toggle
 maximize. Close follows the ordinary terminal-save and application shutdown path. Startup

@@ -543,7 +543,10 @@ async fn roundtrip(deployment: PasswordDeployment, ssh: SshFixture, directory: &
                 "smoke"
             )
             .await,
-        Err(TeamSshError::Personal(PersonalServerError::PermissionDenied)),
+        Err(TeamSshError::PolicyDenied(denial))
+            if denial.source == member_source
+                && denial.host_id == destination.id
+                && denial.remote_user == "smoke",
     ));
     owned_cached.current(&member_store).expect("the independent Owner certificate remains current");
     assert!(
