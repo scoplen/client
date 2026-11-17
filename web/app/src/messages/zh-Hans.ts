@@ -836,6 +836,9 @@ export const zhHans: Messages = {
   "objects.profile.noForwards": "还没有已保存的隧道。",
   "objects.profile.forwardCount": "{count} 条隧道",
   "objects.profile.agentForwarding": "允许代理转发",
+  "objects.profile.agentForwardingHint": "连接期间，这台远程主机可以使用所选代理身份请求签名。其他代理密钥不会共享。",
+  "objects.profile.agentForwardingRequiresAgent":
+    "请选择已填写公钥的代理凭据来使用转发。使用其他凭据前，请关闭代理转发。",
   "objects.profile.default": "设为这台主机的默认登录",
   "objects.credential.new": "新建密钥",
   "objects.credential.name": "名称",
@@ -1830,6 +1833,7 @@ export const zhHans: Messages = {
   "teams.authoring.terminalProfile": "终端配置",
   "teams.authoring.startup": "启动命令",
   "teams.authoring.agentForwarding": "允许代理转发",
+  "teams.authoring.agentForwardingUnsupported": "团队登录配置暂不支持代理转发。连接前请关闭此选项。",
   "teams.authoring.teamSigner": "此登录配置使用团队的本机证书签名密钥，不会选用个人凭据。",
   "teams.authoring.routeKind": "路由类型",
   "teams.authoring.jump": "SSH 跳板",

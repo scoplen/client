@@ -969,6 +969,10 @@ export const en = {
   "objects.profile.noForwards": "No saved tunnels yet.",
   "objects.profile.forwardCount": "{count, plural, one {# tunnel} other {# tunnels}}",
   "objects.profile.agentForwarding": "Allow agent forwarding",
+  "objects.profile.agentForwardingHint":
+    "This remote host can request signatures using the selected Agent identity while connected. Your other Agent keys are not shared.",
+  "objects.profile.agentForwardingRequiresAgent":
+    "Select an Agent credential with its public key to use forwarding. Turn forwarding off to use another credential.",
   "objects.profile.default": "Use as the host's default login",
   "objects.credential.new": "New key",
   "objects.credential.name": "Name",
@@ -2129,6 +2133,8 @@ export const en = {
   "teams.authoring.terminalProfile": "Terminal profile",
   "teams.authoring.startup": "Startup command",
   "teams.authoring.agentForwarding": "Allow agent forwarding",
+  "teams.authoring.agentForwardingUnsupported":
+    "Agent forwarding is not available for team Logins. Turn it off before connecting.",
   "teams.authoring.teamSigner":
     "This Login uses the team's device-local certificate signer. Personal credentials are never selected.",
   "teams.authoring.routeKind": "Route type",

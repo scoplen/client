@@ -18,6 +18,7 @@ use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use crate::connection::agent_forwarding::AgentForwardingService;
 use crate::connection::preparation::{
     PreparationContext, PreparationControl, PreparationError, PreparationEvent,
     PreparationResponse, prepare_resolved_target_connection, resolve_target_preparation_plan,
@@ -1869,6 +1870,7 @@ impl SessionManager {
             } else {
                 None
             };
+        let forwarded_agent = plan.forwarded_agent();
         let connection =
             prepare_resolved_target_connection(store, personal, plan, control, |event| {
                 if let PreparationEvent::Verified { context, .. } = &event
@@ -1886,7 +1888,7 @@ impl SessionManager {
                 })
             })
             .await;
-        let connection = Arc::new(match connection {
+        let mut connection = match connection {
             Ok(connection) => connection,
             Err(_) if control.is_cancelled() => {
                 return history
@@ -1894,11 +1896,24 @@ impl SessionManager {
                     .map_err(|error| AttemptError::Local(error.to_string()));
             }
             Err(error) => return Err(error.into()),
-        });
+        };
+        let mut forwarding = if let Some(selected) = forwarded_agent {
+            let incoming = connection
+                .authenticated_connection_mut()?
+                .take_forwarded_channels()
+                .ok_or(SshConnectionError::AgentForwardingUnavailable)?;
+            Some(AgentForwardingService::start(selected, control.clone(), incoming))
+        } else {
+            None
+        };
+        let connection = Arc::new(connection);
         let mut ready_at = None;
         let mut attachments: Option<AttachedForwardLease> = None;
         let operation = async {
             let mut session = connection.open_session().await?;
+            if forwarding.is_some() {
+                session.request_agent_forwarding().await?;
+            }
             let pty_request = pty.then(default_pty);
             if let Some(command) = command {
                 let result = session.exec(command.as_bytes(), pty_request.as_ref()).await?;
@@ -1994,6 +2009,9 @@ impl SessionManager {
             _ = control.cancelled() => Ok(()),
             result = operation => result,
         };
+        if let Some(forwarding) = &mut forwarding {
+            forwarding.settle().await;
+        }
         if let Some(lease) = &mut attachments {
             lease.settle(&self.forwards).await;
             if let Ok(entries) = lease.state.snapshots()

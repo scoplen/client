@@ -56,7 +56,7 @@ impl Drop for CancelAgent {
     }
 }
 
-fn selected_client(
+pub(super) fn selected_client(
     stream: AgentStream,
     key_blob: &[u8],
 ) -> Result<AgentClient<FramedAgentChannel<AgentStream>>, SshConnectionError> {

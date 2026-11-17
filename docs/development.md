@@ -76,6 +76,30 @@ conflicting and revoked keys, HostName changes and removing source trust while p
 manual trust. Rendered import interaction and native file-picker acceptance are separate
 from this public-core/OpenSSH check.
 
+## Disposable SSH Agent forwarding integration
+
+Run with PowerShell 7, Docker and `ssh-keygen` available:
+
+```powershell
+pwsh -NoProfile -File scripts/test-ssh-agent-forwarding.ps1
+```
+
+The fixture uses a fresh owned source Agent socket or named pipe with two disposable
+identities, plus two pinned OpenSSH listeners. It never changes the system Agent.
+The saved Login starts with forwarding off. A saved edit preserves the live choice;
+reconnect captures the new opt-in and exposes exactly the selected public key.
+Real second-hop SSH runs concurrently with binary SFTP and attached Local and
+Dynamic traffic. Remote management, extensions and other-key signing must be refused
+without reaching the source, and a source signing refusal must preserve later use.
+Turning the saved flag off takes effect on reconnect. Closing a final held signature
+must release its source connection and reject late terminal input. Successful runs
+remove their owned container and temporary files; failed evidence remains local.
+
+Targeted Rust tests cover preflight selection, target-only opt-in, reply ordering,
+live authorization and forbidden forwarded operations. Login and Team authoring
+interface tests cover disabled choices, consent preservation and clearing unsupported
+saved flags. These tests do not establish rendered or native platform acceptance.
+
 ## Disposable Personal server integration
 
 ### Password registration and independent-device sign-in

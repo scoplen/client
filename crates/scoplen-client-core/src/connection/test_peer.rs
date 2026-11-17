@@ -147,6 +147,14 @@ impl server::Handler for Handler {
         Ok(())
     }
 
+    async fn agent_request(
+        &mut self,
+        _channel: russh::ChannelId,
+        _session: &mut server::Session,
+    ) -> Result<bool, Self::Error> {
+        Ok(self.mode == Authentication::Forwarding)
+    }
+
     async fn pty_request(
         &mut self,
         channel: russh::ChannelId,

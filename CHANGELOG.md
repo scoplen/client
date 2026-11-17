@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Opt Local and Personal Logins into forwarding one explicitly selected Agent
+  identity, with a capability disclosure, target-only scope and clear setup refusal.
+  Keep terminal, SFTP and attached Local/Dynamic tunnels on their existing connection;
+  reconnect captures saved changes and ending the attempt stops pending Agent I/O.
+  Team forwarding and Pageant discovery remain unavailable.
+
 - Adopt the published `proto@93053d4` incoming SSH channel receiver ownership API,
   keeping all shared libraries and dependency patches on that revision. This upgrade
   does not enable desktop agent forwarding.

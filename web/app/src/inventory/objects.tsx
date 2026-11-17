@@ -769,6 +769,9 @@ function ProfileEditor({
     routes.state === "ready"
       ? routes.data.filter((route) => !route.orphaned).map((route) => ({ value: route.id, label: route.name }))
       : [];
+  const forwardingCredential =
+    credentials.state === "ready" ? credentials.data.find((credential) => credential.id === value.credential) : null;
+  const canForwardAgent = forwardingCredential?.kind === "agent" && !!forwardingCredential.publicKey?.trim();
   const save = async () => {
     setBusy(true);
     setError(null);
@@ -788,7 +791,7 @@ function ProfileEditor({
       error={error}
       onClose={onClose}
       onSave={() => void save()}
-      canSave={forwards.state === "ready"}
+      canSave={forwards.state === "ready" && (!value.agentForwarding || canForwardAgent)}
     >
       <SelectField
         label={t("objects.profile.host")}
@@ -872,11 +875,15 @@ function ProfileEditor({
         <input
           type="checkbox"
           checked={value.agentForwarding}
+          disabled={!value.agentForwarding && !canForwardAgent}
           onChange={(event) => setValue((current) => ({ ...current, agentForwarding: event.target.checked }))}
           className="size-4 accent-[var(--primary)]"
         />
         {t("objects.profile.agentForwarding")}
       </label>
+      <p className="m-0 text-sm text-muted-foreground">
+        {t(canForwardAgent ? "objects.profile.agentForwardingHint" : "objects.profile.agentForwardingRequiresAgent")}
+      </p>
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
