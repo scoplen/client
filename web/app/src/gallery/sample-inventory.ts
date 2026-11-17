@@ -885,7 +885,7 @@ export function sampleInventory(
           ? routeLabelForSummary(objectRoutes.find((route) => route.id === input.route) ?? sampleRouteSeeds[0]!)
           : { kind: "direct" },
         routeId: input.route,
-        terminalProfile: input.terminalProfile?.trim() || null,
+        terminalProfile: input.terminalProfile,
         startupCommand: input.startupCommand?.trim() || null,
         agentForwarding: input.agentForwarding,
         forwards,
@@ -931,7 +931,7 @@ export function sampleInventory(
           ? routeLabelForSummary(objectRoutes.find((route) => route.id === input.route) ?? sampleRouteSeeds[0]!)
           : { kind: "direct" },
         routeId: input.route,
-        terminalProfile: input.terminalProfile?.trim() || null,
+        terminalProfile: input.terminalProfile,
         startupCommand: input.startupCommand?.trim() || null,
         agentForwarding: input.agentForwarding,
         forwards,

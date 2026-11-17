@@ -23,6 +23,7 @@ fn ready_manager() -> (SessionManager, Uuid, mpsc::Receiver<FileCommand>) {
         file: None,
         ready: true,
         context: Some(PreparationContext {
+            terminal_profile: None,
             source: None,
             profile_id: Uuid::now_v7().to_string(),
             host_id: Uuid::now_v7().to_string(),

@@ -2,6 +2,7 @@
 import { Button, Field, Select, TextAreaField } from "@scoplen/ui";
 import { useId, useRef, useState } from "react";
 import { useI18n } from "./i18n";
+import { TerminalProfileSelect } from "./terminal-profiles";
 import type {
   TeamAuthoringCollection,
   TeamAuthoringData,
@@ -525,10 +526,10 @@ export function TeamAuthoringFields({
             {...refs}
           />
           <p className="text-sm text-muted-foreground">{t("teams.authoring.teamSigner")}</p>
-          <Field
+          <TerminalProfileSelect
             label={t("teams.authoring.terminalProfile")}
-            value={fields.terminal_profile ?? ""}
-            onChange={(event) => set({ terminal_profile: optional(event.target.value) })}
+            value={fields.terminal_profile ?? null}
+            onChange={(terminal_profile) => set({ terminal_profile: terminal_profile ?? undefined })}
           />
           <Field
             label={t("teams.authoring.startup")}

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useI18n } from "./i18n";
+import { TerminalProfileSettingsPanel } from "./terminal-profile-settings";
 import {
   ansiNames,
   surfaceColors,
@@ -26,6 +27,7 @@ export function TerminalSettings() {
         {t("settings.terminal.title")}
       </h2>
       <p className="mt-1 text-sm text-muted-foreground">{t("settings.terminal.body")}</p>
+      <TerminalProfileSettingsPanel />
 
       <fieldset className="m-0 mt-4 border-0 p-0">
         <legend className="mb-3 p-0 text-sm font-medium">{t("settings.terminal.scheme")}</legend>

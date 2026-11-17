@@ -4,6 +4,7 @@ import { Button, Dialog, Field, Select } from "@scoplen/ui";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { commands, events, makeCommands, type ProfileSnapshot } from "./ipc/bindings";
 import { useI18n } from "./i18n";
+import { TerminalProfilesProvider } from "./terminal-profiles";
 
 type ProfileContext = {
   snapshot: ProfileSnapshot;
@@ -88,7 +89,11 @@ function BoundProfile({
     binding.activate();
     return binding.deactivate;
   }, [binding]);
-  return <Context.Provider value={{ snapshot, commands: binding.commands, accept }}>{children}</Context.Provider>;
+  return (
+    <Context.Provider value={{ snapshot, commands: binding.commands, accept }}>
+      <TerminalProfilesProvider>{children}</TerminalProfilesProvider>
+    </Context.Provider>
+  );
 }
 
 function bindProfileCommands(generation: string) {

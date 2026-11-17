@@ -19,6 +19,17 @@ type Handler = (cmd: string, args: Record<string, unknown>) => unknown;
 function defaultInventory(cmd: string): unknown {
   if (cmd === "account_profiles_snapshot")
     return { generation: "1", selected: null, accounts: [], retainedProfile: false };
+  if (cmd === "terminal_profiles_list")
+    return {
+      defaultProfile: {
+        fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
+        fontSize: 14,
+        cursorStyle: "block",
+        cursorBlink: true,
+        scrollback: 2000,
+      },
+      named: [],
+    };
   if (cmd === "inventory_areas") return { favorites: false, recent: false, groups: false, keys: false, routes: false };
   if (cmd === "inventory_groups" || cmd === "inventory_hosts") return [];
   if (cmd === "inventory_host") return null;

@@ -3,6 +3,52 @@
 // Messages use ICU MessageFormat.
 
 export const en = {
+  "terminalProfiles.title": "Terminal profiles",
+  "terminalProfiles.body":
+    "Save font, cursor and scrollback settings for this Local or Account profile on this device. Choose a profile in each Login. Colors below apply to every terminal.",
+  "terminalProfiles.default": "Default",
+  "terminalProfiles.select": "Edit terminal profile",
+  "terminalProfiles.create": "Create profile",
+  "terminalProfiles.name": "Profile name",
+  "terminalProfiles.names":
+    "Names are case-sensitive and cannot be renamed. New profiles copy the current Default. Up to 32 named profiles.",
+  "terminalProfiles.delete": "Delete profile",
+  "terminalProfiles.deleteTitle": "Delete terminal profile?",
+  "terminalProfiles.deleteBody":
+    "Delete “{name}” on this device. Logins keep this name and use Default until you choose another profile or create it again.",
+  "terminalProfiles.cancel": "Cancel",
+  "terminalProfiles.fontFamily": "Font family list",
+  "terminalProfiles.fontHint":
+    "Use installed fonts, separated by commas, with fallback fonts last. No fonts are downloaded.",
+  "terminalProfiles.defaultFonts": "Use default font list",
+  "terminalProfiles.fontSize": "Font size (8–48 px)",
+  "terminalProfiles.cursorStyle": "Cursor shape",
+  "terminalProfiles.cursor.block": "Block",
+  "terminalProfiles.cursor.underline": "Underline",
+  "terminalProfiles.cursor.bar": "Bar",
+  "terminalProfiles.blink": "Blink cursor",
+  "terminalProfiles.scrollback": "Scrollback rows (0–100,000)",
+  "terminalProfiles.scrollbackHint":
+    "Reducing this limit can discard the oldest retained rows. Zero keeps only the current screen.",
+  "terminalProfiles.save": "Save profile",
+  "terminalProfiles.saving": "Saving profile…",
+  "terminalProfiles.reset": "Reset Default",
+  "terminalProfiles.saved": "Profile saved. Open terminals now use these settings.",
+  "terminalProfiles.loading": "Loading terminal profiles…",
+  "terminalProfiles.reload": "Reload profiles",
+  "terminalProfiles.unavailableName": "{name} (unavailable on this device)",
+  "terminalProfiles.missing": "“{name}” is unavailable on this device. Using Default.",
+  "terminalProfiles.issue.invalidName":
+    "Use a name of 1–128 UTF-8 bytes in Unicode NFC, without control characters or surrounding spaces.",
+  "terminalProfiles.issue.invalidFontFamily": "Enter a font list of 1–256 UTF-8 bytes without control characters.",
+  "terminalProfiles.issue.invalidFontSize": "Font size must be a whole number from 8 to 48.",
+  "terminalProfiles.issue.invalidScrollback": "Scrollback must be a whole number from 0 to 100,000.",
+  "terminalProfiles.issue.alreadyExists": "This exact profile name already exists. Choose another name.",
+  "terminalProfiles.issue.notFound": "This profile is no longer available. Reload the directory.",
+  "terminalProfiles.issue.limit": "All 32 named profile slots are in use. Delete a profile before creating another.",
+  "terminalProfiles.issue.unavailable":
+    "Terminal profiles are unavailable. Reopen this Local or Account profile, then reload.",
+  "terminalProfiles.issue.storage": "The terminal profiles could not be read or saved. Reload before trying again.",
   "include.title": "OpenSSH configuration",
   "include.body":
     "Use your saved hosts from OpenSSH. Review and generate a configuration for the current inventory, then include it in your own SSH config.",
@@ -342,8 +388,8 @@ export const en = {
     "Background sync is paused. Ask your server operator to check this device's sync access, then authenticate again.",
   "settings.personal.sync.background.failed":
     "Background sync is paused. Verify sync keys and retry synchronization to review the problem. Local data is available.",
-  "settings.terminal.title": "Terminal colors",
-  "settings.terminal.body": "Used by every session. Change any color; your changes become your own scheme.",
+  "settings.terminal.title": "Terminal appearance",
+  "settings.terminal.body": "Choose local font, cursor and scrollback profiles. Color settings apply to every session.",
   "settings.terminal.scheme": "Scheme",
   "settings.terminal.scheme.app": "Match the theme",
   "settings.terminal.scheme.paperLight": "Paper light",

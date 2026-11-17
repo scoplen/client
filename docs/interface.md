@@ -45,6 +45,26 @@ Right-click menus are the application's own (`web/ui/src/components/context-menu
 
 The terminal has its own colors, chosen in Settings → Terminal (`web/app/src/terminal-colors.tsx`, `terminal-settings.tsx`): "Match the theme" (the default) takes the interface theme's surface, text, and accent, and a set of fixed schemes uses their projects' published palettes. Each of the four surface colors and sixteen ANSI colors can be changed; an edit makes the colors the person's own scheme. They are applied to running sessions at once and kept like the theme. The session header has a shortcut to these settings, and sessions stay mounted and connected while another tab or Settings is shown.
 
+Settings > Terminal also manages up to 32 named local profiles and a separate,
+editable/resettable Default. These font-family, font-size, cursor and scrollback
+settings live in the current encrypted Local or Account Store and never synchronize.
+New profiles copy the current Default. Names are exact, case-sensitive and immutable;
+they must already be Unicode NFC as required by Login text and are never normalized.
+Create another profile to use a different name. Default cannot be deleted. A custom
+font list uses installed fonts with ordinary fallback; no font is discovered or downloaded.
+Reducing scrollback can discard the oldest retained rows; zero keeps only the screen.
+
+Personal and Organization Login editors select these names through the custom Select.
+Only the target Login controls its pane; Jump Login choices have no effect. A missing
+name remains visible in the editor and falls back to Default with an inline pane hint.
+Deleting a profile leaves Login references intact. Reconnect reads the target's current
+selection again. Saving updates affected live, hidden and read-only saved-output panes
+through the public terminal profile setter, preserving terminal, transport, input and
+restoration identity. A font change may cause normal grid resizing. Global color
+preferences and their storage remain unchanged. Account replacement discards the old
+directory and panes. Profile settings operations never connect or request remote data.
+Per-profile colors, ligatures, bell and rendered/native acceptance remain incomplete.
+
 Files opens beside a connected terminal, or below it in a narrow window. Each
 IPC request carries the logical session, exact transport, operation identifier,
 and remote path bytes to Rust. The panel keeps display-safe names and raw path

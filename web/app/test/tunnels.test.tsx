@@ -99,6 +99,7 @@ function temporarySnapshot(mode: "local" | "remote" | "dynamic", overrides: Part
 function challenge(kind: "trust" | "passphrase" | "keyboardInteractive", promptId = "prompt-1"): PreparationEvent {
   const context = {
     source: null,
+    terminalProfile: null,
     profileId: "l-3",
     hostId: "h-db-1",
     login: "ops",

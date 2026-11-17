@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Manage named device-local terminal profiles in Settings, with font, cursor and
+  scrollback controls and editable/resettable Default. Target Logins choose an
+  exact profile through the custom selector. Changes update live, hidden and saved
+  output panes in place; missing names use Default with a hint. Global colors keep
+  their existing settings and persistence.
+
 - Adopt the published `proto@f493ece` Host Grant contracts and audit resource kind.
   Keep every shared library and the Pageant and ssh-key patches on that revision;
   this dependency update does not add a desktop Grant management workflow.

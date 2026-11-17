@@ -855,4 +855,11 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     ) STRICT, WITHOUT ROWID;
     CREATE INDEX portable_destination_preferences ON portable_import_preferences(key);
     "#,
+    // 24: terminal appearance stays in the current device-local Store.
+    r#"
+    CREATE TABLE terminal_profiles (
+        name TEXT PRIMARY KEY NOT NULL,
+        settings TEXT NOT NULL
+    ) STRICT, WITHOUT ROWID;
+    "#,
 ];
