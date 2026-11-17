@@ -209,10 +209,10 @@ it.each(["en", "zh-Hans"] as const)(
       attachedEntry(c.transportId),
       attachedEntry(c.transportId, { forwardId: "missing", name: null, run: null, issue: "notFound" }),
       attachedEntry(c.transportId, {
-        forwardId: "remote",
-        name: "Remote tunnel",
+        forwardId: "invalid-remote",
+        name: "Invalid remote tunnel",
         run: null,
-        issue: "unsupportedDefinition",
+        issue: "invalidConfiguration",
       }),
       attachedEntry(c.transportId, { forwardId: "occupied", name: "Occupied port", run: null, issue: "listenFailed" }),
       attachedEntry(c.transportId, {
@@ -225,7 +225,7 @@ it.each(["en", "zh-Hans"] as const)(
     await c.emit({ kind: "forwards", transportId: c.transportId, entries });
     const list = screen.getByRole("list", { name: catalog["tunnels.attached.title"] });
     expect(within(list).getAllByRole("listitem")).toHaveLength(5);
-    expect(within(list).getByText(catalog["tunnels.issue.unsupportedDefinition"])).toBeTruthy();
+    expect(within(list).getByText(catalog["tunnels.attached.issue.invalidConfiguration"])).toBeTruthy();
     expect(within(list).getByText(catalog["tunnels.attached.issue.listenFailed"])).toBeTruthy();
     expect(within(list).getByText(catalog["tunnels.attached.issue.capacityReached"])).toBeTruthy();
     const missing = within(list).getAllByRole("listitem")[1]!;
@@ -250,6 +250,41 @@ it.each(["en", "zh-Hans"] as const)(
     expect(f.matching("session_input").at(-1)?.args.transportId).toBe(c.transportId);
   },
 );
+
+it.each(["en", "zh-Hans"] as const)("keeps unconfirmed Remote cleanup visible after Stop in %s", async (locale) => {
+  const f = fixture();
+  const catalog = locale === "en" ? en : zhHans;
+  const view = render(sessionView(locale, true, undefined, undefined, { sessionId: "logical-terminal" }));
+  const c = await connect(f);
+  await c.ready();
+  const entry = attachedEntry(c.transportId);
+  const run = entry.run!;
+  if (run.configuration.kind !== "local") throw new Error("expected TCP fixture");
+  await c.emit({
+    kind: "forwards",
+    transportId: c.transportId,
+    entries: [
+      {
+        ...entry,
+        stopped: true,
+        run: {
+          ...run,
+          configuration: { ...run.configuration, kind: "remote" },
+          phase: "failed",
+          lastIssue: "shutdownFailed",
+        },
+      },
+    ],
+  });
+  const list = screen.getByRole("list", { name: catalog["tunnels.attached.title"] });
+  expect(within(list).getByText(catalog["tunnels.attached.issue.remoteShutdownFailed"])).toBeTruthy();
+  expect(within(list).getByText(catalog["tunnels.attached.stopped"])).toBeTruthy();
+  expect(within(list).getByRole("button").hasAttribute("disabled")).toBe(true);
+  expect(f.matching("session_close_transport")).toHaveLength(0);
+  const terminal = view.container.querySelector<ScoplenTerminalElement>("scoplen-terminal")!;
+  await terminal.send(new Uint8Array([112, 119, 100, 13]));
+  expect(f.matching("session_input").at(-1)?.args.transportId).toBe(c.transportId);
+});
 
 it.each(["success", "failure"] as const)(
   "fences old attachment events, initial lists and Stop %s across replacement transports",

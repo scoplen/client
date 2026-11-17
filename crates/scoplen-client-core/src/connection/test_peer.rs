@@ -9,6 +9,7 @@ use std::sync::{
 use russh::server;
 use tokio::{
     net::TcpListener,
+    sync::{Notify, mpsc},
     task::{JoinHandle, JoinSet},
 };
 
@@ -31,7 +32,35 @@ pub(crate) struct Peer {
     pub challenges: Arc<AtomicUsize>,
     pub session_channels: Arc<AtomicUsize>,
     pub closed_connections: Arc<AtomicUsize>,
+    pub remote: Option<RemoteControl>,
     task: JoinHandle<()>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ForwardReply {
+    Accept,
+    Deny,
+    Hold,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RemoteRequest {
+    Listen(String, u32),
+    Cancel(String, u32),
+}
+
+pub(crate) struct RemoteControl {
+    pub requests: mpsc::UnboundedReceiver<RemoteRequest>,
+    pub connections: mpsc::UnboundedReceiver<server::Handle>,
+    pub release: Arc<Notify>,
+}
+
+#[derive(Clone)]
+struct RemoteHandler {
+    listen: ForwardReply,
+    cancel: ForwardReply,
+    requests: mpsc::UnboundedSender<RemoteRequest>,
+    release: Arc<Notify>,
 }
 
 impl Drop for Peer {
@@ -47,6 +76,7 @@ struct Handler {
     mode: Authentication,
     round: usize,
     factor_accepted: bool,
+    remote: Option<RemoteHandler>,
 }
 
 fn remaining(method: russh::MethodKind, partial_success: bool) -> server::Auth {
@@ -159,6 +189,34 @@ impl server::Handler for Handler {
         Ok(self.mode == Authentication::Forwarding)
     }
 
+    async fn tcpip_forward(
+        &mut self,
+        address: &str,
+        port: &mut u32,
+        _session: &mut server::Session,
+    ) -> Result<bool, Self::Error> {
+        let Some(remote) = &self.remote else { return Ok(false) };
+        remote.requests.send(RemoteRequest::Listen(address.into(), *port)).unwrap();
+        if matches!(remote.listen, ForwardReply::Hold) {
+            remote.release.notified().await;
+        }
+        Ok(!matches!(remote.listen, ForwardReply::Deny))
+    }
+
+    async fn cancel_tcpip_forward(
+        &mut self,
+        address: &str,
+        port: u32,
+        _session: &mut server::Session,
+    ) -> Result<bool, Self::Error> {
+        let Some(remote) = &self.remote else { return Ok(false) };
+        remote.requests.send(RemoteRequest::Cancel(address.into(), port)).unwrap();
+        if matches!(remote.cancel, ForwardReply::Hold) {
+            remote.release.notified().await;
+        }
+        Ok(!matches!(remote.cancel, ForwardReply::Deny))
+    }
+
     async fn pty_request(
         &mut self,
         channel: russh::ChannelId,
@@ -252,6 +310,17 @@ impl Peer {
     }
 
     pub async fn with_authentication(mode: Authentication) -> Self {
+        Self::configured(mode, None).await
+    }
+
+    pub async fn with_remote_forwarding(listen: ForwardReply, cancel: ForwardReply) -> Self {
+        Self::configured(Authentication::Forwarding, Some((listen, cancel))).await
+    }
+
+    async fn configured(
+        mode: Authentication,
+        replies: Option<(ForwardReply, ForwardReply)>,
+    ) -> Self {
         let private = ssh_key::PrivateKey::random(
             &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
             ssh_key::Algorithm::Ed25519,
@@ -275,6 +344,20 @@ impl Peer {
         let closed_count = closed_connections.clone();
         let challenge_count = challenges.clone();
         let count = authentications.clone();
+        let (requests, request_receiver) = mpsc::unbounded_channel();
+        let (connection_controls, connection_receiver) = mpsc::unbounded_channel();
+        let release = Arc::new(Notify::new());
+        let remote_handler = replies.map(|(listen, cancel)| RemoteHandler {
+            listen,
+            cancel,
+            requests,
+            release: release.clone(),
+        });
+        let remote = replies.map(|_| RemoteControl {
+            requests: request_receiver,
+            connections: connection_receiver,
+            release,
+        });
         let task = tokio::spawn(async move {
             let mut connections = JoinSet::new();
             while let Ok((stream, _)) = listener.accept().await {
@@ -283,6 +366,8 @@ impl Peer {
                 let challenges = challenge_count.clone();
                 let session_channels = channel_count.clone();
                 let closed_connections = closed_count.clone();
+                let remote = remote_handler.clone();
+                let controls = connection_controls.clone();
                 connections.spawn(async move {
                     let handler = Handler {
                         authentications: count,
@@ -291,14 +376,25 @@ impl Peer {
                         mode,
                         round: 0,
                         factor_accepted: false,
+                        remote,
                     };
                     if let Ok(session) = server::run_stream(config, stream, handler).await {
+                        let _ = controls.send(session.handle());
                         let _ = session.await;
                     }
                     closed_connections.fetch_add(1, Ordering::SeqCst);
                 });
             }
         });
-        Self { port, key, authentications, challenges, session_channels, closed_connections, task }
+        Self {
+            port,
+            key,
+            authentications,
+            challenges,
+            session_channels,
+            closed_connections,
+            remote,
+            task,
+        }
     }
 }

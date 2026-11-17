@@ -36,6 +36,10 @@ pub(crate) struct AttachedForwardSelection {
 }
 
 impl AttachedForwardSelection {
+    pub(crate) fn has_entries(&self) -> bool {
+        !self.ids.is_empty()
+    }
+
     pub(crate) fn capture(store: &Store, login: &PreparationContext) -> Result<Self, ForwardIssue> {
         let profile =
             Uuid::parse_str(&login.profile_id).map_err(|_| ForwardIssue::InvalidConfiguration)?;
@@ -177,6 +181,7 @@ impl ForwardManager {
         attachment: ForwardAttachment,
         stopped: Arc<Mutex<BTreeSet<Uuid>>>,
         connection: &Arc<SshConnection>,
+        incoming: Option<&IncomingForwardingState>,
     ) -> AttachedForwardLease {
         let (changed, _) = watch::channel(false);
         let mut entries = Vec::with_capacity(selection.ids.len());
@@ -195,9 +200,6 @@ impl ForwardManager {
                 entry.name = Some(forward.name.clone());
                 if stopped.lock().map_err(|_| ForwardIssue::Unavailable)?.contains(&id) {
                     return Ok(None);
-                }
-                if forward.kind == ForwardKind::Remote {
-                    return Err(ForwardIssue::UnsupportedDefinition);
                 }
                 let definition = saved_definition(forward)?;
                 validate_definition(&definition)?;
@@ -230,13 +232,33 @@ impl ForwardManager {
             match registered {
                 Ok((run, _)) => {
                     entry.run = Some(run.clone());
+                    let remote = if matches!(run.configuration, ForwardConfiguration::Remote { .. })
+                    {
+                        match incoming
+                            .ok_or(ForwardIssue::Unavailable)
+                            .and_then(|incoming| incoming.reserve(run.clone()))
+                        {
+                            Ok(endpoint) => Some(endpoint),
+                            Err(issue) => {
+                                self.complete(&run, Err(issue));
+                                entries.push(entry);
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     let manager = self.clone();
                     let mut connection = connection.clone();
                     let guard = AttachedRunGuard { manager: manager.clone(), run: run.clone() };
                     tasks.push(tokio::spawn(async move {
                         let _guard = guard;
                         let mut stop = run.stop.subscribe();
-                        let result = serve(&run, &mut connection, &mut stop).await;
+                        let result = if let Some(remote) = remote {
+                            remote::execute_attached(&run, &connection, &remote, &mut stop).await
+                        } else {
+                            serve(&run, &mut connection, &mut stop).await
+                        };
                         // Release the borrowed transport before notifying its session owner.
                         drop(connection);
                         manager.complete(&run, result);

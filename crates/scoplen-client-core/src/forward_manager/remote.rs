@@ -7,6 +7,149 @@ use tokio::time::{Instant, timeout_at};
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(1);
 const PEER_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
+struct AttachedPeers {
+    listening: bool,
+    workers: JoinSet<()>,
+}
+
+/// An endpoint borrows the terminal transport and owns only its admitted local peers.
+pub(super) struct AttachedRemote {
+    run: Arc<Run>,
+    peers: Mutex<AttachedPeers>,
+}
+
+impl AttachedRemote {
+    pub(super) fn new(run: Arc<Run>) -> Self {
+        Self { run, peers: Mutex::new(AttachedPeers { listening: false, workers: JoinSet::new() }) }
+    }
+
+    fn listening(&self) {
+        let mut peers = self.peers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !*self.run.stop.borrow() {
+            peers.listening = true;
+            self.run.update(|snapshot| {
+                if snapshot.phase == ForwardPhase::Preparing {
+                    snapshot.phase = ForwardPhase::Listening;
+                    snapshot.preparation = None;
+                }
+            });
+        }
+    }
+
+    pub(super) fn accept(&self, channel: ForwardedChannel) -> Option<ForwardedChannel> {
+        let mut peers = self.peers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !peers.listening || *self.run.stop.borrow() {
+            return Some(channel);
+        }
+        while peers.workers.try_join_next().is_some() {}
+        if self.run.active.load(Ordering::Acquire) as usize >= MAX_FORWARD_PEERS {
+            self.run.peer_failed(ForwardIssue::PeerLimitReached);
+            return Some(channel);
+        }
+        let ForwardConfiguration::Remote { target_host, target_port, .. } = &self.run.configuration
+        else {
+            return Some(channel);
+        };
+        let target_host = target_host.clone();
+        let target_port = *target_port;
+        self.run.active.fetch_add(1, Ordering::AcqRel);
+        let lease = PeerLease(self.run.clone());
+        let deadline = Instant::now() + OPEN_TIMEOUT;
+        peers.workers.spawn(async move {
+            let channel = channel.into_channel();
+            let result = async {
+                match connect_target(&target_host, target_port, deadline, &lease.0.stop).await {
+                    Ok(Some(socket)) => {
+                        let mut stopped = lease.0.stop.subscribe();
+                        let copying = copy_peer(&lease.0, socket, channel, Vec::new());
+                        tokio::select! { biased;
+                            _ = stopped.wait_for(|stopped| *stopped) => Ok(()),
+                            result = copying => result,
+                        }
+                    }
+                    result => {
+                        close_peer(channel).await?;
+                        result.map(|_| ())
+                    }
+                }
+            }
+            .await;
+            if let Err(issue) = result
+                && !*lease.0.stop.borrow()
+            {
+                lease.0.peer_failed(issue);
+            }
+        });
+        None
+    }
+
+    pub(super) fn stop(&self) {
+        let mut peers = self.peers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        peers.listening = false;
+        self.run.stop();
+    }
+
+    async fn settle(&self) {
+        self.stop();
+        let mut workers = {
+            let mut peers = self.peers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut peers.workers)
+        };
+        while workers.join_next().await.is_some() {}
+    }
+}
+
+pub(super) async fn execute_attached(
+    run: &Arc<Run>,
+    connection: &SshConnection,
+    endpoint: &AttachedRemote,
+    stop: &mut watch::Receiver<bool>,
+) -> Result<(), ForwardIssue> {
+    if *stop.borrow() {
+        return Ok(());
+    }
+    let (address, port) = run.configuration.bind();
+    let request = async {
+        connection
+            .authenticated_connection()
+            .map_err(|_| ClientError::ConnectionClosed)?
+            .request_tcpip_forward(address, u32::from(port))
+            .await
+    };
+    let acknowledgement = tokio::select! { biased;
+        _ = stop.wait_for(|stopped| *stopped) => None,
+        result = tokio::time::timeout(OPEN_TIMEOUT, request) => Some(result),
+    };
+    let registered =
+        matches!(acknowledgement, Some(Ok(Ok(actual))) if actual == 0 || actual == u32::from(port));
+    if registered {
+        endpoint.listening();
+        loop {
+            tokio::select! { biased;
+                _ = stop.wait_for(|stopped| *stopped) => break,
+                _ = tokio::time::sleep(PUBLISH_INTERVAL) => run.update(|_| {}),
+            }
+        }
+    }
+    endpoint.settle().await;
+    if !registered {
+        // The request may have reached the server; only this tuple loses local authority.
+        return Err(ForwardIssue::ShutdownFailed);
+    }
+    let cancelled = async {
+        connection
+            .authenticated_connection()
+            .map_err(|_| ClientError::ConnectionClosed)?
+            .cancel_tcpip_forward(address, u32::from(port))
+            .await
+    };
+    if matches!(tokio::time::timeout(CANCEL_TIMEOUT, cancelled).await, Ok(Ok(()))) {
+        Ok(())
+    } else {
+        Err(ForwardIssue::ShutdownFailed)
+    }
+}
+
 pub(super) async fn execute(
     run: &Arc<Run>,
     mut connection: SshConnection,
@@ -165,7 +308,7 @@ async fn serve(
     }
 }
 
-async fn close_peer(channel: ClientChannel) -> Result<(), ForwardIssue> {
+pub(super) async fn close_peer(channel: ClientChannel) -> Result<(), ForwardIssue> {
     tokio::time::timeout(PEER_CLOSE_TIMEOUT, channel.close())
         .await
         .map_err(|_| ForwardIssue::ConnectionLost)?
@@ -257,7 +400,7 @@ fn resolution_gates() -> &'static Mutex<BTreeMap<String, PendingResolution>> {
 }
 
 #[cfg(test)]
-pub(super) struct ResolutionGate(String);
+pub(crate) struct ResolutionGate(String);
 
 #[cfg(test)]
 impl Drop for ResolutionGate {
@@ -267,7 +410,7 @@ impl Drop for ResolutionGate {
 }
 
 #[cfg(test)]
-pub(super) fn hold_resolution(
+pub(crate) fn hold_resolution(
     host: String,
 ) -> (
     ResolutionGate,

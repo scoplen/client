@@ -25,7 +25,8 @@ export const ForwardsContext = createContext<ForwardController | null>(null);
 
 export const ForwardOwnersContext = createContext<Record<string, { label: string; tab: number; pane: number }>>({});
 
-export function tunnelIssueKey(issue: ForwardIssue, attached = false) {
+export function tunnelIssueKey(issue: ForwardIssue, attached = false, remote = false) {
+  if (attached && remote && issue === "shutdownFailed") return "tunnels.attached.issue.remoteShutdownFailed" as const;
   if (attached) {
     switch (issue) {
       case "invalidConfiguration":

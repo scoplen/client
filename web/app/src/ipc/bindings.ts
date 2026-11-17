@@ -1159,7 +1159,7 @@ export type ForwardPhase =
 "stopping" |
 /**  Explicitly stopped and all owned resources released. */
 "stopped" |
-/**  Execution failed and all owned resources released. */
+/**  Execution ended with an issue; `last_issue` identifies unconfirmed remote cleanup. */
 "failed";
 
 /**  Display-safe execution state. Full-width counters are decimal strings for JavaScript. */

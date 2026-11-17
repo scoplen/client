@@ -26,6 +26,7 @@ try {
     $smoke = Join-Path $metadata.target_directory "debug/examples/ssh_attached_forwards_smoke$suffix"
     & docker run --rm -d --name $container --label "scoplen.fixture.owner=$container" `
         -p '127.0.0.1::2222' -p '127.0.0.1::2223' -p '127.0.0.1::2224' `
+        -p '127.0.0.1::2302' -p '127.0.0.1::2303' `
         -e 'USER_NAME=smoke' -e "USER_PASSWORD=$password" -e 'PASSWORD_ACCESS=true' `
         'linuxserver/openssh-server@sha256:46f115de7c251558297e7e87566fc3fc08544b63e55502b5cf294454db5d29d1' | Out-Null
     Check-LastExit 'start isolated OpenSSH fixture'
@@ -42,6 +43,12 @@ try {
     Check-LastExit 'read target SSH port'
     if ($targetBinding -notmatch '^127\.0\.0\.1:(\d+)$') { throw 'Target fixture was not bound to loopback' }
     $targetPort = [int]$Matches[1]
+    $remotePorts = foreach ($remote in @('2302/tcp', '2303/tcp')) {
+        $remoteBinding = & docker port $container $remote
+        Check-LastExit 'read Remote listener fixture port'
+        if ($remoteBinding -notmatch '^127\.0\.0\.1:(\d+)$') { throw 'Remote fixture was not bound to loopback' }
+        [int]$Matches[1]
+    }
     $ready = $false
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         $probe = [Net.Sockets.TcpClient]::new()
@@ -71,6 +78,8 @@ HostKey /tmp/scoplen-attached-host
 PidFile /tmp/scoplen-attached.pid
 StrictModes no
 AllowTcpForwarding yes
+GatewayPorts clientspecified
+PermitListen 0.0.0.0:2302 0.0.0.0:2303
 PermitOpen 127.0.0.1:2300 localhost:2300
 PerSourcePenalties no
 UsePAM no
@@ -91,9 +100,9 @@ sed -e 's/^Port 2223$/Port 2224/' \
 '@
     & docker exec $container sh -c ($setup.Replace("`r", ''))
     Check-LastExit 'configure isolated target shell, SFTP and forwarding'
-    & $smoke 'direct' '127.0.0.1' $targetPort $passwordFile
+    & $smoke 'direct' '127.0.0.1' $targetPort $passwordFile $remotePorts[0] $remotePorts[1]
     Check-LastExit 'real Direct SSH Login-attached forwarding and reconnect acceptance'
-    & $smoke 'jump' '127.0.0.1' $jumpPort $passwordFile
+    & $smoke 'jump' '127.0.0.1' $jumpPort $passwordFile $remotePorts[0] $remotePorts[1]
     Check-LastExit 'real Jump SSH Login-attached forwarding and reconnect acceptance'
     $authentications = & docker exec $container sh -c "grep -c '^Accepted password for smoke ' /tmp/scoplen-attached-ssh.log"
     Check-LastExit 'read owned target authentication count'

@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Start Login-selected Remote TCP tunnels on the existing Local or Personal terminal's
+  authenticated SSH transport, alongside shell, Files, Local/Dynamic tunnels and the
+  selected Agent identity. Route only exact acknowledged endpoints to captured local
+  services, reject duplicate tuples without another request, and preserve explicit Stop
+  through reconnect. Stop never closes the terminal; uncertain registration or cancellation
+  keeps a warning that the remote listener may remain until its owning terminal closes.
+
 - Explicitly select the read-only Team Snippet library from an Organization terminal,
   with Personal remaining the default library. Require a complete Ready view and
   confirmed matching ACK, review supported typed values once, and send the exact

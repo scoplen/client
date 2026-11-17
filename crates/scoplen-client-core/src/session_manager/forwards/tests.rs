@@ -14,6 +14,8 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+mod remote;
+
 fn store() -> (tempfile::TempDir, Arc<Store>) {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(
@@ -185,8 +187,7 @@ async fn attached_tunnels_share_authentication_report_failures_and_stop_without_
     let dynamic = definition(&store, ForwardKind::Dynamic, dynamic_port, "unused.example");
     let occupied =
         definition(&store, ForwardKind::Local, busy.local_addr().unwrap().port(), "target.example");
-    let unsupported =
-        definition(&store, ForwardKind::Remote, unused_port().await, "target.example");
+    let unsupported = definition(&store, ForwardKind::Remote, 0, "target.example");
     let denied_port = unused_port().await;
     let denied = definition(&store, ForwardKind::Local, denied_port, "refused.example");
     let missing = Uuid::now_v7();
@@ -240,7 +241,7 @@ async fn attached_tunnels_share_authentication_report_failures_and_stop_without_
     .await;
     let get = |id: Uuid| results.iter().find(|entry| entry.forward_id == id.to_string()).unwrap();
     assert_eq!(get(missing).issue, Some(ForwardIssue::NotFound));
-    assert_eq!(get(unsupported).issue, Some(ForwardIssue::UnsupportedDefinition));
+    assert_eq!(get(unsupported).issue, Some(ForwardIssue::InvalidConfiguration));
     assert_eq!(get(independent).issue, Some(ForwardIssue::AlreadyRunning));
     assert_eq!(get(occupied).run.as_ref().unwrap().last_issue, Some(ForwardIssue::ListenFailed));
     for id in [local, dynamic, denied] {

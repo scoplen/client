@@ -29,7 +29,7 @@ try {
     $suffix = if ($IsWindows) { '.exe' } else { '' }
     $smoke = Join-Path $metadata.target_directory "debug/examples/ssh_agent_forwarding_smoke$suffix"
     & docker run --rm -d --name $container --label "scoplen.fixture.owner=$container" `
-        -p '127.0.0.1::2224' -e 'USER_NAME=smoke' -e 'PASSWORD_ACCESS=false' `
+        -p '127.0.0.1::2224' -p '127.0.0.1::2302' -e 'USER_NAME=smoke' -e 'PASSWORD_ACCESS=false' `
         -e ('PUBLIC_KEY=' + (Get-Content -LiteralPath "$selected.pub" -Raw).Trim()) `
         'linuxserver/openssh-server@sha256:46f115de7c251558297e7e87566fc3fc08544b63e55502b5cf294454db5d29d1' | Out-Null
     Check-LastExit 'start owned two-hop OpenSSH fixture'
@@ -59,6 +59,8 @@ AuthorizedKeysFile /tmp/scoplen-agent-first-keys
 StrictModes no
 AllowAgentForwarding yes
 AllowTcpForwarding yes
+GatewayPorts clientspecified
+PermitListen 0.0.0.0:2302
 PermitOpen localhost:2300 127.0.0.1:2300
 PerSourcePenalties no
 UsePAM no
@@ -86,12 +88,16 @@ cat /tmp/scoplen-agent-host.pub >> /tmp/scoplen-agent-known-hosts
     Check-LastExit 'read owned first-hop endpoint'
     if ($binding -notmatch '^127\.0\.0\.1:(\d+)$') { throw 'Fixture is not bound to loopback' }
     $port = [int]$Matches[1]
+    $remoteBinding = & docker port $container '2302/tcp'
+    Check-LastExit 'read owned Remote forwarding endpoint'
+    if ($remoteBinding -notmatch '^127\.0\.0\.1:(\d+)$') { throw 'Remote fixture is not bound to loopback' }
+    $remotePort = [int]$Matches[1]
     $env:SSH_AUTH_SOCK = if ($IsWindows) {
         '\\.\pipe\scoplen-agent-forwarding-' + [guid]::NewGuid().ToString('N')
     } else {
         Join-Path $scratch 'agent.sock'
     }
-    & $smoke '127.0.0.1' $port $selected $other
+    & $smoke '127.0.0.1' $port $selected $other $remotePort
     Check-LastExit 'public desktop-core agent forwarding and real second-hop acceptance'
     $accepted = $true
 } finally {

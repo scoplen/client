@@ -1449,6 +1449,7 @@ export const zhHans: Messages = {
   "tunnels.attached.issue.listenFailed": "监听端点不可用。请检查地址、端口和 SSH 转发策略。终端仍可继续。",
   "tunnels.attached.issue.connectionLost": "终端的 SSH 连接已断开。符合条件的隧道将在下次连接时重新启动。",
   "tunnels.attached.issue.shutdownFailed": "尚未确认隧道已完成停止。请在重连前检查监听端口。",
+  "tunnels.attached.issue.remoteShutdownFailed": "本地转发已停止。远端监听可能仍在运行，关闭此终端才能释放。",
   "tunnels.stop": "停止",
   "tunnels.running": "运行中",
   "tunnels.continue": "继续设置",

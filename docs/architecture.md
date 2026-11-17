@@ -812,8 +812,8 @@ The generated `forward_start`, `forward_list`, `forward_snapshot`, `forward_resp
 require the current one-use preparation token. Stop fences new peers and replies, then
 settles the listener, peers and complete SSH chain. Store replacement drains all owners;
 application exit first permanently fences Starts and waits under one 35-second cleanup
-budget. A failed owner does not skip awaiting the other owners' cleanup. Unix-socket and
-automatic profile forwards remain separate work.
+budget. A failed owner does not skip awaiting the other owners' cleanup. Unix-socket
+forwarding remains separate work.
 
 Dynamic uses the shared SOCKS4/4a/5 CONNECT codecs, with an absolute 15-second negotiation
 deadline and application-only counters. Its immutable configuration contains no fixed target.
@@ -831,6 +831,28 @@ attempts the exact remote cancellation tuple for one second and closes the compl
 regardless of the result, within the shared 35-second shutdown budget. Unknown outcomes retain
 a shutdown failure rather than claiming that the remote port is free. Snapshots expose the
 requested endpoint and no purported actual bound address, because server policy can override it.
+
+## Login-attached tunnels
+
+The target Local or Personal Login captures its saved Local, Remote and Dynamic definitions
+for the terminal's authenticated connection and owned Jump chain. Attached runs borrow that
+connection without closing it. The same registry identifies each terminal/transport owner,
+and explicit Stop remains suppressed across reconnects of the logical terminal.
+
+`IncomingForwardingService` owns the transport's original bounded incoming receiver. Agent
+channels retain the selected identity's existing worker limits; exact requested TCP endpoint
+bytes select only acknowledged, unstopped Remote runs. Unknown, unsupported and excess channels
+close in bounded workers while dispatch keeps serving other channels. Resolution, target
+connection and counted copying reuse the ordinary Remote path and 32-peer bound.
+
+Each Remote tuple is reserved before its request and remains unavailable for reassignment
+until transport teardown. Stop fences its local peers first, then attempts the original
+tuple's cancellation once for at most one second if registration was acknowledged. An unknown
+registration or cancellation ends with Failed/ShutdownFailed and a retained rejecting tuple;
+the terminal and other services remain usable. Its warning explains that the remote listener
+may remain until the owning terminal closes. Independent Remote cleanup still closes its
+complete route. Reconnect releases old transport owners before starting current eligible
+definitions; it does not retry forwarding on the same transport.
 
 ## Session upload sources
 

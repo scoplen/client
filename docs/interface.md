@@ -162,10 +162,10 @@ relabels a running connection or removes its Stop action. Independent stopped an
 visible; another independent attempt requires Start. The renderer receives no socket, key or credential
 handle and sends no network traffic.
 
-A Local or Personal Login's selected Local TCP and Dynamic SOCKS tunnels attach automatically
+A Local or Personal Login's selected Local TCP, Remote TCP and Dynamic SOCKS tunnels attach automatically
 when its terminal is ready. They use that terminal's authenticated target connection and Jump
 chain, without another Login selection or authentication. A Jump Login's own selections do not
-start. Remote and Unix-socket attachments appear as unsupported entries; missing definitions,
+start. Unix-socket attachments remain unsupported; missing definitions,
 listener refusals and capacity failures remain per-entry results without closing the terminal
 or successful tunnels.
 
@@ -176,6 +176,13 @@ terminal's reconnects. Closing the terminal discards that choice. A new transpor
 resources before starting the currently eligible selections. Attached runs also appear in Tunnels,
 identified by their owning terminal's current tab and pane, with the same Stop behavior. Independent
 runs retain their separate owners and are never adopted by a terminal.
+
+Attached Remote uses the requested remote endpoint and captured local target. Duplicate
+endpoints on the same terminal transport are refused without a second request. Stop ends
+local forwarding without closing the terminal. An unconfirmed registration or cancellation
+retains its warning even after the row says Stopped for this terminal: the remote listener
+may remain until that terminal closes. Tunnels shows the same guidance with its owning tab
+and pane. No same-transport Restart is offered.
 
 `sessionForwardList(sessionId, transportId)` and `sessionForwardStop(sessionId, transportId, forwardId)`
 bind reads and Stop to the exact current transport. Ordered `forwards` session events replace the
@@ -593,7 +600,7 @@ connection. It accepts Agent channels only, exposes one public identity and refu
 management, extensions and signatures for any other key. The forwarding request's
 reply is consumed before PTY, shell or command requests. Refusal or timeout fails
 setup clearly. Forwarding ends on the exact attempt's cancellation; receiver closure
-alone does not imply network loss. Terminal, Files and attached Local/Dynamic
+alone does not imply network loss. Terminal, Files and attached Local/Remote/Dynamic
 tunnels retain their existing connection ownership and APIs.
 
 Connection details in a terminal lists each verified hop, fingerprint, trust method, source

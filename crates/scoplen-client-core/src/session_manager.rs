@@ -18,7 +18,6 @@ use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::connection::agent_forwarding::AgentForwardingService;
 use crate::connection::preparation::{
     PreparationContext, PreparationControl, PreparationError, PreparationEvent,
     PreparationResponse, prepare_resolved_target_connection, resolve_target_preparation_plan,
@@ -28,7 +27,7 @@ use crate::connection::{
 };
 use crate::forward_manager::{
     AttachedForwardLease, AttachedForwardSelection, AttachedForwardState, ForwardAttachment,
-    ForwardManager, SessionForwardSnapshot,
+    ForwardManager, IncomingForwardingService, SessionForwardSnapshot,
 };
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
 use crate::personal_server::{PersonalServer, TeamSshError, TeamSshFailure, TeamSshPolicyDenial};
@@ -1898,12 +1897,15 @@ impl SessionManager {
             }
             Err(error) => return Err(error.into()),
         };
-        let mut forwarding = if let Some(selected) = forwarded_agent {
+        let agent_forwarding = forwarded_agent.is_some();
+        let mut forwarding = if agent_forwarding
+            || attached_selection.as_ref().is_some_and(AttachedForwardSelection::has_entries)
+        {
             let incoming = connection
                 .authenticated_connection_mut()?
                 .take_forwarded_channels()
-                .ok_or(SshConnectionError::AgentForwardingUnavailable)?;
-            Some(AgentForwardingService::start(selected, control.clone(), incoming))
+                .ok_or(SshConnectionError::Engine(ClientError::ConnectionClosed))?;
+            Some(IncomingForwardingService::start(forwarded_agent, control.clone(), incoming))
         } else {
             None
         };
@@ -1912,7 +1914,7 @@ impl SessionManager {
         let mut attachments: Option<AttachedForwardLease> = None;
         let operation = async {
             let mut session = connection.open_session().await?;
-            if forwarding.is_some() {
+            if agent_forwarding {
                 session.request_agent_forwarding().await?;
             }
             let pty_request = pty.then(default_pty);
@@ -1964,6 +1966,7 @@ impl SessionManager {
                         },
                         entry.forward_stops.clone(),
                         &connection,
+                        forwarding.as_ref().map(|incoming| incoming.state.as_ref()),
                     );
                     entry.attached_forwards = Some(lease.state.clone());
                     attachments = Some(lease);
