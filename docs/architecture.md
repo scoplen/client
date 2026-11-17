@@ -413,7 +413,8 @@ retains the older unchanged evidence. A timeout, TLS/connect failure, cancellati
 malformed or unknown problem never earns retry permission after handoff. A Confirm response
 cannot mark the original Submit unchanged, even when it reports no business change or no receipt.
 Attempted preparations remain retained; changing usernames or discarding their keys is outside
-this boundary. No password-login driver, Tauri IPC or replacement Settings UI exists yet.
+this boundary. Independent password sign-in and installed-Account password changes use separate
+pending records and native commands.
 
 Migration 14 adds an encrypted Local-owned `account_profiles` catalog, durable `profile_selection`
 generation and an immutable `account_profile_binding` in each Account store. Account identity is
@@ -455,8 +456,28 @@ fail before executing. Bounded private signing also holds the exact profile and 
 network waits hold neither. Cancellation, root replacement and profile selection stop pending
 installation, and final transactions reject stale results. Switching cancels the old Personal
 background owner before publishing the new one. No inventory is copied, adopted or uploaded.
-This Rust library boundary has no Tauri command, IPC type or desktop profile UI; native workspace,
-session and Team context integration remains separate work.
+The native profile commands and generation-bound frontend invokers preserve this Rust boundary
+through desktop Account selection, sessions and Team context.
+
+Migration 26 adds Account-only password replacement. `begin_password_change` reads the
+immutable installation provenance for the original username/generation, verifies retained
+roots and the enrolled Device, and normalizes both passwords through shared D-127 before
+any network or KDF work. A complete old-password bootstrap is projected into the existing
+K-4 validators, preserving revision floors, known revocations, recovery and Personal epochs.
+The old password wrapper must open the retained ARK and roots. A fresh salt and checked
+positive-u64 successor wrap that same ARK; reopening verifies it before Account signing.
+
+The Account's SQLCipher pending row retains exact protected bytes, signature, original public
+anchors/Device reference, capability expiry and monotone dispatch/unchanged evidence.
+FULL-synchronous IMMEDIATE transactions record unknown before Submit dispatch. Every exchange
+uses a fresh challenge and the original enrolled Device signing key. Trusted unchanged Submit
+problems allow explicit Retry; Confirm failures never prove the original Submit unchanged.
+Unknown work cannot be deleted or replaced, including after expiry, cancellation and restart.
+Commit atomically saves its exact receipt, redacts the capability and raises the credential
+floor, encoded as unsigned big-endian eight-byte data. Historical confirmation can never lower
+that floor or alter authentication, immutable installation provenance, Device or vault state.
+Status also one-way redacts expired capabilities. Confirmation requires original retained keys,
+without requiring a current native access session or current online Device authorization.
 
 Migration 8 adds a monotonically increasing authentication generation, the verified scope ceiling,
 single-use refresh claim and an optional Retry-After deadline, alongside the saved absolute family

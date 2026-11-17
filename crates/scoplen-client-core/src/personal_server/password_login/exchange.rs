@@ -242,7 +242,7 @@ pub(super) async fn until_stopped<T, E: Into<PasswordLoginError>>(
     }
 }
 
-pub(super) fn problem(
+pub(in crate::personal_server) fn problem(
     response: &RegistrationResponse,
 ) -> Result<PasswordLoginError, PasswordLoginError> {
     if !response.problem_json {

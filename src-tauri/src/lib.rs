@@ -13,6 +13,7 @@ pub mod frames;
 pub mod generated_open_ssh;
 pub mod inventory;
 pub mod local_data;
+pub mod password_change;
 pub mod password_sign_in;
 pub mod personal_inventory;
 pub mod personal_server;
@@ -67,6 +68,10 @@ pub fn ipc() -> Builder<tauri::Wry> {
             password_sign_in::exchange_password_sign_in,
             password_sign_in::discard_password_sign_in,
             password_sign_in::install_password_sign_in_profile,
+            password_change::password_change_status,
+            password_change::begin_password_change,
+            password_change::exchange_password_change,
+            password_change::discard_password_change,
             forwards::forward_start,
             forwards::forward_list,
             forwards::forward_snapshot,

@@ -32,6 +32,7 @@ impl Transport {
             AccountEntryOperation::PasswordOptions => "/api/v1/auth/accounts/password/options",
             AccountEntryOperation::PasswordLogin => "/api/v1/auth/accounts/password/login",
             AccountEntryOperation::DeviceAdmission => "/api/v1/auth/accounts/device-admissions",
+            AccountEntryOperation::PasswordChange => "/api/v1/auth/accounts/password-changes",
         };
         let (request_limit, success_limit) = operation.body_limits();
         if body.len() > request_limit {

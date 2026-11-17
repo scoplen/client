@@ -10,9 +10,11 @@ mod background;
 mod identity;
 mod notification;
 
+mod password_change;
 mod password_login;
 mod refresh;
 mod registration;
+pub use password_change::{PasswordChangeError, PasswordChangePhase, PasswordChangeStatus};
 pub use password_login::{PasswordLoginError, PasswordLoginPhase, PasswordLoginStatus};
 mod retained;
 mod revalidation;

@@ -886,4 +886,68 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         CHECK(phase=0 OR first_attempt_ms IS NOT NULL)
     ) STRICT, WITHOUT ROWID;
     "#,
+    // 26: password changes retain original business bytes; generations use all 64 bits.
+    r#"
+    CREATE TABLE account_credential_floor (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+        generation BLOB NOT NULL CHECK(length(generation)=8 AND generation>x'0000000000000000')
+    ) STRICT;
+    CREATE TRIGGER credential_floor_insert BEFORE INSERT ON account_credential_floor
+    WHEN EXISTS(SELECT 1 FROM account_credential_floor)
+        OR NOT EXISTS(SELECT 1 FROM account_profile_binding)
+    BEGIN SELECT RAISE(ABORT,'Credential floor requires the original Account'); END;
+    CREATE TRIGGER credential_floor_monotonic BEFORE UPDATE ON account_credential_floor
+    WHEN NEW.generation<OLD.generation
+    BEGIN SELECT RAISE(ABORT,'Credential generation cannot decrease'); END;
+    CREATE TRIGGER credential_floor_retained BEFORE DELETE ON account_credential_floor
+    BEGIN SELECT RAISE(ABORT,'Credential floor must be retained'); END;
+    CREATE TABLE personal_password_change (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+        payload BLOB NOT NULL CHECK(length(payload) BETWEEN 1 AND 8192),
+        account_signature BLOB NOT NULL CHECK(length(account_signature)=64),
+        snapshot BLOB NOT NULL CHECK(length(snapshot) BETWEEN 1 AND 9437184),
+        signing_public BLOB NOT NULL CHECK(length(signing_public)=32),
+        kem_public BLOB NOT NULL CHECK(length(kem_public)=32),
+        certificate BLOB NOT NULL CHECK(length(certificate) BETWEEN 1 AND 65536),
+        token BLOB CHECK(token IS NULL OR length(token)=32),
+        expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms>0),
+        restart_required INTEGER NOT NULL DEFAULT 0 CHECK(restart_required IN(0,1)),
+        phase INTEGER NOT NULL DEFAULT 0 CHECK(phase IN(0,1,2)),
+        confirmation BLOB CHECK(confirmation IS NULL OR length(confirmation) BETWEEN 1 AND 1024),
+        dispatch_generation INTEGER NOT NULL DEFAULT 0 CHECK(dispatch_generation>=0),
+        unchanged_generation INTEGER NOT NULL DEFAULT 0 CHECK(unchanged_generation>=0 AND unchanged_generation<=dispatch_generation),
+        retry_not_before_ms INTEGER NOT NULL DEFAULT 0 CHECK(retry_not_before_ms>=0),
+        CHECK((phase=2)=(confirmation IS NOT NULL)),
+        CHECK((phase=0)=(dispatch_generation=0)),
+        CHECK(phase!=2 OR token IS NULL)
+    ) STRICT;
+    CREATE TRIGGER password_change_insert BEFORE INSERT ON personal_password_change
+    WHEN EXISTS(SELECT 1 FROM personal_password_change)
+        OR NOT EXISTS(SELECT 1 FROM account_profile_binding b, personal_admission a
+            WHERE b.origin=a.origin AND b.account_id=a.account_id AND b.vault_id=a.personal_vault_id AND b.device_id=a.device_id)
+        OR NEW.phase!=0 OR NEW.dispatch_generation!=0 OR NEW.unchanged_generation!=0
+        OR NEW.restart_required!=0 OR NEW.token IS NULL
+    BEGIN SELECT RAISE(ABORT,'Password change requires an installed Account'); END;
+    CREATE TRIGGER password_change_immutable BEFORE UPDATE ON personal_password_change
+    WHEN NEW.payload IS NOT OLD.payload OR NEW.account_signature IS NOT OLD.account_signature
+        OR NEW.snapshot IS NOT OLD.snapshot OR NEW.signing_public IS NOT OLD.signing_public
+        OR NEW.kem_public IS NOT OLD.kem_public OR NEW.certificate IS NOT OLD.certificate
+        OR (NEW.token IS NOT OLD.token AND NEW.token IS NOT NULL)
+        OR NEW.expires_at_ms IS NOT OLD.expires_at_ms OR NEW.restart_required<OLD.restart_required
+        OR (NEW.restart_required!=OLD.restart_required AND (NEW.phase!=1 OR NEW.unchanged_generation!=NEW.dispatch_generation))
+        OR NEW.phase<OLD.phase OR NEW.phase>OLD.phase+1
+        OR (OLD.confirmation IS NOT NULL AND NEW.confirmation IS NOT OLD.confirmation)
+        OR NEW.dispatch_generation<OLD.dispatch_generation
+        OR NEW.dispatch_generation-OLD.dispatch_generation>1
+        OR NEW.unchanged_generation<OLD.unchanged_generation
+        OR (NEW.dispatch_generation!=OLD.dispatch_generation AND
+            (NEW.phase!=1 OR OLD.phase=2 OR (OLD.phase=1 AND OLD.dispatch_generation!=OLD.unchanged_generation)))
+        OR (NEW.unchanged_generation!=OLD.unchanged_generation AND
+            (NEW.phase!=1 OR NEW.dispatch_generation!=OLD.dispatch_generation OR NEW.unchanged_generation!=NEW.dispatch_generation))
+        OR (NEW.retry_not_before_ms!=OLD.retry_not_before_ms AND NEW.unchanged_generation=OLD.unchanged_generation)
+    BEGIN SELECT RAISE(ABORT,'Password change outcome cannot be replaced'); END;
+    CREATE TRIGGER password_change_retained BEFORE DELETE ON personal_password_change
+    WHEN OLD.phase=1 AND OLD.dispatch_generation!=OLD.unchanged_generation
+    BEGIN SELECT RAISE(ABORT,'Unknown password change must retain its original bytes'); END;
+    "#,
 ];

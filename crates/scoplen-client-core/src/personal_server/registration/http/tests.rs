@@ -176,6 +176,10 @@ impl Peer {
         (reached, release)
     }
 
+    pub(in crate::personal_server) fn clear_pause(&self) {
+        self.state.lock().unwrap().pause = None;
+    }
+
     pub(in crate::personal_server) fn healthy(&self) {
         let state = self.state.lock().unwrap();
         assert!(state.errors.is_empty(), "independent peer rejected a request: {:?}", state.errors);
@@ -237,7 +241,10 @@ async fn answer(
             Some(AccountEntryOperation::RequestChallenge) => {
                 let request = AccountRequestChallengeRequest::from_json(&body)
                     .map_err(|_| "challenge codec")?;
-                if request.kind == AccountRequestKind::Admit {
+                if matches!(
+                    request.kind,
+                    AccountRequestKind::Admit | AccountRequestKind::PasswordChange
+                ) {
                     state.extra.as_mut().ok_or("unsupported admission fixture")?(
                         &parts, &body, origin,
                     )?
@@ -307,7 +314,8 @@ async fn answer(
             Some(
                 AccountEntryOperation::PasswordOptions
                 | AccountEntryOperation::PasswordLogin
-                | AccountEntryOperation::DeviceAdmission,
+                | AccountEntryOperation::DeviceAdmission
+                | AccountEntryOperation::PasswordChange,
             )
             | None => {
                 state.extra.as_mut().ok_or("unsupported fixture route")?(&parts, &body, origin)?

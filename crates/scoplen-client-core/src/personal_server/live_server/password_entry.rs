@@ -12,6 +12,7 @@ mod browser_team_ssh;
 mod host_access_request_ssh;
 mod host_grant_ssh;
 mod isolation;
+mod password_change;
 mod personal_inventory_ssh;
 mod team_inventory;
 mod team_membership;

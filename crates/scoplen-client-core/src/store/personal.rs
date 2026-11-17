@@ -10,10 +10,12 @@ use super::{Store, StoreError, uuid_from};
 mod account;
 mod admission;
 mod auth;
+mod password_change;
 mod password_login;
 mod registration;
 pub(crate) use account::PersonalAccountRecord;
 pub(crate) use auth::{PersonalRefreshClaim, PersonalTokens};
+pub(crate) use password_change::PasswordChangeRecord;
 pub(crate) use password_login::PasswordLoginRecord;
 pub(crate) use registration::RegistrationRecord;
 

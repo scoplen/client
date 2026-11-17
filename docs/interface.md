@@ -292,8 +292,8 @@ from command-line component verification.
 
 ## Personal account
 
-Settings → Personal account reads saved public status without network access or database
-mutation. From Local, Create account accepts a server URL, username, device name and transient
+Settings → Personal account reads saved public status without network access.
+From Local, Create account accepts a server URL, username, device name and transient
 password, then asks Rust to prepare the real registration. Recovery export uses a native Save
 dialog and must be explicitly confirmed before Submit. Unknown results expose exact Confirm;
 only trusted unchanged results expose explicit Retry. Committed registration exposes Install
@@ -351,6 +351,22 @@ signed names and platform claims, the current device, and the device-local Last 
 It labels these as saved results, not live presence, hardware guarantees or server admission.
 Errors retain the previous snapshot and timestamp, and expose no raw response. Account and sync
 intents share the parent's busy state; revocation publication remains separate work.
+
+Change account password is available only in an installed Account. Current and new
+passwords are uncontrolled DOM inputs, passed once to Rust and immediately cleared.
+Rust checks Unicode-normalized equality before options, login or either KDF. Verify
+current password prepares one encrypted operation; Change password explicitly submits it.
+The panel explains that browser sessions will end and native Devices, Account roots,
+Personal vault keys and recovery material remain intact. It shares the existing busy
+state and cancels only view-owned I/O when unmounted.
+
+Opening the panel reads durable state without network access. Unknown work offers only
+Check this change, including after restart, capability expiry or
+loss of the native access session. Proven unchanged work offers explicit original retry
+and discard; expired or conflicting work requires discard and a fresh password check.
+An exact committed result offers Done and reminds the person to use their latest password.
+It never creates current session authority. Expired or committed raw capabilities are
+redacted inside SQLCipher while original signed business bytes remain available for proof.
 
 An expired refresh family or uncertain renewal shows Authenticate this device with an explanation
 that local inventory, recovery copies and sync keys were retained. That action obtains a fresh
