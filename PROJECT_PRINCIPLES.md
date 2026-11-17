@@ -45,6 +45,12 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   first Pause and every Resume verify both confirmed prefixes and the original target.
   An associated read refusal preserves ordinary upload. SFTP has no inode identity proof,
   and neither workflow provides source snapshots, cross-transport or durable continuation.
+  Explicit folder upload/download scans the complete source before creating one unused root,
+  retaining bounded parent-index tree metadata and one queue item across all children.
+  It preserves ordinary contents, structure and empty folders/files, rejects links and native
+  name collisions, and never merges or rolls back a completed tree. Confirmed directory and
+  file results remain visible after a partial failure; an uncertain mkdir or publication stops
+  without replay. Native folder selection and rendered platform acceptance remain separate.
   Ordinary UTF-8 files up
   to 256 KiB have a complete, cancellable read-only preview with literal transient display
   and fixed localized refusals; its metadata checks do not establish a snapshot or remote

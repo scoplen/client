@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 use crate::connection::{SshConnection, SshConnectionError};
 
+pub(crate) mod directory_copy;
 pub(crate) mod directory_sync;
 pub(crate) mod downloads;
 mod preview;

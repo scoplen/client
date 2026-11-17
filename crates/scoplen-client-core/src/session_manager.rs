@@ -52,6 +52,7 @@ const FILE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(60);
 const STABLE_READY: Duration = Duration::from_secs(30);
 const RETRY_DELAYS: [u8; 5] = [1, 2, 4, 8, 16];
 
+mod directory_copy;
 mod directory_sync;
 mod editor;
 pub mod file_drop;
@@ -161,6 +162,14 @@ enum TransportCommand {
 }
 
 enum FileCommand {
+    TransferDirectory {
+        input: session_files::directory_copy::DirectoryCopy,
+        control: watch::Receiver<TransferControl>,
+        state: Arc<UploadState>,
+        session_id: String,
+        identity: TransferIdentity,
+        reply: oneshot::Sender<session_files::directory_copy::DirectoryCopyResult>,
+    },
     CompareDirectory {
         remote: Vec<u8>,
         local: PathBuf,
@@ -319,6 +328,7 @@ struct SessionEntry {
     transfer_worker_running: bool,
     editor: Option<editor::EditorRecord>,
     directory_sync: Option<directory_sync::DirectoryRecord>,
+    directory_copy: Option<directory_copy::PreparedSelection>,
     forward_stops: Arc<Mutex<std::collections::BTreeSet<Uuid>>>,
     attached_forwards: Option<Arc<AttachedForwardState>>,
 }
@@ -331,6 +341,11 @@ struct CheckpointOwner {
 }
 
 fn interrupt_transfers(entry: &mut SessionEntry, transport: Uuid) {
+    if entry.directory_copy.as_ref().is_some_and(|selection| selection.transport == transport)
+        && let Some(selection) = entry.directory_copy.take()
+    {
+        entry.transfers.release_selection(selection.reservation);
+    }
     if entry.directory_sync.as_ref().is_some_and(|plan| plan.transport == transport) {
         entry.directory_sync = None;
     }
@@ -544,6 +559,7 @@ impl SessionManager {
                 transfer_worker_running: false,
                 editor: None,
                 directory_sync: None,
+                directory_copy: None,
                 forward_stops: Arc::default(),
                 attached_forwards: None,
             },
@@ -1955,6 +1971,24 @@ async fn serve_files(
 ) {
     while let Some(request) = files.recv().await {
         match request {
+            FileCommand::TransferDirectory {
+                input,
+                control,
+                state,
+                session_id,
+                identity,
+                reply,
+            } => {
+                let result = session_files::directory_copy::copy(
+                    connection,
+                    input,
+                    control,
+                    manager.directory_copy_callbacks(&session_id, identity, state),
+                )
+                .await;
+                manager.finish_remote_effect(&session_id, identity.transport, identity.execution);
+                let _ = reply.send(result);
+            }
             FileCommand::TransferUpload {
                 input,
                 control,

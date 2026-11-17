@@ -14,13 +14,13 @@ use crate::connection::{ConnectionPlan, ConnectionRoute, CredentialMaterial};
 use super::*;
 
 #[derive(Clone)]
-struct Entry {
+pub(crate) struct Entry {
     bytes: Vec<u8>,
     attrs: SftpAttributes,
 }
 
 impl Entry {
-    fn file(bytes: &[u8]) -> Self {
+    pub(crate) fn file(bytes: &[u8]) -> Self {
         Self {
             bytes: bytes.to_vec(),
             attrs: SftpAttributes {
@@ -33,7 +33,7 @@ impl Entry {
         }
     }
 
-    fn directory() -> Self {
+    pub(crate) fn directory() -> Self {
         Self {
             bytes: Vec::new(),
             attrs: SftpAttributes { permissions: Some(0o040700), ..Default::default() },
@@ -51,10 +51,12 @@ struct State {
     grow_on_read: bool,
     stall: bool,
     zero_filled: bool,
+    listing_attributes: usize,
+    cancel_listing_after: Option<(usize, watch::Sender<TransferControl>)>,
 }
 
-struct Peer {
-    connection: SshConnection,
+pub(crate) struct Peer {
+    pub(crate) connection: SshConnection,
     state: Arc<Mutex<State>>,
     task: JoinHandle<()>,
 }
@@ -171,7 +173,15 @@ impl server::Handler for Handler {
                             state.entries.get(path.strip_prefix(b"./root/").unwrap_or(&path))
                         {
                             let mut attrs = entry.attrs.clone();
-                            attrs.access_time = Some(state.reads.len() as u32);
+                            state.listing_attributes += 1;
+                            if let Some((limit, control)) = &state.cancel_listing_after
+                                && state.listing_attributes >= *limit
+                            {
+                                control.send_replace(TransferControl::Cancel);
+                            }
+                            if attrs.modify_time.is_some() {
+                                attrs.access_time = Some(state.reads.len() as u32);
+                            }
                             SftpPacket::Attrs { id, attrs }
                         } else {
                             status(id, 2)
@@ -222,7 +232,15 @@ impl server::Handler for Handler {
 }
 
 impl Peer {
-    async fn start(entries: &[(&[u8], Entry)]) -> Self {
+    pub(crate) fn cancel_scan_after(&self, count: usize, control: watch::Sender<TransferControl>) {
+        self.state.lock().unwrap().cancel_listing_after = Some((count, control));
+    }
+
+    pub(crate) fn listing_attributes(&self) -> usize {
+        self.state.lock().unwrap().listing_attributes
+    }
+
+    pub(crate) async fn start(entries: &[(&[u8], Entry)]) -> Self {
         let state = Arc::new(Mutex::new(State {
             entries: entries.iter().map(|(name, entry)| (name.to_vec(), entry.clone())).collect(),
             ..Default::default()

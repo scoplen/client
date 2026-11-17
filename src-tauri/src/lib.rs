@@ -18,6 +18,7 @@ pub mod personal_inventory;
 pub mod personal_server;
 pub mod portable_archives;
 pub mod profile_context;
+pub mod session_directory_copy;
 pub mod session_directory_sync;
 pub mod session_editor;
 pub mod session_transfers;
@@ -101,6 +102,9 @@ pub fn ipc() -> Builder<tauri::Wry> {
             session_directory_sync::session_prepare_directory_sync,
             session_directory_sync::session_apply_directory_sync,
             session_directory_sync::session_discard_directory_sync,
+            session_directory_copy::session_prepare_directory_copy,
+            session_directory_copy::session_enqueue_directory_copy,
+            session_directory_copy::session_discard_directory_copy,
             session_transfers::session_transfer_queue,
             session_transfers::session_enqueue_upload,
             session_transfers::session_enqueue_download,

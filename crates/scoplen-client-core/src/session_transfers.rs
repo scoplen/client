@@ -9,6 +9,7 @@ use specta::Type;
 use uuid::Uuid;
 
 use crate::connection::preparation::PreparationContext;
+use crate::session_directory_copy::SessionDirectoryCopyProgress;
 use crate::session_files::{FileTransferProgress, SessionFileTransferPhase};
 
 mod local;
@@ -25,9 +26,9 @@ const MAX_NAME_CHARACTERS: usize = 128;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionTransferDirection {
-    /// Publish one native-selected local file on the remote host.
+    /// Copy a native-selected local source to the remote host.
     Upload,
-    /// Save one remote file to a native-selected local destination.
+    /// Save a remote source to a native-selected local destination.
     Download,
 }
 
@@ -207,6 +208,8 @@ pub struct SessionTransferItem {
     pub issue: Option<SessionTransferIssue>,
     /// Temporary-file cleanup could not be confirmed.
     pub staging_may_remain: bool,
+    /// Whole-tree progress, or None for an ordinary file transfer.
+    pub directory_copy: Option<SessionDirectoryCopyProgress>,
 }
 
 /// A complete on-demand snapshot of one logical session's transfer queue.
@@ -280,6 +283,7 @@ struct TransferRecord<T> {
     staging_may_remain: bool,
     publication_started: bool,
     pause_supported: bool,
+    directory_copy: Option<SessionDirectoryCopyProgress>,
     resources: Option<T>,
 }
 
@@ -312,6 +316,7 @@ impl<T> TransferRecord<T> {
             can_acknowledge: self.state == SessionTransferState::Unknown,
             issue: self.issue,
             staging_may_remain: self.staging_may_remain,
+            directory_copy: self.directory_copy.clone(),
         }
     }
 }
@@ -492,6 +497,20 @@ impl<T> TransferQueue<T> {
         Ok(admitted)
     }
 
+    pub fn enqueue_directory_copy(
+        &mut self,
+        selected: SelectionReservation,
+        name: &str,
+        direction: SessionTransferDirection,
+        resources: T,
+    ) -> Result<SessionTransferEnqueueResult, SessionTransferIssue> {
+        let result = self.enqueue_selected(selected, name, direction, None, resources)?;
+        let record = self.items.back_mut().expect("newly admitted directory item");
+        record.pause_supported = false;
+        record.directory_copy = Some(SessionDirectoryCopyProgress::default());
+        Ok(result)
+    }
+
     fn accept_selection(
         &mut self,
         selected: SelectionReservation,
@@ -534,6 +553,7 @@ impl<T> TransferQueue<T> {
             staging_may_remain: false,
             publication_started: false,
             pause_supported: direction == SessionTransferDirection::Download,
+            directory_copy: None,
             resources: Some(resources),
         });
         SessionTransferEnqueueResult::Queued {
@@ -650,6 +670,37 @@ impl<T> TransferQueue<T> {
         Ok(())
     }
 
+    pub fn directory_progress(
+        &mut self,
+        identity: TransferIdentity,
+        transferred: u64,
+        total: Option<u64>,
+        update: SessionDirectoryCopyProgress,
+    ) {
+        let Some(record) = self.running_mut(identity) else { return };
+        if record.directory_copy.is_none()
+            || transferred < record.transferred
+            || total.is_some_and(|total| transferred > total)
+        {
+            return;
+        }
+        record.transferred = transferred;
+        record.total = total;
+        record.directory_copy = Some(update);
+        if record.state != SessionTransferState::Cancelling {
+            record.state = SessionTransferState::Transferring;
+        }
+        self.changed();
+    }
+
+    pub fn finish_directory_effect(&mut self, identity: TransferIdentity) {
+        let Some(record) = self.running_mut(identity) else { return };
+        if record.directory_copy.is_some() {
+            record.publication_started = false;
+            self.changed();
+        }
+    }
+
     pub fn cancel(
         &mut self,
         queue: Uuid,
@@ -746,6 +797,18 @@ impl<T> TransferQueue<T> {
         record.state = completion.state;
         record.issue = completion.issue;
         record.staging_may_remain = completion.staging_may_remain;
+        if let Some(progress) = record.directory_copy.as_mut()
+            && progress.issue.is_none()
+            && completion.state != SessionTransferState::Saved
+        {
+            use crate::session_directory_copy::SessionDirectoryCopyIssue as DirectoryIssue;
+            progress.issue = Some(match completion.state {
+                SessionTransferState::Cancelled => DirectoryIssue::Cancelled,
+                SessionTransferState::Interrupted => DirectoryIssue::Unavailable,
+                SessionTransferState::Unknown => DirectoryIssue::PublicationUnknown,
+                _ => DirectoryIssue::Failed,
+            });
+        }
         if completion.state != SessionTransferState::Unknown {
             let record = self.items.remove(index).expect("matching item exists");
             self.remember(record.view());

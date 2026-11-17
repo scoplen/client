@@ -3,6 +3,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use crate::session_files::directory_copy::DirectoryCopy;
 use crate::session_files::{DownloadCheckpoint, UploadCheckpoint, UploadSource};
 
 use super::{DownloadDestination, SessionTransferIssue, SessionTransferReview};
@@ -16,6 +17,7 @@ pub(crate) type ReplaceConfirmation = Box<
 
 /// Selected handles, paths and native interaction callbacks are never IPC data.
 pub(crate) enum SelectedTransfer {
+    Directory(DirectoryCopy),
     Upload {
         source: UploadSource,
         directory: Vec<u8>,

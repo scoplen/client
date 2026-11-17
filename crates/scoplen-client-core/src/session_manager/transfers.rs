@@ -58,7 +58,7 @@ struct TransferExecution {
     state: Arc<UploadState>,
 }
 
-enum TransferExecutionResult {
+pub(super) enum TransferExecutionResult {
     Finished(TransferCompletion),
     Paused(Box<SelectedTransfer>),
 }
@@ -483,6 +483,9 @@ impl SessionManager {
             upload_state: state,
         };
         let completion = match selected.resources {
+            SelectedTransfer::Directory(input) => {
+                return self.execute_directory_copy(session, identity, guard, input).await;
+            }
             SelectedTransfer::Upload { source, directory, target, confirm, .. } => {
                 let preparation = Abortable::new(
                     async {
@@ -984,7 +987,7 @@ impl SessionManager {
         .map_err(|_| SessionTransferIssue::SelectionFailed)?
     }
 
-    fn stopped_completion(
+    pub(super) fn stopped_completion(
         &self,
         session: &str,
         identity: TransferIdentity,
@@ -1045,11 +1048,14 @@ pub(super) fn file_issue(error: FileAccessError) -> SessionTransferIssue {
     }
 }
 
-fn known_completion(state: SessionTransferState) -> TransferCompletion {
+pub(super) fn known_completion(state: SessionTransferState) -> TransferCompletion {
     TransferCompletion { state, issue: None, staging_may_remain: false }
 }
 
-fn issue_completion(issue: SessionTransferIssue, staging_may_remain: bool) -> TransferCompletion {
+pub(super) fn issue_completion(
+    issue: SessionTransferIssue,
+    staging_may_remain: bool,
+) -> TransferCompletion {
     TransferCompletion {
         state: match issue {
             SessionTransferIssue::SourceChanged | SessionTransferIssue::TargetChanged => {

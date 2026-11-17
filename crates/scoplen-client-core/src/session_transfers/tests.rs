@@ -22,6 +22,51 @@ fn complete(state: SessionTransferState) -> TransferCompletion {
 }
 
 #[test]
+fn directory_children_keep_one_fifo_identity_and_publication_fence_without_pause() {
+    use crate::session_directory_copy::{SessionDirectoryCopyPhase, SessionDirectoryCopyProgress};
+    let mut queue = TransferQueue::default();
+    let transport = Uuid::now_v7();
+    let selection = queue.reserve_selection(transport).unwrap();
+    queue
+        .enqueue_directory_copy(selection, "folder", SessionTransferDirection::Download, 1)
+        .unwrap();
+    let later = queued(&mut queue, transport, 2);
+    let identity = queue.take_next(transport).unwrap().identity;
+    assert_eq!(queue.snapshot("terminal").outstanding, 2);
+    let mut progress = SessionDirectoryCopyProgress {
+        files_total: Some(32),
+        directories_total: Some(1),
+        root_created: true,
+        directories_created: 1,
+        ..Default::default()
+    };
+    for child in 0..32 {
+        queue.begin_publication(identity).unwrap();
+        assert_eq!(
+            queue.cancel(queue.id(), identity.item, identity.execution).err(),
+            Some(SessionTransferIssue::PublicationStarted)
+        );
+        progress.phase = SessionDirectoryCopyPhase::Finalizing;
+        queue.directory_progress(identity, child + 1, Some(32), progress.clone());
+        queue.finish_directory_effect(identity);
+        progress.phase = SessionDirectoryCopyPhase::Copying;
+        progress.files_completed += 1;
+        queue.directory_progress(identity, child + 1, Some(32), progress.clone());
+        let snapshot = queue.snapshot("terminal");
+        assert_eq!(snapshot.items[0].execution_id, identity.execution.to_string());
+        assert!(snapshot.items[0].can_cancel);
+        assert!(!snapshot.items[0].can_pause);
+        assert!(queue.take_next(transport).is_none());
+    }
+    queue.finish(identity, complete(SessionTransferState::Saved));
+    assert_eq!(
+        queue.snapshot("terminal").recent[0].directory_copy.as_ref().unwrap().files_completed,
+        32
+    );
+    assert_eq!(queue.take_next(transport).unwrap().identity, later);
+}
+
+#[test]
 fn upload_pause_requires_admitted_read_capability_and_keeps_fifo_and_execution_fences() {
     let mut queue = TransferQueue::default();
     let transport = Uuid::now_v7();
