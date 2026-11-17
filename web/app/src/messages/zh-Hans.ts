@@ -1823,6 +1823,11 @@ export const zhHans: Messages = {
   "teams.authoring.permission": "权限",
   "teams.authoring.view": "可查看资产",
   "teams.authoring.connect": "可连接主机",
+  "teams.authoring.requestAccess": "可申请临时访问",
+  "teams.authoring.requestAccessNotice":
+    "选择 1 至 64 台主机。成员可申请以任意有效的 SSH 用户名临时访问，交由审批；此规则不授予查看、连接或审批权限。",
+  "teams.authoring.requestAccessPoliciesNotice": "其他允许规则仍然生效，不受此规则范围限制；明确拒绝仍会阻止访问。",
+  "teams.authoring.requestAccessLimit": "每条申请规则最多选择 64 台主机。",
   "teams.authoring.ruleAssets": "所选资产",
   "teams.authoring.ruleName": "规则名称",
   "teams.authoring.preview": "预览规则",

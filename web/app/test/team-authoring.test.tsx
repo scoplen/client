@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { selectOption } from "./select-option";
 import { I18nProvider } from "../src/i18n";
@@ -11,6 +11,7 @@ import type {
 } from "../src/ipc/bindings";
 import { TeamAuthoring } from "../src/team-authoring";
 import { TeamAuthoringFields, emptyTeamData } from "../src/team-authoring-fields";
+import { TeamRuleForm } from "../src/team-rule-form";
 import { violations } from "../../ui/test/axe";
 
 const commands = vi.hoisted(() => ({
@@ -221,6 +222,132 @@ it("uses the shared rule preview with Membership ids and does not implicitly gra
     kind: "policy",
     fields: { name: "Team view", source: sourceInput.value, enabled: true },
   });
+});
+
+it.each(["member", "group"] as const)(
+  "saves an independent Host-only request rule for a %s through the ordinary policy flow",
+  async (subjectKind) => {
+    const group = {
+      ...host,
+      id: "0199a653-8392-7355-8b91-70ab85182e35",
+      data: { kind: "group", fields: { name: "Operators", members: [member.id] } },
+    };
+    const hostGroup = {
+      ...host,
+      id: "0199a653-8392-7355-8b91-70ab85182e36",
+      data: { kind: "hostGroup", fields: { name: "All servers" } },
+    };
+    const ruleSource = 'permit(principal, action == Action::"request_access", resource);';
+    commands.teamAuthoringPage.mockImplementation((_team, collection) =>
+      Promise.resolve({
+        status: "ok",
+        data: {
+          ...source,
+          collection,
+          items: collection === "host" ? [host] : collection === "group" ? [group] : [hostGroup],
+          nextCursor: null,
+        },
+      }),
+    );
+    commands.previewTeamSimpleRule.mockResolvedValue({
+      status: "ok",
+      data: { source: ruleSource, dependencies: [] },
+    });
+    const rendered = fixture("access");
+    await loaded();
+    await userEvent.click(screen.getByRole("button", { name: "Create access rule" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Rule name" }), "Request production access");
+    if (subjectKind === "group") {
+      await selectOption(screen.getByRole("combobox", { name: "Who receives access" }), "Member group");
+      await selectOption(screen.getByRole("combobox", { name: "Member group" }), "Operators");
+    } else {
+      await selectOption(screen.getByRole("combobox", { name: "Member" }), "alex");
+    }
+    await selectOption(screen.getByRole("combobox", { name: "Permission" }), "May connect");
+    await userEvent.type(screen.getByRole("textbox", { name: "SSH username" }), "deploy");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "All servers" }));
+    await selectOption(screen.getByRole("combobox", { name: "Permission" }), "May request temporary access");
+    expect(screen.queryByRole("textbox", { name: "SSH username" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "All servers" })).toBeNull();
+    expect((screen.getByRole("button", { name: "Preview rule" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/any valid SSH username/).textContent).toContain("no visibility, connection or approval");
+    expect(screen.getByText(/Other permits still apply/).textContent).toContain("Explicit denials");
+    expect(rendered.container.querySelector("select")).toBeNull();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Production" }));
+    await userEvent.click(screen.getByRole("button", { name: "Preview rule" }));
+    await screen.findByRole("textbox", { name: "Cedar source" });
+    expect(commands.previewTeamSimpleRule).toHaveBeenCalledExactlyOnceWith(team.id, {
+      membershipId: subjectKind === "member" ? member.id : null,
+      groupId: subjectKind === "group" ? group.id : null,
+      permission: "requestAccess",
+      remoteUser: null,
+      resources: [{ collection: "host", id: host.id }],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Create resource" }));
+    await screen.findByText("The server confirmed the original creation request.");
+    expect(commands.prepareTeamAuthoring).toHaveBeenCalledExactlyOnceWith(team.id, {
+      kind: "policy",
+      fields: { name: "Request production access", source: ruleSource, enabled: true },
+    });
+  },
+);
+
+it("enforces the request rule's 64-Host limit before invoking Rust", async () => {
+  const hosts = Array.from({ length: 65 }, (_, index) => ({
+    ...host,
+    id: `host-${index}`,
+    data: { kind: "host" as const, fields: { address: `host-${index}.example`, name: `Host ${index}` } },
+  }));
+  render(
+    <I18nProvider locale="en">
+      <TeamRuleForm
+        team={team}
+        references={{ host: { items: hosts, more: false } }}
+        members={[member]}
+        moreMembers={false}
+        loadMembers={vi.fn()}
+        loadMore={vi.fn()}
+        disabled={false}
+        onSave={vi.fn()}
+      />
+    </I18nProvider>,
+  );
+  await selectOption(screen.getByRole("combobox", { name: "Member" }), "alex");
+  await selectOption(screen.getByRole("combobox", { name: "Permission" }), "May request temporary access");
+  const preview = screen.getByRole("button", { name: "Preview rule" }) as HTMLButtonElement;
+  expect(preview.disabled).toBe(true);
+  for (const checkbox of screen.getAllByRole("checkbox").slice(0, 64)) fireEvent.click(checkbox);
+  expect(preview.disabled).toBe(false);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Host 64" }));
+  expect(screen.getByRole("alert").textContent).toContain("at most 64 Hosts");
+  expect(preview.disabled).toBe(true);
+  fireEvent.click(preview);
+  expect(commands.previewTeamSimpleRule).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Host 0" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(preview.disabled).toBe(false);
+});
+
+it("explains the independent request permission in Chinese using custom selectors", async () => {
+  const rendered = render(
+    <I18nProvider locale="zh-Hans">
+      <TeamRuleForm
+        team={team}
+        references={{ host: { items: [host], more: false } }}
+        members={[member]}
+        moreMembers={false}
+        loadMembers={vi.fn()}
+        loadMore={vi.fn()}
+        disabled={false}
+        onSave={vi.fn()}
+      />
+    </I18nProvider>,
+  );
+  await selectOption(screen.getByRole("combobox", { name: "权限" }), "可申请临时访问");
+  expect(screen.getByText(/任意有效的 SSH 用户名/).textContent).toContain("不授予查看、连接或审批权限");
+  expect(screen.getByText(/其他允许规则仍然生效/).textContent).toContain("不受此规则范围限制");
+  expect(rendered.container.querySelector("select")).toBeNull();
+  expect(await violations(rendered.container)).toEqual([]);
 });
 
 it("keeps identity-provider groups read-only even when the user has an administrative role", async () => {

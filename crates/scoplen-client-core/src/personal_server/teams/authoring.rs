@@ -536,6 +536,16 @@ impl PersonalServer {
                     remote_user: input.remote_user.ok_or(TeamFailure::InvalidAuthoringData)?,
                 }
             }
+            TeamSimplePermission::RequestAccess => {
+                if input.remote_user.is_some()
+                    || selected
+                        .iter()
+                        .any(|(kind, _)| *kind != scoplen_api::inventory::InventoryType::Host)
+                {
+                    return Err(TeamFailure::InvalidAuthoringData.into());
+                }
+                SimpleRule::RequestAccess { hosts: selected.iter().map(|(_, id)| *id).collect() }
+            }
         };
         let source = SimpleRuleInput { organization, subject, rule }
             .generate()
