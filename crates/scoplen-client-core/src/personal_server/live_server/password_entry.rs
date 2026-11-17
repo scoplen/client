@@ -15,6 +15,7 @@ mod isolation;
 mod password_change;
 mod personal_inventory_ssh;
 mod team_inventory;
+mod team_inventory_import;
 mod team_membership;
 mod team_ssh;
 mod teams;
@@ -103,7 +104,11 @@ fn host(store: &Store, name: &str) -> scoplen_model::Object {
 }
 
 fn manager(ca: &[u8]) -> PersonalServer {
-    PersonalServer { operation: Mutex::new(()), transport: Ok(trusted_transport(ca)) }
+    PersonalServer {
+        operation: Mutex::new(()),
+        transport: Ok(trusted_transport(ca)),
+        import_preview: Default::default(),
+    }
 }
 
 async fn register(

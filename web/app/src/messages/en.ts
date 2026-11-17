@@ -3,6 +3,105 @@
 // Messages use ICU MessageFormat.
 
 export const en = {
+  "teamImport.title": "Import team inventory",
+  "teamImport.body":
+    "Add new team Hosts and default Logins from a CSV or Direct OpenSSH file. Team access rules control who can see and connect to them.",
+  "teamImport.team": "Destination team",
+  "teamImport.chooseTeam": "Choose a team",
+  "teamImport.currentTeams": "Current teams",
+  "teamImport.savedTeams": "Saved imports only",
+  "teamImport.unavailableTeam": "Unavailable team · {id}",
+  "teamImport.refreshTeams": "Refresh teams",
+  "teamImport.moreTeams": "Load more teams",
+  "teamImport.noTeams": "Join or create a team in Account Settings, then return here to import its inventory.",
+  "teamImport.recoveryOnly":
+    "Your current memberships do not include this team. You can review the saved import; new imports are unavailable here.",
+  "teamImport.source": "Source format",
+  "teamImport.csv": "CSV",
+  "teamImport.openSsh": "Direct OpenSSH",
+  "teamImport.csvHint":
+    "Choose one UTF-8 file up to 1 MiB, with 1–100 rows and the exact header: name,address,port,username,login_name. A blank port means 22; login_name is optional. Any invalid row rejects the entire file.",
+  "teamImport.openSshHint":
+    "Choose one UTF-8 file up to 1 MiB. This Direct profile accepts Host, HostName, explicit User and Port. Include and Match reject the file; other applicable options block their candidates. No other files, credentials or commands are read or run.",
+  "teamImport.chooseFile": "Choose file and preview",
+  "teamImport.account": "Account: {id}",
+  "teamImport.loading": "Reading this team's saved import…",
+  "teamImport.reload": "Reload saved import",
+  "teamImport.saved": "Reviewed import",
+  "teamImport.phase.prepared":
+    "Review these exact fields and the destination before importing. The batch is saved locally and has not been confirmed by the server.",
+  "teamImport.phase.unknown":
+    "The import may have committed. Confirm this same saved import to check its original result. You can close Settings and return after restarting; it will not resend automatically.",
+  "teamImport.phase.confirmed":
+    "The original import is confirmed. These are its submitted fields; current inventory and access may have changed.",
+  "teamImport.phase.expired":
+    "The original 24-hour confirmation window ended. Review current inventory before archiving. Missing or similar assets, unavailable service or lost access cannot prove whether this import committed.",
+  "teamImport.disclosure":
+    "This import adds {count} new Host/default-Login pairs to {team}. Members can see this metadata according to team access rules. Existing assets are kept separately; this action grants no access.",
+  "teamImport.selectedRows": "Reviewed rows",
+  "teamImport.refreshed": "Current team inventory was refreshed and acknowledged.",
+  "teamImport.submit": "Import reviewed rows",
+  "teamImport.confirm": "Confirm original import",
+  "teamImport.reviewInventory": "Refresh and review inventory",
+  "teamImport.viewInventory": "Open team inventory",
+  "teamImport.done": "Done",
+  "teamImport.archive": "Archive expired import",
+  "teamImport.cancel": "Cancel this import",
+  "teamImport.previewSummary": "{ready} Ready · {blocked} Blocked. Select the Ready rows you want to import.",
+  "teamImport.preview": "Complete source preview",
+  "teamImport.selectAll": "Select all Ready rows",
+  "teamImport.selectNone": "Clear selection",
+  "teamImport.readyRow": "{ordinal}. Ready · {name}",
+  "teamImport.blockedRow": "{ordinal}. Blocked",
+  "teamImport.reviewSelection": "Review {count} selected rows",
+  "teamImport.record": "Data record {record}",
+  "teamImport.line": "Line {line}",
+  "teamImport.field.name": "Host name",
+  "teamImport.field.address": "Address",
+  "teamImport.field.port": "Port",
+  "teamImport.field.username": "Remote username",
+  "teamImport.field.login_name": "Login name",
+  "teamImport.denied":
+    "You cannot write this team's inventory with your current access. Ask an administrator. Any saved original import is retained.",
+  "teamImport.unavailable":
+    "This team is no longer available. Its saved import is retained; review its current status before archiving an expired result.",
+  "teamImport.accountRequired":
+    "Select a signed-in Account and authenticate its Device before importing team inventory.",
+  "teamImport.notSent": "The request was not sent. Review this same saved import before trying again.",
+  "teamImport.error.connection":
+    "The action could not be completed. Reload the saved import or refresh current inventory; an unconfirmed result is retained.",
+  "teamImport.error.fileUnavailable": "The file could not be read. Choose an accessible regular file.",
+  "teamImport.error.busy": "Another Account operation is running. Try again when it finishes.",
+  "teamImport.error.stalePreview": "The preview is no longer current. Choose the source again.",
+  "teamImport.error.invalidSelection": "Select at least one Ready row from the current preview.",
+  "teamImport.error.pending": "Finish the saved import for this team before preparing another.",
+  "teamImport.error.missing": "The saved import is no longer available. Reload its status.",
+  "teamImport.error.expired": "The confirmation window ended. Refresh and review current inventory before archiving.",
+  "teamImport.error.unknown":
+    "The result is unconfirmed. Keep this saved import and explicitly confirm its original result.",
+  "teamImport.error.reviewRequired": "Refresh and review current inventory before archiving this expired import.",
+  "teamImport.error.invalidRequest": "The import could not be validated. Its original state was retained.",
+  "teamImport.diagnostic.invalid_utf8": "Choose a UTF-8 text file.",
+  "teamImport.diagnostic.invalid_csv": "Correct the CSV quotes, cells or record endings.",
+  "teamImport.diagnostic.invalid_header": "Use the exact header: name,address,port,username,login_name.",
+  "teamImport.diagnostic.invalid_cell": "Correct the indicated field; no rows were prepared.",
+  "teamImport.diagnostic.empty_input": "Include at least one data record.",
+  "teamImport.diagnostic.too_many_records": "Use at most 100 data records.",
+  "teamImport.diagnostic.too_large": "Choose a file no larger than 1 MiB.",
+  "teamImport.diagnostic.raw_too_large": "Choose a file no larger than 1 MiB.",
+  "teamImport.diagnostic.invalid_syntax": "Correct the OpenSSH line syntax, quoting or arguments.",
+  "teamImport.diagnostic.unsupported_scope":
+    "This profile cannot prepare a file containing Include or Match. Prepare a separate Direct configuration.",
+  "teamImport.diagnostic.no_candidates": "Include a positive literal Host alias.",
+  "teamImport.diagnostic.too_many_candidates":
+    "Use at most 100 distinct literal Host aliases, including Blocked candidates.",
+  "teamImport.diagnostic.unsupported_option":
+    "An applicable option is outside this Direct profile. Correct the source and prepare again.",
+  "teamImport.diagnostic.unsupported_value":
+    "An applicable value is outside this Direct profile. Correct the source and prepare again.",
+  "teamImport.diagnostic.invalid_field": "A prepared field exceeds its supported inventory limits.",
+  "teamImport.diagnostic.missing_username":
+    "Set an explicit User for this Host; no local or Account username is assumed.",
   "passwordChange.title": "Change account password",
   "passwordChange.consequences":
     "Changing your password signs out all browser sessions. Your registered desktop devices, saved data and recovery key are unchanged.",

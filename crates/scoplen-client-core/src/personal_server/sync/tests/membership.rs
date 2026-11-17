@@ -314,6 +314,7 @@ async fn competing_public_bootstrap_cannot_lower_a_revision_after_validation() {
     let delayed = PersonalServer {
         operation: tokio::sync::Mutex::new(()),
         transport: Ok(Transport::fixture(peer.certificate.clone(), Duration::from_secs(5))),
+        import_preview: Default::default(),
     };
     let concurrent_store = store.clone();
     let task = tokio::spawn(async move { delayed.bootstrap_sync(concurrent_store).await });

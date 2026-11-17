@@ -446,6 +446,50 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	deleteTeamAuthoring: (organizationId: string, collection: TeamAuthoringCollection, resourceId: string, etag: string) => typedError<null, TeamError>(__TAURI_INVOKE("delete_team_authoring", { organizationId, collection, resourceId, etag })),
 	/**  Preview one shared-generated independent view/connect rule without granting access. */
 	previewTeamSimpleRule: (organizationId: string, input: TeamSimpleRuleInput) => typedError<TeamSimpleRulePreview, TeamError>(__TAURI_INVOKE("preview_team_simple_rule", { organizationId, input })),
+	/**  Read one explicitly selected file; no path or raw source enters the renderer. */
+	chooseTeamInventoryImport: (organizationId: string, source: TeamImportSource, locale: Locale) => typedError<{
+	/**  Opaque identity, invalidated when replaced or explicitly cleared. */
+	previewId: string,
+	/**  Canonical deployment. */
+	origin: string,
+	/**  Owning admitted Account. */
+	accountId: string,
+	/**  Explicit selected team. */
+	organizationId: string,
+	/**  Captured source interpretation. */
+	source: TeamImportSource,
+	/**  Complete ordered Ready/Blocked result. */
+	candidates: TeamImportCandidate[],
+} | null, TeamImportError>(__TAURI_INVOKE("choose_team_inventory_import", { organizationId, source, locale })),
+	/**  Read only saved destination ids for this Account, including unavailable teams. */
+	retainedTeamInventoryImports: (cursor: string | null) => typedError<TeamImportSavedPage, TeamImportError>(__TAURI_INVOKE("retained_team_inventory_imports", { cursor })),
+	/**  Clear only the captured source review when its view changes or closes. */
+	clearTeamInventoryImportPreview: (previewId: string) => typedError<null, TeamImportError>(__TAURI_INVOKE("clear_team_inventory_import_preview", { previewId })),
+	/**  Retain exactly one reviewed Ready subset before any network dispatch. */
+	prepareTeamInventoryImport: (organizationId: string, previewId: string, selected: number[]) => typedError<TeamImportPending, TeamImportError>(__TAURI_INVOKE("prepare_team_inventory_import", { organizationId, previewId, selected })),
+	/**  Read saved original intent; this never authenticates or submits it. */
+	pendingTeamInventoryImport: (organizationId: string) => typedError<{
+	/**  Original canonical deployment. */
+	origin: string,
+	/**  Original Account. */
+	accountId: string,
+	/**  Original team. */
+	organizationId: string,
+	/**  Original Idempotency-Key. */
+	operationId: string,
+	/**  Current permitted recovery action. */
+	phase: TeamImportPhase,
+	/**  Original submitted order and allocated identities. */
+	rows: TeamImportRow[],
+	/**  An expired operation has had an explicit current-inventory review attempt. */
+	canArchive: boolean,
+} | null, TeamImportError>(__TAURI_INVOKE("pending_team_inventory_import", { organizationId })),
+	/**  Explicitly dispatch or confirm the exact retained key/body with fresh Device proofs. */
+	submitTeamInventoryImport: (organizationId: string, operationId: string) => typedError<TeamImportPending, TeamImportError>(__TAURI_INVOKE("submit_team_inventory_import", { organizationId, operationId })),
+	/**  Refresh current member inventory without changing the original historical result. */
+	reviewTeamInventoryImport: (organizationId: string, operationId: string) => typedError<TeamImportInventoryReview, TeamImportError>(__TAURI_INVOKE("review_team_inventory_import", { organizationId, operationId })),
+	/**  Cancel prepared state, dismiss confirmation, or archive explicitly reviewed expiry. */
+	discardTeamInventoryImport: (organizationId: string, operationId: string) => typedError<null, TeamImportError>(__TAURI_INVOKE("discard_team_inventory_import", { organizationId, operationId })),
 	/**  Check only a retained, authenticated policy refusal belonging to this terminal. */
 	checkTeamAccessRequest: (sessionId: string, draft: TeamAccessRequestDraft) => typedError<TeamAccessRequestCheckView, TeamAccessRequestError>(__TAURI_INVOKE("check_team_access_request", { sessionId, draft })),
 	/**  Read one real current Mine or Approvals page. */
@@ -4115,6 +4159,154 @@ export type TeamHostGroupFields_Serialize = {
 	/**  Shared supported defaults, without Personal credentials. */
 	defaults?: { [key in string]: string } | null,
 };
+
+/**  Every source candidate remains represented in its original order. */
+export type TeamImportCandidate =
+/**  Explicitly selectable typed metadata, without identities. */
+{ status: "ready";
+/**  One-based ordinal in the complete source result. */
+ordinal: number;
+/**  Metadata that will become team inventory. */
+fields: TeamImportFields } |
+/**  A refused candidate cannot become part of a batch. */
+{ status: "blocked";
+/**  One-based ordinal in the complete source result. */
+ordinal: number;
+/**  Fixed source-free reason. */
+diagnostic: TeamImportDiagnostic };
+
+/**  Fixed shared diagnostic metadata, without source text or paths. */
+export type TeamImportDiagnostic = {
+	/**  Fixed shared parser code. */
+	code: string,
+	/**  One-based CSV data record, if supplied by the parser. */
+	record: number | null,
+	/**  One-based OpenSSH physical line, if supplied by the parser. */
+	line: number | null,
+	/**  Known shared field name only. */
+	field: string | null,
+};
+
+/**  Fixed native failures; no filesystem/process/server diagnostic is rendered. */
+export type TeamImportError =
+/**  Existing fixed Account/team error. */
+{ kind: "team"; detail: TeamError } |
+/**  Whole-file shared preparation refusal. */
+{ kind: "source"; detail: TeamImportDiagnostic } |
+/**  File opening, regular-file admission or bounded reading failed. */
+{ kind: "fileUnavailable" } |
+/**  Another operation owns the current mutation slot. */
+{ kind: "busy" } |
+/**  The exact preview was cleared, replaced or belongs to another runtime context. */
+{ kind: "stalePreview" } |
+/**  Empty, duplicate, blocked or foreign ordinals. */
+{ kind: "invalidSelection" } |
+/**  An existing original batch must not be replaced. */
+{ kind: "pending" } |
+/**  No exact original operation is retained. */
+{ kind: "missing" } |
+/**  The original confirmation window ended. */
+{ kind: "expired" } |
+/**  Handoff or exact response could not be established. */
+{ kind: "unknown" } |
+/**  Expired archive requires a real explicit review attempt. */
+{ kind: "reviewRequired" } |
+/**  Retained canonical bytes or a shared request failed validation. */
+{ kind: "invalidRequest" };
+
+/**  Intentional successful metadata projection for disclosure review. */
+export type TeamImportFields = {
+	/**  Original Host name. */
+	name: string,
+	/**  Direct connection address. */
+	address: string,
+	/**  Direct SSH port. */
+	port: number,
+	/**  Exact remote username. */
+	username: string,
+	/**  Optional CSV Login name. */
+	loginName: string | null,
+};
+
+/**  Explicit current-member refresh, including a failed attempt before expired archive. */
+export type TeamImportInventoryReview = {
+	/**  Retained operation, including its newly recorded review attempt. */
+	pending: TeamImportPending,
+	/**  Only the ordinary current view/ACK result can establish availability. */
+	inventory: TeamAssetsView | null,
+	/**  A fixed ordinary refresh refusal; it never changes historical confirmation. */
+	error: TeamError | null,
+};
+
+/**  Exact batch recovery projection, independent of current inventory visibility. */
+export type TeamImportPending = {
+	/**  Original canonical deployment. */
+	origin: string,
+	/**  Original Account. */
+	accountId: string,
+	/**  Original team. */
+	organizationId: string,
+	/**  Original Idempotency-Key. */
+	operationId: string,
+	/**  Current permitted recovery action. */
+	phase: TeamImportPhase,
+	/**  Original submitted order and allocated identities. */
+	rows: TeamImportRow[],
+	/**  An expired operation has had an explicit current-inventory review attempt. */
+	canArchive: boolean,
+};
+
+/**  Durable original-operation state; reads never submit it. */
+export type TeamImportPhase =
+/**  Safe for explicit dispatch or cancellation. */
+"prepared" |
+/**  A dispatch may have committed; only the original operation can be confirmed. */
+"unknown" |
+/**  Complete exact ordered result was verified and retained. */
+"confirmed" |
+/**  The original 24-hour confirmation window ended. */
+"expired";
+
+/**  Rust-owned review identity and its complete intentional display projection. */
+export type TeamImportPreview = {
+	/**  Opaque identity, invalidated when replaced or explicitly cleared. */
+	previewId: string,
+	/**  Canonical deployment. */
+	origin: string,
+	/**  Owning admitted Account. */
+	accountId: string,
+	/**  Explicit selected team. */
+	organizationId: string,
+	/**  Captured source interpretation. */
+	source: TeamImportSource,
+	/**  Complete ordered Ready/Blocked result. */
+	candidates: TeamImportCandidate[],
+};
+
+/**  An original pair and its reviewed metadata; these ids never change on confirmation. */
+export type TeamImportRow = {
+	/**  Original Host UUIDv7. */
+	hostId: string,
+	/**  Original default Login UUIDv7. */
+	loginId: string,
+	/**  Exact submitted metadata. */
+	fields: TeamImportFields,
+};
+
+/**  Current Account's saved destinations, without any unselected batch contents. */
+export type TeamImportSavedPage = {
+	/**  Original teams with retained imports; these ids grant no new-import authority. */
+	organizationIds: string[],
+	/**  Explicit ascending continuation, if more retained destinations exist. */
+	nextCursor: string | null,
+};
+
+/**  One explicitly selected shared source interpretation. */
+export type TeamImportSource =
+/**  D-151's complete five-column CSV profile. */
+"csv" |
+/**  D-153's one-file Direct OpenSSH profile. */
+"openSsh";
 
 /**  One explicitly requested invitation page. */
 export type TeamInvitationPageView = {

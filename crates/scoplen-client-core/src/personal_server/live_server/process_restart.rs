@@ -356,6 +356,7 @@ fn manager(run: &Run) -> PersonalServer {
     PersonalServer {
         operation: Mutex::new(()),
         transport: Ok(trusted_transport(&bounded_file(&run.root.join("server-ca.pem"), 65_536))),
+        import_preview: Default::default(),
     }
 }
 

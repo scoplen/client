@@ -165,7 +165,11 @@ impl Fixture {
     }
 
     fn manager(&self) -> PersonalServer {
-        PersonalServer { operation: Mutex::new(()), transport: Ok(self.transport()) }
+        PersonalServer {
+            operation: Mutex::new(()),
+            transport: Ok(self.transport()),
+            import_preview: Default::default(),
+        }
     }
 }
 

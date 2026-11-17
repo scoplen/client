@@ -13,8 +13,11 @@ pub(super) async fn verify(
     paired: confirmed::PairedDevice,
 ) -> (PersonalAccountSnapshot, [Object; 2], String, trust::Receipt) {
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
-    let third_manager =
-        PersonalServer { operation: Mutex::new(()), transport: Ok(trusted_transport(&ca)) };
+    let third_manager = PersonalServer {
+        operation: Mutex::new(()),
+        transport: Ok(trusted_transport(&ca)),
+        import_preview: Default::default(),
+    };
     let profile = &deployment.profiles[2];
     let path = &profile.store;
     let key = profile.key();

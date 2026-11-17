@@ -177,6 +177,7 @@ async fn live_confirmed_personal_inventory_roundtrip() {
     let manager = Arc::new(PersonalServer {
         operation: Mutex::new(()),
         transport: Ok(trusted_transport(&ca)),
+        import_preview: Default::default(),
     });
     let profile = &deployment.profiles[0];
     let path = &profile.store;

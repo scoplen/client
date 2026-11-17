@@ -51,6 +51,11 @@ pub use teams::{
     TeamSnippetVariable, TeamSummary, TeamTrustAttribution, TeamTrustFields,
 };
 pub use teams::{
+    TeamImportCandidate, TeamImportDiagnostic, TeamImportError, TeamImportFields,
+    TeamImportInventoryReview, TeamImportPending, TeamImportPhase, TeamImportPreview,
+    TeamImportRow, TeamImportSavedPage, TeamImportSource,
+};
+pub use teams::{
     TeamSshCertificate, TeamSshError, TeamSshFailure, TeamSshHostSetup, TeamSshOperationKind,
     TeamSshOperationView, TeamSshPolicyDenial, TeamSshSource, TeamUserCaView,
 };
@@ -187,11 +192,16 @@ pub enum PersonalServerError {
 pub struct PersonalServer {
     operation: Mutex<()>,
     transport: Result<Transport, PersonalServerError>,
+    import_preview: std::sync::Mutex<Option<teams::inventory_import::ImportPreviewState>>,
 }
 
 impl Default for PersonalServer {
     fn default() -> Self {
-        Self { operation: Mutex::new(()), transport: Transport::new() }
+        Self {
+            operation: Mutex::new(()),
+            transport: Transport::new(),
+            import_preview: Default::default(),
+        }
     }
 }
 

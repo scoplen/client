@@ -36,6 +36,8 @@ function defaultInventory(cmd: string): unknown {
   if (cmd === "inventory_set_favorite" || cmd === "inventory_undo_delete") return null;
   if (cmd === "inventory_delete_host") return { token: "00000000-0000-7000-8000-000000000000" };
   if (cmd === "choose_key_file") return null;
+  if (cmd === "teams_page") return { teams: [], nextCursor: null };
+  if (cmd === "retained_team_inventory_imports") return { organizationIds: [], nextCursor: null };
   return undefined;
 }
 
@@ -184,14 +186,17 @@ describe("settings", () => {
     await screen.findByRole("heading", { name: "No hosts yet" });
     expect(screen.queryByRole("button", { name: "Import OpenSSH config" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Export OpenSSH" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Import team inventory" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(screen.queryByRole("button", { name: "Import OpenSSH config" })).toBeNull();
     await userEvent.click(screen.getByRole("tab", { name: "Data" }));
     expect(screen.getByRole("heading", { name: "Import and export" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Import OpenSSH config" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Export OpenSSH" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Import team inventory" })).toBeTruthy();
     await userEvent.click(screen.getByRole("tab", { name: "Appearance" }));
     expect(screen.queryByRole("button", { name: "Import OpenSSH config" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Import team inventory" })).toBeNull();
   });
 
   it("sets and removes the local passphrase", async () => {

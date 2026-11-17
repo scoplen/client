@@ -19,6 +19,8 @@ pub(super) struct Transport {
     client: Client,
     sync_client: Client,
     pub(super) notification_tls: std::sync::Arc<rustls::ClientConfig>,
+    #[cfg(all(test, feature = "live-server-integration"))]
+    pub(in crate::personal_server) discard_next_import_reply: std::sync::atomic::AtomicBool,
 }
 
 pub(super) struct Response {
@@ -58,7 +60,13 @@ impl Transport {
         let client = builder().build().map_err(|_| PersonalServerError::Network)?;
         let sync_client =
             builder().http2_prior_knowledge().build().map_err(|_| PersonalServerError::Network)?;
-        Ok(Self { client, sync_client, notification_tls: notification_tls()? })
+        Ok(Self {
+            client,
+            sync_client,
+            notification_tls: notification_tls()?,
+            #[cfg(all(test, feature = "live-server-integration"))]
+            discard_next_import_reply: Default::default(),
+        })
     }
 
     #[cfg(test)]
@@ -78,6 +86,8 @@ impl Transport {
             client: builder().build().unwrap(),
             sync_client: builder().http2_prior_knowledge().build().unwrap(),
             notification_tls: notification_tls().unwrap(),
+            #[cfg(feature = "live-server-integration")]
+            discard_next_import_reply: Default::default(),
         }
     }
 

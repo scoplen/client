@@ -68,6 +68,11 @@ const sample = {
   number: 1,
   tab: 1,
   pane: 2,
+  ready: 2,
+  blocked: 1,
+  ordinal: 1,
+  record: 2,
+  team: "Operations",
 };
 
 describe("message catalogs", () => {
