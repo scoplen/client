@@ -70,6 +70,8 @@ pub fn ipc() -> Builder<tauri::Wry> {
             forwards::forward_snapshot,
             forwards::forward_respond,
             forwards::forward_stop,
+            forwards::session_forward_list,
+            forwards::session_forward_stop,
             ssh::session_respond,
             ssh::session_reserve_transport,
             ssh::session_connect,
@@ -277,8 +279,9 @@ pub fn run() {
                 window_state::restore(&window, &store);
             }
             app.manage(local);
-            app.manage(ssh::SessionManager::default());
-            app.manage(forwards::ForwardManager::default());
+            let forwards = forwards::ForwardManager::default();
+            app.manage(ssh::SessionManager::with_forward_manager(forwards.clone()));
+            app.manage(forwards);
             app.manage(ForwardShutdown::default());
             app.manage(inventory::InventoryState::default());
             app.manage(std::sync::Arc::new(portable_archives::PortableArchiveState::default()));

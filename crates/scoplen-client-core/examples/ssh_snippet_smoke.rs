@@ -97,7 +97,7 @@ impl Terminal {
                     | SessionEvent::Retrying { .. } => {
                         return Err("selected-terminal fixture connection failed".to_owned());
                     }
-                    SessionEvent::Starting { .. } => {}
+                    SessionEvent::Starting { .. } | SessionEvent::Forwards { .. } => {}
                 }
             }
             Err("fixture connection ended before ready".to_owned())
@@ -232,6 +232,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                         closed.store(true, std::sync::atomic::Ordering::SeqCst);
                         manager.close("snippet-terminal")?;
                     }
+                    SessionEvent::Forwards { .. } => {}
                 }
                 Ok(())
             },

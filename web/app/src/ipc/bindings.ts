@@ -91,8 +91,12 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	forwardSnapshot: (runId: string) => typedError<ForwardSnapshot, ForwardIssue>(__TAURI_INVOKE("forward_snapshot", { runId })),
 	/**  Answer the current SSH preparation challenge for one independent run. */
 	forwardRespond: (runId: string, promptId: string, intent: SessionPreparationIntent) => typedError<null, ForwardIssue>(__TAURI_INVOKE("forward_respond", { runId, promptId, intent })),
-	/**  Fence new accepts immediately and begin cancelling one independent run. */
+	/**  Fence new accepts immediately and begin cancelling one run. */
 	forwardStop: (runId: string) => typedError<null, ForwardIssue>(__TAURI_INVOKE("forward_stop", { runId })),
+	/**  Read every selected attachment result for the exact current terminal transport. */
+	sessionForwardList: (sessionId: string, transportId: string) => typedError<SessionForwardSnapshot[], ForwardIssue>(__TAURI_INVOKE("session_forward_list", { sessionId, transportId })),
+	/**  Suppress one attachment for this logical terminal without closing its SSH connection. */
+	sessionForwardStop: (sessionId: string, transportId: string, forwardId: string) => typedError<null, ForwardIssue>(__TAURI_INVOKE("session_forward_stop", { sessionId, transportId, forwardId })),
 	/**  Reply to the current session-owned, one-use preparation prompt. */
 	sessionRespond: (sessionId: string, transportId: string, promptId: string, intent: SessionPreparationIntent) => typedError<null, string>(__TAURI_INVOKE("session_respond", { sessionId, transportId, promptId, intent })),
 	/**  Reserve a logical session before starting its cancellable manager task. */
@@ -893,11 +897,19 @@ export type FileDropAccepted = {
 	accepted: number,
 };
 
+/**  Exact terminal transport borrowing a tunnel's authenticated connection. */
+export type ForwardAttachment = {
+	/**  Logical terminal identity. */
+	sessionId: string,
+	/**  One authenticated attempt of that terminal. */
+	transportId: string,
+};
+
 /**  A display-safe snapshot of one Rust-owned run. */
 export type ForwardChanged = {
 	/**  Source profile opening. */
 	profileGeneration: string,
-	/**  The latest revision of the independent run. */
+	/**  The latest revision of the registered run. */
 	snapshot: ForwardSnapshot,
 };
 
@@ -983,6 +995,8 @@ export type ForwardInput = {
 
 /**  Fixed failure categories; native errors and connection secrets are never exposed. */
 export type ForwardIssue =
+/**  This definition cannot share a terminal's authenticated transport. */
+"unsupportedDefinition" |
 /**  Fields or identifiers are invalid for this tunnel mode. */
 "invalidConfiguration" |
 /**  The saved tunnel or selected Login no longer exists. */
@@ -1046,6 +1060,8 @@ export type ForwardPhase =
 export type ForwardSnapshot = {
 	/**  Fresh execution identity; an earlier run can never control a later one. */
 	runId: string,
+	/**  Terminal transport owning this run; absent for an independent tunnel. */
+	attachment: ForwardAttachment | null,
 	/**  Immutable forwarding configuration captured at Start. */
 	configuration: ForwardConfiguration,
 	/**  Current Rust-owned phase. */
@@ -2846,6 +2862,12 @@ event: PreparationEvent } |
 { kind: "ready";
 /**  Only this transport may receive subsequent terminal input. */
 transportId: string } |
+/**  Per-definition tunnel results belonging to the current terminal transport. */
+{ kind: "forwards";
+/**  Authenticated transport which supplied these results. */
+transportId: string;
+/**  Complete selected definition set, including unavailable definitions. */
+entries: SessionForwardSnapshot[] } |
 /**  A typed network failure qualified for the next bounded retry. */
 { kind: "retrying";
 /**  One-based automatic attempt number, at most five. */
@@ -2903,6 +2925,20 @@ export type SessionFileMutationStatus =
 "unknown" |
 /**  The server refused the change or preparation failed. */
 "failed";
+
+/**  One selected definition, including failures which have no runnable configuration. */
+export type SessionForwardSnapshot = {
+	/**  Original saved reference, never replaced by a Forward's default Login. */
+	forwardId: string,
+	/**  Current readable name, absent when the referenced definition is unavailable. */
+	name: string | null,
+	/**  Registered run, when configuration and shared admission succeeded. */
+	run: ForwardSnapshot | null,
+	/**  Failure before a run could be registered. */
+	issue: ForwardIssue | null,
+	/**  Explicitly suppressed for this logical terminal, including after reconnect. */
+	stopped: boolean,
+};
 
 /**  A one-time response to the current attempt's preparation prompt. */
 export type SessionPreparationIntent =

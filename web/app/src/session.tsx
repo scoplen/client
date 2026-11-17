@@ -31,6 +31,8 @@ import { dismissUploadAttention, initialUploadAttention, recordUploadAttention }
 import { useSessionTransfers } from "./use-session-transfers";
 import { SessionSnippetsButton, type SnippetTarget } from "./session-snippets";
 import { SessionSearch } from "./session-search";
+import { SessionForwards, useSessionForwards } from "./session-forwards";
+import type { ForwardController } from "./use-forwards";
 import {
   TrustDialog,
   PassphraseDialog,
@@ -83,6 +85,7 @@ export function SessionTerminal({
   registerFocus,
   registerSnippetTarget,
   getSnippetTargets,
+  forwardRuntime,
 }: {
   target: SessionTarget;
   label: string;
@@ -92,7 +95,7 @@ export function SessionTerminal({
   savedOutput?: TerminalSnapshot;
   /** Rust-resolved current Login selection for read-only saved output. */
   savedTerminalProfile?: string | null;
-  /** Fresh runtime identity supplied by an explicit saved-Workspace Open. */
+  /** Stable logical identity supplied by the owning pane or saved-Workspace Open. */
   sessionId?: string;
   registerClose?: (close: (discard?: boolean) => Promise<boolean>) => () => void;
   /** Explicitly start one independent ordinary terminal beside this pane. */
@@ -102,6 +105,7 @@ export function SessionTerminal({
   registerFocus?: (focus: () => void) => () => void;
   registerSnippetTarget?: (target: () => SnippetTarget | null) => () => void;
   getSnippetTargets?: () => SnippetTarget[];
+  forwardRuntime?: ForwardController;
   /** Told whenever the connection state changes, so the window can show it on the tab. */
   onStateChange?: (state: SessionState) => void;
   /** Current target label resolved through ordinary Login preparation. */
@@ -170,6 +174,8 @@ export function SessionTerminal({
   const [hasOutput, setHasOutput] = useState(!!savedOutput);
   const [transportPending, setTransportPending] = useState(false);
   const [sessionId] = useState(() => restoredSessionId ?? crypto.randomUUID());
+  const forwards = useSessionForwards(sessionId);
+  const { begin: beginForwards, receive: receiveForwards, load: loadForwards } = forwards;
   const [runRevision, setRunRevision] = useState(0);
   const transfers = useSessionTransfers(sessionId, active && !offline);
   const [transportId, setTransportId] = useState<string | null>(null);
@@ -261,6 +267,7 @@ export function SessionTerminal({
             return;
           switch (event.kind) {
             case "starting":
+              beginForwards(event.transportId);
               checkpointTransport.current = event.transportId;
               setFilesOpen(false);
               clearPreparation();
@@ -323,8 +330,14 @@ export function SessionTerminal({
               setAutomatic(false);
               setRetry(null);
               setError(null);
+              void loadForwards(event.transportId);
+              break;
+            case "forwards":
+              if (currentTransport.current !== event.transportId) return;
+              receiveForwards(event.transportId, event.entries);
               break;
             case "retrying":
+              beginForwards(null);
               clearPreparation();
               currentTransport.current = null;
               setTransportId(null);
@@ -335,6 +348,7 @@ export function SessionTerminal({
               break;
             case "closed":
             case "failed":
+              beginForwards(null);
               clearPreparation();
               connectionEnded.current = true;
               for (const resolve of quietWaiters.current) resolve();
@@ -377,6 +391,7 @@ export function SessionTerminal({
           .then((result) => {
             if (!active || !mounted.current || current !== generation.current) return;
             ended = true;
+            beginForwards(null);
             clearPreparation();
             currentTransport.current = null;
             setTransportId(null);
@@ -390,6 +405,7 @@ export function SessionTerminal({
           })
           .catch((cause: unknown) => {
             if (!active || !mounted.current || current !== generation.current) return;
+            beginForwards(null);
             ended = true;
             clearPreparation();
             currentTransport.current = null;
@@ -410,7 +426,7 @@ export function SessionTerminal({
         return { unsubscribe: stop };
       },
     });
-  }, [connectionTarget, sessionId, commands]);
+  }, [connectionTarget, sessionId, commands, beginForwards, receiveForwards, loadForwards]);
 
   const inputSink = useMemo<TerminalSink>(
     () => ({
@@ -925,6 +941,11 @@ export function SessionTerminal({
           </Button>
         </div>
       </header>
+      <SessionForwards
+        controller={forwards}
+        connected={state === "connected" && transportId !== null}
+        runtime={forwardRuntime}
+      />
       {savedOutput && !directoryReady && profiles?.loading ? (
         <p role="status" className="mx-4 mt-0 mb-2 text-xs text-muted-foreground">
           {t("terminalProfiles.loading")}

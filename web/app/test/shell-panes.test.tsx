@@ -4,6 +4,7 @@ import type { Channel } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useContext } from "react";
 import { AppearanceProvider } from "@scoplen/ui";
 import type { ScoplenTerminalElement } from "@scoplen/terminal";
 import { I18nProvider } from "../src/i18n";
@@ -11,6 +12,7 @@ import { Menus } from "../src/menus";
 import { Shell } from "../src/shell";
 import { TerminalColorsProvider } from "../src/terminal-colors";
 import { AccountProfilesBoundary } from "../src/account-profiles";
+import { ForwardOwnersContext } from "../src/use-forwards";
 import type {
   PreparationContext,
   PreparationEvent,
@@ -28,6 +30,7 @@ vi.mock("../src/inventory/home", () => ({
     onViewOutput: (output: SavedTerminalOutput) => void;
   }) => (
     <>
+      <TunnelOwners />
       <button onClick={() => onConnect({ kind: "personal", profileId: "login-first" }, "First host")}>
         Start first
       </button>
@@ -71,6 +74,11 @@ vi.mock("../src/inventory/home", () => ({
     </>
   ),
 }));
+
+function TunnelOwners() {
+  const owners = useContext(ForwardOwnersContext);
+  return <div data-testid="tunnel-owners">{JSON.stringify(owners)}</div>;
+}
 
 beforeEach(() => {
   vi.stubGlobal("matchMedia", () => ({
@@ -163,6 +171,7 @@ function fixture() {
           recent: [],
         };
       if (command === "forward_list") return [];
+      if (command === "session_forward_list") return [];
       if (command === "inventory_forwards" || command === "inventory_access_profiles") return [];
       if (command === "workspaces_list") return workspaces;
       if (command === "workspaces_create") {
@@ -283,6 +292,30 @@ it("preserves the complete team source when splitting and opening another sessio
     })),
   );
   expect(new Set(f.connections.map((connection) => connection.sessionId)).size).toBe(3);
+});
+
+it("maps attached runtime identities to each exact tab and pane without remounting terminals", async () => {
+  const f = fixture();
+  const view = shell();
+  await userEvent.click(screen.getByRole("button", { name: "Start first" }));
+  const first = await connect(f, 0);
+  await userEvent.click(screen.getByRole("button", { name: "Split right" }));
+  const second = await connect(f, 1);
+  const opened = panes(view.container);
+  expect(first.sessionId).toBe(opened[0]!.pane.dataset.paneId);
+  expect(second.sessionId).toBe(opened[1]!.pane.dataset.paneId);
+  await userEvent.click(screen.getByRole("tab", { name: "Hosts" }));
+  await userEvent.click(screen.getByRole("button", { name: "Start first" }));
+  const third = await connect(f, 2);
+  await userEvent.click(screen.getByRole("tab", { name: "Hosts" }));
+  expect(JSON.parse(screen.getByTestId("tunnel-owners").textContent!)).toEqual({
+    [first.sessionId]: { label: "First host", tab: 1, pane: 1 },
+    [second.sessionId]: { label: "First host", tab: 1, pane: 2 },
+    [third.sessionId]: { label: "First host", tab: 2, pane: 1 },
+  });
+  expect(panes(view.container)[0]!.terminal).toBe(opened[0]!.terminal);
+  expect(panes(view.container)[1]!.terminal).toBe(opened[1]!.terminal);
+  expect(f.connections).toHaveLength(3);
 });
 
 it("splits into independent ordinary sessions while preserving surviving terminals through focus, tabs and collapse", async () => {

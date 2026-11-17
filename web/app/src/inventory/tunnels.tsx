@@ -11,7 +11,7 @@ import type {
   SessionPreparationIntent,
 } from "../ipc/bindings";
 import { InteractiveDialog, PassphraseDialog, TrustDialog } from "../preparation-dialogs";
-import { ForwardsContext, isLiveForward } from "../use-forwards";
+import { ForwardOwnersContext, ForwardsContext, isLiveForward, tunnelIssueKey } from "../use-forwards";
 import {
   useInventory,
   type AccessProfileSummary,
@@ -53,6 +53,7 @@ export function TunnelsHome() {
   const { t, locale } = useI18n();
   const api = useInventory();
   const runtime = useContext(ForwardsContext);
+  const owners = useContext(ForwardOwnersContext);
   const forwards = useLoad(() => loadObjects(api.forwards()), "forwards");
   const profiles = useLoad(() => loadObjects(api.accessProfiles()), "access-profiles");
   const [editing, setEditing] = useState<ForwardSummary | "new" | null>(null);
@@ -149,6 +150,7 @@ export function TunnelsHome() {
           <ul className="m-0 mt-3 list-none divide-y divide-border p-0" aria-label={t("tunnels.runs")}>
             {runs.map((run) => {
               const configuration = run.configuration;
+              const owner = run.attachment ? owners[run.attachment.sessionId] : null;
               const prompt = run.phase === "preparing" && run.preparation && "promptId" in run.preparation;
               return (
                 <li key={run.runId} className="min-w-0 py-4">
@@ -177,6 +179,14 @@ export function TunnelsHome() {
                       </Button>
                     ) : null}
                   </div>
+                  {run.attachment ? (
+                    <>
+                      <p className="mt-1 mb-0 break-words text-xs text-muted-foreground">
+                        {owner ? t("tunnels.attached.owner", owner) : t("tunnels.attached.ownerUnavailable")}
+                      </p>
+                      <p className="mt-1 mb-0 text-xs text-muted-foreground">{t("tunnels.attached.lifetime")}</p>
+                    </>
+                  ) : null}
                   {configuration.kind === "remote" ? (
                     <RemoteEndpoints {...configuration} />
                   ) : (
@@ -218,7 +228,9 @@ export function TunnelsHome() {
                     ))}
                   </dl>
                   {run.lastIssue ? (
-                    <p className="mt-2 mb-0 text-sm text-attention">{t(`tunnels.issue.${run.lastIssue}`)}</p>
+                    <p className="mt-2 mb-0 text-sm text-attention">
+                      {t(tunnelIssueKey(run.lastIssue, !!run.attachment))}
+                    </p>
                   ) : null}
                 </li>
               );

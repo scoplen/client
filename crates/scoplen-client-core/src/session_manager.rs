@@ -25,6 +25,10 @@ use crate::connection::preparation::{
 use crate::connection::{
     MAX_SSH_INPUT, SessionTarget, SshConnectionError, SshSession, terminal_size,
 };
+use crate::forward_manager::{
+    AttachedForwardLease, AttachedForwardSelection, AttachedForwardState, ForwardAttachment,
+    ForwardManager, SessionForwardSnapshot,
+};
 use crate::inventory::{DeletionStore, Inventory, RecentSessionKind, RecentSessionOutcome};
 use crate::personal_server::{PersonalServer, TeamSshError, TeamSshFailure};
 use crate::session_files::{
@@ -51,6 +55,7 @@ const RETRY_DELAYS: [u8; 5] = [1, 2, 4, 8, 16];
 mod directory_sync;
 mod editor;
 pub mod file_drop;
+mod forwards;
 mod transfers;
 
 /// Display-safe state of one logical terminal. Output is delivered as binary frames.
@@ -75,6 +80,13 @@ pub enum SessionEvent {
     Ready {
         /// Only this transport may receive subsequent terminal input.
         transport_id: String,
+    },
+    /// Per-definition tunnel results belonging to the current terminal transport.
+    Forwards {
+        /// Authenticated transport which supplied these results.
+        transport_id: String,
+        /// Complete selected definition set, including unavailable definitions.
+        entries: Vec<SessionForwardSnapshot>,
     },
     /// A typed network failure qualified for the next bounded retry.
     Retrying {
@@ -307,6 +319,8 @@ struct SessionEntry {
     transfer_worker_running: bool,
     editor: Option<editor::EditorRecord>,
     directory_sync: Option<directory_sync::DirectoryRecord>,
+    forward_stops: Arc<Mutex<std::collections::BTreeSet<Uuid>>>,
+    attached_forwards: Option<Arc<AttachedForwardState>>,
 }
 
 struct CheckpointOwner {
@@ -351,6 +365,7 @@ fn interrupt_transfers(entry: &mut SessionEntry, transport: Uuid) {
 pub struct SessionManager {
     sessions: Arc<Mutex<HashMap<String, SessionEntry>>>,
     drops: Arc<Mutex<HashMap<String, file_drop::DropContext>>>,
+    forwards: ForwardManager,
 }
 
 struct Registration<'a> {
@@ -496,6 +511,11 @@ fn retryable_connection(error: &SshConnectionError) -> bool {
 }
 
 impl SessionManager {
+    /// Share run admission and status with independently started tunnels.
+    pub fn with_forward_manager(forwards: ForwardManager) -> Self {
+        Self { forwards, ..Self::default() }
+    }
+
     /// Reserve a logical session before acknowledging it to the renderer.
     pub fn reserve(&self, session_id: &str, pty: bool) -> Result<(), String> {
         if session_id.trim().is_empty() || session_id.len() > 128 {
@@ -524,6 +544,8 @@ impl SessionManager {
                 transfer_worker_running: false,
                 editor: None,
                 directory_sync: None,
+                forward_stops: Arc::default(),
+                attached_forwards: None,
             },
         );
         Ok(())
@@ -1738,6 +1760,15 @@ impl SessionManager {
             Some(plan) => plan,
             None => resolve_target_preparation_plan(store, personal, target)?,
         };
+        let attached_selection =
+            if matches!(target, SessionTarget::Personal { .. }) && command.is_none() {
+                Some(
+                    AttachedForwardSelection::capture(store, plan.target_context())
+                        .map_err(|error| AttemptError::Local(error.to_string()))?,
+                )
+            } else {
+                None
+            };
         let connection =
             prepare_resolved_target_connection(store, personal, plan, control, |event| {
                 if let PreparationEvent::Verified { context, .. } = &event
@@ -1755,7 +1786,7 @@ impl SessionManager {
                 })
             })
             .await;
-        let connection = match connection {
+        let connection = Arc::new(match connection {
             Ok(connection) => connection,
             Err(_) if control.is_cancelled() => {
                 return history
@@ -1763,8 +1794,9 @@ impl SessionManager {
                     .map_err(|error| AttemptError::Local(error.to_string()));
             }
             Err(error) => return Err(error.into()),
-        };
+        });
         let mut ready_at = None;
+        let mut attachments: Option<AttachedForwardLease> = None;
         let operation = async {
             let mut session = connection.open_session().await?;
             let pty_request = pty.then(default_pty);
@@ -1797,8 +1829,53 @@ impl SessionManager {
                     active.ready = true;
                 }
                 ready_at = Some(Instant::now());
+                if let Some(selection) = attached_selection {
+                    let mut sessions = self.sessions.lock().map_err(|_| {
+                        AttemptError::Local("session manager is unavailable".into())
+                    })?;
+                    let entry = sessions
+                        .get_mut(session_id)
+                        .ok_or_else(|| AttemptError::Local("session is closed".into()))?;
+                    if *entry.intent.borrow() != Intent::None || control.is_cancelled() {
+                        return Ok(());
+                    }
+                    let lease = self.forwards.attach(
+                        store,
+                        selection,
+                        ForwardAttachment {
+                            session_id: session_id.to_owned(),
+                            transport_id: transport.to_string(),
+                        },
+                        entry.forward_stops.clone(),
+                        &connection,
+                    );
+                    entry.attached_forwards = Some(lease.state.clone());
+                    attachments = Some(lease);
+                }
                 emit(SessionEvent::Ready { transport_id: transport.to_string() })
                     .map_err(AttemptError::Local)?;
+                let forward_changes = async {
+                    let Some(lease) = attachments.as_ref() else {
+                        return std::future::pending::<Result<(), AttemptError>>().await;
+                    };
+                    let mut changes = lease.state.subscribe();
+                    loop {
+                        let entries = lease
+                            .state
+                            .snapshots()
+                            .map_err(|error| AttemptError::Local(error.to_string()))?;
+                        if !entries.is_empty() {
+                            emit(SessionEvent::Forwards {
+                                transport_id: transport.to_string(),
+                                entries,
+                            })
+                            .map_err(AttemptError::Local)?;
+                        }
+                        changes.changed().await.map_err(|_| {
+                            AttemptError::Local("terminal tunnel updates ended".into())
+                        })?;
+                    }
+                };
                 tokio::select! { biased;
                     result = self.stream_with_file_expiry(
                         session_id,
@@ -1808,6 +1885,7 @@ impl SessionManager {
                     _ = serve_files(self, &connection, files) => {
                         return Err(AttemptError::Local("the file request channel closed unexpectedly".into()));
                     }
+                    result = forward_changes => result?,
                 }
             }
             Ok::<(), AttemptError>(())
@@ -1816,8 +1894,20 @@ impl SessionManager {
             _ = control.cancelled() => Ok(()),
             result = operation => result,
         };
+        if let Some(lease) = &mut attachments {
+            lease.settle(&self.forwards).await;
+            if let Ok(entries) = lease.state.snapshots()
+                && !entries.is_empty()
+            {
+                let _ =
+                    emit(SessionEvent::Forwards { transport_id: transport.to_string(), entries });
+            }
+        }
         self.expire_ready_transport(session_id, transport).map_err(AttemptError::Local)?;
         *ready_for = ready_at.map(|started| started.elapsed());
+        let connection = Arc::try_unwrap(connection).map_err(|_| {
+            AttemptError::Local("terminal tunnels did not release the connection".into())
+        })?;
         let _ = connection.close().await;
         result?;
         history

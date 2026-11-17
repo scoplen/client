@@ -69,7 +69,12 @@ The repository applies `plystra-craft`, `plystra-craft-code`, and `plystra-craft
   complete terminal trees and explicitly selected saved tunnels with their chosen Logins.
   Complete preflight precedes fresh terminal projections and independent ordinary Saved
   Starts; exact refusals preserve other runs. Listing never connects and temporary runs
-  are excluded. Native rendered
+  are excluded. Target Login-selected Local and Dynamic tunnels share the terminal's
+  authenticated connection and owned Jump chain with shell/SFTP. Explicit Stop preserves
+  the terminal and remains effective across reconnects of that logical tab. Direct automatic
+  reconnect and Jump sharing/Stop have real OpenSSH acceptance; parent Jump loss can still
+  require manual Reconnect because its byte stream does not retain the confirmed loss cause.
+  Native rendered
   acceptance, Unix-socket forwarding and the complete C7 gate
   remain incomplete.
   The inventory, terminal, and connection gates still have open outcomes; sync and organization

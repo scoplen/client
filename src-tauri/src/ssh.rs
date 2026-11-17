@@ -13,7 +13,7 @@ use scoplen_client_core::session_files::{
     RemoteDirectory, RemoteFileKind, RemoteTextPreview, RemoteTextPreviewIssue,
     SessionFileMutationResult,
 };
-use scoplen_client_core::session_manager::HistoryChange;
+use scoplen_client_core::session_manager::{HistoryChange, SessionEvent};
 use scoplen_crypto::SecretVec;
 use serde::Deserialize;
 use specta::Type;
@@ -127,6 +127,8 @@ pub async fn session_connect(
         }
     };
     let profile_generation = local.generation();
+    let forward_app = app.clone();
+    let forward_generation = profile_generation.clone();
     manager
         .run_target(
             &session_id,
@@ -136,6 +138,17 @@ pub async fn session_connect(
             pty,
             store,
             |event| {
+                if let SessionEvent::Forwards { entries, .. } = &event {
+                    for entry in entries {
+                        if let Some(snapshot) = &entry.run {
+                            let _ = crate::forwards::ForwardChanged {
+                                profile_generation: forward_generation.clone(),
+                                snapshot: snapshot.clone(),
+                            }
+                            .emit(&forward_app);
+                        }
+                    }
+                }
                 messages
                     .send(SessionMessage::Event(event))
                     .map_err(|_| "session event channel is closed".into())

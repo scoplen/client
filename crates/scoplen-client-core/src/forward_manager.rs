@@ -36,8 +36,12 @@ use crate::{
     store::Store,
 };
 
+mod attached;
 mod remote;
 mod socks;
+
+pub(crate) use attached::{AttachedForwardLease, AttachedForwardSelection, AttachedForwardState};
+pub use attached::{ForwardAttachment, SessionForwardSnapshot};
 
 /// Maximum live tunnels, including preparation and shutdown.
 pub const MAX_RUNNING_FORWARDS: usize = 16;
@@ -223,6 +227,9 @@ impl ForwardPhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 pub enum ForwardIssue {
+    /// This definition cannot share a terminal's authenticated transport.
+    #[error("this tunnel kind cannot run with the terminal; start it independently")]
+    UnsupportedDefinition,
     /// Fields or identifiers are invalid for this tunnel mode.
     #[error("enter valid tunnel endpoints and select a Login")]
     InvalidConfiguration,
@@ -285,6 +292,8 @@ pub enum ForwardIssue {
 pub struct ForwardSnapshot {
     /// Fresh execution identity; an earlier run can never control a later one.
     pub run_id: String,
+    /// Terminal transport owning this run; absent for an independent tunnel.
+    pub attachment: Option<ForwardAttachment>,
     /// Immutable forwarding configuration captured at Start.
     pub configuration: ForwardConfiguration,
     /// Current Rust-owned phase.
@@ -327,6 +336,7 @@ struct Run {
     rejected: AtomicU64,
     peer_issue: Mutex<Option<ForwardIssue>>,
     observer: Mutex<Option<Observer>>,
+    explicit_stops: Option<Arc<Mutex<std::collections::BTreeSet<Uuid>>>>,
 }
 
 impl Run {
@@ -417,6 +427,23 @@ impl ForwardManager {
         let runtime =
             tokio::runtime::Handle::try_current().map_err(|_| ForwardIssue::Unavailable)?;
         let (configuration, plan) = start_configuration(&store, intent)?;
+        let (run, snapshot) = self.register(&store, configuration, None, None, Arc::new(emit))?;
+        let manager = self.clone();
+        runtime.spawn(async move {
+            let result = execute(&run, store, plan).await;
+            manager.complete(&run, result);
+        });
+        Ok(snapshot)
+    }
+
+    fn register(
+        &self,
+        store: &Arc<Store>,
+        configuration: ForwardConfiguration,
+        attachment: Option<ForwardAttachment>,
+        explicit_stops: Option<Arc<Mutex<std::collections::BTreeSet<Uuid>>>>,
+        emit: Observer,
+    ) -> Result<(Arc<Run>, ForwardSnapshot), ForwardIssue> {
         let mut registry = self.registry.lock().map_err(|_| ForwardIssue::Unavailable)?;
         if registry.closed {
             return Err(ForwardIssue::Unavailable);
@@ -438,6 +465,7 @@ impl ForwardManager {
         let id = Uuid::now_v7();
         let snapshot = ForwardSnapshot {
             run_id: id.to_string(),
+            attachment,
             configuration: configuration.clone(),
             phase: ForwardPhase::Preparing,
             preparation: None,
@@ -452,7 +480,7 @@ impl ForwardManager {
         let (stop, _) = watch::channel(false);
         let (finished, _) = watch::channel(false);
         let run = Arc::new(Run {
-            store: Arc::downgrade(&store),
+            store: Arc::downgrade(store),
             configuration,
             state: Mutex::new(State { snapshot: snapshot.clone(), revision: 1 }),
             control: PreparationControl::default(),
@@ -463,28 +491,27 @@ impl ForwardManager {
             downloaded: AtomicU64::new(0),
             rejected: AtomicU64::new(0),
             peer_issue: Mutex::new(None),
-            observer: Mutex::new(Some(Arc::new(emit))),
+            observer: Mutex::new(Some(emit)),
+            explicit_stops,
         });
         registry.runs.insert(id, run.clone());
-        drop(registry);
-        let manager = self.clone();
-        runtime.spawn(async move {
-            let result = execute(&run, store, plan).await;
-            run.update(|snapshot| {
-                snapshot.preparation = None;
-                snapshot.bound_address = None;
-                match result {
-                    Ok(()) => snapshot.phase = ForwardPhase::Stopped,
-                    Err(issue) => {
-                        snapshot.phase = ForwardPhase::Failed;
-                        snapshot.last_issue = Some(issue);
-                    }
+        Ok((run, snapshot))
+    }
+
+    fn complete(&self, run: &Run, result: Result<(), ForwardIssue>) {
+        run.update(|snapshot| {
+            snapshot.preparation = None;
+            snapshot.bound_address = None;
+            match result {
+                Ok(()) => snapshot.phase = ForwardPhase::Stopped,
+                Err(issue) => {
+                    snapshot.phase = ForwardPhase::Failed;
+                    snapshot.last_issue = Some(issue);
                 }
-            });
-            manager.prune_completed();
-            run.finished.send_replace(true);
+            }
         });
-        Ok(snapshot)
+        self.prune_completed();
+        run.finished.send_replace(true);
     }
 
     /// Read retained snapshots belonging to this exact open store.
@@ -524,10 +551,22 @@ impl ForwardManager {
         run.control.respond(prompt_id, response).map_err(|_| ForwardIssue::Expired)
     }
 
-    /// Fence new peers and replies, then settle owned sockets and the SSH chain.
+    /// Fence new peers and replies, then settle this run's owned resources.
     /// Completion is reported by the retained `Stopped` or `Failed` snapshot.
     pub fn stop(&self, store: &Arc<Store>, run_id: &str) -> Result<(), ForwardIssue> {
-        self.run(store, run_id)?.stop();
+        let run = self.run(store, run_id)?;
+        let snapshot = run.snapshot()?;
+        if snapshot.attachment.is_some() && !snapshot.phase.live() {
+            return Err(ForwardIssue::Expired);
+        }
+        if let Some(stopped) = &run.explicit_stops
+            && let ForwardSource::Saved { forward_id } = run.configuration.source()
+        {
+            stopped.lock().map_err(|_| ForwardIssue::Unavailable)?.insert(
+                Uuid::parse_str(forward_id).map_err(|_| ForwardIssue::InvalidConfiguration)?,
+            );
+        }
+        run.stop();
         Ok(())
     }
 
@@ -636,32 +675,7 @@ pub(crate) fn start_configuration(
     };
     let profile = Uuid::parse_str(&profile_id).map_err(|_| ForwardIssue::InvalidConfiguration)?;
     inventory_owner(store, profile, vault)?;
-    let (name, bind_address, bind_port, target, kind) = match definition {
-        ForwardDefinition::Local { name, bind_address, bind_port, target_host, target_port } => {
-            (name, bind_address, bind_port, Some((target_host, target_port)), ForwardKind::Local)
-        }
-        ForwardDefinition::Remote { name, bind_address, bind_port, target_host, target_port } => {
-            (name, bind_address, bind_port, Some((target_host, target_port)), ForwardKind::Remote)
-        }
-        ForwardDefinition::Dynamic { name, bind_address, bind_port } => {
-            (name, bind_address, bind_port, None, ForwardKind::Dynamic)
-        }
-    };
-    if name.trim().is_empty()
-        || name.len() > scoplen_model::MAX_TEXT_BYTES
-        || bind_address.parse::<IpAddr>().is_err()
-        || bind_port == 0
-    {
-        return Err(ForwardIssue::InvalidConfiguration);
-    }
-    if let Some((host, port)) = &target
-        && (*port == 0
-            || host.is_empty()
-            || host.len() > 1024
-            || host.chars().any(|c| c.is_control() || c.is_whitespace()))
-    {
-        return Err(ForwardIssue::InvalidConfiguration);
-    }
+    validate_definition(&definition)?;
     if Repository::<AccessProfile>::new(store)
         .get(profile)
         .map_err(|_| ForwardIssue::Unavailable)?
@@ -693,39 +707,80 @@ pub(crate) fn start_configuration(
         }
     }
     plan.restrict_inventory(vault);
-    let configuration = match target {
-        Some((target_host, target_port)) if kind == ForwardKind::Remote => {
+    let configuration = definition_configuration(source, plan.target_context().clone(), definition);
+    Ok((configuration, plan))
+}
+
+fn validate_definition(definition: &ForwardDefinition) -> Result<(), ForwardIssue> {
+    let (name, bind_address, bind_port, target) = match definition {
+        ForwardDefinition::Local { name, bind_address, bind_port, target_host, target_port }
+        | ForwardDefinition::Remote { name, bind_address, bind_port, target_host, target_port } => {
+            (name, bind_address, *bind_port, Some((target_host, *target_port)))
+        }
+        ForwardDefinition::Dynamic { name, bind_address, bind_port } => {
+            (name, bind_address, *bind_port, None)
+        }
+    };
+    if name.trim().is_empty()
+        || name.len() > scoplen_model::MAX_TEXT_BYTES
+        || bind_address.parse::<IpAddr>().is_err()
+        || bind_port == 0
+    {
+        return Err(ForwardIssue::InvalidConfiguration);
+    }
+    if let Some((host, port)) = target
+        && (port == 0
+            || host.is_empty()
+            || host.len() > 1024
+            || host.chars().any(|c| c.is_control() || c.is_whitespace()))
+    {
+        return Err(ForwardIssue::InvalidConfiguration);
+    }
+    Ok(())
+}
+
+fn definition_configuration(
+    source: ForwardSource,
+    login: PreparationContext,
+    definition: ForwardDefinition,
+) -> ForwardConfiguration {
+    let profile_id = login.profile_id.clone();
+    match definition {
+        ForwardDefinition::Remote { name, bind_address, bind_port, target_host, target_port } => {
             ForwardConfiguration::Remote {
                 source,
                 name,
-                profile_id: profile.to_string(),
-                login: plan.target_context().clone(),
+                profile_id,
+                login,
                 bind_address,
                 bind_port,
                 target_host,
                 target_port,
             }
         }
-        Some((target_host, target_port)) => ForwardConfiguration::Local {
-            source,
-            name,
-            profile_id: profile.to_string(),
-            login: plan.target_context().clone(),
-            bind_address,
-            bind_port,
-            target_host,
-            target_port,
-        },
-        None => ForwardConfiguration::Dynamic {
-            source,
-            name,
-            profile_id: profile.to_string(),
-            login: plan.target_context().clone(),
-            bind_address,
-            bind_port,
-        },
-    };
-    Ok((configuration, plan))
+        ForwardDefinition::Local { name, bind_address, bind_port, target_host, target_port } => {
+            ForwardConfiguration::Local {
+                source,
+                name,
+                profile_id,
+                login,
+                bind_address,
+                bind_port,
+                target_host,
+                target_port,
+            }
+        }
+        ForwardDefinition::Dynamic { name, bind_address, bind_port } => {
+            ForwardConfiguration::Dynamic {
+                source,
+                name,
+                profile_id,
+                login,
+                bind_address,
+                bind_port,
+            }
+        }
+    }
 }
 
 fn inventory_owner(store: &Store, id: Uuid, vault: Option<Uuid>) -> Result<(), ForwardIssue> {
