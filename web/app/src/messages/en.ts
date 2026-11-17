@@ -987,7 +987,7 @@ export const en = {
   "objects.credential.publicKey": "Public key",
   "objects.credential.provider": "Provider details",
   "objects.credential.providerHint":
-    "For a command password, enter type=command, path= followed by the program and arguments, and field=password on separate lines. Use references, never secrets.",
+    "For a command credential, enter type=command, path= followed by the program and arguments, and field=password or field=private_key on separate lines. Use references, never secrets.",
   "objects.credential.certificateScope": "Organization scope",
   "objects.credential.hasSecret": "Secret stored",
   "objects.credential.noSecret": "No secret stored",
