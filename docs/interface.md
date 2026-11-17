@@ -564,7 +564,21 @@ credential selector assigns it to a host. Missing or malformed public keys are
 reported before dialing; the Connect flow keeps its normal host-key
 review and reports missing identities, agent signing failures, and timeouts in
 the existing session error surface. It never prompts for a password fallback.
-Agent forwarding and Pageant discovery remain unavailable.
+Pageant discovery remains unavailable. Local and Personal Login editors allow
+Agent forwarding only with an explicitly selected Agent Credential containing its
+exact public key. The default is off; the editor explains the target's signing
+capability. An existing unsupported on-value can be cleared before saving. Team
+Login editors show the capability as unavailable and can clear an existing flag.
+Only the target Login opts in; Jump-hop flags do not authorize the target.
+
+Each connection captures the saved selection. After ordinary authentication, Rust
+owns the existing bounded incoming-channel receiver independently of the parent
+connection. It accepts Agent channels only, exposes one public identity and refuses
+management, extensions and signatures for any other key. The forwarding request's
+reply is consumed before PTY, shell or command requests. Refusal or timeout fails
+setup clearly. Forwarding ends on the exact attempt's cancellation; receiver closure
+alone does not imply network loss. Terminal, Files and attached Local/Dynamic
+tunnels retain their existing connection ownership and APIs.
 
 Connection details in a terminal lists each verified hop, fingerprint, trust method, source
 device, and recorded confirmation time. A Personal key confirmed manually or imported on

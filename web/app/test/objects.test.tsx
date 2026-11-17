@@ -237,6 +237,47 @@ describe("independent inventory objects", () => {
     expect((within(reopened).getByRole("checkbox", { name: /staging-socks/ }) as HTMLInputElement).checked).toBe(true);
   });
 
+  it("requires an explicit Agent identity and preserves saved forwarding consent", async () => {
+    const api = sampleInventory(sampleHosts());
+    await api.createCredential({
+      name: "Selected Agent",
+      kind: "agent",
+      binding: "none",
+      publicKey: "public test identity",
+      secret: null,
+      deviceSecret: null,
+      provider: {},
+      certificateScope: null,
+    });
+    const save = vi.spyOn(api, "updateAccessProfile");
+    show(api, "logins");
+    await screen.findAllByText("dba@prod-db-01");
+    await userEvent.click(screen.getByRole("button", { name: "Edit dba@prod-db-01" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit dba" });
+    const forwarding = within(dialog).getByRole("checkbox", { name: "Allow agent forwarding" }) as HTMLInputElement;
+    expect(forwarding.checked).toBe(false);
+    expect(forwarding.disabled).toBe(true);
+    expect(within(dialog).getByText(/Select an Agent credential with its public key/)).toBeTruthy();
+    await selectOption(within(dialog).getByLabelText("Credential"), "Selected Agent");
+    expect(forwarding.disabled).toBe(false);
+    expect(forwarding.checked).toBe(false);
+    expect(within(dialog).getByText(/This remote host can request signatures/)).toBeTruthy();
+    await userEvent.click(forwarding);
+    expect(await violations(dialog)).toEqual([]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(save).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ agentForwarding: true }));
+    await userEvent.click(screen.getByRole("button", { name: "Edit dba@prod-db-01" }));
+    const reopened = await screen.findByRole("dialog", { name: "Edit dba" });
+    const retained = within(reopened).getByRole("checkbox", { name: "Allow agent forwarding" }) as HTMLInputElement;
+    expect(retained.checked).toBe(true);
+    await selectOption(within(reopened).getByLabelText("Credential"), "Any usable credential on this device");
+    expect(retained.checked).toBe(true);
+    expect(within(reopened).getByRole("button", { name: "Save changes" }).hasAttribute("disabled")).toBe(true);
+    await userEvent.click(retained);
+    expect(within(reopened).getByRole("button", { name: "Save changes" }).hasAttribute("disabled")).toBe(false);
+  });
+
   it("keeps profile editing blocked when tunnel inventory cannot be loaded", async () => {
     const api = sampleInventory(sampleHosts());
     api.forwards = async () => ({

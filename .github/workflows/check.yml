@@ -101,6 +101,9 @@ jobs:
       - name: Login-attached Local and SOCKS share terminal SSH, SFTP, Stop, and reconnect
         shell: pwsh
         run: ./scripts/test-ssh-attached-forwards.ps1
+      - name: Exact saved Agent forwarding, real second-hop SSH, SFTP, tunnels and cancellation
+        shell: pwsh
+        run: ./scripts/test-ssh-agent-forwarding.ps1
       - name: Terminal-owned SFTP files, recursive directory copies, refusal, and cancellation
         shell: pwsh
         run: ./scripts/test-ssh-session-files.ps1

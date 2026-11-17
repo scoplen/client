@@ -40,6 +40,7 @@ use crate::repository::{
 use crate::store::Store;
 
 mod agent;
+pub(crate) mod agent_forwarding;
 pub mod preparation;
 pub(crate) mod proxy_command;
 pub(crate) mod team;
@@ -767,6 +768,11 @@ pub enum SshConnectionError {
     /// The connection was cancelled while agent authentication was pending.
     #[error("SSH agent authentication was cancelled")]
     AgentCancelled,
+    /// The selected target did not enable its explicitly requested forwarded agent.
+    #[error(
+        "The SSH server did not enable agent forwarding. Turn it off for this Login or review the server's policy, then reconnect."
+    )]
+    AgentForwardingUnavailable,
     /// The stored key is not a valid OpenSSH private key.
     #[error("the stored SSH private key is invalid or unreadable")]
     InvalidPrivateKey,
@@ -1414,6 +1420,19 @@ impl std::fmt::Debug for SshSession {
 }
 
 impl SshSession {
+    pub(crate) async fn request_agent_forwarding(&mut self) -> Result<(), SshConnectionError> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            self.channel.request_agent_forward(true).await?;
+            match self.next_event().await? {
+                Some(ChannelEvent::Success) => Ok(()),
+                Some(ChannelEvent::Failure) => Err(SshConnectionError::AgentForwardingUnavailable),
+                _ => Err(SshConnectionError::Engine(ClientError::UnexpectedChannelEvent)),
+            }
+        })
+        .await
+        .unwrap_or(Err(SshConnectionError::AgentForwardingUnavailable))
+    }
+
     /// Request a bounded pseudo-terminal.
     pub async fn request_pty(&self, request: &PtyRequest) -> Result<(), SshConnectionError> {
         if request.term.len() > MAX_SSH_INPUT || request.modes.len() > MAX_SSH_INPUT {

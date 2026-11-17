@@ -250,6 +250,7 @@ fn team_jumps_require_every_visible_same_source_login_and_host() {
         AccessProfileChange {
             host: Some(jump_host),
             username: Some("jump-user".into()),
+            agent_forwarding: Some(true),
             ..Default::default()
         },
         fixture.store.device_id(),
@@ -283,11 +284,43 @@ fn team_jumps_require_every_visible_same_source_login_and_host() {
     assert!(
         plans.iter().all(|plan| plan.0.credential == CredentialMaterial::OrganizationCertificate)
     );
+    assert!(
+        resolve_target_preparation_plan(&fixture.store, &fixture.personal, &fixture.target())
+            .unwrap()
+            .forwarded_agent()
+            .is_none()
+    );
     fixture.objects.retain(|object| object.id != jump_host);
     fixture.publish();
     assert!(
         resolve_target_preparation_plan(&fixture.store, &fixture.personal, &fixture.target())
             .is_err()
+    );
+}
+
+#[test]
+fn team_target_agent_forwarding_is_refused_before_preparation() {
+    let mut fixture = Fixture::new();
+    fixture.objects.retain(|object| object.id != fixture.profile);
+    fixture.objects.push(object::<AccessProfile>(
+        fixture.profile,
+        AccessProfileChange {
+            host: Some(fixture.host),
+            username: Some("team-user".into()),
+            agent_forwarding: Some(true),
+            ..Default::default()
+        },
+        fixture.store.device_id(),
+    ));
+    fixture.publish();
+    let result =
+        resolve_target_preparation_plan(&fixture.store, &fixture.personal, &fixture.target());
+    assert!(
+        result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Agent forwarding is not supported for team Logins")
     );
 }
 

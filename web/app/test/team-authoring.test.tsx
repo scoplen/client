@@ -459,6 +459,41 @@ it("renders a nullable snippet default as absent", () => {
   expect(screen.queryByRole("textbox", { name: "Default value" })).toBeNull();
 });
 
+it("does not enable unsupported team agent forwarding and allows an existing opt-in to be cleared", async () => {
+  for (const enabled of [false, true]) {
+    const change = vi.fn();
+    const rendered = render(
+      <I18nProvider locale="en">
+        <TeamAuthoringFields
+          data={{ kind: "login", fields: { host: host.id, username: "operator", agent_forwarding: enabled } }}
+          onChange={change}
+          references={{}}
+          loadMore={vi.fn()}
+          members={[]}
+          moreMembers={false}
+          loadMembers={vi.fn()}
+          onValid={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    const forwarding = screen.getByRole("checkbox", { name: "Allow agent forwarding" }) as HTMLInputElement;
+    expect(forwarding.checked).toBe(enabled);
+    expect(forwarding.disabled).toBe(!enabled);
+    expect(screen.getByText(/Agent forwarding is not available for team Logins/)).toBeTruthy();
+    await userEvent.click(forwarding);
+    if (enabled) {
+      expect(change).toHaveBeenLastCalledWith({
+        kind: "login",
+        fields: { host: host.id, username: "operator", agent_forwarding: false },
+      });
+    } else {
+      expect(change).not.toHaveBeenCalled();
+    }
+    expect(await violations(rendered.container)).toEqual([]);
+    rendered.unmount();
+  }
+});
+
 it("removes a snippet default when changing its variable to secret input", async () => {
   let data: TeamAuthoringData = {
     kind: "snippet",

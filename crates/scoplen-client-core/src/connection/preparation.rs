@@ -18,6 +18,7 @@ use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
 use uuid::Uuid;
 
+use super::agent_forwarding::ForwardedAgent;
 use super::trust::TrustPolicy;
 
 use super::{
@@ -454,6 +455,7 @@ struct Step {
     context: PreparationContext,
     passphrase: bool,
     team: Option<Arc<TeamConnectionSnapshot>>,
+    forwarded_agent: Option<ForwardedAgent>,
 }
 
 /// Locally resolved immutable inputs; credentials remain inside Rust preparation.
@@ -464,6 +466,10 @@ pub(crate) struct PreparationPlan {
 }
 
 impl PreparationPlan {
+    pub(crate) fn forwarded_agent(&self) -> Option<ForwardedAgent> {
+        self.steps.last().and_then(|step| step.forwarded_agent.clone())
+    }
+
     pub(crate) fn target_context(&self) -> &PreparationContext {
         &self.steps.last().expect("target step exists").context
     }
@@ -508,9 +514,15 @@ pub(crate) fn resolve_target_preparation_plan(
     let total = u32::try_from(plans.len()).map_err(|_| "The team Jump route is too large.")?;
     let mut steps = Vec::with_capacity(plans.len());
     for (index, (plan, profile, host)) in plans.into_iter().enumerate() {
+        let position = index as u32 + 1;
+        if position == total && profile.agent_forwarding {
+            return Err(
+                "Agent forwarding is not supported for team Logins. Turn it off before connecting."
+                    .into(),
+            );
+        }
         transport_route(&plan).map_err(|error| error.to_string())?;
         validate_credential(&plan.credential).map_err(|error| error.to_string())?;
-        let position = index as u32 + 1;
         let context = PreparationContext {
             terminal_profile: profile.terminal_profile.clone(),
             source: Some(source.clone()),
@@ -531,6 +543,7 @@ pub(crate) fn resolve_target_preparation_plan(
             context,
             passphrase: false,
             team: Some(snapshot.clone()),
+            forwarded_agent: None,
         });
     }
     Ok(PreparationPlan { steps, inventory_vault: None })
@@ -593,6 +606,11 @@ fn resolve_steps(store: &Store, target_id: Uuid) -> Result<Vec<Step>, String> {
             .get(plan.host_id)
             .map_err(|e| e.to_string())?
             .ok_or("the Host was not found")?;
+        let forwarded_agent = if index as u32 + 1 == total {
+            ForwardedAgent::capture(&profile, credential, &plan.credential)?
+        } else {
+            None
+        };
         let context = PreparationContext {
             terminal_profile: profile.terminal_profile.clone(),
             source: None,
@@ -607,7 +625,14 @@ fn resolve_steps(store: &Store, target_id: Uuid) -> Result<Vec<Step>, String> {
             total,
             target: index as u32 + 1 == total,
         };
-        steps.push(Step { plan, credential_id: Some(credential), context, passphrase, team: None });
+        steps.push(Step {
+            plan,
+            credential_id: Some(credential),
+            context,
+            passphrase,
+            team: None,
+            forwarded_agent,
+        });
     }
     Ok(steps)
 }

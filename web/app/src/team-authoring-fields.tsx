@@ -110,14 +110,21 @@ export function TeamCheck({
   label,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   onChange: (value: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <label className="flex min-h-10 cursor-pointer items-center gap-2 break-words text-sm [overflow-wrap:anywhere]">
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
       {label}
     </label>
   );
@@ -539,8 +546,10 @@ export function TeamAuthoringFields({
           <TeamCheck
             label={t("teams.authoring.agentForwarding")}
             checked={fields.agent_forwarding ?? false}
+            disabled={!fields.agent_forwarding}
             onChange={(agent_forwarding) => set({ agent_forwarding })}
           />
+          <p className="text-sm text-muted-foreground">{t("teams.authoring.agentForwardingUnsupported")}</p>
         </>
       );
     }

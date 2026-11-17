@@ -696,6 +696,130 @@ fn route(store: &Store, profile: Uuid, kind: RouteKind) -> Uuid {
     route.meta.id
 }
 
+#[test]
+fn forwarding_requires_explicit_selected_agent_and_captures_only_the_target() {
+    let (_dir, store) = store();
+    let target = login(&store, "target");
+    let hop = login(&store, "jump");
+    assert!(resolve_preparation_plan(&store, target).unwrap().forwarded_agent().is_none());
+    Repository::<AccessProfile>::new(&store)
+        .update(target, AccessProfileChange { agent_forwarding: Some(true), ..Default::default() })
+        .unwrap();
+    assert!(resolve_preparation_plan(&store, target).is_err());
+    let profile = Repository::<AccessProfile>::new(&store).get(target).unwrap().unwrap();
+    let key = ssh_key::PrivateKey::random(
+        &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+        ssh_key::Algorithm::Ed25519,
+    )
+    .unwrap();
+    Repository::<Credential>::new(&store)
+        .update(
+            profile.credential.unwrap(),
+            CredentialChange {
+                kind: Some(CredentialKind::Agent),
+                binding: Some(CredentialBinding::None),
+                secret: Edit::Clear,
+                public_key: Edit::Set(key.public_key().to_openssh().unwrap()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let captured = resolve_preparation_plan(&store, target).unwrap();
+    assert!(captured.forwarded_agent().is_some());
+    Repository::<AccessProfile>::new(&store)
+        .update(target, AccessProfileChange { credential: Edit::Clear, ..Default::default() })
+        .unwrap();
+    assert!(resolve_preparation_plan(&store, target).is_err());
+    assert!(captured.forwarded_agent().is_some());
+    Repository::<AccessProfile>::new(&store)
+        .update(target, AccessProfileChange { agent_forwarding: Some(false), ..Default::default() })
+        .unwrap();
+    Repository::<AccessProfile>::new(&store)
+        .update(hop, AccessProfileChange { agent_forwarding: Some(true), ..Default::default() })
+        .unwrap();
+    route(&store, target, RouteKind::Jump { hops: vec![hop] });
+    let plan = resolve_preparation_plan(&store, target).unwrap();
+    assert!(plan.forwarded_agent().is_none());
+    assert!(plan.steps.iter().all(|step| step.forwarded_agent.is_none()));
+}
+
+#[tokio::test]
+async fn unsupported_forwarding_fails_before_any_connection_or_trust_event() {
+    let (_dir, store) = store();
+    let profile = login(&store, "unsupported target");
+    Repository::<AccessProfile>::new(&store)
+        .update(profile, AccessProfileChange { agent_forwarding: Some(true), ..Default::default() })
+        .unwrap();
+    let result = prepare_connection(&store, profile, &PreparationControl::default(), |_| {
+        panic!("unsupported forwarding must fail before connection preparation")
+    })
+    .await;
+    assert!(result.err().unwrap().to_string().contains("Agent forwarding requires"));
+}
+
+#[tokio::test]
+async fn forwarding_reply_is_settled_before_ordinary_pty_and_shell_requests() {
+    use super::super::test_peer::{Authentication, Peer};
+
+    for accepted in [false, true] {
+        let peer = Peer::with_authentication(if accepted {
+            Authentication::Forwarding
+        } else {
+            Authentication::Password
+        })
+        .await;
+        let (_dir, store) = store();
+        let profile = peer_login(
+            &store,
+            peer.port,
+            CredentialKind::Password,
+            Some(b"disposable-trust-password".to_vec()),
+        );
+        let control = PreparationControl::default();
+        let connection = prepare_connection(&store, profile, &control, |event| {
+            if let PreparationEvent::Trust { prompt_id, .. } = event {
+                control.respond(&prompt_id, PreparationResponse::AcceptHostKey)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let mut session = connection.open_session().await.unwrap();
+        let result = session.request_agent_forwarding().await;
+        if accepted {
+            result.unwrap();
+        } else {
+            assert!(matches!(result, Err(SshConnectionError::AgentForwardingUnavailable)));
+        }
+        session
+            .request_pty(&scoplen_ssh::PtyRequest {
+                term: b"xterm-256color".to_vec(),
+                columns: 80,
+                rows: 24,
+                pixel_width: 0,
+                pixel_height: 0,
+                modes: vec![0],
+            })
+            .await
+            .unwrap();
+        session.request_shell().await.unwrap();
+        assert!(matches!(
+            session.next_event().await.unwrap(),
+            Some(scoplen_ssh::ChannelEvent::Success)
+        ));
+        assert!(matches!(
+            session.next_event().await.unwrap(),
+            Some(scoplen_ssh::ChannelEvent::Success)
+        ));
+        assert!(matches!(
+            session.next_event().await.unwrap(),
+            Some(scoplen_ssh::ChannelEvent::Data(_))
+        ));
+        session.close().await.unwrap();
+        connection.close().await.unwrap();
+    }
+}
+
 fn raw_key(byte: u8) -> HostKey {
     HostKey::Raw { algorithm: "ssh-ed25519".into(), key_blob: vec![byte; 32] }
 }

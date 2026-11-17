@@ -171,7 +171,22 @@ a public key fails before dialing. The client never selects the first agent
 identity, imports a private key from the agent, or falls back to a password.
 Unix uses `SSH_AUTH_SOCK`; Windows uses that variable when it names a local
 pipe, otherwise the standard OpenSSH pipe when the variable is absent.
-Pageant discovery and agent forwarding remain later outcomes.
+Pageant discovery remains a later outcome.
+
+Local and Personal Logins can opt into Agent forwarding after selecting an Agent
+Credential with its exact public key. It is off by default. The target can ask that
+one loaded identity to sign while the terminal is connected; enable it only for a
+target you trust. Other loaded identities, key management and extensions are not
+forwarded. Jump Login flags do not enable forwarding on the target, and Team
+Logins cannot enable it. A refused forwarding request stops setup with an explicit
+error before starting a shell. Saved changes apply on the next connection.
+
+Forwarding runs alongside the terminal, SFTP and attached Local or Dynamic tunnels
+on the same authenticated connection. Closing, reconnecting or switching Accounts
+stops its channels and pending local Agent I/O. Each forwarded signature has a
+ten-second deadline, with at most four Agent channels and four local signers active
+across the application. A missing key, locked Agent, refusal or timeout fails that
+request without selecting another identity.
 
 Host-key review completes before querying or signing with the agent. A single
 ten-second deadline covers local agent connection, identities, signing, and SSH
@@ -886,6 +901,11 @@ missing identities, host-key rejection, unavailable agents, signing refusal,
 disconnect, timeout, cancellation, and successful controls after failures.
 `scripts/test-ssh-agent-pipe.ps1` exercises an isolated Windows mock agent pipe
 against a disposable OpenSSH server without touching the user's system agent.
+`scripts/test-ssh-agent-forwarding.ps1` uses an isolated source with two loaded keys
+and two real OpenSSH listeners. Through the public SessionManager it checks default
+off, exact saved-key forwarding, second-hop SSH, simultaneous binary SFTP and Local
+and Dynamic tunnels, forbidden requests, source refusal recovery, saved-edit and
+reconnect behavior, and cancellation of a held source signature.
 `scripts/test-ssh-jump.ps1` checks three independent OpenSSH hosts, saved ordered
 routes, new and changed trust at every position, password/software-key/Agent
 authentication, wrong-passphrase retries, refusal, timeout, cancellation, and a
