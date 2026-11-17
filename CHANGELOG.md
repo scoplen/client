@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Fetch Local and Personal SSH passwords through explicitly selected command
+  Credentials. Review each hop's Host key and exact command before execution;
+  keep bounded output only in zeroizing authentication memory. Jump hops fetch
+  independently, reconnect requires fresh approval, and cancellation releases
+  the directly owned helper. Other providers and private-key output remain separate.
+
 - Opt Local and Personal Logins into forwarding one explicitly selected Agent
   identity, with a capability disclosure, target-only scope and clear setup refusal.
   Keep terminal, SFTP and attached Local/Dynamic tunnels on their existing connection;

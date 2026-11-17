@@ -141,6 +141,33 @@ Each hop has five minutes for authentication, including key passphrase entry,
 and each server request has at most two minutes for a reply. Cancellation or
 expiry closes that connection attempt; reconnect starts with blank inputs.
 
+To fetch an SSH password from an existing desktop helper, create an External
+Credential with binding None and these provider entries, then explicitly assign
+it to a Local or Personal Login:
+
+```text
+type=command
+path=secret-helper read ssh-password
+field=password
+```
+
+The helper must already have access to its secret service. The descriptor contains
+only references and nonsecret arguments. Each connection verifies that hop's Host
+key, then asks you to approve the exact program and arguments before running it.
+Jump Logins fetch independently. Reconnect requires fresh approval and output.
+Plan resolution and Host-key probes never start a password helper.
+
+The command uses the quoting and backslash rules below, but percent, environment,
+home, wildcard, pipeline and redirection characters stay literal. It inherits the
+environment, receives no standard input, and discards standard error. Windows
+helpers create no console window. Output is held only in zeroizing authentication
+memory. The helper must exit successfully within 30 seconds and return a password
+of 1 to 16,384 bytes, optionally followed by one LF or CRLF; other bytes, including
+spaces, are preserved. Failure does not select another credential or rerun the
+helper. Organization certificates, proxy passwords, private keys and other provider
+types are separate features. Native confirmation and editor interaction remain
+unverified by the command-line acceptance suite.
+
 To use ProxyCommand, create that kind of Route and assign it to the target Login.
 Enter a program followed by arguments; quote paths or arguments containing spaces.
 Space and tab separate arguments outside single or double quotes. Outside single
@@ -810,6 +837,16 @@ pnpm typecheck
 pnpm test
 pnpm license-check
 ```
+
+`scripts/test-ssh-command-password.ps1` uses PowerShell 7 and Docker for real
+Direct and Jump password authentication, exact literal helper arguments, optional
+line endings and preserved password whitespace. It checks trust and command refusal,
+malformed descriptors, failed/empty/excess output, timeout, cancellation and abandoned
+preparation. Independent helper leases and SSH relays verify cleanup. SessionManager
+journeys retain binary SFTP and require fresh approval and fetching after reconnect;
+Stop and store replacement release pending helpers. Successful runs remove their
+owned container and temporary files. Native confirmation and macOS process behavior
+require separate platform acceptance.
 
 `scripts/test-ssh-keyboard-interactive.ps1` uses PowerShell 7 and Docker to start
 disposable OpenSSH 9.9/PAM listeners with exact package versions. Through public

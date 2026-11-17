@@ -1867,8 +1867,9 @@ impl Inventory {
         if binding != CredentialBinding::Shared && existing.is_none() && secret.is_some() {
             return Err(ObjectEditError::SecretNotAllowed);
         }
-        if kind == CredentialKind::ExternalProvider && provider.is_empty() {
-            return Err(ObjectEditError::InvalidCredential);
+        if kind == CredentialKind::ExternalProvider {
+            crate::connection::command_password::CommandPassword::parse(&provider)
+                .map_err(|_| ObjectEditError::InvalidCredential)?;
         }
         if kind == CredentialKind::Certificate && certificate_scope.is_none() {
             return Err(ObjectEditError::InvalidCredential);
@@ -3424,6 +3425,49 @@ mod tests {
         let store =
             Store::open(&dir.path().join("local.db"), &LocalDatabaseKey::new([7; 32])).unwrap();
         Inventory::new(Arc::new(store))
+    }
+
+    #[test]
+    fn command_password_editor_keeps_only_the_validated_provider_descriptor() {
+        let inventory = inventory();
+        let input = CredentialInput {
+            name: Some("External password".into()),
+            kind: CredentialKindInput::External,
+            binding: CredentialBindingInput::None,
+            secret: None,
+            device_secret: None,
+            public_key: None,
+            provider: BTreeMap::from([
+                ("type".into(), "command".into()),
+                ("path".into(), "secret-helper read ssh-password".into()),
+                ("field".into(), "password".into()),
+            ]),
+            certificate_scope: None,
+        };
+        let saved = inventory.create_credential(input.clone()).unwrap();
+        assert_eq!(saved.provider, input.provider);
+        assert!(!saved.has_secret);
+        let credential = parse_id(&saved.id).unwrap();
+        assert!(
+            crate::repository::credential_secret(&inventory.store, credential).unwrap().is_none()
+        );
+        assert!(inventory.store.device_credential(credential).unwrap().is_none());
+        let mut invalid = input;
+        invalid.provider.insert("field".into(), "private-key".into());
+        assert_eq!(
+            inventory.update_credential(saved.id.clone(), invalid),
+            Err(ObjectEditError::InvalidCredential)
+        );
+        assert_eq!(
+            inventory
+                .credentials_objects()
+                .unwrap()
+                .iter()
+                .find(|entry| entry.id == saved.id)
+                .unwrap()
+                .provider,
+            saved.provider
+        );
     }
 
     #[test]

@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: Apache-2.0
+
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
+$scratchRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
+$scratch = Join-Path $scratchRoot ('scoplen-command-password-' + [guid]::NewGuid().ToString('N'))
+$container = 'scoplen-command-password-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+$started = $false
+$accepted = $false
+function Check-LastExit([string]$description) {
+    if ($LASTEXITCODE -ne 0) { throw "$description failed (exit $LASTEXITCODE)" }
+}
+try {
+    New-Item -ItemType Directory -Path $scratch | Out-Null
+    $password = '  disposable-fixture-' + [guid]::NewGuid().ToString('N') + '  '
+    $passwordFile = Join-Path $scratch 'password'
+    [IO.File]::WriteAllBytes($passwordFile, [Text.Encoding]::UTF8.GetBytes($password))
+    & cargo build --locked -p scoplen-client-core --example ssh_command_password_smoke *> (Join-Path $scratch 'build.log')
+    if ($LASTEXITCODE -ne 0) {
+        Get-Content -LiteralPath (Join-Path $scratch 'build.log') -Tail 25
+        throw 'build command-password fixture failed'
+    }
+    $metadata = & cargo metadata --locked --format-version 1 --no-deps | ConvertFrom-Json
+    Check-LastExit 'read configured target directory'
+    $suffix = if ($IsWindows) { '.exe' } else { '' }
+    $smoke = Join-Path $metadata.target_directory "debug/examples/ssh_command_password_smoke$suffix"
+    & docker run --rm -d --name $container --label "scoplen.fixture.owner=$container" `
+        -p '127.0.0.1::2222' -p '127.0.0.1::2223' -p '127.0.0.1::2224' `
+        -e 'USER_NAME=smoke' -e "USER_PASSWORD=$password" -e 'PASSWORD_ACCESS=true' `
+        'linuxserver/openssh-server@sha256:46f115de7c251558297e7e87566fc3fc08544b63e55502b5cf294454db5d29d1' | Out-Null
+    Check-LastExit 'start isolated OpenSSH fixture'
+    $started = $true
+    $ports = @{}
+    foreach ($port in @(2222, 2223, 2224)) {
+        $binding = & docker port $container "$port/tcp"
+        Check-LastExit 'read owned SSH binding'
+        if ($binding -notmatch '^127\.0\.0\.1:(\d+)$') { throw 'SSH fixture was not bound to loopback' }
+        $ports[$port] = [int]$Matches[1]
+    }
+    $ready = $false
+    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+        $probe = [Net.Sockets.TcpClient]::new()
+        try {
+            if ($probe.ConnectAsync('127.0.0.1', $ports[2222]).Wait([TimeSpan]::FromSeconds(1)) -and $probe.Connected) {
+                $stream = $probe.GetStream(); $stream.ReadTimeout = 500
+                $banner = [byte[]]::new(256)
+                $count = $stream.Read($banner, 0, $banner.Length)
+                if ([Text.Encoding]::ASCII.GetString($banner, 0, $count).StartsWith('SSH-')) { $ready = $true; break }
+            }
+        } catch {} finally { $probe.Dispose() }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $ready) { throw 'OpenSSH fixture did not become ready' }
+    $setup = @'
+set -eu
+ssh-keygen -q -t ed25519 -N '' -f /tmp/scoplen-password-host
+cat > /tmp/scoplen-password-target.conf <<'CONF'
+Port 2223
+ListenAddress 0.0.0.0
+HostKey /tmp/scoplen-password-host
+PidFile /tmp/scoplen-password-target.pid
+StrictModes no
+AllowTcpForwarding yes
+PermitOpen 127.0.0.1:2223
+PerSourcePenalties no
+UsePAM no
+PasswordAuthentication yes
+PubkeyAuthentication no
+KbdInteractiveAuthentication no
+Subsystem sftp internal-sftp
+LogLevel VERBOSE
+CONF
+/usr/sbin/sshd.pam -t -f /tmp/scoplen-password-target.conf
+/usr/sbin/sshd.pam -E /tmp/scoplen-password-target.log -f /tmp/scoplen-password-target.conf
+sed -e 's/^Port 2223$/Port 2224/' -e 's@^PidFile .*@PidFile /tmp/scoplen-password-jump.pid@' /tmp/scoplen-password-target.conf > /tmp/scoplen-password-jump.conf
+/usr/sbin/sshd.pam -t -f /tmp/scoplen-password-jump.conf
+/usr/sbin/sshd.pam -E /tmp/scoplen-password-jump.log -f /tmp/scoplen-password-jump.conf
+'@
+    & docker exec $container sh -c ($setup.Replace("`r", ''))
+    Check-LastExit 'configure independent password SSH servers'
+    & $smoke $ports[2223] $ports[2224] 2223 $passwordFile
+    Check-LastExit 'command password Direct, Jump, failures, cleanup and reconnect'
+    $targetCount = & docker exec $container sh -c "grep -c '^Accepted password for smoke ' /tmp/scoplen-password-target.log"
+    Check-LastExit 'read target authentication count'
+    $jumpCount = & docker exec $container sh -c "grep -c '^Accepted password for smoke ' /tmp/scoplen-password-jump.log"
+    Check-LastExit 'read Jump authentication count'
+    if ([int]$targetCount -ne 8 -or [int]$jumpCount -ne 4) { throw 'Unexpected password authentication count' }
+    Write-Output 'Exact successful authentication counts: target 8, Jump 4. All failure controls kept their original result.'
+    $accepted = $true
+} finally {
+    if ($started) {
+        if (-not $accepted) {
+            & docker logs --tail 100 $container *> (Join-Path $scratch 'container.log')
+            & docker exec $container sh -c 'cat /tmp/scoplen-password-target.log /tmp/scoplen-password-jump.log 2>/dev/null' *> (Join-Path $scratch 'openssh.log')
+        }
+        $owner = & docker inspect --format '{{index .Config.Labels "scoplen.fixture.owner"}}' $container 2>$null
+        if ($LASTEXITCODE -eq 0 -and $owner -eq $container) { & docker rm -f $container 2>$null | Out-Null }
+    }
+    if ($accepted -and (Test-Path -LiteralPath $scratch)) {
+        $resolved = [IO.Path]::GetFullPath($scratch)
+        if ([IO.Path]::GetDirectoryName($resolved) -ne $scratchRoot -or [IO.Path]::GetFileName($resolved) -notlike 'scoplen-command-password-*') { throw 'Refusing cleanup outside owned fixture' }
+        Remove-Item -LiteralPath $resolved -Recurse -Force
+    }
+}

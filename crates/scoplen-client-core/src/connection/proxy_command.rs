@@ -35,6 +35,19 @@ fn invalid(reason: &'static str) -> SshConnectionError {
     SshConnectionError::InvalidProxyCommand(reason)
 }
 
+pub(super) fn literal(command: &str) -> Result<(String, Vec<String>), SshConnectionError> {
+    let mut words = tokenize(command)?.into_iter();
+    let program = words.next().filter(|word| !word.is_empty()).ok_or(invalid("enter a program"))?;
+    if program.len() > MAX_PROXY_COMMAND_PROGRAM {
+        return Err(invalid("the program must fit 4096 bytes"));
+    }
+    let arguments = words.collect::<Vec<_>>();
+    if arguments.iter().any(|word| word.len() > MAX_PROXY_COMMAND_ARGUMENT) {
+        return Err(invalid("each argument must fit 4096 bytes"));
+    }
+    Ok((program, arguments))
+}
+
 fn tokenize(command: &str) -> Result<Vec<String>, SshConnectionError> {
     if command.len() > scoplen_model::MAX_TEXT_BYTES {
         return Err(invalid("the saved command exceeds 16384 bytes"));
