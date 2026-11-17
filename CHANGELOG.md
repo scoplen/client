@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Explicitly select the read-only Team Snippet library from an Organization terminal,
+  with Personal remaining the default library. Require a complete Ready view and
+  confirmed matching ACK, review supported typed values once, and send the exact
+  command only to selected existing same-team terminals. View or origin changes
+  invalidate review and stop later sends; individual target changes remain Not sent.
+  Secret definitions stay inspection-only with hidden defaults.
+
 - Import Organization CSV and Direct OpenSSH files in Settings > Data with an
   explicit team, complete Ready/Blocked preview, explicit Ready selection and
   final metadata disclosure. Retain exact encrypted batches across uncertain

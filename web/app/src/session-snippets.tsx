@@ -3,7 +3,16 @@ import { Button, Dialog, Field, Select, TextAreaField } from "@scoplen/ui";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useProfileCommands } from "./account-profiles";
 import { useI18n } from "./i18n";
-import type { PreparedSnippet, SnippetInput, SnippetIssue, SnippetVariableInput, SnippetView } from "./ipc/bindings";
+import type {
+  PreparedSnippet,
+  PreparedTeamSnippet,
+  SnippetInput,
+  SnippetIssue,
+  SnippetVariableInput,
+  SnippetView,
+  TeamSnippetLibrary,
+  TeamSshSource,
+} from "./ipc/bindings";
 import { useStoreChanges } from "./ipc/store-events";
 
 type Mode = "library" | "edit" | "values" | "preview" | "delete" | "results";
@@ -13,12 +22,20 @@ export interface SnippetTarget {
   sessionId: string;
   transportId: string;
   target: string;
+  source?: TeamSshSource | null;
   location?: { tab: number; pane: number };
   canSend: () => boolean;
 }
 
 type TargetOutcome = "pending" | "sent" | "notSent" | "unknown";
 const targetKey = (target: SnippetTarget) => JSON.stringify([target.sessionId, target.transportId]);
+const sameSource = (left: TeamSshSource | null | undefined, right: TeamSshSource | null | undefined) =>
+  !!left &&
+  !!right &&
+  left.origin === right.origin &&
+  left.accountId === right.accountId &&
+  left.deviceId === right.deviceId &&
+  left.organizationId === right.organizationId;
 
 export function SessionSnippetsButton(props: Omit<Parameters<typeof SessionSnippets>[0], "onClose" | "finalFocus">) {
   const { t } = useI18n();
@@ -43,6 +60,7 @@ export function SessionSnippets({
   canSend,
   finalFocus,
   getTargets,
+  source,
 }: {
   sessionId: string;
   transportId: string;
@@ -51,6 +69,7 @@ export function SessionSnippets({
   canSend: () => boolean;
   finalFocus?: () => HTMLButtonElement | null;
   getTargets?: () => SnippetTarget[];
+  source?: TeamSshSource | null;
 }) {
   const commands = useProfileCommands();
   const { t } = useI18n();
@@ -64,6 +83,10 @@ export function SessionSnippets({
   const [variables, setVariables] = useState<DraftVariable[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [prepared, setPrepared] = useState<PreparedSnippet | null>(null);
+  const [librarySource, setLibrarySource] = useState<"personal" | "team">("personal");
+  const [teamLibrary, setTeamLibrary] = useState<TeamSnippetLibrary | null>(null);
+  const [teamPrepared, setTeamPrepared] = useState<PreparedTeamSnippet | null>(null);
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const [targets, setTargets] = useState<SnippetTarget[]>([]);
   const [chosen, setChosen] = useState<string[]>([]);
   const [reviewed, setReviewed] = useState<SnippetTarget[]>([]);
@@ -72,10 +95,79 @@ export function SessionSnippets({
   const alive = useRef(false);
   const inFlight = useRef(false);
   const listRevision = useRef(0);
+  const selectionRevision = useRef(0);
+  const teamFence = useRef<string | null>(null);
+  const teamSelected = librarySource === "team";
+  const sourceKey = source
+    ? JSON.stringify([source.origin, source.accountId, source.deviceId, source.organizationId])
+    : "";
+  const sourceOwner = useRef(sourceKey);
   const formId = useId();
+
+  const library = useCallback(() => {
+    selectionRevision.current++;
+    setMode("library");
+    setSelected(null);
+    setDraft(null);
+    setVariables([]);
+    setPrepared(null);
+    setTeamPrepared(null);
+    setTargets([]);
+    setChosen([]);
+    setReviewed([]);
+    setOutcomes([]);
+    setTargetIssue(null);
+    setValues({});
+    setIssue(null);
+  }, []);
+
+  useEffect(() => {
+    if (sourceOwner.current === sourceKey) return;
+    sourceOwner.current = sourceKey;
+    library();
+    listRevision.current++;
+    teamFence.current = null;
+    setTeamLibrary(null);
+    setItems([]);
+    setLibrarySource("personal");
+    setLoading(true);
+  }, [sourceKey, library]);
 
   const reload = useCallback(() => {
     const revision = ++listRevision.current;
+    if (teamSelected) {
+      return commands
+        .teamSnippets({ sessionId, transportId })
+        .then(
+          (result) => {
+            if (!alive.current || revision !== listRevision.current) return;
+            if (result.status === "ok") {
+              const next = result.data.fence ? JSON.stringify(result.data.fence) : null;
+              if (teamFence.current !== null && teamFence.current !== next) library();
+              teamFence.current = next;
+              setTeamLibrary(result.data);
+              setItems(result.data.snippets);
+            } else {
+              library();
+              teamFence.current = null;
+              setTeamLibrary(null);
+              setItems([]);
+              setIssue(result.error);
+            }
+          },
+          () => {
+            if (!alive.current || revision !== listRevision.current) return;
+            library();
+            teamFence.current = null;
+            setTeamLibrary(null);
+            setItems([]);
+            setIssue({ kind: "storage" });
+          },
+        )
+        .finally(() => {
+          if (alive.current && revision === listRevision.current) setLoading(false);
+        });
+    }
     return commands
       .snippetsList()
       .then(
@@ -91,44 +183,47 @@ export function SessionSnippets({
       .finally(() => {
         if (alive.current && revision === listRevision.current) setLoading(false);
       });
-  }, [commands]);
+  }, [commands, teamSelected, sessionId, transportId, library]);
 
   useEffect(() => {
     alive.current = true;
-    void reload();
     return () => {
       alive.current = false;
     };
-  }, [reload]);
-  useStoreChanges(["snippet"], () => void reload());
+  }, []);
+  useEffect(() => {
+    void reload();
+  }, [reload, sourceKey]);
+  useEffect(() => {
+    if (!teamSelected) return;
+    let reading = false;
+    const timer = setInterval(() => {
+      if (reading) return;
+      reading = true;
+      void reload().finally(() => {
+        reading = false;
+      });
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [reload, teamSelected]);
+  useStoreChanges(["snippet"], () => {
+    if (!teamSelected) void reload();
+  });
 
   const run = async (operation: () => Promise<void>) => {
     if (inFlight.current) return;
     inFlight.current = true;
+    const revision = selectionRevision.current;
     setBusy(true);
     setIssue(null);
     try {
       await operation();
     } catch {
-      if (alive.current) setIssue({ kind: "storage" });
+      if (alive.current && revision === selectionRevision.current) setIssue({ kind: "storage" });
     } finally {
       inFlight.current = false;
       if (alive.current) setBusy(false);
     }
-  };
-  const library = () => {
-    setMode("library");
-    setSelected(null);
-    setDraft(null);
-    setVariables([]);
-    setPrepared(null);
-    setTargets([]);
-    setChosen([]);
-    setReviewed([]);
-    setOutcomes([]);
-    setTargetIssue(null);
-    setValues({});
-    setIssue(null);
   };
   const edit = (snippet: SnippetView | null) => {
     setSelected(snippet);
@@ -179,7 +274,27 @@ export function SessionSnippets({
             : null;
     setTargetIssue(problem);
     if (problem) return;
+    const revision = selectionRevision.current;
     void run(async () => {
+      if (teamSelected) {
+        if (!teamLibrary?.fence) return;
+        const result = await commands.prepareTeamSnippet(
+          { sessionId, transportId },
+          teamLibrary.fence,
+          selected.id,
+          values,
+          selectedTargets.map(({ sessionId, transportId }) => ({ sessionId, transportId })),
+        );
+        if (!alive.current || revision !== selectionRevision.current) return;
+        if (result.status === "error") setIssue(result.error);
+        else {
+          setTeamPrepared(result.data);
+          setPrepared(result.data.snippet);
+          setReviewed(selectedTargets);
+          setMode("preview");
+        }
+        return;
+      }
       const result = await commands.snippetsPrepare(selected.id, values);
       if (!alive.current) return;
       if (result.status === "error") setIssue(result.error);
@@ -192,25 +307,39 @@ export function SessionSnippets({
   };
   const send = () => {
     if (!prepared || !reviewed.length) return;
+    if (teamSelected && !teamPrepared) return;
     if (!canSend()) return onClose();
+    const revision = selectionRevision.current;
     void run(async () => {
       const data = Array.from(new TextEncoder().encode(prepared.command + "\r"));
       setPrepared(null);
+      setTeamPrepared(null);
       setValues({});
       setMode("results");
       setOutcomes(reviewed.map(() => "pending"));
       for (const [index, candidate] of reviewed.entries()) {
-        if (!alive.current) return;
+        if (!alive.current || revision !== selectionRevision.current) return;
         if (!canSend()) return onClose();
         let outcome: TargetOutcome = "notSent";
         if (candidate.canSend()) {
-          // A failure after invocation cannot prove whether input reached the queue.
-          const result = await commands
-            .sessionInput(candidate.sessionId, candidate.transportId, data)
-            .catch(() => ({ status: "error" as const }));
-          outcome = result.status === "ok" ? "sent" : "unknown";
+          if (teamSelected && teamPrepared) {
+            const result = await commands.sendTeamSnippet(teamPrepared, index).catch(() => null);
+            if (!alive.current || revision !== selectionRevision.current) return;
+            if (result?.status === "ok" && result.data === "invalidated") {
+              library();
+              void reload();
+              return;
+            }
+            outcome = result?.status === "ok" ? (result.data === "sent" ? "sent" : "notSent") : "unknown";
+          } else {
+            // A failure after invocation cannot prove whether input reached the queue.
+            const result = await commands
+              .sessionInput(candidate.sessionId, candidate.transportId, data)
+              .catch(() => ({ status: "error" as const }));
+            outcome = result.status === "ok" ? "sent" : "unknown";
+          }
         }
-        if (!alive.current) return;
+        if (!alive.current || revision !== selectionRevision.current) return;
         if (!canSend()) return onClose();
         setOutcomes((current) => current.map((value, position) => (position === index ? outcome : value)));
       }
@@ -254,7 +383,7 @@ export function SessionSnippets({
               {t("snippets.back")}
             </Button>
           ) : null}
-          {mode === "library" ? (
+          {mode === "library" && !teamSelected ? (
             <Button variant="primary" disabled={busy || loading} onClick={() => edit(null)}>
               {t("snippets.add")}
             </Button>
@@ -276,6 +405,7 @@ export function SessionSnippets({
                 disabled={busy}
                 onClick={() => {
                   setPrepared(null);
+                  setTeamPrepared(null);
                   setReviewed([]);
                   setMode("values");
                 }}
@@ -300,6 +430,34 @@ export function SessionSnippets({
         </>
       }
     >
+      {source ? (
+        <label className="mb-4 flex flex-col gap-1.5 text-sm font-medium">
+          {t("snippets.source")}
+          <Select
+            label={t("snippets.source")}
+            size="field"
+            value={librarySource}
+            disabled={busy}
+            onValueChange={(next) => {
+              library();
+              listRevision.current++;
+              teamFence.current = null;
+              setTeamLibrary(null);
+              setItems([]);
+              setRefreshFailed(false);
+              setLoading(true);
+              setLibrarySource(next);
+            }}
+            options={[
+              { value: "personal", label: t("snippets.source.personal") },
+              { value: "team", label: t("snippets.source.team", { team: source.organizationId }) },
+            ]}
+          />
+        </label>
+      ) : null}
+      {teamSelected ? (
+        <p className="mb-4 text-sm wrap-anywhere text-muted-foreground">{t("snippets.team.readOnly")}</p>
+      ) : null}
       {loading ? (
         <p role="status" className="text-sm text-muted-foreground">
           {t("snippets.loading")}
@@ -317,11 +475,54 @@ export function SessionSnippets({
       ) : null}
       {mode === "library" ? (
         <>
-          <Button variant="ghost" disabled={busy || loading} onClick={() => void run(reload)}>
-            {t("snippets.refresh")}
+          <Button
+            variant="ghost"
+            disabled={busy || loading}
+            onClick={() =>
+              void run(async () => {
+                if (!teamSelected || !source) return reload();
+                library();
+                teamFence.current = null;
+                setItems([]);
+                setTeamLibrary(null);
+                setRefreshFailed(false);
+                const result = await commands.refreshTeamAssets(source.organizationId);
+                if (!alive.current) return;
+                setRefreshFailed(result.status === "error");
+                await reload();
+              })
+            }
+          >
+            {t(teamSelected ? "snippets.team.refresh" : "snippets.refresh")}
           </Button>
+          {teamSelected && refreshFailed ? (
+            <p role="alert" className="mt-3 text-sm text-attention">
+              {t("snippets.team.failed")}
+            </p>
+          ) : null}
+          {teamSelected && !loading && !teamLibrary?.fence ? (
+            <p role="status" className="mt-3 text-sm text-muted-foreground">
+              {t(
+                teamLibrary?.phase === "ready"
+                  ? "snippets.team.acknowledgement"
+                  : teamLibrary?.phase === "updating"
+                    ? "snippets.team.updating"
+                    : teamLibrary?.phase === "unavailable"
+                      ? "snippets.team.unavailable"
+                      : teamLibrary?.phase === "stale"
+                        ? "snippets.team.withdrawn"
+                        : teamLibrary?.phase === "failed"
+                          ? "snippets.team.failed"
+                          : "snippets.team.notLoaded",
+              )}
+            </p>
+          ) : null}
           {!loading && !items.length ? (
-            <p className="mt-3 text-sm text-muted-foreground">{t("snippets.empty")}</p>
+            !teamSelected || teamLibrary?.fence ? (
+              <p className="mt-3 text-sm text-muted-foreground">
+                {t(teamSelected ? "snippets.team.empty" : "snippets.empty")}
+              </p>
+            ) : null
           ) : null}
           <ul aria-label={t("snippets.list")} className="m-0 list-none divide-y divide-border p-0">
             {items.map((snippet) => (
@@ -359,8 +560,13 @@ export function SessionSnippets({
                         ),
                       );
                       setPrepared(null);
-                      const current = { sessionId, transportId, target, canSend };
-                      setTargets((getTargets?.() ?? [current]).filter((candidate) => candidate.canSend()));
+                      const current = { sessionId, transportId, target, canSend, source };
+                      setTargets(
+                        (getTargets?.() ?? [current]).filter(
+                          (candidate) =>
+                            candidate.canSend() && (!teamSelected || sameSource(candidate.source, teamLibrary?.source)),
+                        ),
+                      );
                       setChosen([targetKey(current)]);
                       setReviewed([]);
                       setOutcomes([]);
@@ -371,7 +577,7 @@ export function SessionSnippets({
                   >
                     {t(snippet.readOnly || snippet.issue ? "snippets.inspect" : "snippets.use")}
                   </Button>
-                  {!snippet.readOnly ? (
+                  {!teamSelected && !snippet.readOnly ? (
                     <>
                       <Button variant="ghost" disabled={busy} onClick={() => edit(snippet)}>
                         {t("snippets.edit")}

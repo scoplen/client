@@ -58,6 +58,7 @@ mod directory_sync;
 mod editor;
 pub mod file_drop;
 mod forwards;
+mod snippets;
 mod transfers;
 
 /// Display-safe state of one logical terminal. Output is delivered as binary frames.

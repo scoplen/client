@@ -312,6 +312,17 @@ accounts or tabs, closing the dialog, or losing its originating connection stops
 sends. A selected connection is never redirected to its replacement. Input is never
 automatically replayed.
 
+Personal is the default Snippet library. From an Organization terminal, explicitly
+choose its read-only Team library to use Snippets from that terminal's current team.
+The complete Team view must be Ready with its matching ACK confirmed. Refresh team
+assets explicitly if the view is unavailable; opening the library does not fetch it.
+Team execution uses the same Text, Integer and Choice review and sends only to up to
+64 existing ready terminals with the exact same deployment, Account, Device and
+Organization. Changes to the originating connection or Team view clear values and
+review and stop later sends. A target-only change shows Not sent for that target.
+Team definitions cannot be added, edited, deleted or copied from this dialog; Secret
+and unsupported definitions remain inspection-only with secret defaults hidden.
+
 Use exact `{{name}}` placeholders with ASCII letters, digits and underscores, starting
 with a letter or underscore. A repeated placeholder uses one value. `{{{{` and `}}}}`
 produce literal double braces; ordinary Docker actions such as `{{.State.Status}}`
@@ -921,6 +932,21 @@ reply discard, not a real network outage. Ordinary production builds contain
 neither the control nor its state.
 Use only disposable HTTPS deployments and owned OpenSSH fixtures. This public-core
 integration does not establish rendered or native interaction acceptance.
+
+The opt-in `live-server-integration` test
+`personal_server::live_server::password_entry::team_snippets::live_native_current_team_snippets`
+keeps one native process and existing real Team SSH terminals across externally
+authored publication, replacement, view withdrawal, restoration, membership removal
+and deletion. Set `SCOPLEN_LIVE_TEAM_SNIPPET_DIRECTORY` to a private disposable
+handoff directory and `SCOPLEN_LIVE_TEAM_SSH_FIXTURE` to the owned OpenSSH descriptor.
+Each bounded `snippet-client-{phase}.json` and its closed `.ready` file provide
+ordinary fields and a password-file path; no credential belongs in command output.
+The consumer publishes `snippet-native-{phase}.json` with descriptor/command hashes,
+source/view fences and per-target local outcomes plus exact executed output-line
+counts. The controller checks it before publishing the phase's `.complete` file
+containing `passed` and one newline. Old preparations remain in the same process
+and must be refused after reconciliation; a replaced target receives no replay.
+This public-core fixture does not establish rendered or native interaction acceptance.
 
 `scripts/test-ssh-command-password.ps1` uses PowerShell 7 and Docker for real
 Direct and Jump password authentication, exact literal helper arguments, optional

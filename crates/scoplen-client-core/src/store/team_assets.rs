@@ -9,8 +9,10 @@ use super::{Store, StoreError, personal::PersonalRecord};
 
 pub(crate) struct TeamAssetRecord {
     pub phase: i64,
+    pub generation: Uuid,
     pub vault: Option<Uuid>,
     pub revision: Option<u64>,
+    pub cursor: u64,
     pub acknowledged: bool,
     pub objects: Vec<Object>,
 }
@@ -24,6 +26,32 @@ pub(crate) struct TeamAssetPublication {
 }
 
 impl Store {
+    pub(crate) fn team_snippet_view_current(
+        &self,
+        identity: &PersonalRecord,
+        publication: &TeamAssetPublication,
+    ) -> Result<bool, StoreError> {
+        if self.personal_admission(identity)?.is_none() {
+            return Ok(false);
+        }
+        let current = self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM team_asset_views WHERE origin=?1 AND account_id=?2
+                AND organization_id=?3 AND phase=1 AND acknowledged=1
+                AND vault_id=?4 AND revision=?5 AND cursor=?6 AND generation=?7)",
+            params![
+                identity.origin,
+                identity.account_id.as_bytes().as_slice(),
+                publication.organization.as_bytes().as_slice(),
+                publication.vault.as_bytes().as_slice(),
+                publication.revision.to_be_bytes().as_slice(),
+                publication.cursor.to_be_bytes().as_slice(),
+                publication.generation.as_bytes().as_slice()
+            ],
+            |row| row.get(0),
+        )?;
+        Ok(current)
+    }
+
     pub(crate) fn team_asset_changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.team_changes.subscribe()
     }
@@ -179,7 +207,7 @@ impl Store {
         ];
         let Some(mut record) = conn
             .query_row(
-                "SELECT phase,vault_id,revision,cursor,acknowledged FROM team_asset_views
+                "SELECT phase,vault_id,revision,cursor,acknowledged,generation FROM team_asset_views
              WHERE origin=?1 AND account_id=?2 AND organization_id=?3",
                 scope,
                 |row| {
@@ -200,8 +228,12 @@ impl Store {
                         .transpose()?;
                     Ok(TeamAssetRecord {
                         phase: row.get(0)?,
+                        generation: Uuid::from_slice(&row.get::<_, Vec<u8>>(5)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
                         vault,
                         revision,
+                        cursor: u64::from_be_bytes(row.get::<_, Vec<u8>>(3)?.try_into()
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?),
                         acknowledged: row.get(4)?,
                         objects: Vec::new(),
                     })
