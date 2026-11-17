@@ -741,6 +741,43 @@ it("opens Files only while connected and restores focus after closing its panel"
   await act(() => listing.resolve(null));
 });
 
+it("restores Files only after the first transport is ready and does not replay it on reconnect", async () => {
+  const f = fixture();
+  const path = [46, 47, 255, 110];
+  const changed = vi.fn();
+  const listing = f.delay("session_list_files");
+  render(
+    sessionView("en", true, vi.fn(), vi.fn(), {
+      initialFiles: { path, label: "./restored" },
+      onFilesChange: changed,
+    }),
+  );
+  const c = await connect(f);
+  expect(f.matching("session_list_files")).toHaveLength(0);
+  await c.ready();
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(1));
+  expect(f.matching("session_list_files")[0]?.args).toMatchObject({
+    sessionId: c.sessionId,
+    transportId: c.transportId,
+    path,
+  });
+  expect(changed).toHaveBeenCalledWith({ kind: "open", path });
+  expect(f.matching("session_connect")).toHaveLength(1);
+  expect(f.matching("session_input")).toHaveLength(0);
+  await act(() => listing.resolve({ entries: [] }));
+  await c.emit({ kind: "retrying", attempt: 1, delaySeconds: 1, error: "Connection lost" });
+  const next = await c.start(true);
+  await next.ready();
+  expect(screen.getByRole("button", { name: "Open files" }).getAttribute("aria-pressed")).toBe("false");
+  expect(changed).toHaveBeenLastCalledWith({ kind: "closed" });
+  expect(f.matching("session_list_files")).toHaveLength(1);
+  const home = f.delay("session_list_files");
+  await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+  await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(2));
+  expect(f.matching("session_list_files")[1]?.args).toMatchObject({ transportId: next.transportId, path: [46] });
+  await act(() => home.resolve({ entries: [] }));
+});
+
 it("starts Files at home on a replacement transport and ignores old directory results", async () => {
   const f = fixture();
   const home = f.delay("session_list_files");

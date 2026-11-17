@@ -307,7 +307,8 @@ Use Workspaces in the tab bar to save all terminal trees, each tab's focused pan
 tab order and selection, plus explicitly selected saved tunnels. Choose a Login for
 each included tunnel. Save tunnel-only Workspaces from Hosts. Each definition contains
 at most 64 terminal panes and tunnels combined, including at most 16 saved tunnels.
-Temporary runs are not captured.
+Each terminal also retains whether Files is open and its selected remote directory,
+including inactive panes or a directory whose listing failed. Temporary runs are not captured.
 
 Explicit Open validates the complete definition before appending fresh SSH terminals
 and starting each saved tunnel through its ordinary preparation. It preserves existing
@@ -318,11 +319,15 @@ Saving includes failed or closed ordinary panes, but refuses the entire definiti
 if any pane contains saved output or unsupported team intent. Save creates a new local
 object without starting connections; Personal adoption stays separate.
 
-Loading or listing never connects. Output, directories, commands and remote processes
-are not restored. Earlier tab-only and split-only layouts and other unsupported
+Loading or listing never connects. After ordinary Host trust and authentication, a restored
+Files panel lists its exact saved directory on that terminal's new SSH connection. A missing
+or denied directory stays selected with Try again, Home and Close files available. No shell
+directory command is sent. Closed panels stay closed, and reconnect keeps its ordinary
+closed-panel behavior. Output, commands, remote processes and transfer queues are not restored.
+Earlier tab-only, split-only and version-three layouts and other unsupported
 definitions remain byte-identical in Unavailable workspaces with explicit Delete.
-Missing inventory dependencies require repair before opening. Files restoration,
-divider dragging, detached windows and native restart acceptance remain separate work.
+Missing inventory dependencies require repair before opening. Divider dragging,
+detached windows and native restart acceptance remain separate work.
 
 Tunnels starts saved or temporary Local TCP, Remote TCP and Dynamic SOCKS forwards independently
 of terminal tabs. In New tunnel, choose a Login and Start without saving for a one-off run,

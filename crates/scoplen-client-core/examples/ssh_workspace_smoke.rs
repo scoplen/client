@@ -3,6 +3,7 @@
 //! Explicit mixed Workspace restoration against owned disposable OpenSSH peers.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,11 +17,12 @@ use scoplen_client_core::repository::{
     AccessProfile, AccessProfileChange, Edit, Forward, ForwardChange, ForwardKind, Repository,
     Route, RouteChange, RouteChoice, RouteKind,
 };
+use scoplen_client_core::session_files::{SessionDownloadStatus, SessionUploadStatus};
 use scoplen_client_core::session_manager::{SessionEvent, SessionManager};
 use scoplen_client_core::store::Store;
 use scoplen_client_core::workspaces::{
-    WorkspaceForwardInput, WorkspaceInput, WorkspaceSplitDirection, WorkspaceTabInput,
-    WorkspaceTerminal, WorkspaceTree, WorkspaceTreeInput, Workspaces,
+    WorkspaceFilesInput, WorkspaceForwardInput, WorkspaceInput, WorkspaceSplitDirection,
+    WorkspaceTabInput, WorkspaceTerminal, WorkspaceTree, WorkspaceTreeInput, Workspaces,
 };
 use scoplen_crypto::LocalDatabaseKey;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -242,6 +244,126 @@ impl Pane {
         output.windows(marker.len()).filter(|part| *part == marker.as_bytes()).count()
     }
 
+    async fn files(&self, manager: &SessionManager, transport: &str, local: &Path) -> Result<()> {
+        let directory = self.terminal.files.as_ref().ok_or("open Files intent missing")?;
+        let initial = manager.transfer_queue_snapshot(&self.terminal.session_id)?;
+        assert!(initial.items.is_empty() && initial.recent.is_empty());
+        manager
+            .list_files(
+                &self.terminal.session_id,
+                transport,
+                &Uuid::now_v7().to_string(),
+                directory.path.clone(),
+            )
+            .await?;
+        let source = local.join(format!("workspace-{}.bin", Uuid::now_v7()));
+        let expected: Vec<u8> = (0..=255).cycle().take(8192).collect();
+        std::fs::write(&source, &expected)?;
+        let upload = manager
+            .upload_file_with_picker(
+                &self.terminal.session_id,
+                transport,
+                &Uuid::now_v7().to_string(),
+                directory.path.clone(),
+                || async { Ok(Some(source.clone())) },
+                |_| async { Err("fresh fixture must not overwrite".into()) },
+                |_| {},
+            )
+            .await?;
+        assert_eq!(upload.status, SessionUploadStatus::Saved);
+        let entry = manager
+            .list_files(
+                &self.terminal.session_id,
+                transport,
+                &Uuid::now_v7().to_string(),
+                directory.path.clone(),
+            )
+            .await?
+            .entries
+            .into_iter()
+            .find(|entry| entry.name == source.file_name().unwrap().to_str().unwrap())
+            .ok_or("restored Files upload missing")?;
+        assert!(entry.path.starts_with(&directory.path));
+        let destination = local.join(format!("download-{}.bin", Uuid::now_v7()));
+        let download = manager
+            .download_file_with_picker(
+                &self.terminal.session_id,
+                transport,
+                &Uuid::now_v7().to_string(),
+                entry.path,
+                || async { Ok(Some(destination.clone())) },
+                |_| {},
+            )
+            .await?;
+        assert_eq!(download.status, SessionDownloadStatus::Saved);
+        assert_eq!(std::fs::read(destination)?, expected);
+        Ok(())
+    }
+
+    async fn refused(&mut self, manager: &SessionManager, trust: bool) -> Result<()> {
+        let transport = tokio::time::timeout(Duration::from_secs(30), async {
+            let mut current = None;
+            let mut reviewed = false;
+            let mut finished = false;
+            while let Some(event) = self.events.recv().await {
+                match event {
+                    SessionEvent::Starting { transport_id, automatic } => {
+                        assert!(!automatic);
+                        current = Some(transport_id);
+                    }
+                    SessionEvent::Preparation { transport_id, event } => {
+                        if let PreparationEvent::Trust { prompt_id, .. } = *event {
+                            reviewed = true;
+                            if trust {
+                                manager.stop(&self.terminal.session_id)?;
+                            } else {
+                                manager.respond(
+                                    &self.terminal.session_id,
+                                    &transport_id,
+                                    &prompt_id,
+                                    PreparationResponse::AcceptHostKey,
+                                )?;
+                            }
+                        }
+                    }
+                    SessionEvent::Failed { exhausted, .. } if !trust => {
+                        assert!(!exhausted);
+                        finished = true;
+                        break;
+                    }
+                    SessionEvent::Closed if trust => {
+                        finished = true;
+                        break;
+                    }
+                    SessionEvent::Ready { .. } | SessionEvent::Retrying { .. } => {
+                        return Err("refused Workspace must not become ready or retry".to_owned());
+                    }
+                    _ => {}
+                }
+            }
+            if !finished {
+                return Err("negative Workspace events ended before refusal".to_owned());
+            }
+            if !reviewed {
+                return Err("negative Workspace must review its independent Host".to_owned());
+            }
+            current.ok_or("negative Workspace did not begin preparation".to_owned())
+        })
+        .await??;
+        assert!(
+            manager
+                .list_files(
+                    &self.terminal.session_id,
+                    &transport,
+                    &Uuid::now_v7().to_string(),
+                    self.terminal.files.as_ref().unwrap().path.clone()
+                )
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
     async fn marker(
         &self,
         manager: &SessionManager,
@@ -337,6 +459,20 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         name: Some("Workspace Jump route".into()),
         kind: Some(RouteKind::Jump { hops: vec![Uuid::parse_str(&jump.logins[0].id)?] }),
     })?;
+    let files_jump = Inventory::new(store.clone()).add_host(NewHost {
+        name: Some("Workspace Files Jump".into()),
+        address: "127.0.0.1".into(),
+        port: Some(2224),
+        username: "smoke".into(),
+        sign_in: SignIn::Password { password: std::fs::read_to_string(&args[3])? },
+    })?;
+    Repository::<AccessProfile>::new(&store).update(
+        Uuid::parse_str(&files_jump.logins[0].id)?,
+        AccessProfileChange {
+            route: Some(RouteChoice::Route(route.meta.id)),
+            ..Default::default()
+        },
+    )?;
     let tunnel_profile = Uuid::parse_str(&target.logins[0].id)?;
     Repository::<AccessProfile>::new(&store).update(
         tunnel_profile,
@@ -398,6 +534,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         session_id: id.into(),
         profile_id: profile_id.clone(),
         label: "Workspace fixture".into(),
+        files: None,
     };
     let manager = Arc::new(SessionManager::default());
     let mut first = Pane::start(manager.clone(), store.clone(), terminal("first-pane"))?;
@@ -416,16 +553,52 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     first.grid(&manager, &first_transport, "first-resized", 20, 80).await?;
     second.grid(&manager, &second_transport, "second-unchanged", 18, 60).await?;
     let workspaces = Workspaces::new(store.clone());
+    let directory = b"/tmp/scoplen-workspace-files/nested".to_vec();
+    let mut opaque = b"/tmp/scoplen-workspace-files/".to_vec();
+    opaque.push(255);
     let saved = workspaces.create(WorkspaceInput {
         name: "Terminals and selected tunnels".into(),
-        tabs: vec![WorkspaceTabInput {
-            tree: WorkspaceTreeInput::Split {
-                direction: WorkspaceSplitDirection::Horizontal,
-                first: Box::new(WorkspaceTreeInput::Terminal { profile_id: profile_id.clone() }),
-                second: Box::new(WorkspaceTreeInput::Terminal { profile_id: profile_id.clone() }),
+        tabs: vec![
+            WorkspaceTabInput {
+                tree: WorkspaceTreeInput::Split {
+                    direction: WorkspaceSplitDirection::Horizontal,
+                    first: Box::new(WorkspaceTreeInput::Terminal {
+                        profile_id: profile_id.clone(),
+                        files: WorkspaceFilesInput::Open { path: directory.clone() },
+                    }),
+                    second: Box::new(WorkspaceTreeInput::Terminal {
+                        profile_id: files_jump.logins[0].id.clone(),
+                        files: WorkspaceFilesInput::Open { path: opaque.clone() },
+                    }),
+                },
+                focused: 1,
             },
-            focused: 1,
-        }],
+            WorkspaceTabInput {
+                tree: WorkspaceTreeInput::Terminal {
+                    profile_id: profile_id.clone(),
+                    files: WorkspaceFilesInput::Closed,
+                },
+                focused: 0,
+            },
+            WorkspaceTabInput {
+                tree: WorkspaceTreeInput::Terminal {
+                    profile_id: profile_id.clone(),
+                    files: WorkspaceFilesInput::Open {
+                        path: b"/tmp/scoplen-workspace-files/removed".to_vec(),
+                    },
+                },
+                focused: 0,
+            },
+            WorkspaceTabInput {
+                tree: WorkspaceTreeInput::Terminal {
+                    profile_id: files_jump.logins[0].id.clone(),
+                    files: WorkspaceFilesInput::Open {
+                        path: b"/tmp/scoplen-workspace-files/denied".to_vec(),
+                    },
+                },
+                focused: 0,
+            },
+        ],
         active: Some(0),
         forwards: selected,
     })?;
@@ -445,6 +618,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(opened.forwards.len(), 3);
     let mut unrelated = Pane::start(manager.clone(), reopened.clone(), terminal("unrelated-pane"))?;
     let unrelated_transport = unrelated.ready(&manager).await?;
+    let unrelated_queue = manager.transfer_queue_snapshot(&unrelated.terminal.session_id)?;
     let mut temporary = Tunnel::start(
         &forward_manager,
         reopened.clone(),
@@ -507,12 +681,77 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut two = Pane::start(manager.clone(), reopened.clone(), two.clone())?;
     let one_transport = one.ready(&manager).await?;
     let two_transport = two.ready(&manager).await?;
+    assert_eq!(one.terminal.files.as_ref().unwrap().path, directory);
+    assert_eq!(two.terminal.files.as_ref().unwrap().path, opaque);
+    one.files(&manager, &one_transport, scratch.path()).await?;
+    two.files(&manager, &two_transport, scratch.path()).await?;
+    for (index, tab) in opened.tabs[1..].iter().enumerate() {
+        let WorkspaceTree::Terminal { terminal } = &tab.tree else {
+            return Err("extra terminal missing".into());
+        };
+        let mut pane = Pane::start(manager.clone(), reopened.clone(), terminal.clone())?;
+        let transport = pane.ready(&manager).await?;
+        let queue = manager.transfer_queue_snapshot(&pane.terminal.session_id)?;
+        assert!(queue.items.is_empty() && queue.recent.is_empty());
+        assert_ne!(queue.queue_id, unrelated_queue.queue_id);
+        if index == 0 {
+            assert!(pane.terminal.files.is_none());
+        } else {
+            assert!(
+                manager
+                    .list_files(
+                        &pane.terminal.session_id,
+                        &transport,
+                        &Uuid::now_v7().to_string(),
+                        pane.terminal.files.as_ref().unwrap().path.clone()
+                    )
+                    .await
+                    .is_err()
+            );
+            pane.marker(&manager, &transport, "directory-failure-keeps-shell").await?;
+        }
+        pane.close(&manager).await?;
+    }
+    assert_eq!(manager.transfer_queue_snapshot(&unrelated.terminal.session_id)?, unrelated_queue);
     assert_eq!(one.marker_count("SCOPLEN-WORKSPACE:first\r\n"), 0);
     assert_eq!(two.marker_count("SCOPLEN-WORKSPACE:second\r\n"), 0);
     one.marker(&manager, &one_transport, "reopened-first").await?;
     two.marker(&manager, &two_transport, "reopened-second").await?;
     one.close(&manager).await?;
     two.close(&manager).await?;
+    for refuse_trust in [true, false] {
+        let host = Inventory::new(reopened.clone()).add_host(NewHost {
+            name: Some(
+                if refuse_trust {
+                    "Refused Workspace trust"
+                } else {
+                    "Denied Workspace authentication"
+                }
+                .into(),
+            ),
+            address: args[1].clone(),
+            port: Some(args[2].parse()?),
+            username: "smoke".into(),
+            sign_in: SignIn::Password { password: "wrong-disposable-password".into() },
+        })?;
+        let denied = workspaces.create(WorkspaceInput {
+            name: "Negative Files restoration".into(),
+            tabs: vec![WorkspaceTabInput {
+                tree: WorkspaceTreeInput::Terminal {
+                    profile_id: host.logins[0].id.clone(),
+                    files: WorkspaceFilesInput::Open { path: directory.clone() },
+                },
+                focused: 0,
+            }],
+            active: Some(0),
+            forwards: vec![],
+        })?;
+        let projection = workspaces.open(&denied.id)?;
+        let WorkspaceTree::Terminal { terminal } = &projection.tabs[0].tree else { unreachable!() };
+        let mut pane = Pane::start(manager.clone(), reopened.clone(), terminal.clone())?;
+        pane.refused(&manager, refuse_trust).await?;
+        pane.close(&manager).await?;
+    }
     forward_manager.stop_all().await?;
     for run in runs.iter().chain(std::iter::once(&temporary)) {
         assert_eq!(forward_manager.snapshot(&reopened, &run.id)?.phase, ForwardPhase::Stopped);
@@ -524,7 +763,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     echo_task.abort();
     let _ = echo_task.await;
     println!(
-        "Real OpenSSH mixed Workspace restored fresh independent terminals and saved Local/Remote/Dynamic traffic through Jump trust/authentication; exact duplicate refusals preserved existing sessions/runs, binary counters and Stop."
+        "Real OpenSSH Workspace restored Direct/Jump opaque Files directories, binary transfers and fresh queues; closed panels, failed directories and trust/authentication refusals preserved ordinary terminals and selected Local/Remote/Dynamic tunnel results."
     );
     Ok(())
 }

@@ -144,18 +144,23 @@ the component in both desktop and browser consumers.
 ## Saved terminal workspaces
 
 The Rust `workspaces::Workspaces` facade creates, lists, opens and tombstones
-device-local Workspace objects in SQLCipher. The internal version-two layout
+device-local Workspace objects in SQLCipher. The internal version-four layout
 stores ordered binary terminal trees, each tab's focused slot and the selected
-tab or Hosts. Session slots retain only Login references. Create validates the
-entire definition before writing; Open resolves every current Login and dependency
+tab or Hosts, explicitly selected saved tunnels and each terminal's Files state.
+Its fifth CBOR map field covers exactly the terminal slots with null for closed
+panels or opaque directory bytes for open ones. Paths retain 1 to 4096 bytes,
+without NUL or display-text substitution. Terminal SessionSpecs keep only Login
+references; tunnel specs retain the selected Forward and Login. Create validates the
+entire definition before writing; Open resolves every current dependency
 before returning complete trees with fresh runtime session identifiers. Neither
 operation reserves or connects a transport. The four generated `workspaces*`
 commands run against the captured `ProfileRequest`; a replaced or unavailable
 profile cannot apply an old request to the new store.
 
 Trees are bounded to eight leaves per tab, three branch levels and 64 total
-slots, within the existing object and 64 KiB layout limits. Unsupported layouts,
-including retained version-one definitions, remain byte-identical and deletable.
+slots including at most 16 saved tunnels, within the existing object and 64 KiB
+layout limits. Unsupported layouts, including versions one through three, remain
+byte-identical and deletable.
 Missing dependencies make Open unavailable. Foreign Workspace metadata is omitted
 from the list, and foreign reads and deletes are refused. New saves stay local;
 they do not adopt existing inventory into sync.
@@ -172,10 +177,14 @@ Closing a pane awaits its output checkpoint before collapsing the parent to its
 surviving child. Whole-tab and window close use the same per-pane controllers;
 failed checkpoints keep the affected panes for retry or explicit discard.
 Explicit Workspace Open appends fresh ordinary sessions and preserves existing
-ones. Startup, unlock and list do not restore connections automatically. Saved
-output, Files, tunnels and remote processes are outside this terminal-only
-restoration profile. Native interaction and application/system restart acceptance
-remain separate roadmap outcomes.
+ones and starts selected saved tunnels through the ordinary ForwardManager. Startup,
+unlock and list do not restore connections automatically. A terminal's Files panel
+waits for its first ready transport before listing its saved directory through the
+same SessionManager connection. Shell captures panel/path intent without retaining
+file contents or jobs. Failed directory requests retain the selected path with explicit
+Retry/Home; later transport replacement closes Files through its ordinary lifecycle.
+Saved output, remote processes and transfer queues are not restored. Native interaction
+and application/system restart acceptance remain separate roadmap outcomes.
 
 ## Selected-terminal snippets
 

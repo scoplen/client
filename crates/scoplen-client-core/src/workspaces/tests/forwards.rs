@@ -60,8 +60,10 @@ fn mixed_reopen_preserves_order_explicit_logins_references_and_deterministic_byt
     let Value::Map(fields) = cbor::decode(record.layout.as_ref().unwrap()).unwrap() else {
         panic!()
     };
-    assert_eq!(fields[0], (Value::UInt(1), Value::UInt(3)));
-    assert_eq!(fields.len(), 4);
+    assert_eq!(fields[0], (Value::UInt(1), Value::UInt(4)));
+    assert_eq!(fields.len(), 5);
+    assert_eq!(layout.files.len(), 2);
+    assert!(layout.forwards.iter().all(|id| !layout.files.contains_key(id)));
     for (slot, id) in layout.forwards.iter().zip(ids) {
         let session = &record.sessions[slot];
         assert_eq!(session.kind, SessionKind::Forward);
@@ -130,7 +132,10 @@ fn tunnel_only_and_combined_limits_require_explicit_unique_saved_definitions() {
     let full = workspaces.create(combined.clone()).unwrap();
     assert_eq!(workspaces.open(&full.id).unwrap().forwards.len(), 16);
     combined.tabs.push(WorkspaceTabInput {
-        tree: WorkspaceTreeInput::Terminal { profile_id: profile.to_string() },
+        tree: WorkspaceTreeInput::Terminal {
+            profile_id: profile.to_string(),
+            files: WorkspaceFilesInput::Closed,
+        },
         focused: 0,
     });
     assert_eq!(workspaces.create(combined), Err(WorkspaceIssue::DefinitionTooLarge));
@@ -266,6 +271,22 @@ fn unavailable_forward_shapes_and_slot_mismatches_stay_byte_identical() {
     let Value::Map(fields) = cbor::decode(&bytes).unwrap() else { panic!() };
     let terminal = layout.tabs[0].focused;
     let tunnel = layout.forwards[0];
+    let mut foreign_files = fields.clone();
+    foreign_files[4].1 = Value::Map(vec![
+        (Value::Bytes(terminal.as_bytes().to_vec()), Value::Null),
+        (Value::Bytes(tunnel.as_bytes().to_vec()), Value::Null),
+    ]);
+    rewrite(
+        &store,
+        &view.id,
+        vec![(
+            FieldPath::Field(2),
+            Value::Bytes(cbor::encode(&Value::Map(foreign_files)).unwrap()),
+        )],
+    );
+    let before = store.get(id).unwrap().unwrap().encode().unwrap();
+    assert_eq!(workspaces.open(&view.id), Err(WorkspaceIssue::UnsupportedLayout));
+    assert_eq!(store.get(id).unwrap().unwrap().encode().unwrap(), before);
     for slots in [
         vec![],
         vec![Value::Bytes(tunnel.as_bytes().to_vec()); 2],

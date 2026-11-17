@@ -24,6 +24,8 @@ import {
   type SessionPreparationIntent,
   type SessionTarget,
   type TeamSshPolicyDenial,
+  type WorkspaceFilesInput,
+  type WorkspaceDirectory,
 } from "./ipc/bindings";
 import { TeamAccessRequests } from "./team-access-requests";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
@@ -89,9 +91,14 @@ export function SessionTerminal({
   getSnippetTargets,
   forwardRuntime,
   onConnect,
+  initialFiles,
+  onFilesChange,
 }: {
   target: SessionTarget;
   label: string;
+  /** One explicit Workspace Open's initial Files intent. */
+  initialFiles?: WorkspaceDirectory | null;
+  onFilesChange?: (files: WorkspaceFilesInput) => void;
   /** Only the selected session may display its pending prompt. */
   active?: boolean;
   onClose: (discardOutput?: boolean) => void;
@@ -173,7 +180,26 @@ export function SessionTerminal({
   const hostKey = hostPrompt?.hostKey ?? null;
   const [verified, setVerified] = useState<Array<Extract<PreparationEvent, { kind: "verified" }>>>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [filesOpen, setFilesOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(!!initialFiles);
+  const [initialDirectory, setInitialDirectory] = useState(initialFiles ?? null);
+  const filesPath = useRef(initialFiles?.path ?? [46]);
+  const firstTransport = useRef(true);
+  const reportFiles = useRef(onFilesChange);
+  useEffect(() => {
+    reportFiles.current = onFilesChange;
+  }, [onFilesChange]);
+  const changeFilesOpen = useCallback((open: boolean) => {
+    if (!open) {
+      setInitialDirectory(null);
+      filesPath.current = [46];
+    }
+    setFilesOpen(open);
+    reportFiles.current?.(open ? { kind: "open", path: filesPath.current } : { kind: "closed" });
+  }, []);
+  const changeFilesDirectory = useCallback((path: number[]) => {
+    filesPath.current = path;
+    reportFiles.current?.({ kind: "open", path });
+  }, []);
   const [findOpen, setFindOpen] = useState(false);
   const [enqueueIssue, setEnqueueIssue] = useState<SessionTransferIssue | null>(null);
   const latestEnqueue = useRef<string | null>(null);
@@ -288,7 +314,8 @@ export function SessionTerminal({
             case "starting":
               beginForwards(event.transportId);
               checkpointTransport.current = event.transportId;
-              setFilesOpen(false);
+              if (firstTransport.current) firstTransport.current = false;
+              else changeFilesOpen(false);
               clearPreparation();
               currentTransport.current = event.transportId;
               setTransportId(event.transportId);
@@ -454,7 +481,7 @@ export function SessionTerminal({
         return { unsubscribe: stop };
       },
     });
-  }, [connectionTarget, sessionId, commands, beginForwards, receiveForwards, loadForwards]);
+  }, [connectionTarget, sessionId, commands, beginForwards, receiveForwards, loadForwards, changeFilesOpen]);
 
   const inputSink = useMemo<TerminalSink>(
     () => ({
@@ -952,7 +979,7 @@ export function SessionTerminal({
               ref={filesToggle}
               label={t(filesOpen ? "session.files.close" : "session.files.open")}
               pressed={filesOpen}
-              onClick={() => setFilesOpen((open) => !open)}
+              onClick={() => changeFilesOpen(!filesOpen)}
             >
               <FolderOpen aria-hidden="true" className="size-4" />
             </IconButton>
@@ -1040,7 +1067,7 @@ export function SessionTerminal({
       {!filesOpen && enqueueIssue ? (
         <div role="alert" className="mx-3 mb-2 flex flex-wrap items-center gap-2 text-xs text-attention">
           <p className="m-0 min-w-0 flex-1">{t(`session.transfers.issue.${enqueueIssue}`)}</p>
-          <Button variant="ghost" onClick={() => setFilesOpen(true)}>
+          <Button variant="ghost" onClick={() => changeFilesOpen(true)}>
             {t("session.transfers.review")}
           </Button>
           <Button variant="ghost" onClick={() => setEnqueueIssue(null)}>
@@ -1063,7 +1090,7 @@ export function SessionTerminal({
               { count: transfers.snapshot.outstanding },
             )}
           </p>
-          <Button variant="ghost" onClick={() => setFilesOpen(true)}>
+          <Button variant="ghost" onClick={() => changeFilesOpen(true)}>
             {t("session.transfers.review")}
           </Button>
         </div>
@@ -1084,7 +1111,7 @@ export function SessionTerminal({
             ) : null}
           </div>
           {state === "connected" && !offline && !closingView && !filesOpen ? (
-            <Button variant="ghost" className="shrink-0 px-2" onClick={() => setFilesOpen(true)}>
+            <Button variant="ghost" className="shrink-0 px-2" onClick={() => changeFilesOpen(true)}>
               {t("session.files.open")}
             </Button>
           ) : null}
@@ -1162,12 +1189,14 @@ export function SessionTerminal({
             sessionId={sessionId}
             transportId={state === "connected" ? transportId : null}
             connectionLabel={label}
+            initialDirectory={initialDirectory}
+            onDirectoryChange={changeFilesDirectory}
             active={active}
             queue={transfers.snapshot}
             queueIssue={enqueueIssue ?? transfers.issue}
             onEnqueueFeedback={reportEnqueue}
             onClose={() => {
-              setFilesOpen(false);
+              changeFilesOpen(false);
               filesToggle.current?.focus();
             }}
             onFileOutcome={reportFileOutcome}

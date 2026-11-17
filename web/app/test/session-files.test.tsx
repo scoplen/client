@@ -2,7 +2,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { StrictMode } from "react";
+import { StrictMode, type ComponentProps } from "react";
 import { I18nProvider } from "../src/i18n";
 import type { SessionTransferItem, SessionTransferQueueSnapshot } from "../src/ipc/bindings";
 import { SessionFiles } from "../src/session-files";
@@ -83,6 +83,7 @@ function view(
   locale: "en" | "zh-Hans" = "en",
   transfers = queue(),
   active = true,
+  options: Partial<ComponentProps<typeof SessionFiles>> = {},
 ) {
   return (
     <I18nProvider locale={locale}>
@@ -96,6 +97,7 @@ function view(
         queue={transfers}
         queueIssue={null}
         onEnqueueFeedback={vi.fn()}
+        {...options}
       />
     </I18nProvider>
   );
@@ -104,6 +106,32 @@ function view(
 const directory: Entry = { name: "logs", path: [46, 47, 108, 111, 103, 115], kind: "directory", sizeBytes: null };
 const file: Entry = { name: "raw.bin", path: [46, 47, 255, 46, 98, 105, 110], kind: "file", sizeBytes: "4" };
 const other: Entry = { name: "socket", path: [46, 47, 115, 111, 99, 107, 101, 116], kind: "other", sizeBytes: null };
+
+it("retains an opaque restored directory after failure and retries it until explicit Home", async () => {
+  const path = [46, 47, 255, 60, 62];
+  const changed = vi.fn();
+  fileCommands.list.mockRejectedValueOnce(new Error("Directory unavailable"));
+  render(
+    view("transport-1", vi.fn(), vi.fn(), "en", queue(), true, {
+      initialDirectory: { path, label: "./<img src=x>" },
+      onDirectoryChange: changed,
+    }),
+  );
+  await screen.findByText("Directory unavailable");
+  expect(fileCommands.list.mock.calls[0]?.[3]).toEqual(path);
+  expect(changed).toHaveBeenLastCalledWith(path);
+  expect(screen.getByText("./<img src=x>").querySelector("img")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(2));
+  expect(fileCommands.list.mock.calls[1]?.[3]).toEqual(path);
+  await screen.findByText("This directory is empty.");
+  await userEvent.click(screen.getByRole("button", { name: "Home" }));
+  await waitFor(() => expect(fileCommands.list).toHaveBeenCalledTimes(3));
+  expect(fileCommands.list.mock.calls[2]?.[3]).toEqual([46]);
+  expect(changed).toHaveBeenLastCalledWith([46]);
+  expect(fileCommands.upload).not.toHaveBeenCalled();
+  expect(fileCommands.download).not.toHaveBeenCalled();
+});
 
 beforeEach(() => {
   mockIPC(() => undefined);
