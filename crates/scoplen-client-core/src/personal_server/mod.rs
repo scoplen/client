@@ -33,6 +33,11 @@ pub use sync::{
 };
 pub(crate) use teams::TeamSshAuthority;
 pub use teams::{
+    TeamAccessRequestAction, TeamAccessRequestCheckView, TeamAccessRequestDecisionView,
+    TeamAccessRequestDraft, TeamAccessRequestError, TeamAccessRequestFailure,
+    TeamAccessRequestFields, TeamAccessRequestGrantView, TeamAccessRequestList,
+    TeamAccessRequestLogin, TeamAccessRequestOperationView, TeamAccessRequestPageView,
+    TeamAccessRequestResourceView, TeamAccessRequestReviewView, TeamAccessRequests,
     TeamAssetSummary, TeamAssetsPhase, TeamAssetsView, TeamAuthoringCollection,
     TeamAuthoringCreatePhase, TeamAuthoringCreateView, TeamAuthoringData, TeamAuthoringPageView,
     TeamAuthoringResourceView, TeamCreationPhase, TeamCreationView, TeamError, TeamFailure,

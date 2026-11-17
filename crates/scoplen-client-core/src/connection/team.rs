@@ -107,6 +107,19 @@ impl TeamConnectionSnapshot {
         Ok((plan, profile, host))
     }
 
+    pub fn matching_logins(&self, host: Uuid, username: &str) -> Vec<(Uuid, String)> {
+        if self.read::<Host>(host).is_err() {
+            return Vec::new();
+        }
+        self.objects
+            .values()
+            .filter(|object| object.object_type == AccessProfile::TYPE)
+            .filter_map(|object| AccessProfile::read(object).ok())
+            .filter(|profile| profile.host == host && profile.username == username)
+            .map(|profile| (profile.meta.id, profile.name.unwrap_or(profile.username)))
+            .collect()
+    }
+
     pub fn plans(
         &self,
         profile: Uuid,

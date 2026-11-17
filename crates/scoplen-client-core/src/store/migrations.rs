@@ -862,4 +862,28 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         settings TEXT NOT NULL
     ) STRICT, WITHOUT ROWID;
     "#,
+    // 25: access-request confirmations retain their original body and reviewed version.
+    r#"
+    CREATE TABLE team_access_requests (
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK(length(account_id)=16),
+        device_id BLOB NOT NULL CHECK(length(device_id)=16),
+        organization_id BLOB NOT NULL CHECK(length(organization_id)=16),
+        operation_id BLOB NOT NULL CHECK(length(operation_id)=16),
+        request_id BLOB NOT NULL CHECK(length(request_id)=16),
+        kind INTEGER NOT NULL CHECK(kind BETWEEN 0 AND 3),
+        payload BLOB NOT NULL CHECK(length(payload) BETWEEN 0 AND 4096),
+        original BLOB CHECK(original IS NULL OR length(original) BETWEEN 1 AND 8192),
+        etag TEXT CHECK(etag IS NULL OR length(etag) BETWEEN 1 AND 256),
+        phase INTEGER NOT NULL CHECK(phase BETWEEN 0 AND 2),
+        first_attempt_ms INTEGER CHECK(first_attempt_ms IS NULL OR first_attempt_ms>=0),
+        response BLOB CHECK(response IS NULL OR length(response) BETWEEN 1 AND 8192),
+        PRIMARY KEY(origin,account_id,device_id,organization_id),
+        CHECK((kind=0)=(original IS NULL)),
+        CHECK((kind=0)=(etag IS NULL)),
+        CHECK((kind=3)=(length(payload)=0)),
+        CHECK((phase=2)=(response IS NOT NULL)),
+        CHECK(phase=0 OR first_attempt_ms IS NOT NULL)
+    ) STRICT, WITHOUT ROWID;
+    "#,
 ];

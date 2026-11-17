@@ -295,6 +295,41 @@ each phase on each database. Broader interval, lifecycle, tenant and ordinary-po
 to the genuine server HTTPS matrix. These checks establish neither immediate revocation of
 disclosed certificates nor existing-session termination, rendered interaction or native UI acceptance.
 
+### Access request to native SSH
+
+The separate D-150 consumer uses the existing prepared Host, Direct Login, user CA and owned
+OpenSSH fixture. Its private descriptor contains the same twelve Host Grant fields plus exactly
+`request_id`, `request_duration_seconds` and `request_reason`. Before applying, `request_id` is
+explicitly null and `expected_outcome` is `issuance_denied`. After the independent administrator
+approves the actual request, retain its exact canonical UUIDv7 in the active and withdrawn
+descriptors. The active phase uses `ssh_sftp` and the effective certificate cutoff; withdrawal
+uses `issuance_denied` with a null cutoff. Duration and reason must remain exact throughout.
+
+```powershell
+$env:SCOPLEN_LIVE_HOST_ACCESS_REQUEST_DEPLOYMENT = '<absolute access-request descriptor path>'
+$env:SCOPLEN_LIVE_TEAM_SSH_FIXTURE = '<absolute owned OpenSSH descriptor path>'
+cargo test --locked -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::host_access_request_ssh::live_host_access_request_ordinary_ssh_and_binary_sftp -- --exact --test-threads=1
+```
+
+Each phase signs in on fresh encrypted stores and Devices. Before approval, an actual ordinary
+terminal performs Host-key review and receives the authenticated exact-target certificate policy
+refusal. Only that native refusal can enable the side-effect-free eligibility check. A separate
+explicit preparation and submission creates the pending application. An independent administrator
+must read and verify that application's requester, Membership and all four original fields before
+approving it through the public API. The active consumer reads the approved history, selects a
+currently visible matching Login, and explicitly opens a separate ordinary terminal with the
+original Host and username. It then exercises the existing shell, resize and binary-SFTP
+roundtrip and verifies certificate expiry. After Grant withdrawal, approved history remains
+readable while a new Device's actual ordinary terminal must receive a typed policy refusal.
+
+A successful consumer writes only its previously absent `request-client-before.complete`,
+`request-client-active.complete` or `request-client-withdrawn.complete` beside the descriptor.
+Each contains one compact JSON object followed by LF. Before reports exactly `request_id`,
+`host_id`, `remote_user`, `duration_seconds`, `status`; active reports exactly `request_id`,
+`status`, `ssh_sftp`; withdrawn reports exactly `request_id`, `status`, `issuance_denied`.
+Completion evidence excludes the private reason and credentials. Require one passing test in
+each phase on both databases; compilation does not establish genuine or rendered acceptance.
+
 ### Preconfirmed-profile integration
 
 The opt-in `live-server-integration` feature checks retained admitted-device authentication,

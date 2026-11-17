@@ -457,7 +457,8 @@ uncertainty requires a successful explicit collection refresh before Archive rev
 `update_team_authoring` and `delete_team_authoring` use only the captured If-Match. Conflict,
 malformed completion or an unknown invocation disables another edit until an explicit fresh read.
 
-Create access rule selects a Membership or local Group and one independent view or connect grant.
+Create access rule selects a Membership or local Group and one independent view, connect, or
+request-access grant. Request access accepts explicit Hosts only and no SSH username condition.
 `preview_team_simple_rule` invokes the shared generator. The read-only source and dependency notice
 are reviewed before the normal durable policy create; dependencies receive no implicit grant.
 The Advanced editor accepts one supported Cedar policy. Fields preserve their exact permitted text.
@@ -482,6 +483,35 @@ Membership invalidation withdraws only that team's preparation and cached certif
 established unmanaged SSH sessions are not described as forcibly revoked. Real client-core HTTPS
 inventory and certificate-authenticated SSH/SFTP checks pass on SQLite and PostgreSQL. Native
 desktop interaction for these workflows remains unverified on Windows and macOS.
+
+### Temporary access requests
+
+An authenticated certificate-policy denial exposes **Review access** for its exact original
+team, Host and SSH username. `check_team_access_request` takes only the retained terminal id,
+duration and reason; Rust obtains the target from the completed native refusal. Generic errors,
+CA setup refusals and caller-authored target projections do not enable this entry point.
+The exact duration and reason remain unchanged. A successful check permits an explicit
+`prepare_team_access_request`, followed by `submit_team_access_request`; checking creates
+no application, Grant, certificate or connection.
+
+**My requests** and **Approvals** use real current authorized pages and refresh every 60 seconds
+while that view remains open. Selecting an item GETs its complete Resource before review.
+Approve, Deny and Cancel retain that original Resource and strong ETag inside Rust. A decision
+cannot partially approve, edit its input, or approve the requester's own application. Cancellation
+uses the original requester identity without requiring a synchronized Host projection. Persisted
+pending records past their independent deadline and unknown future statuses remain inert.
+
+One mutation per Account, Device and team is retained in SQLCipher before sending. The original
+UUIDv7 Idempotency-Key, path, exact body and If-Match survive reopening. Unknown results offer
+only explicit **Confirm original request**; no list refresh, later ETag or reconnect replaces them.
+Confirmed and prepared operations can be completed explicitly. Expired uncertainty requires a
+successful current refresh and explicit archive before another operation.
+
+Approval history offers a separate ordinary **Connect** using a currently visible Login matching
+the original Host and exact SSH username. The native connection preparation checks that tuple
+again, then follows ordinary current certificate authorization, Host-key review, SSH and SFTP.
+Approval never connects automatically and does not serve as a current access permit. Personal
+assets, other teams and another Account opening cannot supply an intent's missing context.
 
 ## Inventory (roadmap C3)
 

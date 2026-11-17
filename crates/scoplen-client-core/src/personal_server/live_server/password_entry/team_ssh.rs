@@ -134,7 +134,8 @@ pub(super) async fn terminal_and_files_with_trust(
     let trusts = AtomicUsize::new(0);
     let validate = |context: &PreparationContext| {
         match target {
-            SessionTarget::Organization { source, .. } => {
+            SessionTarget::Organization { source, .. }
+            | SessionTarget::OrganizationAccessRequest { source, .. } => {
                 assert_eq!(context.source.as_ref(), Some(source));
             }
             SessionTarget::Personal { .. } => {
@@ -249,7 +250,18 @@ pub(super) async fn terminal_and_files_with_trust(
     assert_eq!(trusts.load(Ordering::SeqCst), expected_trust_prompts);
     let recent = Inventory::new(store).recent_sessions().unwrap();
     assert_eq!(recent.len(), recent_before + 1);
-    assert_eq!(&recent[0].target, target);
+    if let SessionTarget::OrganizationAccessRequest { source, profile_id, host_id, remote_user } =
+        target
+    {
+        assert_eq!(
+            recent[0].target,
+            SessionTarget::Organization { source: source.clone(), profile_id: profile_id.clone() }
+        );
+        assert_eq!(&recent[0].host_id, host_id);
+        assert_eq!(&recent[0].username, remote_user);
+    } else {
+        assert_eq!(&recent[0].target, target);
+    }
     assert!(recent[0].ended_at.is_some());
 }
 

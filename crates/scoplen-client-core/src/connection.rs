@@ -65,13 +65,26 @@ pub enum SessionTarget {
         /// Login identifier in that Organization alone.
         profile_id: String,
     },
+    /// An explicit ordinary Connect retaining an approved request's concrete target.
+    OrganizationAccessRequest {
+        /// Captured deployment, Account, Organization and Device.
+        source: TeamSshSource,
+        /// A currently visible matching Login.
+        profile_id: String,
+        /// Original request Host, checked again during preparation.
+        host_id: String,
+        /// Exact original username, checked again during preparation.
+        remote_user: String,
+    },
 }
 
 impl SessionTarget {
     /// The Login identifier within this target's explicit source.
     pub fn profile_id(&self) -> &str {
         match self {
-            Self::Personal { profile_id } | Self::Organization { profile_id, .. } => profile_id,
+            Self::Personal { profile_id }
+            | Self::Organization { profile_id, .. }
+            | Self::OrganizationAccessRequest { profile_id, .. } => profile_id,
         }
     }
 }

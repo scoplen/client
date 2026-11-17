@@ -190,6 +190,47 @@ fn identical_personal_ids_never_supply_a_missing_team_host_or_route() {
 }
 
 #[test]
+fn request_connect_retains_exact_host_and_user_when_the_selected_login_changes() {
+    let mut fixture = Fixture::new();
+    let target = SessionTarget::OrganizationAccessRequest {
+        source: fixture.source.clone(),
+        profile_id: fixture.profile.to_string(),
+        host_id: fixture.host.to_string(),
+        remote_user: "team-user".into(),
+    };
+    let snapshot =
+        TeamConnectionSnapshot::load(&fixture.store, &fixture.personal, &fixture.source).unwrap();
+    assert_eq!(
+        snapshot.matching_logins(fixture.host, "team-user"),
+        vec![(fixture.profile, "team-user".into())]
+    );
+    assert!(snapshot.matching_logins(fixture.host, " team-user ").is_empty());
+    let plan = resolve_target_preparation_plan(&fixture.store, &fixture.personal, &target).unwrap();
+    assert_eq!(plan.target_context().host_id, fixture.host.to_string());
+    assert_eq!(plan.target_context().username, "team-user");
+    fixture.objects.retain(|object| object.id != fixture.profile);
+    fixture.objects.push(object::<AccessProfile>(
+        fixture.profile,
+        AccessProfileChange {
+            host: Some(fixture.host),
+            username: Some("different-user".into()),
+            ..Default::default()
+        },
+        fixture.store.device_id(),
+    ));
+    fixture.publish();
+    assert!(resolve_target_preparation_plan(&fixture.store, &fixture.personal, &target).is_err());
+    let snapshot =
+        TeamConnectionSnapshot::load(&fixture.store, &fixture.personal, &fixture.source).unwrap();
+    assert!(snapshot.matching_logins(fixture.host, "team-user").is_empty());
+    fixture.objects.retain(|object| object.id != fixture.host);
+    fixture.publish();
+    let snapshot =
+        TeamConnectionSnapshot::load(&fixture.store, &fixture.personal, &fixture.source).unwrap();
+    assert!(snapshot.matching_logins(fixture.host, "different-user").is_empty());
+}
+
+#[test]
 fn team_jumps_require_every_visible_same_source_login_and_host() {
     let mut fixture = Fixture::new();
     let jump_host = Uuid::now_v7();

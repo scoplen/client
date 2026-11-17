@@ -9,6 +9,7 @@ use crate::{
 use super::*;
 
 mod browser_team_ssh;
+mod host_access_request_ssh;
 mod host_grant_ssh;
 mod isolation;
 mod personal_inventory_ssh;

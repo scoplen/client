@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Account-scoped team discovery, durable creation and conditional name updates.
 
+mod access_requests;
 pub(super) mod assets;
 mod authoring;
 mod membership;
 mod ssh;
+pub use access_requests::*;
 pub use assets::{TeamAssetSummary, TeamAssetsPhase, TeamAssetsView};
 pub use authoring::*;
 pub use membership::{
