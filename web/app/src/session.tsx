@@ -525,9 +525,9 @@ export function SessionTerminal({
         if (state !== "connected" || offline || closingView || !transportId) return null;
         const canSend = () =>
           mounted.current && currentTransport.current === transportId && !connectionEnded.current && !closing.current;
-        return canSend() ? { sessionId, transportId, target: label, canSend } : null;
+        return canSend() ? { sessionId, transportId, target: label, canSend, source: context?.source } : null;
       }),
-    [registerSnippetTarget, state, offline, closingView, transportId, sessionId, label],
+    [registerSnippetTarget, state, offline, closingView, transportId, sessionId, label, context?.source],
   );
   const menu = useContextMenu();
 
@@ -968,6 +968,7 @@ export function SessionTerminal({
               sessionId={sessionId}
               transportId={transportId}
               target={label}
+              source={context?.source}
               getTargets={getSnippetTargets}
               canSend={() => currentTransport.current === transportId && !connectionEnded.current && !closing.current}
             />

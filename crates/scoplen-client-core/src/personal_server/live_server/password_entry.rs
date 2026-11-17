@@ -17,6 +17,7 @@ mod personal_inventory_ssh;
 mod team_inventory;
 mod team_inventory_import;
 mod team_membership;
+mod team_snippets;
 mod team_ssh;
 mod teams;
 

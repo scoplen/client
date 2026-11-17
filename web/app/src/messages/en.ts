@@ -2031,6 +2031,22 @@ export const en = {
     "Team setup could not be verified or saved. Your existing account data was kept. Review the retained creation before retrying.",
   "snippets.open": "Snippets",
   "snippets.title": "Command snippets",
+  "snippets.source": "Snippet library",
+  "snippets.source.personal": "Personal",
+  "snippets.source.team": "Team · {team}",
+  "snippets.team.readOnly":
+    "Team templates are managed in Team Assets or the Account Console. Review supported commands here before sending to this team's connected terminals.",
+  "snippets.team.refresh": "Refresh team inventory",
+  "snippets.team.empty": "No command snippets are visible in this team's current inventory.",
+  "snippets.team.notLoaded": "Load this team's current inventory before choosing a command.",
+  "snippets.team.updating": "Team inventory is updating. Review a command after the complete view is ready.",
+  "snippets.team.unavailable":
+    "This team is unavailable to the current Account. Refresh team inventory to check access.",
+  "snippets.team.withdrawn": "The previous team view is no longer current. Refresh team inventory and review again.",
+  "snippets.team.acknowledgement":
+    "The complete team view is saved, but its acknowledgement is unconfirmed. Refresh team inventory before using a command.",
+  "snippets.team.failed":
+    "The current team inventory could not be confirmed. Refresh team inventory before choosing a command.",
   "snippets.editor": "Edit snippet",
   "snippets.preview": "Review command",
   "snippets.target": "Terminal: {target}",

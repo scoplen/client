@@ -16,6 +16,8 @@ use crate::repository::{
 };
 use crate::store::{Store, StoreError};
 
+pub mod team;
+
 /// Variable kinds in the editor and retained read-only definitions.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -134,7 +136,7 @@ pub struct SnippetView {
 }
 
 /// An exact nonsecret preview; the Send action adds one CR.
-#[derive(Clone, Debug, Serialize, Type, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedSnippet {
     /// The definition used for this preparation.
@@ -302,42 +304,7 @@ impl Snippets {
         values: BTreeMap<String, String>,
     ) -> Result<PreparedSnippet, SnippetIssue> {
         let object = self.object(id)?;
-        let record = Snippet::read(&object).map_err(|_| SnippetIssue::InvalidDefinition)?;
-        if has_secret(&record) {
-            return Err(SnippetIssue::SecretUnsupported);
-        }
-        let input = input_of(&record);
-        let parts = validate(&input)?;
-        let definitions: BTreeMap<_, _> =
-            input.variables.iter().map(|variable| (variable.name.as_str(), variable)).collect();
-        for name in values.keys() {
-            if !definitions.contains_key(name.as_str()) {
-                return Err(SnippetIssue::UnknownValue { name: name.clone() });
-            }
-        }
-        let mut resolved = BTreeMap::new();
-        for (name, definition) in definitions {
-            let value = values
-                .get(name)
-                .or(definition.default.as_ref())
-                .ok_or_else(|| SnippetIssue::MissingValue { name: name.into() })?;
-            if !valid_value(definition, value) {
-                return Err(SnippetIssue::InvalidValue { name: name.into() });
-            }
-            resolved.insert(name, value.as_str());
-        }
-        let mut command = String::new();
-        for part in parts {
-            let text = match part {
-                Part::Literal(text) => text,
-                Part::Variable(name) => resolved[name],
-            };
-            if command.len() + text.len() >= MAX_SSH_INPUT {
-                return Err(SnippetIssue::CommandTooLarge);
-            }
-            command.push_str(text);
-        }
-        Ok(PreparedSnippet { snippet_id: record.meta.id.to_string(), command })
+        prepare_object(&object, values)
     }
 
     fn object(&self, id: &str) -> Result<Object, SnippetIssue> {
@@ -350,6 +317,48 @@ impl Snippets {
             .filter(|object| object.object_type == ObjectType::SNIPPET && !object.is_tombstoned())
             .ok_or(SnippetIssue::NotFound)
     }
+}
+
+fn prepare_object(
+    object: &Object,
+    values: BTreeMap<String, String>,
+) -> Result<PreparedSnippet, SnippetIssue> {
+    let record = Snippet::read(object).map_err(|_| SnippetIssue::InvalidDefinition)?;
+    if has_secret(&record) {
+        return Err(SnippetIssue::SecretUnsupported);
+    }
+    let input = input_of(&record);
+    let parts = validate(&input)?;
+    let definitions: BTreeMap<_, _> =
+        input.variables.iter().map(|variable| (variable.name.as_str(), variable)).collect();
+    for name in values.keys() {
+        if !definitions.contains_key(name.as_str()) {
+            return Err(SnippetIssue::UnknownValue { name: name.clone() });
+        }
+    }
+    let mut resolved = BTreeMap::new();
+    for (name, definition) in definitions {
+        let value = values
+            .get(name)
+            .or(definition.default.as_ref())
+            .ok_or_else(|| SnippetIssue::MissingValue { name: name.into() })?;
+        if !valid_value(definition, value) {
+            return Err(SnippetIssue::InvalidValue { name: name.into() });
+        }
+        resolved.insert(name, value.as_str());
+    }
+    let mut command = String::new();
+    for part in parts {
+        let text = match part {
+            Part::Literal(text) => text,
+            Part::Variable(name) => resolved[name],
+        };
+        if command.len() + text.len() >= MAX_SSH_INPUT {
+            return Err(SnippetIssue::CommandTooLarge);
+        }
+        command.push_str(text);
+    }
+    Ok(PreparedSnippet { snippet_id: record.meta.id.to_string(), command })
 }
 
 fn has_secret(record: &Snippet) -> bool {

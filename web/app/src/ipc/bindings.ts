@@ -130,6 +130,12 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	snippetsDelete: (id: string) => typedError<null, SnippetIssue>(__TAURI_INVOKE("snippets_delete", { id })),
 	/**  Produce a bounded exact preview; this command performs no SSH input. */
 	snippetsPrepare: (id: string, values: { [key in string]: string }) => typedError<PreparedSnippet, SnippetIssue>(__TAURI_INVOKE("snippets_prepare", { id, values })),
+	/**  List the originating ready transport's complete, acknowledged Team library locally. */
+	teamSnippets: (origin: SnippetTerminal) => typedError<TeamSnippetLibrary, SnippetIssue>(__TAURI_INVOKE("team_snippets", { origin })),
+	/**  Review one current Team template and the complete same-source existing target set. */
+	prepareTeamSnippet: (origin: SnippetTerminal, fence: TeamSnippetFence, id: string, values: { [key in string]: string }, targets: SnippetTerminal[]) => typedError<PreparedTeamSnippet, SnippetIssue>(__TAURI_INVOKE("prepare_team_snippet", { origin, fence, id, values, targets })),
+	/**  Admit exact reviewed bytes to one original Team transport, with no automatic retry. */
+	sendTeamSnippet: (prepared: PreparedTeamSnippet, index: number) => typedError<TeamSnippetSendOutcome, SnippetIssue>(__TAURI_INVOKE("send_team_snippet", { prepared, index })),
 	/**  Read the captured Store's appearance directory without network access. */
 	terminalProfilesList: () => typedError<TerminalProfileDirectory, TerminalProfileIssue>(__TAURI_INVOKE("terminal_profiles_list")),
 	/**  Create an exact name from the current Default. */
@@ -2449,6 +2455,18 @@ export type PreparedSnippet = {
 	command: string,
 };
 
+/**  Exact command and ordered existing terminals confirmed by the user. */
+export type PreparedTeamSnippet = {
+	/**  The original complete view and its current owners. */
+	fence: TeamSnippetFence,
+	/**  Originating ready terminal that owns the dialog. */
+	origin: SnippetTerminal,
+	/**  Complete exact command, never rerendered at Send. */
+	snippet: PreparedSnippet,
+	/**  One to 64 distinct transports in the confirmed order. */
+	targets: SnippetTerminal[],
+};
+
 /**  Published only after a replacement namespace becomes current. */
 export type ProfileChanged = {
 	/**  Fresh selection state. */
@@ -3439,6 +3457,14 @@ name: string } |
 { kind: "invalidValue";
 /**  The definition's identifier, never the rejected input. */
 name: string };
+
+/**  Existing terminal identity, never a request to connect or replace a transport. */
+export type SnippetTerminal = {
+	/**  Logical terminal owner. */
+	sessionId: string,
+	/**  Exact existing transport. */
+	transportId: string,
+};
 
 /**  A definition submitted to the nonsecret editor. */
 export type SnippetVariableInput = {
@@ -4545,6 +4571,22 @@ export type TeamSimpleRuleResource = {
 	id: string,
 };
 
+/**  Captured existing view and authentication owners, without an execution lease. */
+export type TeamSnippetFence = {
+	/**  Canonical deployment, Account, Device and Organization. */
+	source: TeamSshSource,
+	/**  Organization inventory namespace. */
+	vaultId: string,
+	/**  Exact uint64 revision, without JavaScript precision loss. */
+	revision: string,
+	/**  Matching acknowledged cursor. */
+	cursor: string,
+	/**  Existing complete-view publication owner. */
+	viewGeneration: string,
+	/**  Existing retained authentication owner. */
+	authGeneration: string,
+};
+
 /**  Ordinary named command template and non-secret variable definitions. */
 export type TeamSnippetFields = TeamSnippetFields_Serialize | TeamSnippetFields_Deserialize;
 
@@ -4575,6 +4617,29 @@ export type TeamSnippetFields_Serialize = {
 	/**  Optional display folder. */
 	folder?: string | null,
 };
+
+/**  Read-only library from one terminal's actual Organization source. */
+export type TeamSnippetLibrary = {
+	/**  Actual source, never inferred from a display label. */
+	source: TeamSshSource,
+	/**  Existing current-view state. */
+	phase: TeamAssetsPhase,
+	/**  Whether the complete publication's ACK is confirmed. */
+	acknowledged: boolean,
+	/**  Present only for a complete Ready publication with matching ACK. */
+	fence: TeamSnippetFence | null,
+	/**  Safe complete definitions; asset immutability is independent of eligibility. */
+	snippets: SnippetView[],
+};
+
+/**  Local queue outcomes; none claims remote execution or an exit status. */
+export type TeamSnippetSendOutcome =
+/**  Accepted by the exact existing input queue. */
+"sent" |
+/**  Refused before queue handoff; another reviewed target may still qualify. */
+"notSent" |
+/**  The originating source/view is obsolete; stop starting further sends. */
+"invalidated";
 
 /**  Shared Snippet variable definition without a stored secret value. */
 export type TeamSnippetVariable = TeamSnippetVariable_Serialize | TeamSnippetVariable_Deserialize;
