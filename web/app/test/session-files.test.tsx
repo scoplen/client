@@ -65,6 +65,7 @@ const queuedItem: SessionTransferItem = {
   canAcknowledge: false,
   issue: null,
   stagingMayRemain: false,
+  directoryCopy: null,
 };
 
 function deferred<T>() {

@@ -168,6 +168,7 @@ it("reads a retained paused checkpoint again after reopening without inventing a
         canAcknowledge: false,
         issue: null,
         stagingMayRemain: false,
+        directoryCopy: null,
       },
     ],
   });

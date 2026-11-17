@@ -31,6 +31,7 @@ function row(changes: Partial<SessionTransferItem> = {}): SessionTransferItem {
     canAcknowledge: false,
     issue: null,
     stagingMayRemain: false,
+    directoryCopy: null,
     ...changes,
   };
 }
@@ -292,4 +293,183 @@ it("keeps ordinary uploads available without an admitted Pause capability", () =
   render(view(snapshot([row({ direction: "upload", state: "transferring", canPause: false })])));
   expect(screen.queryByRole("button", { name: /Pause transfer|Resume transfer/ })).toBeNull();
   expect(screen.getByRole("button", { name: "Cancel transfer of archive.bin" })).toBeTruthy();
+});
+
+function folder(changes: Partial<NonNullable<SessionTransferItem["directoryCopy"]>> = {}) {
+  return {
+    phase: "copying" as const,
+    filesTotal: 24,
+    directoriesTotal: 3,
+    filesCompleted: 8,
+    directoriesCreated: 2,
+    currentName: "nested/data.bin",
+    rootCreated: true,
+    rootCreationUnknown: false,
+    issue: null,
+    ...changes,
+  };
+}
+
+it("shows scanning without a byte percentage before the whole tree is known", () => {
+  render(
+    view(
+      snapshot([
+        row({
+          state: "transferring",
+          directoryCopy: folder({
+            phase: "scanning",
+            filesTotal: null,
+            directoriesTotal: null,
+            filesCompleted: 0,
+            directoriesCreated: 0,
+            rootCreated: false,
+            currentName: null,
+          }),
+          totalBytes: "0",
+        }),
+      ]),
+    ),
+  );
+  expect(screen.getByText("Scanning the complete folder")).toBeTruthy();
+  expect(screen.getByText("Files complete: 0 · Folders created: 0 · Totals pending")).toBeTruthy();
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect(screen.queryByText(/100%/)).toBeNull();
+});
+
+it("keeps one directory row with aggregate counts and bytes across child finalization", () => {
+  const rendered = render(
+    view(snapshot([row({ state: "transferring", transferredBytes: "2048", directoryCopy: folder() })])),
+  );
+  expect(screen.getByText("Copying folder contents")).toBeTruthy();
+  expect(screen.getByText("Files: 8 / 24 · Folders: 2 / 3")).toBeTruthy();
+  expect(screen.getByText("2,048 / 4,096 bytes · 50%")).toBeTruthy();
+  expect(screen.getByText("Current: nested/data.bin")).toBeTruthy();
+  expect(screen.getByRole("progressbar")).toHaveProperty("value", 50);
+  rendered.rerender(
+    view(
+      snapshot([
+        row({
+          state: "finalizing",
+          transferredBytes: "4096",
+          canCancel: false,
+          directoryCopy: folder({ phase: "finalizing", filesCompleted: 23, directoriesCreated: 3 }),
+        }),
+      ]),
+    ),
+  );
+  expect(screen.getByText("Verifying and saving folder contents")).toBeTruthy();
+  expect(screen.getByText("Files: 23 / 24 · Folders: 3 / 3")).toBeTruthy();
+  expect(screen.queryByText("Saved")).toBeNull();
+  expect(screen.queryByRole("button", { name: /Cancel transfer/ })).toBeNull();
+});
+
+it("finishes empty folders through directory counts without a byte ratio", () => {
+  render(
+    view(
+      snapshot(
+        [],
+        [
+          row({
+            state: "saved",
+            totalBytes: "0",
+            canCancel: false,
+            directoryCopy: folder({
+              filesTotal: 0,
+              filesCompleted: 0,
+              directoriesTotal: 1,
+              directoriesCreated: 1,
+              currentName: null,
+            }),
+          }),
+        ],
+      ),
+    ),
+  );
+  expect(screen.getByText("Saved")).toBeTruthy();
+  expect(screen.getByText("Files: 0 / 0 · Folders: 1 / 1")).toBeTruthy();
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect(screen.queryByText(/100%/)).toBeNull();
+});
+
+it.each(["failed", "cancelled", "interrupted"] as const)(
+  "discloses retained partial output after directory %s",
+  (state) => {
+    render(view(snapshot([], [row({ state, canCancel: false, directoryCopy: folder({ issue: "sourceChanged" }) })])));
+    expect(screen.getByText(/Completed files and created folders remain at the destination/)).toBeTruthy();
+    expect(screen.getByText("Files: 8 / 24 · Folders: 2 / 3")).toBeTruthy();
+    expect(screen.getByText("0 / 4,096 bytes · 0%")).toBeTruthy();
+    expect(screen.getByText(/The source changed/)).toBeTruthy();
+    expect(screen.queryByText("Saved")).toBeNull();
+  },
+);
+
+it("does not call a preexisting-root refusal partial completion", () => {
+  render(
+    view(
+      snapshot(
+        [],
+        [
+          row({
+            state: "failed",
+            canCancel: false,
+            directoryCopy: folder({
+              rootCreated: false,
+              filesCompleted: 0,
+              directoriesCreated: 0,
+              issue: "destinationExists",
+            }),
+          }),
+        ],
+      ),
+    ),
+  );
+  expect(screen.getByText(/The destination folder already exists/)).toBeTruthy();
+  expect(screen.queryByText(/Completed files and created folders remain at the destination/)).toBeNull();
+});
+
+it("explains unconfirmed root creation and acknowledges without replay", async () => {
+  render(
+    view(
+      snapshot([
+        row({
+          state: "unknown",
+          canCancel: false,
+          canAcknowledge: true,
+          directoryCopy: folder({
+            rootCreated: false,
+            rootCreationUnknown: true,
+            filesCompleted: 0,
+            directoriesCreated: 0,
+            issue: "publicationUnknown",
+          }),
+        }),
+      ]),
+    ),
+  );
+  expect(screen.getByText(/Creation of the destination folder could not be confirmed/)).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Dismiss unknown-result reminder for archive.bin" }));
+  expect(actions.acknowledge).toHaveBeenCalledExactlyOnceWith("session-1", "queue-1", "item-1", "execution-1");
+  expect(actions.resume).not.toHaveBeenCalled();
+});
+
+it.each(["transferring", "paused"] as const)(
+  "never offers directory Pause or Resume in %s despite inconsistent flags",
+  (state) => {
+    render(view(snapshot([row({ state, canPause: true, canResume: true, directoryCopy: folder() })])));
+    expect(screen.queryByRole("button", { name: /Pause transfer|Resume transfer/ })).toBeNull();
+    expect(screen.queryByText(/Resume joins the end of the queue/)).toBeNull();
+  },
+);
+
+it("localizes directory phase, partial counts and fixed issue", () => {
+  render(
+    view(
+      snapshot([], [row({ state: "failed", canCancel: false, directoryCopy: folder({ issue: "remoteDenied" }) })]),
+      "zh-Hans",
+    ),
+  );
+  expect(screen.getByText("文件：8 / 24 · 文件夹：2 / 3")).toBeTruthy();
+  expect(screen.getByText("当前：nested/data.bin")).toBeTruthy();
+  expect(screen.getByText(/已完成的文件和已创建的文件夹仍保留/)).toBeTruthy();
+  expect(screen.getByText("服务器拒绝文件访问，请检查权限并核对目标。")).toBeTruthy();
 });

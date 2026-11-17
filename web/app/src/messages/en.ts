@@ -518,6 +518,70 @@ export const en = {
     "No files were added. Drop 1–16 ordinary files into this directory list, or choose Upload file.",
   "session.files.download": "Download {name}",
   "session.directorySync.action": "Compare folder files",
+  "session.directoryCopy.upload": "Upload folder",
+  "session.directoryCopy.download": "Download folder {name}",
+  "session.directoryCopy.title.upload": "Upload folder",
+  "session.directoryCopy.title.download": "Download folder",
+  "session.directoryCopy.description": "Copy a complete folder through {connection}.",
+  "session.directoryCopy.newRoot": "Copy into a new folder. Existing folders are never merged or replaced.",
+  "session.directoryCopy.partialDisclosure":
+    "If copying stops or is cancelled, completed files and created folders remain at the destination. Local copies are outside Scoplen's encrypted storage.",
+  "session.directoryCopy.preparing": "Choose a local folder in the system dialog, then review the copy here…",
+  "session.directoryCopy.direction.upload": "Upload: local folder → remote folder",
+  "session.directoryCopy.direction.download": "Download: remote folder → local folder",
+  "session.directoryCopy.source": "Source folder",
+  "session.directoryCopy.destination": "Destination parent",
+  "session.directoryCopy.name": "New folder name",
+  "session.directoryCopy.nameHint": "Use one folder name. The new folder must not already exist.",
+  "session.directoryCopy.invalidName": "Enter one folder name, without path separators, . or ..",
+  "session.directoryCopy.enqueue": "Queue folder copy",
+  "session.directoryCopy.chooseAgain": "Choose again",
+  "session.directoryCopy.close": "Close",
+  "session.directoryCopy.queued": "The folder was added to the transfer queue.",
+  "session.directoryCopy.unknown":
+    "The queueing result could not be confirmed. Close this review and check the transfer queue before starting another copy. This request will not be replayed.",
+  "session.directoryCopy.phase.scanning": "Scanning the complete folder",
+  "session.directoryCopy.phase.copying": "Copying folder contents",
+  "session.directoryCopy.phase.finalizing": "Verifying and saving folder contents",
+  "session.directoryCopy.countsPending": "Files complete: {files} · Folders created: {directories} · Totals pending",
+  "session.directoryCopy.counts": "Files: {files} / {filesTotal} · Folders: {directories} / {directoriesTotal}",
+  "session.directoryCopy.current": "Current: {name}",
+  "session.directoryCopy.partial":
+    "Copy stopped. Completed files and created folders remain at the destination; review them before another attempt.",
+  "session.directoryCopy.rootUnknown":
+    "Creation of the destination folder could not be confirmed. Review the destination before another attempt; it will not be created again automatically.",
+  "session.directoryCopy.issue.unavailable": "This connection is unavailable. Reconnect and choose the folder again.",
+  "session.directoryCopy.issue.invalidSelection": "The folder selection is unavailable. Choose the folder again.",
+  "session.directoryCopy.issue.selectionExpired": "This folder selection expired. Choose the folder again.",
+  "session.directoryCopy.issue.unsupportedEntry":
+    "The source contains a link or unsupported entry. Remove it from the source before another copy.",
+  "session.directoryCopy.issue.unsupportedName":
+    "A name cannot be used unchanged at the destination, or names collide. Check the new folder name and source names.",
+  "session.directoryCopy.issue.destinationExists":
+    "The destination folder already exists. Nothing was merged or replaced. Start a new copy with a different name.",
+  "session.directoryCopy.issue.tooManyEntries":
+    "The folder exceeds 10,000 entries, including its root. Choose a smaller folder.",
+  "session.directoryCopy.issue.tooDeep": "The folder exceeds 32 nested levels. Choose a shallower folder.",
+  "session.directoryCopy.issue.tooMuchMetadata":
+    "The folder names and structure exceed the copy limit. Choose a smaller folder.",
+  "session.directoryCopy.issue.timeout": "Scanning took too long. Check the connection and choose a smaller folder.",
+  "session.directoryCopy.issue.cancelled": "The folder selection or copy was cancelled.",
+  "session.directoryCopy.issue.sourceChanged": "The source changed. Review both folders before another copy.",
+  "session.directoryCopy.issue.targetChanged": "The destination changed. Review it before another copy.",
+  "session.directoryCopy.issue.queueFull":
+    "The transfer queue is full. Wait for a free slot, then choose the folder again.",
+  "session.directoryCopy.issue.nativeDialogBusy":
+    "Another file dialog is open. Finish it, then choose the folder again.",
+  "session.directoryCopy.issue.localIo":
+    "A local file or folder could not be accessed. Check its permissions and review the destination.",
+  "session.directoryCopy.issue.remoteDenied":
+    "The server refused file access. Check permissions and review the destination.",
+  "session.directoryCopy.issue.cleanupIncomplete":
+    "A temporary file may remain at the destination. Review it before another copy.",
+  "session.directoryCopy.issue.publicationUnknown":
+    "A folder or file save could not be confirmed. Review the destination; the operation will not be replayed.",
+  "session.directoryCopy.issue.failed":
+    "The folder copy could not be completed. Check the connection and review the destination before another attempt.",
   "session.directorySync.title": "Compare folder files",
   "session.directorySync.description":
     "Compare files on {connection} with a folder you choose. Nothing is written during comparison.",

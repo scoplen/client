@@ -25,9 +25,9 @@ function actionAvailable(item: SessionTransferItem, action: TransferAction) {
     case "cancel":
       return item.canCancel;
     case "pause":
-      return item.state === "transferring" && item.canPause;
+      return !item.directoryCopy && item.state === "transferring" && item.canPause;
     case "resume":
-      return item.state === "paused" && item.canResume;
+      return !item.directoryCopy && item.state === "paused" && item.canResume;
     case "acknowledge":
       return item.canAcknowledge;
   }
@@ -65,7 +65,7 @@ export function SessionTransferQueue({
   const currentIssue = visibleAction?.issue ?? issue;
   const rows = snapshot ? [...snapshot.items, ...snapshot.recent.slice().reverse()] : [];
   const hasUnknown = snapshot?.items.some((item) => item.state === "unknown") ?? false;
-  const hasPaused = snapshot?.items.some((item) => item.state === "paused") ?? false;
+  const hasPaused = snapshot?.items.some((item) => !item.directoryCopy && item.state === "paused") ?? false;
   const format = new Intl.NumberFormat(locale);
 
   const request = async (item: SessionTransferItem, kind: TransferAction) => {
@@ -146,6 +146,10 @@ export function SessionTransferQueue({
       ) : null}
       <ol className="m-0 max-h-64 list-none overflow-y-auto p-0 px-3 text-xs">
         {rows.map((item) => {
+          const directory = item.directoryCopy;
+          const directoryActive = !!directory && (item.state === "transferring" || item.state === "finalizing");
+          const directoryStopped =
+            !!directory && ["cancelled", "conflict", "failed", "interrupted", "unknown"].includes(item.state);
           const transferred = byteCount(item.transferredBytes);
           const total = item.totalBytes === null ? null : byteCount(item.totalBytes);
           const countsValid =
@@ -178,7 +182,13 @@ export function SessionTransferQueue({
                   <p className="m-0 mt-1 text-muted">
                     <span>{t(`session.transfers.direction.${item.direction}`)}</span>
                     {" · "}
-                    <span>{t(`session.transfers.state.${item.state}`)}</span>
+                    <span>
+                      {t(
+                        directoryActive
+                          ? `session.directoryCopy.phase.${directory.phase}`
+                          : `session.transfers.state.${item.state}`,
+                      )}
+                    </span>
                   </p>
                 </div>
               </div>
@@ -232,19 +242,56 @@ export function SessionTransferQueue({
                   </Button>
                 ) : null}
               </div>
-              {moving && progress ? (
+              {directory ? (
                 <div className="mt-2">
-                  <p className="m-0 break-all tabular-nums">{progress}</p>
-                  <progress
-                    className="mt-1 block h-1.5 w-full min-w-0 accent-primary"
-                    max={100}
-                    value={percent ?? undefined}
-                    aria-label={t("session.transfers.progressNamed", { name: item.name })}
-                    aria-valuetext={progress}
-                  />
+                  <p className="m-0 break-words tabular-nums">
+                    {t(
+                      directory.filesTotal === null || directory.directoriesTotal === null
+                        ? "session.directoryCopy.countsPending"
+                        : "session.directoryCopy.counts",
+                      {
+                        files: directory.filesCompleted,
+                        filesTotal: directory.filesTotal ?? 0,
+                        directories: directory.directoriesCreated,
+                        directoriesTotal: directory.directoriesTotal ?? 0,
+                      },
+                    )}
+                  </p>
+                  {directory.currentName ? (
+                    <p className="m-0 mt-1 break-all text-muted">
+                      {t("session.directoryCopy.current", { name: directory.currentName })}
+                    </p>
+                  ) : null}
+                  {directoryStopped && (directory.rootCreated || directory.rootCreationUnknown) ? (
+                    <p className="m-0 mt-1 text-attention">
+                      {t(
+                        directory.rootCreationUnknown
+                          ? "session.directoryCopy.rootUnknown"
+                          : "session.directoryCopy.partial",
+                      )}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
-              {item.issue ? (
+              {(moving || directory) && progress && (!directory || (directory.phase !== "scanning" && total !== 0n)) ? (
+                <div className="mt-2">
+                  <p className="m-0 break-all tabular-nums">{progress}</p>
+                  {moving ? (
+                    <progress
+                      className="mt-1 block h-1.5 w-full min-w-0 accent-primary"
+                      max={100}
+                      value={percent ?? undefined}
+                      aria-label={t("session.transfers.progressNamed", { name: item.name })}
+                      aria-valuetext={progress}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+              {directory?.issue ? (
+                <p className="m-0 mt-1 break-words text-attention">
+                  {t(`session.directoryCopy.issue.${directory.issue}`)}
+                </p>
+              ) : item.issue ? (
                 <p className="m-0 mt-1 break-words text-attention">{t(`session.transfers.issue.${item.issue}`)}</p>
               ) : null}
               {item.stagingMayRemain && item.issue !== "cleanupIncomplete" ? (
