@@ -169,7 +169,26 @@ it("downloads only a directory row using its opaque path and requires a name whe
   );
 });
 
-it.each(["", ".", "..", "nested/name", "nested\\name"])(
+it("passes an upload basename containing a backslash unchanged to Rust", async () => {
+  const name = "config\\backup";
+  api.commands.sessionPrepareDirectoryCopy.mockResolvedValueOnce({
+    status: "ok",
+    data: { kind: "prepared", selection: selection({ sourceName: name, defaultRootName: name }) },
+  });
+  render(view());
+  await open();
+  expect(screen.getByRole("textbox", { name: "New folder name" })).toHaveProperty("value", name);
+  expect(screen.getByRole("button", { name: "Queue folder copy" })).toHaveProperty("disabled", false);
+  await userEvent.click(screen.getByRole("button", { name: "Queue folder copy" }));
+  expect(api.commands.sessionEnqueueDirectoryCopy).toHaveBeenCalledExactlyOnceWith(
+    "session-1",
+    "transport-1",
+    "selection-1",
+    name,
+  );
+});
+
+it.each(["", ".", "..", "nested/name"])(
   "refuses obvious non-basename input %j without consuming selection",
   async (name) => {
     render(view());
@@ -182,26 +201,29 @@ it.each(["", ".", "..", "nested/name", "nested\\name"])(
   },
 );
 
-it("retains the review after native name validation and requires explicit corrected enqueue", async () => {
-  api.commands.sessionEnqueueDirectoryCopy.mockResolvedValueOnce({ status: "error", error: "unsupportedName" });
-  render(view());
-  await open();
-  await userEvent.click(screen.getByRole("button", { name: "Queue folder copy" }));
-  expect(await screen.findByRole("alert")).toHaveProperty(
-    "textContent",
-    expect.stringContaining("A name cannot be used unchanged"),
-  );
-  expect(api.commands.sessionPrepareDirectoryCopy).toHaveBeenCalledTimes(1);
-  expect(api.commands.sessionDiscardDirectoryCopy).not.toHaveBeenCalled();
-  await userEvent.type(screen.getByRole("textbox"), "-copy");
-  await userEvent.click(screen.getByRole("button", { name: "Queue folder copy" }));
-  expect(api.commands.sessionEnqueueDirectoryCopy).toHaveBeenLastCalledWith(
-    "session-1",
-    "transport-1",
-    "selection-1",
-    "config-copy",
-  );
-});
+it.each(["upload", "download"] as const)(
+  "retains the %s review after native name validation and requires explicit corrected enqueue",
+  async (direction) => {
+    api.commands.sessionEnqueueDirectoryCopy.mockResolvedValueOnce({ status: "error", error: "unsupportedName" });
+    render(view());
+    await open(direction);
+    await userEvent.click(screen.getByRole("button", { name: "Queue folder copy" }));
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      expect.stringContaining("A name cannot be used unchanged"),
+    );
+    expect(api.commands.sessionPrepareDirectoryCopy).toHaveBeenCalledTimes(1);
+    expect(api.commands.sessionDiscardDirectoryCopy).not.toHaveBeenCalled();
+    await userEvent.type(screen.getByRole("textbox"), "-copy");
+    await userEvent.click(screen.getByRole("button", { name: "Queue folder copy" }));
+    expect(api.commands.sessionEnqueueDirectoryCopy).toHaveBeenLastCalledWith(
+      "session-1",
+      "transport-1",
+      "selection-1",
+      "config-copy",
+    );
+  },
+);
 
 it("discards closing review and restores keyboard focus", async () => {
   render(view());

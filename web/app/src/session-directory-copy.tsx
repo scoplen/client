@@ -115,7 +115,7 @@ export function SessionDirectoryCopy({
   }, [owner]);
 
   const validName =
-    state.name.trim().length > 0 && state.name !== "." && state.name !== ".." && !/[/\\\0]/.test(state.name);
+    state.name.trim().length > 0 && state.name !== "." && state.name !== ".." && !/[/\0]/.test(state.name);
   const enqueue = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (
