@@ -435,8 +435,8 @@ mod tests {
             ForwardInput, ForwardKindInput, Inventory, NewHost, SignIn,
         };
         use scoplen_client_core::workspaces::{
-            WorkspaceForwardInput, WorkspaceInput, WorkspaceIssue, WorkspaceSplitDirection,
-            WorkspaceTabInput, WorkspaceTree, WorkspaceTreeInput,
+            WorkspaceFilesInput, WorkspaceForwardInput, WorkspaceInput, WorkspaceIssue,
+            WorkspaceSplitDirection, WorkspaceTabInput, WorkspaceTree, WorkspaceTreeInput,
         };
 
         let directory =
@@ -454,7 +454,11 @@ mod tests {
                     sign_in: SignIn::KeyboardInteractive,
                 })
                 .unwrap();
-            let leaf = WorkspaceTreeInput::Terminal { profile_id: host.logins[0].id.clone() };
+            let leaf = WorkspaceTreeInput::Terminal {
+                profile_id: host.logins[0].id.clone(),
+                files: WorkspaceFilesInput::Closed,
+            };
+            let path = vec![b'.', b'/', 255, b'<', b'>'];
             let forward = Inventory::new(store.clone())
                 .create_forward(ForwardInput {
                     name: "Native saved tunnel".into(),
@@ -477,7 +481,10 @@ mod tests {
                     tabs: vec![WorkspaceTabInput {
                         tree: WorkspaceTreeInput::Split {
                             direction: WorkspaceSplitDirection::Vertical,
-                            first: Box::new(leaf.clone()),
+                            first: Box::new(WorkspaceTreeInput::Terminal {
+                                profile_id: host.logins[0].id.clone(),
+                                files: WorkspaceFilesInput::Open { path: path.clone() },
+                            }),
                             second: Box::new(leaf),
                         },
                         focused: 1,
@@ -514,6 +521,8 @@ mod tests {
                 panic!("second missing")
             };
             assert_ne!(first.session_id, second.session_id);
+            assert_eq!(first.files.as_ref().unwrap().path, path);
+            assert!(second.files.is_none());
             assert_eq!(opened.tabs[0].focused_session_id, second.session_id);
             let unbound = Arc::new(
                 Store::open(

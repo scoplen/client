@@ -269,6 +269,87 @@ async function focusPane(button: "Previous pane" | "Next pane", terminal: Scople
   await waitFor(() => expect(document.activeElement).toBe(terminal));
 }
 
+it.each(["failed", "loading"])(
+  "captures inactive Files with its %s opaque directory and restores only explicit panel intent",
+  async (listingState) => {
+    const f = fixture();
+    const path = [46, 47, 255, 110];
+    const pending = deferred<{ entries: [] }>();
+    f.handlers.set("session_list_files", ({ path: selected }) =>
+      JSON.stringify(selected) === "[46]"
+        ? { entries: [{ name: "nested", path, kind: "directory", sizeBytes: null }] }
+        : listingState === "loading"
+          ? pending.promise
+          : Promise.reject("Directory unavailable"),
+    );
+    const app = shell();
+    await userEvent.click(screen.getByRole("button", { name: "Start first" }));
+    await connect(f, 0);
+    await userEvent.click(screen.getByRole("button", { name: "Open files" }));
+    await userEvent.click(await screen.findByRole("button", { name: "nested" }));
+    if (listingState === "failed") await screen.findByText("Directory unavailable");
+    else await waitFor(() => expect(f.matching("session_list_files")).toHaveLength(2));
+    await userEvent.click(screen.getByRole("tab", { name: "Hosts" }));
+    await userEvent.click(screen.getByRole("button", { name: "Start second" }));
+    await connect(f, 1);
+    const requests = f.matching("session_list_files").length;
+    await userEvent.click(screen.getByRole("button", { name: "Workspaces" }));
+    await screen.findByText(/No saved workspaces/);
+    await userEvent.type(screen.getByRole("textbox", { name: "Workspace name" }), "Operations");
+    await userEvent.click(screen.getByRole("button", { name: "Save workspace" }));
+    await screen.findByText("Operations");
+    expect(f.matching("workspaces_create")[0]?.args.input).toMatchObject({
+      tabs: [
+        { tree: { kind: "terminal", profileId: "login-first", files: { kind: "open", path } } },
+        { tree: { kind: "terminal", profileId: "login-second", files: { kind: "closed" } } },
+      ],
+      active: 1,
+    });
+    expect(f.matching("session_list_files")).toHaveLength(requests);
+    await act(async () => app.unmount());
+    await act(async () => pending.resolve({ entries: [] }));
+    f.handlers.set("session_list_files", () => Promise.reject("Directory unavailable"));
+    const reopened = shell();
+    const first = crypto.randomUUID();
+    const second = crypto.randomUUID();
+    f.openWith({
+      tabs: [first, second].map((sessionId, index) => ({
+        tree: {
+          kind: "terminal",
+          terminal: {
+            sessionId,
+            profileId: index === 0 ? "login-first" : "login-second",
+            label: `Restored ${index}`,
+            files: index === 0 ? { path, label: "./restored" } : null,
+          },
+        },
+        focusedSessionId: sessionId,
+      })),
+      active: 0,
+      forwards: [],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Workspaces" }));
+    await screen.findByText("Operations");
+    expect(f.connections).toHaveLength(2);
+    await userEvent.click(screen.getByRole("button", { name: "Open workspace" }));
+    const restored = await connect(f, 2, false);
+    await connect(f, 3);
+    expect(f.matching("session_list_files")).toHaveLength(requests);
+    await restored.ready();
+    await screen.findByText("Directory unavailable");
+    expect(f.matching("session_list_files").at(-1)?.args).toMatchObject({
+      sessionId: first,
+      transportId: restored.transportId,
+      path,
+    });
+    expect(panes(reopened.container)).toHaveLength(2);
+    expect(screen.getByRole("tab", { name: /^Restored 0/ }).getAttribute("aria-selected")).toBe("true");
+    expect(f.matching("session_input")).toHaveLength(0);
+    expect(f.matching("session_connect")).toHaveLength(4);
+  },
+  15_000,
+);
+
 it.each(["organization", "organizationAccessRequest"] as const)(
   "preserves the complete %s source and exact target when splitting and opening another session",
   async (kind) => {
@@ -783,8 +864,8 @@ it("saves complete active and inactive trees and focus, then explicitly opens th
   await userEvent.type(screen.getByRole("textbox", { name: "Workspace name" }), "Operations");
   await userEvent.click(screen.getByRole("button", { name: "Save workspace" }));
   await screen.findByText("Operations");
-  const firstLeaf = { kind: "terminal", profileId: "login-first" };
-  const secondLeaf = { kind: "terminal", profileId: "login-second" };
+  const firstLeaf = { kind: "terminal", profileId: "login-first", files: { kind: "closed" } };
+  const secondLeaf = { kind: "terminal", profileId: "login-second", files: { kind: "closed" } };
   expect(f.matching("workspaces_create")[0]!.args.input).toEqual({
     name: "Operations",
     forwards: [],
@@ -817,7 +898,7 @@ it("saves complete active and inactive trees and focus, then explicitly opens th
   const ids = Array.from({ length: 5 }, () => crypto.randomUUID());
   const restored = (index: number, profileId: string, label: string) => ({
     kind: "terminal",
-    terminal: { sessionId: ids[index]!, profileId, label },
+    terminal: { sessionId: ids[index]!, profileId, label, files: null },
   });
   f.openWith({
     forwards: [],

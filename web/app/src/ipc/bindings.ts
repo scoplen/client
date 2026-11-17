@@ -127,9 +127,9 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	terminalProfilesDelete: (name: string) => typedError<TerminalProfileDirectory, TerminalProfileIssue>(__TAURI_INVOKE("terminal_profiles_delete", { name })),
 	/**  List complete saved definitions and fixed unavailable reasons. */
 	workspacesList: () => typedError<WorkspaceView[], WorkspaceIssue>(__TAURI_INVOKE("workspaces_list")),
-	/**  Save complete terminal trees and explicitly selected saved tunnels as a local object. */
+	/**  Save complete terminal trees, Files intent and selected saved tunnels as a local object. */
 	workspacesCreate: (input: WorkspaceInput) => typedError<WorkspaceView, WorkspaceIssue>(__TAURI_INVOKE("workspaces_create", { input })),
-	/**  Preflight all slots, then project fresh terminal trees and ordered saved-tunnel starts. */
+	/**  Preflight all slots and Files paths, then project fresh terminal and saved-tunnel intents. */
 	workspacesOpen: (id: string) => typedError<OpenedWorkspace, WorkspaceIssue>(__TAURI_INVOKE("workspaces_open", { id })),
 	/**  Tombstone a selected definition, including unsupported retained definitions. */
 	workspacesDelete: (id: string) => typedError<null, WorkspaceIssue>(__TAURI_INVOKE("workspaces_delete", { id })),
@@ -4618,6 +4618,23 @@ export type UnreadableReason =
 /**  It was written by a newer version of Scoplen. */
 "newerVersion";
 
+/**  A saved directory projected with bounded literal display text. */
+export type WorkspaceDirectory = {
+	/**  Original opaque SFTP directory request bytes. */
+	path: number[],
+	/**  Safe bounded text; never use it to form a file request. */
+	label: string,
+};
+
+/**  Complete Files intent for one terminal, including an explicitly closed panel. */
+export type WorkspaceFilesInput =
+/**  Do not open Files or retain a directory. */
+{ kind: "closed" } |
+/**  Open Files on the terminal's new authenticated connection. */
+{ kind: "open";
+/**  Original opaque SFTP directory request bytes. */
+path: number[] };
+
 /**  A validated saved-tunnel start projection, without reserving a run. */
 export type WorkspaceForward = {
 	/**  Current saved Forward identifier. */
@@ -4708,6 +4725,8 @@ export type WorkspaceTerminal = {
 	profileId: string,
 	/**  Current Host and Login display text. */
 	label: string,
+	/**  Initial Files intent; absent means a closed panel. */
+	files: WorkspaceDirectory | null,
 };
 
 /**  A restored tree using fresh ordinary runtime session identities. */
@@ -4730,7 +4749,9 @@ export type WorkspaceTreeInput =
 /**  An ordinary terminal retains only its Login reference. */
 { kind: "terminal";
 /**  Canonical Login object identifier. */
-profileId: string } |
+profileId: string;
+/**  Complete panel and directory intent for this terminal. */
+files: WorkspaceFilesInput } |
 /**  Offline output must not silently become a new SSH connection. */
 { kind: "savedOutput" } |
 /**  An ordered pair of equal-half children. */

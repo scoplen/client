@@ -4,6 +4,13 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Save and reopen each Workspace terminal's Files panel and exact remote directory
+  with internal layout version four. List only after ordinary trust/authentication,
+  on the terminal's new SSH connection. Keep failed paths available for Retry, Home
+  and Close, preserve existing sessions and never resume old transfers or send `cd`.
+  Earlier layouts remain unchanged, unavailable and explicitly deletable. Rendered
+  and native restart acceptance remain separate.
+
 - Authenticate Local and Personal Logins with their generated platform-keystore
   P-256 device Credentials. Validate the saved public identity before connecting,
   retain ordinary per-hop Host trust, and reuse Direct/Jump terminals, Files and
@@ -55,8 +62,8 @@ All notable changes to the Scoplen desktop client are recorded here.
   selected saved Local, Remote and Dynamic definitions and their captured Logins.
   Validate every dependency before opening, preserve existing sessions and runs,
   and show independent tunnel start results through the existing Tunnels owner.
-  New version-three layouts leave earlier definitions unavailable and deletable;
-  temporary runs, Files and native restart acceptance remain separate work.
+  The version-three profile left earlier definitions unavailable and deletable;
+  temporary runs and native restart acceptance remain separate work.
 
 - Start temporary Local TCP, Remote TCP and Dynamic SOCKS tunnels without creating a saved
   definition. Keep Start without saving separate from Save, show temporary runs with their

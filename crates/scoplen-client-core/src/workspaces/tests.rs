@@ -9,7 +9,31 @@ use crate::store::LocalWrite;
 use scoplen_crypto::LocalDatabaseKey;
 use scoplen_model::{FieldPath, MapKey};
 
+mod files;
 mod forwards;
+
+fn encode_layout(
+    order: &[SavedTab],
+    active: Option<u32>,
+    forwards: &[Uuid],
+) -> Result<Vec<u8>, WorkspaceIssue> {
+    fn collect(tree: &SavedTree, files: &mut BTreeMap<Uuid, Option<Vec<u8>>>) {
+        match tree {
+            SavedTree::Leaf(id) => {
+                files.insert(*id, None);
+            }
+            SavedTree::Split(_, first, second) => {
+                collect(first, files);
+                collect(second, files);
+            }
+        }
+    }
+    let mut files = BTreeMap::new();
+    for tab in order {
+        collect(&tab.tree, &mut files);
+    }
+    super::encode_layout(order, active, forwards, &files)
+}
 
 fn fixture() -> (tempfile::TempDir, Arc<Store>, Workspaces, Uuid) {
     let directory = tempfile::tempdir().unwrap();
@@ -55,7 +79,10 @@ fn input(profiles: &[Uuid], active: Option<u32>) -> WorkspaceInput {
         tabs: profiles
             .iter()
             .map(|id| WorkspaceTabInput {
-                tree: WorkspaceTreeInput::Terminal { profile_id: id.to_string() },
+                tree: WorkspaceTreeInput::Terminal {
+                    profile_id: id.to_string(),
+                    files: WorkspaceFilesInput::Closed,
+                },
                 focused: 0,
             })
             .collect(),
@@ -87,7 +114,10 @@ fn saved_leaf(id: Uuid) -> SavedTab {
 
 fn balanced(profile: Uuid, depth: usize) -> WorkspaceTreeInput {
     if depth == 0 {
-        return WorkspaceTreeInput::Terminal { profile_id: profile.to_string() };
+        return WorkspaceTreeInput::Terminal {
+            profile_id: profile.to_string(),
+            files: WorkspaceFilesInput::Closed,
+        };
     }
     WorkspaceTreeInput::Split {
         direction: if depth.is_multiple_of(2) {
@@ -198,7 +228,7 @@ fn pane_depth_count_focus_and_definition_bounds_are_enforced_before_persistence(
 }
 
 #[test]
-fn exact_v3_shapes_and_old_v1_v2_layouts_remain_unchanged_unavailable_and_deletable() {
+fn exact_v4_shapes_and_old_v1_v2_v3_layouts_remain_unchanged_unavailable_and_deletable() {
     let (_directory, store, workspaces, profile) = fixture();
     let saved = workspaces.create(input(&[profile], None)).unwrap();
     let id = Uuid::parse_str(&saved.id).unwrap();
@@ -209,13 +239,20 @@ fn exact_v3_shapes_and_old_v1_v2_layouts_remain_unchanged_unavailable_and_deleta
     let foreign = Value::Bytes(Uuid::now_v7().as_bytes().to_vec());
     let envelope = |tab: Value, active: Value| {
         Value::Map(vec![
-            (Value::UInt(1), Value::UInt(3)),
+            (Value::UInt(1), Value::UInt(4)),
             (Value::UInt(2), Value::Array(vec![tab])),
             (Value::UInt(3), active),
             (Value::UInt(4), Value::Array(vec![])),
+            (Value::UInt(5), Value::Map(vec![(leaf.clone(), Value::Null)])),
         ])
     };
     let mut layouts = vec![
+        Value::Map(vec![
+            (Value::UInt(1), Value::UInt(3)),
+            (Value::UInt(2), Value::Array(vec![Value::Array(vec![leaf.clone(), leaf.clone()])])),
+            (Value::UInt(3), Value::Null),
+            (Value::UInt(4), Value::Array(vec![])),
+        ]),
         Value::Map(vec![
             (Value::UInt(1), Value::UInt(2)),
             (Value::UInt(2), Value::Array(vec![Value::Array(vec![leaf.clone(), leaf.clone()])])),
@@ -342,7 +379,7 @@ fn facade_retains_order_duplicates_and_hosts_selection_across_sqlcipher_reopen()
     );
     let encoded = record.layout.unwrap();
     assert_eq!(encoded, encode_layout(&order, active, &[]).unwrap());
-    assert_eq!(&encoded[..7], &[0xa4, 0x01, 0x03, 0x02, 0x83, 0x82, 0x50]);
+    assert_eq!(&encoded[..7], &[0xa5, 0x01, 0x04, 0x02, 0x83, 0x82, 0x50]);
     let before = workspaces.open(&saved.id).unwrap();
     assert_eq!(before.active, Some(1));
     assert_eq!(terminals(&before)[0].label, "Staging · operator");
@@ -395,7 +432,10 @@ fn save_refuses_offline_output_empty_tabs_bad_indices_names_ids_and_existing_lim
     }
     let mut draft = input(&[profile], None);
     draft.tabs = vec![WorkspaceTabInput {
-        tree: WorkspaceTreeInput::Terminal { profile_id: "bad".into() },
+        tree: WorkspaceTreeInput::Terminal {
+            profile_id: "bad".into(),
+            files: WorkspaceFilesInput::Closed,
+        },
         focused: 0,
     }];
     assert_eq!(workspaces.create(draft), Err(WorkspaceIssue::InvalidId));
@@ -416,9 +456,9 @@ fn unsupported_layouts_stay_byte_identical_and_deletable_without_hiding_good_ent
     let Value::Bytes(layout_bytes) = &valid.set_field(2).unwrap().value else { panic!() };
     let canonical = cbor::decode(layout_bytes).unwrap();
     let Value::Map(mut future) = canonical.clone() else { panic!() };
-    future[0].1 = Value::UInt(4);
+    future[0].1 = Value::UInt(5);
     let Value::Map(mut unknown) = canonical.clone() else { panic!() };
-    unknown.push((Value::UInt(5), Value::Null));
+    unknown.push((Value::UInt(6), Value::Null));
     let mut cases = vec![
         Value::Null,
         Value::Bytes(Vec::new()),

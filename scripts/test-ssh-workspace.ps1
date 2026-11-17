@@ -25,7 +25,7 @@ try {
     $suffix = if ($IsWindows) { '.exe' } else { '' }
     $smoke = Join-Path $metadata.target_directory "debug/examples/ssh_workspace_smoke$suffix"
     & docker run --rm -d --name $container --label "scoplen.fixture.owner=$container" `
-        -p '127.0.0.1::2222' -p '127.0.0.1::2223' -p '127.0.0.1::2302' `
+        -p '127.0.0.1::2222' -p '127.0.0.1::2223' -p '127.0.0.1::2224' -p '127.0.0.1::2302' `
         -e 'USER_NAME=smoke' -e "USER_PASSWORD=$password" -e 'PASSWORD_ACCESS=true' `
         'linuxserver/openssh-server@sha256:46f115de7c251558297e7e87566fc3fc08544b63e55502b5cf294454db5d29d1' | Out-Null
     Check-LastExit 'start isolated OpenSSH fixture'
@@ -34,6 +34,10 @@ try {
     Check-LastExit 'read OpenSSH port'
     if ($binding -notmatch '^127\.0\.0\.1:(\d+)$') { throw 'Fixture was not bound to loopback' }
     $port = [int]$Matches[1]
+    $terminalBinding = & docker port $container '2224/tcp'
+    Check-LastExit 'read logged terminal SSH port'
+    if ($terminalBinding -notmatch '^127\.0\.0\.1:(\d+)$') { throw 'Terminal fixture was not bound to loopback' }
+    $terminalPort = [int]$Matches[1]
     $tunnelBinding = & docker port $container '2223/tcp'
     Check-LastExit 'read tunnel SSH port'
     if ($tunnelBinding -notmatch '^127\.0\.0\.1:(\d+)$') { throw 'Tunnel fixture was not bound to loopback' }
@@ -86,11 +90,39 @@ grep -Fx 'allowtcpforwarding yes' /tmp/scoplen-workspace-2223.effective
 grep -Fx 'gatewayports clientspecified' /tmp/scoplen-workspace-2223.effective
 grep -Fx 'maxsessions 0' /tmp/scoplen-workspace-2223.effective
 /usr/sbin/sshd.pam -E /tmp/scoplen-workspace-2223.log -f /tmp/scoplen-workspace-2223.conf
+ssh-keygen -q -t ed25519 -N '' -f /tmp/scoplen-workspace-terminal-host
+cat > /tmp/scoplen-workspace-2224.conf <<'CONF'
+Port 2224
+ListenAddress 0.0.0.0
+HostKey /tmp/scoplen-workspace-terminal-host
+PidFile /tmp/scoplen-workspace-2224.pid
+StrictModes no
+AllowTcpForwarding no
+PerSourcePenalties no
+UsePAM no
+PasswordAuthentication yes
+PubkeyAuthentication no
+KbdInteractiveAuthentication no
+Subsystem sftp internal-sftp
+LogLevel VERBOSE
+CONF
+/usr/sbin/sshd.pam -t -f /tmp/scoplen-workspace-2224.conf
+/usr/sbin/sshd.pam -E /tmp/scoplen-workspace-2224.log -f /tmp/scoplen-workspace-2224.conf
+files=/tmp/scoplen-workspace-files
+opaque=$(printf '\377')
+mkdir -p "$files/nested" "$files/$opaque" "$files/denied"
+chown -R "$(id -u smoke):$(id -g smoke)" "$files"
+chmod 000 "$files/denied"
 '@
     & docker exec $container sh -c ($setup.Replace("`r", ''))
     Check-LastExit 'configure isolated forwarding-only SSH and binary echo'
-    & $smoke '127.0.0.1' $port $passwordFile $tunnelPort $remotePort
+    & $smoke '127.0.0.1' $terminalPort $passwordFile $tunnelPort $remotePort
     Check-LastExit 'real SSH saved mixed workspace acceptance'
+    $targetCount = & docker exec $container sh -c "grep -c '^Accepted password for smoke ' /tmp/scoplen-workspace-2224.log"
+    Check-LastExit 'read terminal authentication count'
+    $jumpCount = & docker exec $container sh -c "grep -c '^Accepted password for smoke ' /tmp/scoplen-workspace-2223.log"
+    Check-LastExit 'read Jump authentication count'
+    if ([int]$targetCount -ne 8 -or [int]$jumpCount -ne 9) { throw 'Unexpected Workspace authentication count' }
     & docker exec $container sh -c 'if /bin/busybox netstat -ltn | /bin/busybox grep -q ":2302 "; then exit 1; fi'
     Check-LastExit 'verify owned remote listener released after Stop'
     $accepted = $true
@@ -98,7 +130,7 @@ grep -Fx 'maxsessions 0' /tmp/scoplen-workspace-2223.effective
     if ($started) {
         if (-not $accepted) {
             & docker logs --tail 100 $container *> (Join-Path $scratch 'container.log')
-            & docker exec $container sh -c 'cat /tmp/scoplen-workspace-2223.log /tmp/scoplen-workspace-echo.log 2>/dev/null' *> (Join-Path $scratch 'openssh.log')
+            & docker exec $container sh -c 'cat /tmp/scoplen-workspace-2223.log /tmp/scoplen-workspace-2224.log /tmp/scoplen-workspace-echo.log 2>/dev/null' *> (Join-Path $scratch 'openssh.log')
         }
         $owner = & docker inspect --format '{{index .Config.Labels "scoplen.fixture.owner"}}' $container 2>$null
         if ($LASTEXITCODE -eq 0 -and $owner -eq $container) { & docker rm -f $container 2>$null | Out-Null }
