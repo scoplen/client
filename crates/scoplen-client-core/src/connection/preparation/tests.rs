@@ -273,14 +273,40 @@ fn saved_interactive_jump_descriptors_resolve_at_their_own_positions() {
     let (_dir, store) = store();
     let target = peer_login(&store, 2222, CredentialKind::KeyboardInteractive, None);
     let hop = peer_login(&store, 2223, CredentialKind::KeyboardInteractive, None);
+    for (id, name) in [(hop, "Jump appearance"), (target, "Target appearance")] {
+        Repository::<AccessProfile>::new(&store)
+            .update(
+                id,
+                AccessProfileChange {
+                    terminal_profile: Edit::Set(name.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
     route(&store, target, RouteKind::Jump { hops: vec![hop] });
     let steps = resolve_steps(&store, target).unwrap();
     assert_eq!(steps.len(), 2);
     assert_eq!(steps[0].context.profile_id, hop.to_string());
     assert_eq!(steps[0].context.position, 1);
     assert!(!steps[0].context.target);
+    assert_eq!(steps[0].context.terminal_profile.as_deref(), Some("Jump appearance"));
     assert_eq!(steps[1].context.profile_id, target.to_string());
     assert!(steps[1].context.target);
+    assert_eq!(steps[1].context.terminal_profile.as_deref(), Some("Target appearance"));
+    Repository::<AccessProfile>::new(&store)
+        .update(
+            target,
+            AccessProfileChange {
+                terminal_profile: Edit::Set("Reconnect appearance".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        resolve_steps(&store, target).unwrap()[1].context.terminal_profile.as_deref(),
+        Some("Reconnect appearance")
+    );
     assert!(steps.iter().all(|step| matches!(
         step.plan.credential,
         super::super::CredentialMaterial::KeyboardInteractive
@@ -898,6 +924,7 @@ async fn prompts_reject_wrong_kind_stale_duplicate_and_cross_attempt_responses()
 
 fn context() -> PreparationContext {
     PreparationContext {
+        terminal_profile: None,
         source: None,
         profile_id: "login".into(),
         host_id: "host".into(),

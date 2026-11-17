@@ -59,6 +59,7 @@ vi.mock("../src/inventory/home", () => ({
             target: {
               target: { kind: "personal", profileId: "login-first" },
               hostName: "Saved host",
+              terminalProfile: null,
               loginName: "ops",
             },
             snapshot: { version: 1, columns: 80, rows: 24, data: "offline output" },
@@ -116,6 +117,17 @@ function fixture() {
       if (handlers.has(command)) return handlers.get(command)!(payload);
       if (command === "account_profiles_snapshot")
         return { generation: "1", selected: null, accounts: [], retainedProfile: false };
+      if (command === "terminal_profiles_list")
+        return {
+          defaultProfile: {
+            fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
+            fontSize: 14,
+            cursorStyle: "block",
+            cursorBlink: true,
+            scrollback: 2000,
+          },
+          named: [],
+        };
       if (command === "session_connect") {
         const finish = deferred<null>();
         connections.push({
@@ -377,6 +389,7 @@ it("keeps several pending preparations separate and shows only the selected pane
   const third = await connect(f, 2, false);
   const context: PreparationContext = {
     source: null,
+    terminalProfile: null,
     profileId: "login-first",
     hostId: "host-first",
     host: "First host",
@@ -570,6 +583,7 @@ it("selects ready same-Login sibling panes and another tab without opening conne
       phase: "authenticating",
       context: {
         source: null,
+        terminalProfile: null,
         profileId: connection.profileId,
         hostId: `host-${connection.profileId}`,
         host,

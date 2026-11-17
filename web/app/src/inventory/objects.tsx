@@ -3,6 +3,7 @@ import { Button, Confirm, Dialog, Field, IconButton, Mark, Notice, Select, TextA
 import { Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
+import { TerminalProfileSelect } from "../terminal-profiles";
 import {
   useInventory,
   type AccessProfileInput,
@@ -819,10 +820,10 @@ function ProfileEditor({
         onChange={(route) => setValue((current) => ({ ...current, route: route || null }))}
         options={[{ value: "", label: t("objects.profile.direct") }, ...routeOptions]}
       />
-      <Field
+      <TerminalProfileSelect
         label={t("objects.profile.terminalProfile")}
-        value={value.terminalProfile ?? ""}
-        onChange={(event) => setValue((current) => ({ ...current, terminalProfile: event.target.value || null }))}
+        value={value.terminalProfile}
+        onChange={(terminalProfile) => setValue((current) => ({ ...current, terminalProfile }))}
       />
       <Field
         label={t("objects.profile.startupCommand")}

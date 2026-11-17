@@ -109,6 +109,7 @@ it("prepares only on intent, clears the password, and requires native recovery e
     "account_profiles_snapshot",
     "registration_status",
     "password_sign_in_status",
+    "terminal_profiles_list",
   ]);
   await userEvent.type(screen.getByLabelText("Personal server URL"), preparation.origin);
   await userEvent.type(screen.getByLabelText("Username"), preparation.username);
@@ -369,7 +370,7 @@ it("keeps a retained root accessible without requesting registration state or re
   expect(await screen.findByText("Retained account profile")).toBeTruthy();
   expect(screen.getByText(/This retained account remains available/)).toBeTruthy();
   expect(screen.queryByLabelText("Open profile")).toBeNull();
-  expect(f.calls.map((call) => call.command)).toEqual(["account_profiles_snapshot"]);
+  expect(f.calls.map((call) => call.command)).toEqual(["account_profiles_snapshot", "terminal_profiles_list"]);
 });
 
 async function fillPasswordForm() {

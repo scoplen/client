@@ -679,6 +679,14 @@ removed by replaying an older signed active list. Missing or unverified provenan
 local and requires review before sync; wildcard-only records and bare CA/policy claims do not
 authorize raw host keys. A newly created trust record still needs explicit upload selection.
 
+Settings > Terminal manages device-local named profiles for font, cursor and scrollback,
+with an editable/resettable Default. Choose a profile in a Personal or Organization Login;
+only the target Login affects its pane. Missing names use Default with a visible hint.
+Saving applies to current live, hidden and saved-output panes without reconnecting.
+These settings remain in the current Local or Account Store, do not synchronize and leave
+the existing global colors unchanged. Per-profile colors, ligatures, bell and native
+rendered acceptance remain separate roadmap outcomes.
+
 ## What it does not do
 
 - It sends nothing to the vendor: no telemetry, update server, or crash-report endpoint in Phase 1.

@@ -34,6 +34,7 @@ type OpenSession = {
   target: SessionTarget;
   label: string;
   snapshot?: TerminalSnapshot;
+  terminalProfile?: string | null;
   sessionId?: string;
 };
 
@@ -154,7 +155,13 @@ export function Shell({
     workspace.restoreTab({ id, title: target.hostName }, { type: "pane", paneId: id }, id);
     setSessions((current) => [
       ...current,
-      { id, target: target.target, label: `${target.hostName} · ${target.loginName}`, snapshot },
+      {
+        id,
+        target: target.target,
+        label: `${target.hostName} · ${target.loginName}`,
+        snapshot,
+        terminalProfile: target.terminalProfile,
+      },
     ]);
     setActiveTab(id);
     setView("hosts");
@@ -480,6 +487,7 @@ export function Shell({
                         label={session.label}
                         active={view !== "settings" && session.id === layout.activePaneId}
                         savedOutput={session.snapshot}
+                        savedTerminalProfile={session.terminalProfile}
                         sessionId={session.sessionId}
                         splitIssue={splitIssue}
                         onSplit={(direction) => split(session.id, direction)}

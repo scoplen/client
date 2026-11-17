@@ -75,6 +75,19 @@ function fixture() {
             ...transferState,
           }
         );
+      if (command === "terminal_profiles_list")
+        return (
+          pending.get(command)?.shift()?.promise ?? {
+            defaultProfile: {
+              fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
+              fontSize: 14,
+              cursorStyle: "block",
+              cursorBlink: true,
+              scrollback: 2000,
+            },
+            named: [],
+          }
+        );
       return pending.get(command)?.shift()?.promise ?? null;
     },
     { shouldMockEvents: true },
@@ -369,6 +382,7 @@ it("clears both echo policies on hide, replacement and cancellation, including C
 function context(position = 1): PreparationContext {
   return {
     source: null,
+    terminalProfile: null,
     profileId: `profile-${position}`,
     hostId: `host-${position}`,
     login: `Login ${position}`,

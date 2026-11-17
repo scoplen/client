@@ -27,6 +27,7 @@ pub mod ssh;
 pub mod team_authoring;
 pub mod team_ssh;
 pub mod teams;
+pub mod terminal_profiles;
 mod window_state;
 pub mod workspaces;
 
@@ -78,6 +79,11 @@ pub fn ipc() -> Builder<tauri::Wry> {
             snippets::snippets_update,
             snippets::snippets_delete,
             snippets::snippets_prepare,
+            terminal_profiles::terminal_profiles_list,
+            terminal_profiles::terminal_profiles_create,
+            terminal_profiles::terminal_profiles_save,
+            terminal_profiles::terminal_profiles_reset_default,
+            terminal_profiles::terminal_profiles_delete,
             workspaces::workspaces_list,
             workspaces::workspaces_create,
             workspaces::workspaces_open,

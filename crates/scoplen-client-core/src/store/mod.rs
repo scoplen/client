@@ -21,6 +21,7 @@ pub(crate) mod team_sessions;
 pub(crate) mod team_ssh;
 pub(crate) mod team_ssh_operations;
 pub(crate) mod teams;
+pub mod terminal_profiles;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

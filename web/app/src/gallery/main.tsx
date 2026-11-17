@@ -80,6 +80,7 @@ function previewChallenge(transportId: string, informational: boolean): SessionE
       kind: "keyboardInteractive",
       context: {
         source: null,
+        terminalProfile: null,
         profileId: "gallery-interactive",
         hostId: "gallery-api-01",
         login: "deploy",

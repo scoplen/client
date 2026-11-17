@@ -111,6 +111,16 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	snippetsDelete: (id: string) => typedError<null, SnippetIssue>(__TAURI_INVOKE("snippets_delete", { id })),
 	/**  Produce a bounded exact preview; this command performs no SSH input. */
 	snippetsPrepare: (id: string, values: { [key in string]: string }) => typedError<PreparedSnippet, SnippetIssue>(__TAURI_INVOKE("snippets_prepare", { id, values })),
+	/**  Read the captured Store's appearance directory without network access. */
+	terminalProfilesList: () => typedError<TerminalProfileDirectory, TerminalProfileIssue>(__TAURI_INVOKE("terminal_profiles_list")),
+	/**  Create an exact name from the current Default. */
+	terminalProfilesCreate: (name: string) => typedError<TerminalProfileDirectory, TerminalProfileIssue>(__TAURI_INVOKE("terminal_profiles_create", { name })),
+	/**  Save the separate Default or an existing exact named entry. */
+	terminalProfilesSave: (name: string | null, settings: TerminalProfileSettings) => typedError<TerminalProfileDirectory, TerminalProfileIssue>(__TAURI_INVOKE("terminal_profiles_save", { name, settings })),
+	/**  Reset Default to the shipped settings, leaving all named entries intact. */
+	terminalProfilesResetDefault: () => typedError<TerminalProfileDirectory, TerminalProfileIssue>(__TAURI_INVOKE("terminal_profiles_reset_default")),
+	/**  Delete a local entry without modifying any Login reference. */
+	terminalProfilesDelete: (name: string) => typedError<TerminalProfileDirectory, TerminalProfileIssue>(__TAURI_INVOKE("terminal_profiles_delete", { name })),
 	/**  List complete saved definitions and fixed unavailable reasons. */
 	workspacesList: () => typedError<WorkspaceView[], WorkspaceIssue>(__TAURI_INVOKE("workspaces_list")),
 	/**  Save complete terminal trees and explicitly selected saved tunnels as a local object. */
@@ -1359,6 +1369,14 @@ export type LoginSummary = {
 	isDefault: boolean,
 };
 
+/**  An immutable case-sensitive name and its editable appearance. */
+export type NamedTerminalProfile = {
+	/**  Exact key stored by a Login. */
+	name: string,
+	/**  Current local appearance. */
+	settings: TerminalProfileSettings,
+};
+
 /**  Input for the tier-0 add-host flow. */
 export type NewHost = {
 	/**  Display name; defaults to the address. */
@@ -2178,6 +2196,8 @@ export type PortableArchiveError =
 
 /**  Safe identity shown on every progress event and prompt. */
 export type PreparationContext = {
+	/**  Exact local terminal appearance name selected by this Login. */
+	terminalProfile: string | null,
 	/**  Explicit Organization source; absent only for Local or Personal inventory. */
 	source: TeamSshSource | null,
 	/**  Login identifier. */
@@ -2364,6 +2384,8 @@ export type RecentSessionOutcome = "closed" | "failed";
  *  Resolving this target neither opens a connection nor records new history.
  */
 export type ReconnectTarget = {
+	/**  Current target Login's exact local appearance name. */
+	terminalProfile: string | null,
 	/**  The current AccessProfile to pass to the normal connection entry point. */
 	target: SessionTarget,
 	/**  Current Host display name. */
@@ -4129,6 +4151,58 @@ export type TeamUserCaView = {
 	fingerprint: string,
 	/**  Exact per-Login configuration derived only from the complete current readable view. */
 	setups: TeamSshHostSetup[],
+};
+
+/**  Cursor shapes supported by the terminal component. */
+export type TerminalCursorStyle =
+/**  Filled character cell. */
+"block" |
+/**  Line under the character. */
+"underline" |
+/**  Vertical line. */
+"bar";
+
+/**  Complete directory for the current Store. */
+export type TerminalProfileDirectory = {
+	/**  Separate, editable Default, never a named alias. */
+	defaultProfile: TerminalProfileSettings,
+	/**  Up to 32 exact named entries in name order. */
+	named: NamedTerminalProfile[],
+};
+
+/**  Safe failures for native commands and localized rendering. */
+export type TerminalProfileIssue =
+/**  Invalid exact name. */
+"invalidName" |
+/**  Invalid installed font list. */
+"invalidFontFamily" |
+/**  Font size outside the supported integer range. */
+"invalidFontSize" |
+/**  Scrollback outside the supported integer range. */
+"invalidScrollback" |
+/**  Exact key already exists. */
+"alreadyExists" |
+/**  The named entry no longer exists. */
+"notFound" |
+/**  Directory capacity reached. */
+"limit" |
+/**  Captured Account generation is no longer admitted. */
+"unavailable" |
+/**  Encrypted local persistence failed. */
+"storage";
+
+/**  Editable appearance fields; colors retain their existing global owner. */
+export type TerminalProfileSettings = {
+	/**  CSS font-family list resolved from installed fonts. */
+	fontFamily: string,
+	/**  Font size in CSS pixels, from 8 through 48. */
+	fontSize: number,
+	/**  Cursor shape. */
+	cursorStyle: TerminalCursorStyle,
+	/**  Whether the cursor blinks. */
+	cursorBlink: boolean,
+	/**  Retained rows above the current screen, from zero through 100,000. */
+	scrollback: number,
 };
 
 /**  Rendered terminal state, rather than an unbounded SSH transport log. */

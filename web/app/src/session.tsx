@@ -25,6 +25,7 @@ import {
   type SessionTarget,
 } from "./ipc/bindings";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
+import { useTerminalProfiles } from "./terminal-profiles";
 import { SessionFiles, type EnqueueFeedback, type FileOperationOutcome } from "./session-files";
 import { dismissUploadAttention, initialUploadAttention, recordUploadAttention } from "./session-upload-attention";
 import { useSessionTransfers } from "./use-session-transfers";
@@ -74,6 +75,7 @@ export function SessionTerminal({
   onLabelChange,
   onOpenColors,
   savedOutput,
+  savedTerminalProfile,
   registerClose,
   sessionId: restoredSessionId,
   onSplit,
@@ -88,6 +90,8 @@ export function SessionTerminal({
   active?: boolean;
   onClose: (discardOutput?: boolean) => void;
   savedOutput?: TerminalSnapshot;
+  /** Rust-resolved current Login selection for read-only saved output. */
+  savedTerminalProfile?: string | null;
   /** Fresh runtime identity supplied by an explicit saved-Workspace Open. */
   sessionId?: string;
   registerClose?: (close: (discard?: boolean) => Promise<boolean>) => () => void;
@@ -121,6 +125,10 @@ export function SessionTerminal({
     [targetKind, profileId, origin, accountId, organizationId, deviceId],
   );
   const commands = useProfileCommands();
+  const profiles = useTerminalProfiles();
+  const directoryReady = !profiles || profiles.directory !== null;
+  const appearanceReady = directoryReady || !!profiles?.issue;
+  const [profileName, setProfileName] = useState(savedTerminalProfile ?? null);
   const { t } = useI18n();
   const titleId = useId();
   const [state, setState] = useState<SessionState>(savedOutput ? "closed" : "verifying");
@@ -273,8 +281,10 @@ export function SessionTerminal({
               clearPreparation();
               const preparation = event.event;
               setContext(preparation.context);
-              if (preparation.context.target)
+              if (preparation.context.target) {
+                setProfileName(preparation.context.terminalProfile);
                 reportLabel.current?.(`${preparation.context.host} · ${preparation.context.login}`);
+              }
               if (preparation.kind === "verified") {
                 setVerified((current) => [
                   ...current.filter((item) => item.context.position !== preparation.context.position),
@@ -460,9 +470,17 @@ export function SessionTerminal({
   useEffect(() => {
     if (state === "connected") sendSize();
   }, [state, sendSize]);
+  const namedProfile = profiles?.directory?.named.find((entry) => entry.name === profileName);
+  const appearance = namedProfile?.settings ?? profiles?.directory?.defaultProfile;
+  const { fontFamily, fontSize, cursorBlink, cursorStyle, scrollback } = appearance ?? {};
   const terminalProfile = useMemo(
-    () => ({ cursorBlink: true, scrollback: 2_000, theme: xtermTheme(colors) }),
-    [colors],
+    () => ({
+      cursorBlink: true,
+      scrollback: 2_000,
+      ...(fontFamily === undefined ? {} : { fontFamily, fontSize, cursorBlink, cursorStyle, scrollback }),
+      theme: xtermTheme(colors),
+    }),
+    [fontFamily, fontSize, cursorBlink, cursorStyle, scrollback, colors],
   );
 
   const closeTransport = useCallback(() => {
@@ -559,7 +577,7 @@ export function SessionTerminal({
   }, [offline, checkpoint]);
 
   useEffect(() => {
-    if (!savedOutput) return;
+    if (!savedOutput || !directoryReady) return;
     let active = true;
     void Promise.resolve()
       .then(async () => {
@@ -574,7 +592,7 @@ export function SessionTerminal({
     return () => {
       active = false;
     };
-  }, [savedOutput]);
+  }, [savedOutput, directoryReady]);
 
   useEffect(() => {
     if (offline) return;
@@ -584,7 +602,7 @@ export function SessionTerminal({
   }, [offline, profileId, sessionId, commands]);
 
   useEffect(() => {
-    if (offline) return;
+    if (offline || !appearanceReady) return;
     let active = true;
     const current = ++generation.current;
     mounted.current = true;
@@ -613,7 +631,7 @@ export function SessionTerminal({
       active = false;
       mounted.current = false;
     };
-  }, [connectSession, profileId, sessionId, offline, runRevision]);
+  }, [connectSession, profileId, sessionId, offline, runRevision, appearanceReady]);
 
   const interruptTransport = (failure: boolean, message: string | null) => {
     const current = generation.current;
@@ -907,6 +925,24 @@ export function SessionTerminal({
           </Button>
         </div>
       </header>
+      {savedOutput && !directoryReady && profiles?.loading ? (
+        <p role="status" className="mx-4 mt-0 mb-2 text-xs text-muted-foreground">
+          {t("terminalProfiles.loading")}
+        </p>
+      ) : null}
+      {!directoryReady && profiles?.issue ? (
+        <div role="alert" className="mx-4 mb-2 flex flex-wrap items-center gap-2 text-sm text-attention">
+          <p className="m-0">{t(`terminalProfiles.issue.${profiles.issue}`)}</p>
+          <Button disabled={profiles.loading} onClick={profiles.reload}>
+            {t("terminalProfiles.reload")}
+          </Button>
+        </div>
+      ) : null}
+      {profileName !== null && profiles?.directory && !namedProfile ? (
+        <p className="mx-4 mt-0 mb-2 text-xs break-words text-muted-foreground">
+          {t("terminalProfiles.missing", { name: profileName })}
+        </p>
+      ) : null}
       {onSplit && active && (splitIssue || offline || closingView) ? (
         <p className="mx-4 mt-0 mb-2 text-xs text-muted-foreground">
           {splitIssue ?? t(offline ? "panes.offline" : "panes.closing")}

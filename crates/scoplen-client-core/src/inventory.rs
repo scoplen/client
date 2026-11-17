@@ -274,6 +274,8 @@ pub struct SavedTerminalOutput {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ReconnectTarget {
+    /// Current target Login's exact local appearance name.
+    pub terminal_profile: Option<String>,
     /// The current AccessProfile to pass to the normal connection entry point.
     pub target: SessionTarget,
     /// Current Host display name.
@@ -1731,8 +1733,10 @@ impl Inventory {
         }
         validate_text(&username, "username")?;
         let name = trim_optional(input.name.as_deref(), "name")?;
-        let terminal_profile =
-            trim_optional(input.terminal_profile.as_deref(), "terminal profile")?;
+        let terminal_profile = input.terminal_profile.clone();
+        if let Some(name) = &terminal_profile {
+            validate_text(name, "terminal profile")?;
+        }
         let startup_command = trim_optional(input.startup_command.as_deref(), "startup command")?;
         let credential = match &input.credential {
             None => None,
@@ -2225,6 +2229,7 @@ impl Inventory {
             .ok_or(SavedOutputError::Unavailable)?;
         Ok(SavedTerminalOutput {
             target: ReconnectTarget {
+                terminal_profile: profile.terminal_profile.clone(),
                 target: SessionTarget::Personal {
                     profile_id: crate::inventory::id(profile.meta.id),
                 },
@@ -2266,6 +2271,7 @@ impl Inventory {
             .find(|host| host.meta.id == profile.host)
             .ok_or(SessionError::ProfileNotFound)?;
         Ok(ReconnectTarget {
+            terminal_profile: profile.terminal_profile.clone(),
             target: SessionTarget::Personal { profile_id: id(profile.meta.id) },
             host_name: host.name.clone(),
             login_name: profile.name.clone().unwrap_or_else(|| profile.username.clone()),
@@ -2294,6 +2300,7 @@ impl Inventory {
             return Err(SessionError::ProfileNotFound);
         }
         Ok(ReconnectTarget {
+            terminal_profile: profile.terminal_profile.clone(),
             target: SessionTarget::Organization {
                 source: saved.source.clone(),
                 profile_id: id(profile.meta.id),
@@ -3977,6 +3984,7 @@ mod tests {
         assert_eq!(
             inventory.reconnect_session(open.id.clone()),
             Ok(ReconnectTarget {
+                terminal_profile: None,
                 target: SessionTarget::Personal { profile_id: profile },
                 host_name: "api".into(),
                 login_name: "ops".into(),
@@ -3999,6 +4007,65 @@ mod tests {
             inventory.open_session("not-a-uuid".into(), RecentSessionKind::Forward),
             Err(SessionError::InvalidProfileId)
         ));
+    }
+
+    #[test]
+    fn saved_output_and_reconnect_keep_the_current_exact_target_appearance_reference() {
+        let inventory = inventory();
+        let host = inventory
+            .add_host(NewHost {
+                name: Some("Target".into()),
+                address: "target.example".into(),
+                port: None,
+                username: "operator".into(),
+                sign_in: SignIn::Agent,
+            })
+            .unwrap();
+        let login = host.logins[0].id.clone();
+        let session = inventory.open_session(login.clone(), RecentSessionKind::Terminal).unwrap();
+        inventory.close_session(session.id.clone(), RecentSessionOutcome::Closed).unwrap();
+        inventory
+            .store
+            .save_scrollback(
+                parse_id(&session.id).unwrap(),
+                &TerminalSnapshot {
+                    version: 1,
+                    columns: 80,
+                    rows: 24,
+                    data: "saved output".into(),
+                },
+            )
+            .unwrap();
+        for name in ["Work", " work ", "", "é"] {
+            inventory
+                .update_access_profile(
+                    login.clone(),
+                    AccessProfileInput {
+                        host: host.summary.id.clone(),
+                        name: None,
+                        username: "operator".into(),
+                        credential: None,
+                        route: None,
+                        terminal_profile: Some(name.into()),
+                        startup_command: None,
+                        forwards: vec![],
+                        default_profile: false,
+                        agent_forwarding: false,
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                inventory
+                    .reconnect_session(session.id.clone())
+                    .unwrap()
+                    .terminal_profile
+                    .as_deref(),
+                Some(name)
+            );
+            let output = inventory.saved_terminal_output(session.id.clone()).unwrap();
+            assert_eq!(output.target.terminal_profile.as_deref(), Some(name));
+            assert_eq!(output.snapshot.data, "saved output");
+        }
     }
 
     #[test]

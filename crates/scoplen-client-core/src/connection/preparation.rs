@@ -51,6 +51,8 @@ pub struct AuthenticationPrompt {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparationContext {
+    /// Exact local terminal appearance name selected by this Login.
+    pub terminal_profile: Option<String>,
     /// Explicit Organization source; absent only for Local or Personal inventory.
     pub source: Option<TeamSshSource>,
     /// Login identifier.
@@ -498,6 +500,7 @@ pub(crate) fn resolve_target_preparation_plan(
         validate_credential(&plan.credential).map_err(|error| error.to_string())?;
         let position = index as u32 + 1;
         let context = PreparationContext {
+            terminal_profile: profile.terminal_profile.clone(),
             source: Some(source.clone()),
             profile_id: plan.profile_id.to_string(),
             host_id: plan.host_id.to_string(),
@@ -579,6 +582,7 @@ fn resolve_steps(store: &Store, target_id: Uuid) -> Result<Vec<Step>, String> {
             .map_err(|e| e.to_string())?
             .ok_or("the Host was not found")?;
         let context = PreparationContext {
+            terminal_profile: profile.terminal_profile.clone(),
             source: None,
             profile_id: plan.profile_id.to_string(),
             host_id: plan.host_id.to_string(),
