@@ -946,6 +946,10 @@ source/view fences and per-target local outcomes plus exact executed output-line
 counts. The controller checks it before publishing the phase's `.complete` file
 containing `passed` and one newline. Old preparations remain in the same process
 and must be refused after reconciliation; a replaced target receives no replay.
+An additional unselected terminal retains its transport, confirms ordinary output
+in every phase and observes no Snippet marker. Fixture commands start marker output
+on a new line so shell control sequences cannot adjoin the counted line; the full
+marker remains absent from the echoed input command.
 This public-core fixture does not establish rendered or native interaction acceptance.
 
 `scripts/test-ssh-command-password.ps1` uses PowerShell 7 and Docker for real
