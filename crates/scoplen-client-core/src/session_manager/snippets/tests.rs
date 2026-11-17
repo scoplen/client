@@ -2,10 +2,11 @@
 use super::*;
 use crate::personal_server::{TeamAssetsPhase, tests::fixture_profile};
 use crate::repository::{Repository, Snippet, SnippetChange, Variable, VariableKind};
-use crate::snippets::Snippets;
+use crate::snippets::{SnippetVariableKind, SnippetVariableView, SnippetView, Snippets};
 use crate::store::team_assets::TeamAssetPublication;
+use scoplen_api::inventory::{InventoryFields, InventoryType};
 use scoplen_crypto::LocalDatabaseKey;
-use scoplen_model::Object;
+use scoplen_model::{Hlc, Object};
 
 fn local(dir: &tempfile::TempDir, name: &str) -> Arc<Store> {
     Arc::new(Store::open(&dir.path().join(name), &LocalDatabaseKey::new([7; 32])).unwrap())
@@ -130,6 +131,92 @@ fn ready(
         }),
     });
     (SnippetTerminal { session_id: name.into(), transport_id: id.to_string() }, commands)
+}
+
+#[test]
+fn public_team_snippet_facade_preserves_shared_integer_defaults_and_complete_definition() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir, "account.db");
+    let source = source(&store);
+    let manager = SessionManager::default();
+    let (origin, _commands) = ready(&manager, "origin", Some(source.clone()));
+    for default in ["-7", "-9223372036854775808", "0", "9223372036854775807"] {
+        let fields = serde_json::json!({
+            "name": "Shared inspection",
+            "template": "printf '%s' '{{label}}/{{count}}/{{mode}}'",
+            "variables": {
+                "label": {"kind": 1, "default": "ready"},
+                "count": {"kind": 2, "default": default},
+                "mode": {"kind": 3, "default": "status", "choices": ["status", "detail"]}
+            },
+            "tags": {"acceptance": true, "team": true},
+            "folder": "Operations"
+        });
+        let object = InventoryFields::from_json(
+            InventoryType::Snippet,
+            &serde_json::to_vec(&fields).unwrap(),
+        )
+        .unwrap()
+        .to_object(Uuid::now_v7(), Hlc::at(1).unwrap(), Uuid::now_v7())
+        .unwrap();
+        let original = object.encode().unwrap();
+        publish(&store, &source, std::slice::from_ref(&object), true);
+        let library = manager.team_snippets(&store, &origin).unwrap();
+        assert_eq!(
+            library.snippets,
+            [SnippetView {
+                id: object.id.to_string(),
+                name: "Shared inspection".into(),
+                template: "printf '%s' '{{label}}/{{count}}/{{mode}}'".into(),
+                variables: vec![
+                    SnippetVariableView {
+                        name: "count".into(),
+                        kind: SnippetVariableKind::Integer,
+                        default: Some(default.into()),
+                        choices: vec![],
+                        has_default: true,
+                    },
+                    SnippetVariableView {
+                        name: "label".into(),
+                        kind: SnippetVariableKind::Text,
+                        default: Some("ready".into()),
+                        choices: vec![],
+                        has_default: true,
+                    },
+                    SnippetVariableView {
+                        name: "mode".into(),
+                        kind: SnippetVariableKind::Choice,
+                        default: Some("status".into()),
+                        choices: vec!["status".into(), "detail".into()],
+                        has_default: true,
+                    },
+                ],
+                tags: vec!["acceptance".into(), "team".into()],
+                folder: Some("Operations".into()),
+                read_only: false,
+                issue: None,
+            }]
+        );
+        let preview = manager
+            .prepare_team_snippet(
+                &store,
+                origin.clone(),
+                library.fence.unwrap(),
+                &object.id.to_string(),
+                BTreeMap::new(),
+                vec![origin.clone()],
+            )
+            .unwrap();
+        assert_eq!(preview.snippet.command, format!("printf '%s' 'ready/{default}/status'"));
+        let retained = store
+            .team_assets_record(
+                &store.personal_record().unwrap().unwrap(),
+                Uuid::parse_str(&source.organization_id).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.objects[0].encode().unwrap(), original);
+    }
 }
 
 #[test]
