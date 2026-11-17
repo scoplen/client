@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Adopt the published `proto@f493ece` Host Grant contracts and audit resource kind.
+  Keep every shared library and the Pageant and ssh-key patches on that revision;
+  this dependency update does not add a desktop Grant management workflow.
+
 - Find exact case-sensitive text in each terminal's retained scrollback and read-only
   saved output. Add Previous/Next, local keyboard shortcuts and focus return while
   preserving the terminal, connection and independent pane queries.
