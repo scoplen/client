@@ -364,30 +364,28 @@ async fn run(args: &[String]) -> Result<()> {
             manager.forward_stop(&store, "terminal", &first, &ids[1].to_string())?;
             Box::pin(files(&manager, &first, scratch.path())).await?;
             shell(&manager, &first, &mut output, "AFTER-STOP").await?;
-            if !jump_route {
-                cut.send_replace(1);
-                let second = ready(&mut events).await?;
-                assert_ne!(first, second);
-                let rebuilt = settled(&manager, &store, &second).await?;
-                for id in &ids[..2] {
-                    let entry =
-                        rebuilt.iter().find(|entry| entry.forward_id == id.to_string()).unwrap();
-                    assert!(entry.stopped && entry.run.is_none());
-                }
-                let replacement =
-                    rebuilt.iter().find(|entry| entry.forward_id == ids[2].to_string()).unwrap();
-                assert_eq!(replacement.run.as_ref().unwrap().phase, ForwardPhase::Listening);
-                assert_ne!(replacement.run.as_ref().unwrap().run_id, old);
-                assert_eq!(forwards.snapshot(&store, &old)?.phase, ForwardPhase::Stopped);
-                assert!(held.read_u8().await.is_err());
-                for port in &ports[..2] {
-                    assert!(TcpListener::bind(("127.0.0.1", *port)).await.is_ok());
-                }
-                traffic(ports[2], false).await?;
-                traffic(ports[3], false).await?;
-                Box::pin(files(&manager, &second, scratch.path())).await?;
-                shell(&manager, &second, &mut output, "RECONNECTED").await?;
+            cut.send_replace(1);
+            let second = ready(&mut events).await?;
+            assert_ne!(first, second);
+            let rebuilt = settled(&manager, &store, &second).await?;
+            for id in &ids[..2] {
+                let entry =
+                    rebuilt.iter().find(|entry| entry.forward_id == id.to_string()).unwrap();
+                assert!(entry.stopped && entry.run.is_none());
             }
+            let replacement =
+                rebuilt.iter().find(|entry| entry.forward_id == ids[2].to_string()).unwrap();
+            assert_eq!(replacement.run.as_ref().unwrap().phase, ForwardPhase::Listening);
+            assert_ne!(replacement.run.as_ref().unwrap().run_id, old);
+            assert_eq!(forwards.snapshot(&store, &old)?.phase, ForwardPhase::Stopped);
+            assert!(held.read_u8().await.is_err());
+            for port in &ports[..2] {
+                assert!(TcpListener::bind(("127.0.0.1", *port)).await.is_ok());
+            }
+            traffic(ports[2], false).await?;
+            traffic(ports[3], false).await?;
+            Box::pin(files(&manager, &second, scratch.path())).await?;
+            shell(&manager, &second, &mut output, "RECONNECTED").await?;
             Ok::<(), Box<dyn std::error::Error>>(())
         }
         .await;
@@ -420,10 +418,9 @@ async fn run(args: &[String]) -> Result<()> {
         "{}: real shell/SFTP/Local/SOCKS bytes, per-entry failures, both Stop paths and independent survival passed",
         args[1]
     );
-    if !jump_route {
-        println!(
-            "Direct reconnect: old listener/peer release, eligible recreation and Stop preservation passed"
-        );
-    }
+    println!(
+        "{} reconnect: old listener/peer release, eligible recreation and Stop preservation passed",
+        args[1]
+    );
     Ok(())
 }

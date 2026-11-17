@@ -94,13 +94,19 @@ sed -e 's/^Port 2223$/Port 2224/' \
     & $smoke 'direct' '127.0.0.1' $targetPort $passwordFile
     Check-LastExit 'real Direct SSH Login-attached forwarding and reconnect acceptance'
     & $smoke 'jump' '127.0.0.1' $jumpPort $passwordFile
-    Check-LastExit 'real Jump SSH Login-attached forwarding acceptance'
+    Check-LastExit 'real Jump SSH Login-attached forwarding and reconnect acceptance'
     $authentications = & docker exec $container sh -c "grep -c '^Accepted password for smoke ' /tmp/scoplen-attached-ssh.log"
     Check-LastExit 'read owned target authentication count'
-    if ([int]$authentications -ne 5) {
-        throw 'Expected two independent target authentications and three terminal target authentications including Direct reconnect'
+    if ([int]$authentications -ne 6) {
+        throw 'Expected two independent target authentications and four terminal target authentications including Direct and Jump reconnect'
     }
-    Write-Output 'Target authentication count: exactly 5 (two independent, three terminal transports including Direct reconnect).'
+    $jumpAuthentications = & docker exec $container sh -c "grep -c '^Accepted password for smoke ' /tmp/scoplen-attached-jump.log"
+    Check-LastExit 'read owned Jump authentication count'
+    if ([int]$jumpAuthentications -ne 3) {
+        throw 'Expected one independent and two terminal Jump authentications including reconnect'
+    }
+    Write-Output 'Target authentication count: exactly 6 (two independent, four terminal transports including Direct and Jump reconnect).'
+    Write-Output 'Jump authentication count: exactly 3 (one independent, two terminal transports including reconnect).'
     $accepted = $true
 } finally {
     if ($started) {
