@@ -21,7 +21,7 @@ import { InventoryContext } from "./inventory/api";
 import { createInventoryApi } from "./inventory/core-api";
 import { SessionTerminal, type SessionState } from "./session";
 import { SettingsView, type SettingsSection } from "./settings";
-import { ForwardsContext, useForwards, type ForwardStartResult } from "./use-forwards";
+import { ForwardOwnersContext, ForwardsContext, useForwards, type ForwardStartResult } from "./use-forwards";
 import { useProfile, useProfileCommands } from "./account-profiles";
 import { WorkspacesDialog } from "./workspaces";
 import { canvasMinimum, paneDepth, paneOrder, paneRectangles } from "./terminal-layout";
@@ -289,6 +289,16 @@ export function Shell({
   const minimum = layout.layout ? canvasMinimum(layout.layout) : { width: 320, height: 240 };
   const rectangles = layout.layout ? paneRectangles(layout.layout) : {};
   const currentIds = layout.layout ? paneOrder(layout.layout) : [];
+  const forwardOwners = Object.fromEntries(
+    layout.tabs.flatMap((tab, tabIndex) =>
+      paneOrder(layout.layouts[tab.id]!).flatMap((id, paneIndex) => {
+        const session = sessions.find((entry) => entry.id === id);
+        return session
+          ? [[session.sessionId ?? session.id, { label: session.label, tab: tabIndex + 1, pane: paneIndex + 1 }]]
+          : [];
+      }),
+    ),
+  );
 
   return (
     <Frame
@@ -404,15 +414,17 @@ export function Shell({
           ) : activeTab !== "hosts" ? null : (
             <InventoryContext.Provider value={inventory}>
               <ForwardsContext.Provider value={forwards}>
-                <main id="main" tabIndex={-1} className="h-full min-h-0 focus:outline-none">
-                  <HostsHome
-                    key={tunnelsRequest}
-                    initialSection={tunnelsRequest ? "tunnels" : null}
-                    manage
-                    onConnect={openSession}
-                    onViewOutput={viewOutput}
-                  />
-                </main>
+                <ForwardOwnersContext.Provider value={forwardOwners}>
+                  <main id="main" tabIndex={-1} className="h-full min-h-0 focus:outline-none">
+                    <HostsHome
+                      key={tunnelsRequest}
+                      initialSection={tunnelsRequest ? "tunnels" : null}
+                      manage
+                      onConnect={openSession}
+                      onViewOutput={viewOutput}
+                    />
+                  </main>
+                </ForwardOwnersContext.Provider>
               </ForwardsContext.Provider>
             </InventoryContext.Provider>
           )}
@@ -488,7 +500,8 @@ export function Shell({
                         active={view !== "settings" && session.id === layout.activePaneId}
                         savedOutput={session.snapshot}
                         savedTerminalProfile={session.terminalProfile}
-                        sessionId={session.sessionId}
+                        sessionId={session.sessionId ?? session.id}
+                        forwardRuntime={forwards}
                         splitIssue={splitIssue}
                         onSplit={(direction) => split(session.id, direction)}
                         registerFocus={(focus) => {

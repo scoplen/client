@@ -129,6 +129,8 @@ it("saves actual terminal selection, survives app remount and connects only afte
   shell();
   expect(screen.queryAllByTestId("session")).toHaveLength(0);
   await userEvent.click(screen.getByRole("button", { name: "Start first" }));
+  const existingSessionId = screen.getByTestId("session").dataset.session;
+  expect(existingSessionId).toBe(screen.getByTestId("session").closest<HTMLElement>("[data-pane-id]")!.dataset.paneId);
   await userEvent.click(screen.getByRole("button", { name: "Workspaces" }));
   await screen.findByText("Operations");
   expect(api.workspacesOpen).not.toHaveBeenCalled();
@@ -151,7 +153,7 @@ it("saves actual terminal selection, survives app remount and connects only afte
     "login-second",
   ]);
   expect(screen.getAllByTestId("session").map((entry) => entry.dataset.session)).toEqual([
-    undefined,
+    existingSessionId,
     "fresh-first",
     "fresh-second",
   ]);

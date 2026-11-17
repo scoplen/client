@@ -829,7 +829,8 @@ export const en = {
   "objects.profile.terminalProfile": "Terminal profile",
   "objects.profile.startupCommand": "Startup command",
   "objects.profile.forwards": "Tunnels",
-  "objects.profile.forwardsHint": "Start these saved tunnels when this login connects.",
+  "objects.profile.forwardsHint":
+    "Local TCP and Dynamic SOCKS tunnels start on this terminal's SSH connection. Remote and Unix-socket attachments are unsupported. Jump Logins do not start their tunnels.",
   "objects.profile.noForwards": "No saved tunnels yet.",
   "objects.profile.forwardCount": "{count, plural, one {# tunnel} other {# tunnels}}",
   "objects.profile.agentForwarding": "Allow agent forwarding",
@@ -1370,6 +1371,25 @@ export const en = {
   "tunnels.start": "Start",
   "tunnels.startTemporary": "Start without saving",
   "tunnels.temporary": "Temporary",
+  "tunnels.attached.title": "Login tunnels",
+  "tunnels.attached.owner": "{label} · Tab {tab} · Pane {pane}",
+  "tunnels.attached.ownerUnavailable": "Attached terminal unavailable",
+  "tunnels.attached.lifetime":
+    "Uses the terminal's SSH connection. Closing the terminal stops these tunnels. Stop keeps a tunnel off after reconnect until you close this terminal.",
+  "tunnels.attached.missing": "Unavailable tunnel ({id})",
+  "tunnels.attached.stopped": "Stopped for this terminal",
+  "tunnels.attached.issue.invalidConfiguration": "Check this Login's saved tunnel definition before reconnecting.",
+  "tunnels.attached.issue.capacityReached":
+    "The tunnel limit was reached. Other tunnels and the terminal can continue. Up to 16 tunnels can run at once.",
+  "tunnels.attached.issue.unavailable":
+    "This terminal's tunnels could not be updated. Other terminal actions remain available.",
+  "tunnels.attached.issue.preparationFailed": "This tunnel could not use the terminal's SSH connection.",
+  "tunnels.attached.issue.listenFailed":
+    "The listening endpoint is unavailable. Check the address, port and SSH forwarding policy. The terminal can continue.",
+  "tunnels.attached.issue.connectionLost":
+    "The terminal's SSH connection ended. Eligible tunnels restart on its next connection.",
+  "tunnels.attached.issue.shutdownFailed":
+    "Tunnel shutdown could not be confirmed. Check the listener before reconnecting.",
   "tunnels.stop": "Stop",
   "tunnels.running": "Running",
   "tunnels.continue": "Continue setup",
@@ -1439,6 +1459,8 @@ export const en = {
   "tunnels.error.missingReference":
     "The tunnel or selected Login is no longer available. Reopen this editor to refresh it.",
   "tunnels.issue.invalidConfiguration": "Check the tunnel endpoints and selected Login before starting again.",
+  "tunnels.issue.unsupportedDefinition":
+    "This tunnel cannot attach to a terminal. Only Local TCP and Dynamic SOCKS attachments are supported.",
   "tunnels.issue.notFound":
     "The tunnel or selected Login is no longer available. Choose an existing definition and Login.",
   "tunnels.issue.alreadyRunning": "This tunnel is already preparing, running or stopping.",

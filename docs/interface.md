@@ -138,9 +138,9 @@ and other remote edits remain separate work.
 
 `web/app/src/frame.tsx`. A strip of tabs above the content. The first tab is always Hosts, led by the mark; each session adds a tab after it, led by its host's egg (roadmap C5). On macOS the strip is the title bar: the window is created with `titleBarStyle: "Overlay"` and a hidden title, the strip leaves 92 px for the window controls, which sit centered in it, and its empty space carries `data-tauri-drag-region`. Windows keeps its native title bar. Settings opens from the gear at the right of the strip.
 
-## Independent tunnels
+## Tunnels
 
-Hosts → Tunnels lists saved Local TCP, Remote TCP and Dynamic SOCKS definitions and their independent runs. Saving only
+Hosts → Tunnels lists saved Local TCP, Remote TCP and Dynamic SOCKS definitions and current or recent runs. Saving only
 writes inventory. Start selects an existing Login and uses the terminal's shared trust,
 passphrase and Interactive dialogs without opening a terminal tab. The editor defaults to
 loopback and explains access from other devices when another bind address is entered.
@@ -153,9 +153,30 @@ native owner running; cancelling its preparation dialog sends Stop for that exac
 
 Runs display the fixed Host, Login and endpoints captured by Rust, with current connection
 count, uploaded/downloaded bytes and refusal count. Editing or deleting inventory never
-relabels a running connection or removes its Stop action. Stopped and failed runs remain
-visible; another attempt requires Start. The renderer receives no socket, key or credential
+relabels a running connection or removes its Stop action. Independent stopped and failed runs remain
+visible; another independent attempt requires Start. The renderer receives no socket, key or credential
 handle and sends no network traffic.
+
+A Local or Personal Login's selected Local TCP and Dynamic SOCKS tunnels attach automatically
+when its terminal is ready. They use that terminal's authenticated target connection and Jump
+chain, without another Login selection or authentication. A Jump Login's own selections do not
+start. Remote and Unix-socket attachments appear as unsupported entries; missing definitions,
+listener refusals and capacity failures remain per-entry results without closing the terminal
+or successful tunnels.
+
+The terminal's bounded Login tunnels list shows each selected definition, current phase or fixed
+localized refusal, and Stop. A missing definition keeps an identifiable unavailable row. Stop
+also applies to failed entries and prevents that definition from restarting during this logical
+terminal's reconnects. Closing the terminal discards that choice. A new transport releases old
+resources before starting the currently eligible selections. Attached runs also appear in Tunnels,
+identified by their owning terminal's current tab and pane, with the same Stop behavior. Independent
+runs retain their separate owners and are never adopted by a terminal.
+
+`sessionForwardList(sessionId, transportId)` and `sessionForwardStop(sessionId, transportId, forwardId)`
+bind reads and Stop to the exact current transport. Ordered `forwards` session events replace the
+entry list; old events and delayed List or Stop replies cannot alter a replacement connection.
+The Shell's existing forward observer supplies newer run phases to both surfaces and counters in Tunnels.
+English and Chinese component checks do not establish rendered or native acceptance.
 
 Remote labels the requested server listener separately from the fixed local target in the
 editor and running snapshot. A successful Start does not report the actual interfaces:

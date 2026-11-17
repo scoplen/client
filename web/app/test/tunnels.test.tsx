@@ -10,7 +10,7 @@ import { InventoryContext } from "../src/inventory/api";
 import { TunnelsHome } from "../src/inventory/tunnels";
 import { HostsHome } from "../src/inventory/home";
 import type { ForwardIssue, ForwardSnapshot, PreparationEvent } from "../src/ipc/bindings";
-import { ForwardsContext, useForwards, type ForwardController } from "../src/use-forwards";
+import { ForwardOwnersContext, ForwardsContext, useForwards, type ForwardController } from "../src/use-forwards";
 import { violations } from "../../ui/test/axe";
 
 afterEach(() => {
@@ -29,6 +29,7 @@ function deferred<T>() {
 function snapshot(overrides: Partial<ForwardSnapshot> = {}): ForwardSnapshot {
   return {
     runId: "run-1",
+    attachment: null,
     configuration: {
       kind: "local",
       source: { kind: "saved", forwardId: "f-db" },
@@ -149,6 +150,7 @@ function fixture(
     listIssue?: ForwardIssue;
     locale?: "en" | "zh-Hans";
     home?: boolean;
+    owners?: Record<string, { label: string; tab: number; pane: number }>;
   } = {},
 ) {
   const calls: { command: string; args: Record<string, unknown> }[] = [];
@@ -180,7 +182,9 @@ function fixture(
       <I18nProvider locale={options.locale ?? "en"}>
         <InventoryContext.Provider value={api}>
           <ForwardsContext.Provider value={controller}>
-            <main>{!visible ? <p>Other view</p> : options.home ? <HostsHome manage /> : <TunnelsHome />}</main>
+            <ForwardOwnersContext.Provider value={options.owners ?? {}}>
+              <main>{!visible ? <p>Other view</p> : options.home ? <HostsHome manage /> : <TunnelsHome />}</main>
+            </ForwardOwnersContext.Provider>
           </ForwardsContext.Provider>
         </InventoryContext.Provider>
       </I18nProvider>
@@ -203,6 +207,27 @@ function fixture(
     changed: (run: ForwardSnapshot) => act(() => emit("forward-changed", { snapshot: run })),
   };
 }
+
+it.each(["en", "zh-Hans"] as const)("identifies attached owners and stops only that run in %s", async (locale) => {
+  const f = fixture({
+    locale,
+    runs: [
+      snapshot({ attachment: { sessionId: "pane-two", transportId: "transport-two" } }),
+      snapshot({ runId: "independent" }),
+    ],
+    owners: { "pane-two": { label: "Database host · ops", tab: 2, pane: 3 } },
+  });
+  const list = await screen.findByRole("list", { name: locale === "en" ? "Runs" : "运行记录" });
+  await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(2));
+  const [attached, independent] = within(list).getAllByRole("listitem");
+  expect(attached!.textContent).toContain(
+    locale === "en" ? "Database host · ops · Tab 2 · Pane 3" : "Database host · ops · 标签页 2 · 窗格 3",
+  );
+  expect(independent!.textContent).not.toContain(locale === "en" ? "Uses the terminal" : "使用终端");
+  await userEvent.click(within(attached!).getByRole("button", { name: locale === "en" ? "Stop" : "停止" }));
+  expect(f.calls.filter((call) => call.command === "forward_stop").map((call) => call.args.runId)).toEqual(["run-1"]);
+  expect(f.calls.some((call) => call.command === "session_close_transport")).toBe(false);
+});
 
 it("subscribes before listing, fences older revisions without precision loss and detaches without Stop", async () => {
   const pendingList = deferred<ForwardSnapshot[]>();

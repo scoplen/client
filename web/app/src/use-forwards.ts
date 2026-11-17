@@ -23,6 +23,24 @@ export interface ForwardController {
 
 export const ForwardsContext = createContext<ForwardController | null>(null);
 
+export const ForwardOwnersContext = createContext<Record<string, { label: string; tab: number; pane: number }>>({});
+
+export function tunnelIssueKey(issue: ForwardIssue, attached = false) {
+  if (attached) {
+    switch (issue) {
+      case "invalidConfiguration":
+      case "capacityReached":
+      case "unavailable":
+      case "preparationFailed":
+      case "listenFailed":
+      case "connectionLost":
+      case "shutdownFailed":
+        return `tunnels.attached.issue.${issue}` as const;
+    }
+  }
+  return `tunnels.issue.${issue}` as const;
+}
+
 export function isLiveForward(snapshot: ForwardSnapshot): boolean {
   return snapshot.phase === "preparing" || snapshot.phase === "listening" || snapshot.phase === "stopping";
 }

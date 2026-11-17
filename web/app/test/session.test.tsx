@@ -16,7 +16,10 @@ import type {
   SessionTransferQueueSnapshot,
   SessionTransferItem,
   SessionTarget,
+  SessionForwardSnapshot,
+  ForwardSnapshot,
 } from "../src/ipc/bindings";
+import { ForwardsContext, type ForwardController } from "../src/use-forwards";
 import type { ScoplenTerminalElement } from "@scoplen/terminal";
 import { en } from "../src/messages/en";
 import { zhHans } from "../src/messages/zh-Hans";
@@ -88,6 +91,7 @@ function fixture() {
             named: [],
           }
         );
+      if (command === "session_forward_list") return pending.get(command)?.shift()?.promise ?? [];
       return pending.get(command)?.shift()?.promise ?? null;
     },
     { shouldMockEvents: true },
@@ -157,6 +161,213 @@ function outputFrame(transportId: string, text: string): ArrayBuffer {
   bytes.set(data, 16);
   return bytes.buffer;
 }
+
+function attachedEntry(transportId: string, overrides: Partial<SessionForwardSnapshot> = {}): SessionForwardSnapshot {
+  return {
+    forwardId: "forward-db",
+    name: "Database tunnel",
+    stopped: false,
+    issue: null,
+    run: {
+      runId: "attached-db",
+      attachment: { sessionId: "logical-terminal", transportId },
+      configuration: {
+        kind: "local",
+        source: { kind: "saved", forwardId: "forward-db" },
+        name: "Database tunnel",
+        profileId: "profile-1",
+        bindAddress: "127.0.0.1",
+        bindPort: 5433,
+        targetHost: "database.internal",
+        targetPort: 5432,
+        login: context(1),
+      },
+      phase: "listening",
+      preparation: null,
+      boundAddress: "127.0.0.1:5433",
+      activeConnections: 0,
+      uploadedBytes: "0",
+      downloadedBytes: "0",
+      rejectedConnections: "0",
+      lastIssue: null,
+      revision: "1",
+    },
+    ...overrides,
+  };
+}
+
+it.each(["en", "zh-Hans"] as const)(
+  "shows per-entry attachment results and stops a missing entry without changing the terminal in %s",
+  async (locale) => {
+    const f = fixture();
+    const catalog = locale === "en" ? en : zhHans;
+    const view = render(sessionView(locale, true, undefined, undefined, { sessionId: "logical-terminal" }));
+    const c = await connect(f);
+    const terminal = view.container.querySelector<ScoplenTerminalElement>("scoplen-terminal")!;
+    await c.ready();
+    const entries = [
+      attachedEntry(c.transportId),
+      attachedEntry(c.transportId, { forwardId: "missing", name: null, run: null, issue: "notFound" }),
+      attachedEntry(c.transportId, {
+        forwardId: "remote",
+        name: "Remote tunnel",
+        run: null,
+        issue: "unsupportedDefinition",
+      }),
+      attachedEntry(c.transportId, { forwardId: "occupied", name: "Occupied port", run: null, issue: "listenFailed" }),
+      attachedEntry(c.transportId, {
+        forwardId: "capacity",
+        name: "Capacity tunnel",
+        run: null,
+        issue: "capacityReached",
+      }),
+    ];
+    await c.emit({ kind: "forwards", transportId: c.transportId, entries });
+    const list = screen.getByRole("list", { name: catalog["tunnels.attached.title"] });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(5);
+    expect(within(list).getByText(catalog["tunnels.issue.unsupportedDefinition"])).toBeTruthy();
+    expect(within(list).getByText(catalog["tunnels.attached.issue.listenFailed"])).toBeTruthy();
+    expect(within(list).getByText(catalog["tunnels.attached.issue.capacityReached"])).toBeTruthy();
+    const missing = within(list).getAllByRole("listitem")[1]!;
+    expect(missing.textContent).toContain("missing");
+    const stopped = f.delay("session_forward_list");
+    await userEvent.click(within(missing).getByRole("button", { name: catalog["tunnels.stop"] }));
+    expect(f.matching("session_forward_stop").at(-1)?.args).toMatchObject({
+      sessionId: c.sessionId,
+      transportId: c.transportId,
+      forwardId: "missing",
+    });
+    await act(() =>
+      stopped.resolve(entries.map((entry) => (entry.forwardId === "missing" ? { ...entry, stopped: true } : entry))),
+    );
+    expect(within(missing).getByText(catalog["tunnels.attached.stopped"])).toBeTruthy();
+    expect(within(missing).getByRole("button").hasAttribute("disabled")).toBe(true);
+    expect(view.container.querySelector("scoplen-terminal")).toBe(terminal);
+    expect(f.connections).toHaveLength(1);
+    expect(f.matching("session_close_transport")).toHaveLength(0);
+    expect(f.matching("forward_stop")).toHaveLength(0);
+    await terminal.send(new Uint8Array([112, 119, 100, 13]));
+    expect(f.matching("session_input").at(-1)?.args.transportId).toBe(c.transportId);
+  },
+);
+
+it.each(["success", "failure"] as const)(
+  "fences old attachment events, initial lists and Stop %s across replacement transports",
+  async (result) => {
+    const f = fixture();
+    const view = render(sessionView());
+    const c = await connect(f);
+    const terminal = view.container.querySelector("scoplen-terminal");
+    const initial = f.delay("session_forward_list");
+    await c.ready();
+    await c.emit({ kind: "forwards", transportId: c.transportId, entries: [attachedEntry(c.transportId)] });
+    await act(() => initial.resolve([attachedEntry(c.transportId, { name: "Late initial list" })]));
+    expect(screen.queryByText("Late initial list")).toBeNull();
+    const stop = f.delay("session_forward_stop");
+    await userEvent.click(
+      within(screen.getByRole("list", { name: "Login tunnels" })).getByRole("button", { name: "Stop" }),
+    );
+    const replacement = await c.start(true);
+    expect(screen.queryByRole("list", { name: "Login tunnels" })).toBeNull();
+    const replacementList = f.delay("session_forward_list");
+    await replacement.ready();
+    await c.emit({
+      kind: "forwards",
+      transportId: replacement.transportId,
+      entries: [attachedEntry(replacement.transportId, { name: "Replacement tunnel", stopped: true, run: null })],
+    });
+    await act(() =>
+      replacementList.resolve([attachedEntry(replacement.transportId, { name: "Late replacement list" })]),
+    );
+    await c.emit({
+      kind: "forwards",
+      transportId: c.transportId,
+      entries: [attachedEntry(c.transportId, { name: "Old event" })],
+    });
+    await act(() => (result === "success" ? stop.resolve(null) : stop.reject("unavailable")));
+    expect(screen.getByText("Replacement tunnel")).toBeTruthy();
+    expect(screen.getByText("Stopped for this terminal")).toBeTruthy();
+    expect(screen.queryByText("Old event")).toBeNull();
+    expect(screen.queryByText("Late replacement list")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(f.matching("session_forward_list")).toHaveLength(2);
+    expect(view.container.querySelector("scoplen-terminal")).toBe(terminal);
+    expect(f.connections).toHaveLength(1);
+  },
+);
+
+it("uses newer global run revisions without replacing session entry ownership", async () => {
+  const f = fixture();
+  const entry = attachedEntry("transport-one");
+  const run = {
+    ...entry.run!,
+    phase: "failed",
+    lastIssue: "targetRejected",
+    revision: "9007199254740993",
+  } satisfies ForwardSnapshot;
+  const runtime: ForwardController = {
+    snapshots: [run],
+    loading: false,
+    issue: null,
+    refresh: vi.fn(),
+    start: vi.fn(),
+    stop: vi.fn(),
+    respond: vi.fn(),
+  };
+  render(<ForwardsContext.Provider value={runtime}>{sessionView()}</ForwardsContext.Provider>);
+  const c = await connect(f);
+  await c.ready();
+  await c.emit({ kind: "forwards", transportId: c.transportId, entries: [entry] });
+  const list = screen.getByRole("list", { name: "Login tunnels" });
+  expect(within(list).getByText("Failed")).toBeTruthy();
+  expect(within(list).getByText(en["tunnels.issue.targetRejected"])).toBeTruthy();
+  expect(runtime.stop).not.toHaveBeenCalled();
+});
+
+it("discards an old transport's unresolved attachment list after reconnect", async () => {
+  const f = fixture();
+  render(sessionView());
+  const c = await connect(f);
+  const oldList = f.delay("session_forward_list");
+  await c.ready();
+  const replacement = await c.start(true);
+  await replacement.ready();
+  await c.emit({
+    kind: "forwards",
+    transportId: replacement.transportId,
+    entries: [attachedEntry(replacement.transportId, { name: "Current connection tunnel" })],
+  });
+  await act(() => oldList.resolve([attachedEntry(c.transportId, { name: "Obsolete connection tunnel" })]));
+  expect(screen.getByText("Current connection tunnel")).toBeTruthy();
+  expect(screen.queryByText("Obsolete connection tunnel")).toBeNull();
+  expect(f.connections).toHaveLength(1);
+});
+
+it("reports an attachment Stop refusal per entry and permits another explicit Stop without changing shell state", async () => {
+  const f = fixture();
+  render(sessionView());
+  const c = await connect(f);
+  await c.ready();
+  await c.emit({
+    kind: "forwards",
+    transportId: c.transportId,
+    entries: [attachedEntry(c.transportId, { run: null, issue: "listenFailed" })],
+  });
+  const refused = f.delay("session_forward_stop");
+  const stop = within(screen.getByRole("list", { name: "Login tunnels" })).getByRole("button", { name: "Stop" });
+  await userEvent.click(stop);
+  await act(() => refused.reject("unavailable"));
+  expect(screen.getByRole("alert").textContent).toBe(en["tunnels.attached.issue.unavailable"]);
+  expect(stop.hasAttribute("disabled")).toBe(false);
+  expect(screen.getByRole("status").textContent).toContain("Connected");
+  const listed = f.delay("session_forward_list");
+  await userEvent.click(stop);
+  await act(() => listed.resolve([attachedEntry(c.transportId, { run: null, stopped: true })]));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(f.matching("session_forward_stop")).toHaveLength(2);
+  expect(f.matching("session_retry_transport")).toHaveLength(0);
+  expect(f.matching("session_close_transport")).toHaveLength(0);
+});
 
 it.each([
   ["en", "certificateRevoked", "teams.ssh.revoked"],

@@ -85,6 +85,7 @@ function fixture(initial: TerminalProfileDirectory = { defaultProfile: defaults,
         connections.push(input as unknown as (typeof connections)[number]);
         return new Promise(() => undefined);
       }
+      if (command === "session_forward_list") return [];
       if (command === "session_transfer_queue")
         return {
           sessionId: input.sessionId,
