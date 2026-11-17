@@ -298,9 +298,10 @@ Attached runs identify their terminal; Stop releases only that tunnel's listener
 It stays stopped across reconnects of the same tab; closing the tab discards that choice.
 Reconnect releases old resources before starting eligible current definitions. Independently
 running tunnels retain their own lifetime. Attached Remote and Unix-socket forwarding remain
-unsupported. Direct automatic reconnect and Jump sharing/Stop have separate real OpenSSH checks.
-A lost parent Jump connection can currently end the terminal without an automatic retry;
-choose Reconnect manually. Native Windows/macOS interaction remains unverified.
+unsupported. Direct and Jump routes use the existing bounded automatic reconnect after
+confirmed network loss, including a lost Jump parent. A replacement transport recreates
+eligible attached runs while preserving explicit Stop. Native Windows/macOS interaction
+remains unverified.
 
 Remote requests a fixed nonzero listening port and numeric IPv4 or IPv6 address on the
 SSH server, and reaches a fixed local target whose hostname is resolved by this device.
@@ -772,8 +773,8 @@ connections. Native pane focus and rendering need separate platform acceptance.
 
 `scripts/test-ssh-attached-forwards.ps1` uses public `run_target` with owned Direct and Jump
 OpenSSH peers. It checks shared shell/SFTP/Local/SOCKS binary traffic, per-entry failures,
-both Stop paths, Direct reconnect and independent-run survival. Target logs prove there is
-one authentication per terminal transport. Jump parent-loss propagation remains separate.
+both Stop paths, Direct and Jump parent-loss reconnect and independent-run survival. Target
+and Jump logs prove one authentication per owned transport, including fresh reconnects.
 
 `scripts/test-ssh-local-forward.ps1` checks saved and temporary standalone TCP tunnels against
 disposable OpenSSH listeners with session channels disabled. It exercises password,

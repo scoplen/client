@@ -688,16 +688,16 @@ eligible definitions again. Existing independently started tunnels keep their ow
 The Docker fixture exercises public `run_target` with Direct and Jump routes, with binary SFTP,
 Local TCP and SOCKS roundtrips alongside the shell. It verifies per-entry failures, ignored
 Forward defaults and Jump-hop attachments, both Stop paths, old listener/peer release,
-eligible recreation on Direct and independent-run survival. The owned target's OpenSSH log must
-show exactly five authentications: two independent runs, two Direct terminal transports separated
-by a forced network interruption and one Jump terminal transport. Its container and successful
-temporary data are removed.
+eligible recreation on Direct and Jump and independent-run survival. The owned target's OpenSSH
+log must show exactly six authentications: two independent runs, two Direct terminal transports
+and two Jump terminal transports, with forced network interruption between each terminal pair.
+The Jump log must show exactly three authentications: one independent run and the original and
+replacement terminal parents. Its container and successful temporary data are removed.
 
-The current shared SSH byte-stream adapter can lose the confirmed network-failure cause when
-a parent Jump connection disappears. That path can end the terminal without automatic retry;
-use manual Reconnect. This fixture establishes Jump transport sharing and Stop separately from
-Direct automatic reconnect. Propagating the parent's confirmed cause requires a separate shared
-SSH contract outcome.
+The published D-148 shared adapter preserves confirmed parent network loss through the Jump
+byte stream. The terminal uses its existing bounded reconnect policy and current trust and
+credentials; normal shell completion and local shutdown retain their non-retry semantics.
+Replacing the transport opens a fresh shell and does not restore remote processes.
 
 Core tests and generated-command checks do not establish rendered or native Windows/macOS
 interaction acceptance.
