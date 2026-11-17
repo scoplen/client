@@ -227,7 +227,7 @@ impl Terminal {
     async fn barrier(&self, sessions: &SessionManager, target: &SnippetTerminal) {
         let suffix = uuid::Uuid::now_v7();
         let marker = format!("SCOPLEN-D156-BARRIER:{suffix}");
-        let command = format!("printf '\\123COPLEN-D156-BARRIER:{suffix}\\n'\r");
+        let command = format!("printf '\\n\\123COPLEN-D156-BARRIER:{suffix}\\n'\r");
         sessions
             .input(&target.session_id, &target.transport_id, command.into_bytes())
             .expect("independent ordinary output barrier");
