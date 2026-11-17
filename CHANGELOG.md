@@ -4,6 +4,10 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Preserve an authenticated team SSH policy refusal while closing its failed transport,
+  so Review access can use the original Host and username. Authority withdrawal still
+  interrupts pending connection preparation.
+
 - Manage named device-local terminal profiles in Settings, with font, cursor and
   scrollback controls and editable/resettable Default. Target Logins choose an
   exact profile through the custom selector. Changes update live, hidden and saved

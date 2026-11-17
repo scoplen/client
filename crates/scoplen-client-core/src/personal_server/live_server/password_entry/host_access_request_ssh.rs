@@ -112,9 +112,11 @@ async fn denied_terminal(
                         )?;
                     }
                 }
-                SessionEvent::Failed { team_ssh_policy_denial, .. } => {
+                SessionEvent::Failed {
+                    error, team_ssh_failure, team_ssh_policy_denial, ..
+                } => {
                     failure_tx
-                        .send(team_ssh_policy_denial)
+                        .send((error, team_ssh_failure, team_ssh_policy_denial))
                         .map_err(|_| "denial receiver closed")?;
                 }
                 SessionEvent::Ready { .. } => {
@@ -128,11 +130,11 @@ async fn denied_terminal(
         |_, _| {},
     );
     let exercise = async {
-        let denial = failure_rx
-            .recv()
-            .await
-            .expect("actual completed ordinary terminal refusal")
-            .expect("authenticated certificate-policy refusal");
+        let (error, failure, denial) =
+            failure_rx.recv().await.expect("actual completed ordinary terminal refusal");
+        let denial = denial.unwrap_or_else(|| {
+            panic!("expected authenticated certificate-policy refusal; failure={failure:?}; error={error}")
+        });
         assert_eq!(&denial, expected);
         let request = if let Some(application) = application {
             let checked = requests

@@ -421,6 +421,56 @@ fn ordinary_failed_pulls_preserve_exact_authority_and_other_team_invalidation_is
 }
 
 #[tokio::test]
+async fn authority_withdrawal_interrupts_a_live_host_key_prompt() {
+    let mut fixture = Fixture::new();
+    let ssh = crate::connection::test_peer::Peer::start().await;
+    fixture.objects.retain(|object| object.id != fixture.host);
+    fixture.objects.push(object::<Host>(
+        fixture.host,
+        HostChange {
+            name: Some("Pending team Host".into()),
+            address: Some("127.0.0.1".into()),
+            port: crate::repository::Edit::Set(ssh.port),
+            ..Default::default()
+        },
+        fixture.store.device_id(),
+    ));
+    fixture.publish();
+    let plan =
+        resolve_target_preparation_plan(&fixture.store, &fixture.personal, &fixture.target())
+            .unwrap();
+    let control = PreparationControl::default();
+    let reached = std::sync::atomic::AtomicBool::new(false);
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        prepare_resolved_target_connection(
+            &fixture.store,
+            &fixture.personal,
+            plan,
+            &control,
+            |event| {
+                if let PreparationEvent::Trust { .. } = event {
+                    reached.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let identity = fixture.store.personal_record().unwrap().unwrap();
+                    fixture
+                        .store
+                        .invalidate_team_assets(&identity, fixture.publication.organization, None)
+                        .unwrap();
+                }
+                Ok(())
+            },
+        ),
+    )
+    .await
+    .expect("authority withdrawal must interrupt pending trust");
+    assert!(reached.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(matches!(result, Err(crate::connection::preparation::PreparationError::Local(error))
+        if error == "Team access changed. Refresh its assets before connecting again."));
+    assert_eq!(ssh.authentications.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(ssh.session_channels.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn organization_command_requires_exact_attempt_approval_before_spawn() {
     let mut fixture = Fixture::new();
     let route = Uuid::now_v7();
