@@ -38,7 +38,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.len() != 4 {
         return Err("usage: ssh_session_files_smoke <host> <port> <password-file>".into());
     }
-    tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(run(&args))
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(Box::pin(run(&args)))
 }
 
 async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -56,7 +59,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     manager.reserve("fixture-terminal", true)?;
     let (ready_tx, mut ready_rx) = mpsc::unbounded_channel::<String>();
     let (output_tx, mut output_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let terminal = manager.run(
+    let terminal = Box::pin(manager.run(
         "fixture-terminal",
         &host.logins[0].id,
         None,
@@ -84,7 +87,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         },
         |_, bytes| output_tx.send(bytes).map_err(|_| "output receiver closed".into()),
         |_, _| {},
-    );
+    ));
     let exercise = async {
         let result = exercise(&manager, scratch.path(), &mut ready_rx, &mut output_rx).await;
         let _ = manager.close("fixture-terminal");
