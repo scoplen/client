@@ -8,7 +8,14 @@ All notable changes to the Scoplen desktop client are recorded here.
   Credentials. Review each hop's Host key and exact command before execution;
   keep bounded output only in zeroizing authentication memory. Jump hops fetch
   independently, reconnect requires fresh approval, and cancellation releases
-  the directly owned helper. Other providers and private-key output remain separate.
+  the directly owned helper. Other providers remain separate.
+
+- Fetch transient OpenSSH software private keys with `field=private_key` through
+  the same command confirmation and bounded runner. Validate format, supported
+  algorithms and encrypted-key KDF parameters before requesting a passphrase.
+  Wrong-passphrase retry keeps the fetched key and reviewed SSH connection;
+  Direct/Jump authentication, additional factors, SFTP and reconnect reuse the
+  existing client paths without saving keys or passphrases.
 
 - Opt Local and Personal Logins into forwarding one explicitly selected Agent
   identity, with a capability disclosure, target-only scope and clear setup refusal.

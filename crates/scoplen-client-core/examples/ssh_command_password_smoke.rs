@@ -12,20 +12,15 @@ use scoplen_client_core::{
     },
     inventory::Inventory,
     repository::{
-        AccessProfile, AccessProfileChange, Credential, CredentialBinding, CredentialChange,
-        CredentialKind, Edit, Host, HostChange, Repository, Route, RouteChange, RouteChoice,
-        RouteKind,
+        AccessProfile, AccessProfileChange, Credential, Repository, Route, RouteChange,
+        RouteChoice, RouteKind,
     },
-    session_files::{SessionDownloadStatus, SessionUploadStatus},
     session_manager::{SessionEvent, SessionManager},
     store::Store,
 };
 use scoplen_crypto::LocalDatabaseKey;
 use std::{
-    collections::BTreeMap,
     fs,
-    io::{Read, Write},
-    net::TcpStream as BlockingStream,
     path::Path,
     sync::{
         Arc, Mutex,
@@ -34,16 +29,15 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::AsyncReadExt,
-    net::{TcpListener, TcpStream},
+    net::TcpListener,
     sync::{mpsc, watch},
-    task::JoinHandle,
 };
-use uuid::Uuid;
 use zeroize::Zeroizing;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-const LITERALS: [&str; 8] = ["%h", "%p", "%r", "%%", "$HOME", "|", ">", ""];
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+#[path = "support/command_credentials.rs"]
+mod fixture;
+use fixture::{Relay, files, helper, leases, login, provider, ready, released};
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
@@ -57,184 +51,6 @@ fn main() -> Result<()> {
         .enable_all()
         .build()?
         .block_on(Box::pin(run(&args)))
-}
-
-fn helper(args: &[String]) -> Result<()> {
-    if args.len() != 15 || args[7..] != LITERALS {
-        return Err("literal helper arguments changed".into());
-    }
-    let mut lease = BlockingStream::connect(("127.0.0.1", args[4].parse()?))?;
-    fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&args[5])?
-        .write_all(format!("{}\n", args[6]).as_bytes())?;
-    lease.write_all(format!("{}\n", args[6]).as_bytes())?;
-    if std::io::stdin().read(&mut [0])? != 0 {
-        return Err("provider stdin was not null".into());
-    }
-    let password = Zeroizing::new(fs::read(&args[3])?);
-    let mut stdout = std::io::stdout().lock();
-    match args[2].as_str() {
-        "empty" => {}
-        "oversize" => stdout.write_all(&vec![b'x'; 17000])?,
-        "wrong" => stdout.write_all(b"wrong-disposable-password")?,
-        "stall" => std::thread::sleep(Duration::from_secs(60)),
-        mode => {
-            stdout.write_all(&password)?;
-            if mode == "lf" {
-                stdout.write_all(b"\n")?;
-            }
-            if mode == "crlf" {
-                stdout.write_all(b"\r\n")?;
-            }
-            stdout.flush()?;
-            if mode == "exit" {
-                std::process::exit(7);
-            }
-            if mode == "no-exit" {
-                std::thread::sleep(Duration::from_secs(60));
-            }
-        }
-    }
-    stdout.flush()?;
-    std::io::stderr().write_all(&vec![b'x'; 65536])?;
-    drop(lease);
-    Ok(())
-}
-
-fn quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn provider(
-    executable: &Path,
-    mode: &str,
-    password: &Path,
-    lease: u16,
-    marker: &Path,
-    label: &str,
-) -> (BTreeMap<String, String>, Vec<String>) {
-    let mut arguments = vec![
-        "helper".into(),
-        mode.into(),
-        password.to_str().unwrap().into(),
-        lease.to_string(),
-        marker.to_str().unwrap().into(),
-        label.into(),
-    ];
-    arguments.extend(LITERALS.map(str::to_owned));
-    let path = std::iter::once(quote(executable.to_str().unwrap()))
-        .chain(arguments.iter().map(|value| quote(value)))
-        .collect::<Vec<_>>()
-        .join(" ");
-    (
-        BTreeMap::from([
-            ("type".into(), "command".into()),
-            ("path".into(), path),
-            ("field".into(), "password".into()),
-        ]),
-        arguments,
-    )
-}
-
-fn login(
-    store: &Store,
-    port: u16,
-    provider: BTreeMap<String, String>,
-    label: &str,
-) -> Result<(Uuid, Uuid)> {
-    let host = Repository::<Host>::new(store).create(HostChange {
-        name: Some(label.into()),
-        address: Some("127.0.0.1".into()),
-        port: Edit::Set(port),
-        ..Default::default()
-    })?;
-    let credential = Repository::<Credential>::new(store).create(CredentialChange {
-        kind: Some(CredentialKind::ExternalProvider),
-        binding: Some(CredentialBinding::None),
-        provider: provider.into_iter().map(|(key, value)| (key, Some(value))).collect(),
-        ..Default::default()
-    })?;
-    let profile = Repository::<AccessProfile>::new(store).create(AccessProfileChange {
-        host: Some(host.meta.id),
-        username: Some("smoke".into()),
-        credential: Edit::Set(credential.meta.id),
-        ..Default::default()
-    })?;
-    Ok((profile.meta.id, credential.meta.id))
-}
-
-struct Relay {
-    task: JoinHandle<()>,
-    open: Arc<AtomicUsize>,
-    port: u16,
-}
-impl Drop for Relay {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-impl Relay {
-    async fn start(destination: u16) -> Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let port = listener.local_addr()?.port();
-        let open = Arc::new(AtomicUsize::new(0));
-        let count = open.clone();
-        let task = tokio::spawn(async move {
-            let mut peers = tokio::task::JoinSet::new();
-            loop {
-                tokio::select! {
-                    accepted = listener.accept() => {
-                        let Ok((mut client, _)) = accepted else { break; };
-                        let count = count.clone();
-                        peers.spawn(async move {
-                            let Ok(mut upstream) = TcpStream::connect(("127.0.0.1", destination)).await else { return; };
-                            count.fetch_add(1, Ordering::SeqCst);
-                            let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
-                            count.fetch_sub(1, Ordering::SeqCst);
-                        });
-                    },
-                    _ = peers.join_next(), if !peers.is_empty() => {},
-                }
-            }
-        });
-        Ok(Self { task, open, port })
-    }
-    async fn idle(&self) -> Result<()> {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while self.open.load(Ordering::SeqCst) != 0 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .map_err(|_| "retained SSH chain was not released".into())
-    }
-}
-
-async fn leases(listener: &TcpListener, labels: &[&str]) -> Result<Vec<TcpStream>> {
-    let mut result = Vec::new();
-    for label in labels {
-        let (mut stream, _) =
-            tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
-        let mut actual = vec![0; label.len() + 1];
-        stream.read_exact(&mut actual).await?;
-        assert_eq!(actual, format!("{label}\n").as_bytes());
-        result.push(stream);
-    }
-    Ok(result)
-}
-
-async fn released(mut streams: Vec<TcpStream>) -> Result<()> {
-    for stream in &mut streams {
-        let result = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut [0])).await?;
-        assert!(
-            matches!(result, Ok(0))
-                || result.is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionReset),
-            "owned helper retained its independent lease"
-        );
-    }
-    Ok(())
 }
 
 async fn run(args: &[String]) -> Result<()> {
@@ -294,8 +110,15 @@ async fn prepare_case(
         "jump" => "raw",
         other => other,
     };
-    let (mut descriptor, target_args) =
-        provider(executable, behavior, password, listener.local_addr()?.port(), &marker, "target");
+    let (mut descriptor, target_args) = provider(
+        executable,
+        behavior,
+        password,
+        listener.local_addr()?.port(),
+        &marker,
+        "target",
+        "password",
+    );
     if mode == "invalid" {
         descriptor.insert("unknown".into(), "value".into());
     }
@@ -304,8 +127,15 @@ async fn prepare_case(
     }
     let (profile, _) =
         login(&store, if is_jump { internal } else { relay.port }, descriptor, "Password target")?;
-    let (hop_descriptor, hop_args) =
-        provider(executable, "raw", password, listener.local_addr()?.port(), &marker, "hop");
+    let (hop_descriptor, hop_args) = provider(
+        executable,
+        "raw",
+        password,
+        listener.local_addr()?.port(),
+        &marker,
+        "hop",
+        "password",
+    );
     if is_jump {
         let (hop, _) = login(&store, relay.port, hop_descriptor, "Password Jump")?;
         let route = Repository::<Route>::new(&store).create(RouteChange {
@@ -380,7 +210,7 @@ async fn prepare_case(
         if mode == "drop" {
             drop_signal.send_replace(true);
         }
-        Ok::<_, Box<dyn std::error::Error>>(streams)
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(streams)
     };
     let execute = async {
         if mode == "drop" {
@@ -409,10 +239,10 @@ async fn prepare_case(
             "invalid" => "external credential is invalid",
             "missing" => "could not start",
             "wrong" => {
-                "SSH authentication with the password command was rejected. Check the Login, helper and any additional factors, then reconnect."
+                "SSH authentication with the credential command was rejected. Check the Login, helper and any additional factors, then reconnect."
             }
-            "exit" => "password command failed",
-            "empty" => "empty password",
+            "exit" => "credential command failed",
+            "empty" => "empty output",
             "oversize" => "too much output",
             "no-exit" => "timed out",
             _ => "connection was cancelled",
@@ -421,6 +251,10 @@ async fn prepare_case(
         assert!(!error.contains(executable.to_str().unwrap()));
     }
     relay.idle().await?;
+    assert_eq!(
+        relay.accepted.load(Ordering::SeqCst),
+        if mode == "raw" { 2 } else { usize::from(mode != "invalid") }
+    );
     if expected.is_empty() {
         assert!(!marker.exists());
         assert!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err());
@@ -458,57 +292,6 @@ async fn prepare_case(
     Ok(())
 }
 
-async fn ready(events: &mut mpsc::UnboundedReceiver<SessionEvent>) -> Result<String> {
-    loop {
-        match events.recv().await.ok_or("session events ended")? {
-            SessionEvent::Ready { transport_id } => return Ok(transport_id),
-            SessionEvent::Failed { error, .. } => return Err(error.into()),
-            _ => {}
-        }
-    }
-}
-
-async fn files(manager: &SessionManager, transport: &str, directory: &Path) -> Result<()> {
-    let source = directory.join(format!("provider-{}.bin", Uuid::now_v7()));
-    let expected: Vec<u8> = (0..=255).cycle().take(8192).collect();
-    fs::write(&source, &expected)?;
-    manager.list_files("terminal", transport, &Uuid::now_v7().to_string(), b".".to_vec()).await?;
-    let upload = manager
-        .upload_file_with_picker(
-            "terminal",
-            transport,
-            &Uuid::now_v7().to_string(),
-            b".".to_vec(),
-            || async { Ok(Some(source.clone())) },
-            |_| async { Err("fresh fixture must not overwrite".into()) },
-            |_| {},
-        )
-        .await?;
-    assert_eq!(upload.status, SessionUploadStatus::Saved);
-    let remote = manager
-        .list_files("terminal", transport, &Uuid::now_v7().to_string(), b".".to_vec())
-        .await?
-        .entries
-        .into_iter()
-        .find(|entry| entry.name == source.file_name().unwrap().to_str().unwrap())
-        .ok_or("uploaded file missing")?
-        .path;
-    let destination = directory.join("download.bin");
-    let download = manager
-        .download_file_with_picker(
-            "terminal",
-            transport,
-            &Uuid::now_v7().to_string(),
-            remote,
-            || async { Ok(Some(destination.clone())) },
-            |_| {},
-        )
-        .await?;
-    assert_eq!(download.status, SessionDownloadStatus::Saved);
-    assert_eq!(fs::read(destination)?, expected);
-    Ok(())
-}
-
 async fn session_case(
     executable: &Path,
     password: &Path,
@@ -523,16 +306,30 @@ async fn session_case(
     let marker = scratch.path().join("invocations");
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let relay = Relay::start(if is_jump { jump } else { target }).await?;
-    let (descriptor, target_args) =
-        provider(executable, "raw", password, listener.local_addr()?.port(), &marker, "target");
+    let (descriptor, target_args) = provider(
+        executable,
+        "raw",
+        password,
+        listener.local_addr()?.port(),
+        &marker,
+        "target",
+        "password",
+    );
     let (profile, _) = login(
         &store,
         if is_jump { internal } else { relay.port },
         descriptor,
         "Session password target",
     )?;
-    let (descriptor, hop_args) =
-        provider(executable, "crlf", password, listener.local_addr()?.port(), &marker, "hop");
+    let (descriptor, hop_args) = provider(
+        executable,
+        "crlf",
+        password,
+        listener.local_addr()?.port(),
+        &marker,
+        "hop",
+        "password",
+    );
     if is_jump {
         let (hop, _) = login(&store, relay.port, descriptor, "Session password Jump")?;
         let route = Repository::<Route>::new(&store).create(RouteChange {
@@ -605,7 +402,7 @@ async fn session_case(
         let next = ready(&mut events).await?;
         assert_ne!(first, next);
         manager.close_all()?;
-        Ok::<_, Box<dyn std::error::Error>>(())
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     };
     let labels =
         if is_jump { vec!["hop", "target", "hop", "target"] } else { vec!["target", "target"] };
@@ -653,6 +450,7 @@ async fn cancelled_session(executable: &Path, password: &Path, port: u16) -> Res
             listener.local_addr()?.port(),
             &marker,
             "target",
+            "password",
         );
         let (profile, _) = login(&store, relay.port, descriptor, "Pending session")?;
         let manager = SessionManager::default();

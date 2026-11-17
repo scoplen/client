@@ -436,162 +436,187 @@ async fn public_preparation_keeps_one_budget_across_passphrase_retry_partial_suc
         .await;
     }
 
-    let peer = Peer::with_authentication(Authentication::KeyThenInteractive).await;
-    let (_dir, store) = store();
-    let mut rng = ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng);
-    let private = ssh_key::PrivateKey::random(&mut rng, ssh_key::Algorithm::Ed25519).unwrap();
-    let private = private.encrypt(&mut rng, b"disposable-passphrase").unwrap();
-    let profile = peer_login(
-        &store,
-        peer.port,
-        CredentialKind::PrivateKey,
-        Some(private.to_openssh(ssh_key::LineEnding::LF).unwrap().as_bytes().to_vec()),
-    );
-    let control = PreparationControl::default();
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let started = Mutex::new(None);
-    let timed_out_prompt = Mutex::new(None);
-    let finished = AtomicBool::new(false);
-    let preparation = async {
-        let result = prepare_connection(&store, profile, &control, |event| {
-            if matches!(event, PreparationEvent::Verified { .. }) {
-                tokio::time::pause();
-                *started.lock().unwrap() = Some(Instant::now());
+    for external in [false, true] {
+        let peer = Peer::with_authentication(Authentication::KeyThenInteractive).await;
+        let (_dir, store) = store();
+        let mut rng = ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng);
+        let private = ssh_key::PrivateKey::random(&mut rng, ssh_key::Algorithm::Ed25519).unwrap();
+        let private = private.encrypt(&mut rng, b"disposable-passphrase").unwrap();
+        let profile = if external {
+            super::command_private_key_tests::login(
+                &store,
+                peer.port,
+                _dir.path(),
+                private.to_openssh(ssh_key::LineEnding::LF).unwrap().as_bytes(),
+            )
+            .0
+        } else {
+            peer_login(
+                &store,
+                peer.port,
+                CredentialKind::PrivateKey,
+                Some(private.to_openssh(ssh_key::LineEnding::LF).unwrap().as_bytes().to_vec()),
+            )
+        };
+        let control = PreparationControl::default();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let started = Mutex::new(None);
+        let timed_out_prompt = Mutex::new(None);
+        let commands = AtomicUsize::new(0);
+        let finished = AtomicBool::new(false);
+        let preparation = async {
+            let result = prepare_connection(&store, profile, &control, |event| {
+                if matches!(event, PreparationEvent::Verified { .. }) {
+                    tokio::time::pause();
+                    *started.lock().unwrap() = Some(Instant::now());
+                }
+                tx.send(event).map_err(|_| "test receiver closed".into())
+            })
+            .await;
+            finished.store(true, Ordering::SeqCst);
+            result
+        };
+        let wall_deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let answers = async {
+            let mut passphrases = 0;
+            let mut rounds = 0;
+            let mut accepted_factor_timer_released = false;
+            loop {
+                // Keep the executor runnable while the local protocol peer handles
+                // real sockets, so paused time advances only at the explicit steps.
+                let event = loop {
+                    assert!(
+                        !finished.load(Ordering::SeqCst),
+                        "preparation ended before the expected prompt"
+                    );
+                    assert!(
+                        std::time::Instant::now() < wall_deadline,
+                        "protocol peer did not deliver the expected prompt after {passphrases} passphrases and {rounds} rounds ({} authentications, {} challenges)",
+                        peer.authentications.load(Ordering::SeqCst),
+                        peer.challenges.load(Ordering::SeqCst)
+                    );
+                    if passphrases == 2
+                        && !accepted_factor_timer_released
+                        && peer.authentications.load(Ordering::SeqCst) == 1
+                    {
+                        // Russh gates its partial-success reply on a zero-duration
+                        // rejection timer, which still needs one paused-clock tick.
+                        tokio::time::advance(Duration::from_millis(1)).await;
+                        accepted_factor_timer_released = true;
+                    }
+                    tokio::select! { biased;
+                        event = rx.recv() => break event.expect("preparation ended before the expected prompt"),
+                        _ = tokio::task::yield_now() => {}
+                    }
+                };
+                match event {
+                    PreparationEvent::Trust { prompt_id, .. } => {
+                        control.respond(&prompt_id, PreparationResponse::AcceptHostKey).unwrap();
+                    }
+                    PreparationEvent::CommandExecution { prompt_id, .. } => {
+                        assert!(external);
+                        assert_eq!(commands.fetch_add(1, Ordering::SeqCst), 0);
+                        let began = started.lock().unwrap().unwrap();
+                        advance_to(began, 120).await;
+                        control.respond(&prompt_id, PreparationResponse::AcceptCommand).unwrap();
+                    }
+                    PreparationEvent::Passphrase { prompt_id, incorrect, .. } => {
+                        let began = started.lock().unwrap().unwrap();
+                        let (at, answer) = if passphrases == 0 {
+                            assert!(!incorrect);
+                            (180, b"wrong-passphrase".as_slice())
+                        } else {
+                            assert!(incorrect);
+                            (240, b"disposable-passphrase".as_slice())
+                        };
+                        advance_to(began, at).await;
+                        control
+                            .respond(
+                                &prompt_id,
+                                PreparationResponse::Passphrase(SecretVec::new(answer.to_vec())),
+                            )
+                            .unwrap();
+                        passphrases += 1;
+                    }
+                    PreparationEvent::KeyboardInteractive { prompt_id, prompts, .. } => {
+                        let began = started.lock().unwrap().unwrap();
+                        assert_eq!(passphrases, 2);
+                        assert_eq!(peer.authentications.load(Ordering::SeqCst), 1);
+                        let answer = match rounds {
+                            0 => vec![b"visible".to_vec(), vec![]],
+                            1 => vec![],
+                            2 => {
+                                assert_eq!(prompts.len(), 1);
+                                advance_to(began, 299).await;
+                                assert_eq!(
+                                    started.lock().unwrap().unwrap().elapsed(),
+                                    Duration::from_secs(299)
+                                );
+                                assert!(control.state.lock().unwrap().pending.is_some());
+                                advance_to(began, 300).await;
+                                assert_eq!(began.elapsed(), AUTHENTICATION_TIMEOUT);
+                                *timed_out_prompt.lock().unwrap() = Some(prompt_id);
+                                // Dispatch the expired timer while the socket-driving loop stays runnable.
+                                tokio::time::advance(Duration::from_millis(1)).await;
+                                break;
+                            }
+                            _ => panic!("unexpected additional authentication round"),
+                        };
+                        assert_eq!(prompts.len(), answer.len());
+                        advance_to(began, 260 + 20 * rounds).await;
+                        control
+                            .respond(
+                                &prompt_id,
+                                PreparationResponse::keyboard_interactive(answer).unwrap(),
+                            )
+                            .unwrap();
+                        rounds += 1;
+                    }
+                    _ => {}
+                }
             }
-            tx.send(event).map_err(|_| "test receiver closed".into())
-        })
-        .await;
-        finished.store(true, Ordering::SeqCst);
-        result
-    };
-    let wall_deadline = std::time::Instant::now() + Duration::from_secs(20);
-    let answers = async {
-        let mut passphrases = 0;
-        let mut rounds = 0;
-        let mut accepted_factor_timer_released = false;
-        loop {
-            // Keep the executor runnable while the local protocol peer handles
-            // real sockets, so paused time advances only at the explicit steps.
-            let event = loop {
-                assert!(
-                    !finished.load(Ordering::SeqCst),
-                    "preparation ended before the expected prompt"
-                );
+            assert_eq!(rounds, 2);
+            assert_eq!(
+                started.lock().unwrap().unwrap().elapsed(),
+                AUTHENTICATION_TIMEOUT + Duration::from_millis(1)
+            );
+            while !finished.load(Ordering::SeqCst) {
                 assert!(
                     std::time::Instant::now() < wall_deadline,
-                    "protocol peer did not deliver the expected prompt after {passphrases} passphrases and {rounds} rounds ({} authentications, {} challenges)",
-                    peer.authentications.load(Ordering::SeqCst),
-                    peer.challenges.load(Ordering::SeqCst)
+                    "timed-out preparation did not close"
                 );
-                if passphrases == 2
-                    && !accepted_factor_timer_released
-                    && peer.authentications.load(Ordering::SeqCst) == 1
-                {
-                    // Russh gates its partial-success reply on a zero-duration
-                    // rejection timer, which still needs one paused-clock tick.
-                    tokio::time::advance(Duration::from_millis(1)).await;
-                    accepted_factor_timer_released = true;
-                }
-                tokio::select! { biased;
-                    event = rx.recv() => break event.expect("preparation ended before the expected prompt"),
-                    _ = tokio::task::yield_now() => {}
-                }
-            };
-            match event {
-                PreparationEvent::Trust { prompt_id, .. } => {
-                    control.respond(&prompt_id, PreparationResponse::AcceptHostKey).unwrap();
-                }
-                PreparationEvent::Passphrase { prompt_id, incorrect, .. } => {
-                    let began = started.lock().unwrap().unwrap();
-                    let (at, answer) = if passphrases == 0 {
-                        assert!(!incorrect);
-                        (180, b"wrong-passphrase".as_slice())
-                    } else {
-                        assert!(incorrect);
-                        (240, b"disposable-passphrase".as_slice())
-                    };
-                    advance_to(began, at).await;
-                    control
-                        .respond(
-                            &prompt_id,
-                            PreparationResponse::Passphrase(SecretVec::new(answer.to_vec())),
-                        )
-                        .unwrap();
-                    passphrases += 1;
-                }
-                PreparationEvent::KeyboardInteractive { prompt_id, prompts, .. } => {
-                    let began = started.lock().unwrap().unwrap();
-                    assert_eq!(passphrases, 2);
-                    assert_eq!(peer.authentications.load(Ordering::SeqCst), 1);
-                    let answer = match rounds {
-                        0 => vec![b"visible".to_vec(), vec![]],
-                        1 => vec![],
-                        2 => {
-                            assert_eq!(prompts.len(), 1);
-                            advance_to(began, 299).await;
-                            assert_eq!(
-                                started.lock().unwrap().unwrap().elapsed(),
-                                Duration::from_secs(299)
-                            );
-                            assert!(control.state.lock().unwrap().pending.is_some());
-                            advance_to(began, 300).await;
-                            assert_eq!(began.elapsed(), AUTHENTICATION_TIMEOUT);
-                            *timed_out_prompt.lock().unwrap() = Some(prompt_id);
-                            // Dispatch the expired timer while the socket-driving loop stays runnable.
-                            tokio::time::advance(Duration::from_millis(1)).await;
-                            break;
-                        }
-                        _ => panic!("unexpected additional authentication round"),
-                    };
-                    assert_eq!(prompts.len(), answer.len());
-                    advance_to(began, 260 + 20 * rounds).await;
-                    control
-                        .respond(
-                            &prompt_id,
-                            PreparationResponse::keyboard_interactive(answer).unwrap(),
-                        )
-                        .unwrap();
-                    rounds += 1;
-                }
-                _ => {}
+                tokio::task::yield_now().await;
             }
-        }
-        assert_eq!(rounds, 2);
-        assert_eq!(
-            started.lock().unwrap().unwrap().elapsed(),
-            AUTHENTICATION_TIMEOUT + Duration::from_millis(1)
-        );
-        while !finished.load(Ordering::SeqCst) {
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(330), async {
+            tokio::join!(preparation, answers)
+        })
+        .await
+        .expect("preparation did not release the timed-out connection");
+        tokio::time::resume();
+        assert!(result.is_err());
+        assert!(control.state.lock().unwrap().pending.is_none());
+        assert!(!control.is_cancelled());
+        let error = control
+            .respond(
+                timed_out_prompt.lock().unwrap().as_ref().unwrap(),
+                PreparationResponse::keyboard_interactive(vec![b"late-disposable".to_vec()])
+                    .unwrap(),
+            )
+            .unwrap_err();
+        assert!(!error.contains("late-disposable"));
+        assert_eq!(peer.session_channels.load(Ordering::SeqCst), 0);
+        while peer.closed_connections.load(Ordering::SeqCst) == 0 {
             assert!(
                 std::time::Instant::now() < wall_deadline,
-                "timed-out preparation did not close"
+                "failed preparation retained its connection"
             );
             tokio::task::yield_now().await;
         }
-    };
-    let (result, ()) = tokio::time::timeout(Duration::from_secs(330), async {
-        tokio::join!(preparation, answers)
-    })
-    .await
-    .expect("preparation did not release the timed-out connection");
-    tokio::time::resume();
-    assert!(result.is_err());
-    assert!(control.state.lock().unwrap().pending.is_none());
-    assert!(!control.is_cancelled());
-    let error = control
-        .respond(
-            timed_out_prompt.lock().unwrap().as_ref().unwrap(),
-            PreparationResponse::keyboard_interactive(vec![b"late-disposable".to_vec()]).unwrap(),
-        )
-        .unwrap_err();
-    assert!(!error.contains("late-disposable"));
-    assert_eq!(peer.session_channels.load(Ordering::SeqCst), 0);
-    while peer.closed_connections.load(Ordering::SeqCst) == 0 {
-        assert!(
-            std::time::Instant::now() < wall_deadline,
-            "failed preparation retained its connection"
-        );
-        tokio::task::yield_now().await;
+        assert_eq!(commands.load(Ordering::SeqCst), usize::from(external));
+        if external {
+            assert_eq!(std::fs::read(_dir.path().join("called")).unwrap(), b"+");
+        }
     }
 }
 
