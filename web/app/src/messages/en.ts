@@ -1678,6 +1678,8 @@ export const en = {
     "The terminal's SSH connection ended. Eligible tunnels restart on its next connection.",
   "tunnels.attached.issue.shutdownFailed":
     "Tunnel shutdown could not be confirmed. Check the listener before reconnecting.",
+  "tunnels.attached.issue.remoteShutdownFailed":
+    "Local forwarding has stopped. A remote listener may remain until you close this terminal.",
   "tunnels.stop": "Stop",
   "tunnels.running": "Running",
   "tunnels.continue": "Continue setup",

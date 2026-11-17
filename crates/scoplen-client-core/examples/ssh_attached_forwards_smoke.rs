@@ -29,9 +29,9 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 5 || !matches!(args[1].as_str(), "direct" | "jump") {
+    if args.len() != 7 || !matches!(args[1].as_str(), "direct" | "jump") {
         return Err(
-            "usage: ssh_attached_forwards_smoke <direct|jump> <host> <ssh-port> <password-file>"
+            "usage: ssh_attached_forwards_smoke <direct|jump> <host> <ssh-port> <password-file> <remote-a-port> <remote-b-port>"
                 .into(),
         );
     }
@@ -82,7 +82,7 @@ async fn settled(
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let entries = manager.forward_list(store, "terminal", transport)?;
-            if entries.len() == 8
+            if entries.len() == 11
                 && entries.iter().all(|entry| {
                     entry.run.as_ref().is_none_or(|run| run.phase != ForwardPhase::Preparing)
                 })
@@ -122,6 +122,38 @@ async fn traffic(port: u16, socks: bool) -> Result<()> {
     stream.read_exact(&mut echoed).await?;
     assert_eq!(echoed, bytes);
     stream.shutdown().await?;
+    Ok(())
+}
+
+async fn local_service() -> Result<(u16, tokio::task::JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let task = tokio::spawn(async move {
+        let mut peers = tokio::task::JoinSet::new();
+        while let Ok((mut socket, _)) = listener.accept().await {
+            peers.spawn(async move {
+                let mut bytes = [0; 16384];
+                while let Ok(count) = socket.read(&mut bytes).await {
+                    if count == 0 {
+                        break;
+                    }
+                    if socket.write_all(&bytes[..count]).await.is_err() {
+                        break;
+                    }
+                }
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    Ok((port, task))
+}
+
+async fn no_remote_traffic(port: u16) -> Result<()> {
+    if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)).await {
+        let _ = stream.write_all(b"closed remote listener").await;
+        let result = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut [0])).await?;
+        assert!(matches!(result, Ok(0) | Err(_)));
+    }
     Ok(())
 }
 
@@ -251,7 +283,20 @@ async fn run(args: &[String]) -> Result<()> {
     ];
     let occupied = TcpListener::bind("127.0.0.1:0").await?;
     let busy = definition(&store, ForwardKind::Local, occupied.local_addr()?.port(), 2300)?;
-    let unsupported = definition(&store, ForwardKind::Remote, unused_port().await?, 2300)?;
+    let unsupported = definition(&store, ForwardKind::Remote, 0, 2300)?;
+    let (service_port, service) = local_service().await?;
+    let remote_ports: [u16; 2] = [args[5].parse()?, args[6].parse()?];
+    let remote_ids = [
+        definition(&store, ForwardKind::Remote, 2302, service_port)?,
+        definition(&store, ForwardKind::Remote, 2303, service_port)?,
+        definition(&store, ForwardKind::Remote, 2302, service_port)?,
+    ];
+    for id in remote_ids {
+        Repository::<Forward>::new(&store).update(
+            id,
+            ForwardChange { bind_address: Edit::Set("0.0.0.0".into()), ..Default::default() },
+        )?;
+    }
     let refused_port = unused_port().await?;
     let refused = definition(&store, ForwardKind::Local, refused_port, 2301)?;
     let missing = Uuid::now_v7();
@@ -268,6 +313,7 @@ async fn run(args: &[String]) -> Result<()> {
             forwards: ids
                 .into_iter()
                 .chain([busy, unsupported, refused, missing])
+                .chain(remote_ids)
                 .map(|id| (id, true))
                 .collect(),
             ..Default::default()
@@ -332,6 +378,7 @@ async fn run(args: &[String]) -> Result<()> {
         |_, data| bytes.send(data).map_err(|_| "terminal output receiver closed".into()),
         |_, _| {},
     ));
+    let mut expected_unknown = None;
     let exercise = Box::pin(async {
         let result = async {
             let first = ready(&mut events).await?;
@@ -342,10 +389,26 @@ async fn run(args: &[String]) -> Result<()> {
                 entry(busy).run.as_ref().unwrap().last_issue,
                 Some(ForwardIssue::ListenFailed)
             );
-            assert_eq!(entry(unsupported).issue, Some(ForwardIssue::UnsupportedDefinition));
+            assert_eq!(entry(unsupported).issue, Some(ForwardIssue::InvalidConfiguration));
             assert_eq!(entry(missing).issue, Some(ForwardIssue::NotFound));
             assert_eq!(entry(ids[3]).issue, Some(ForwardIssue::AlreadyRunning));
             assert!(TcpListener::bind(("127.0.0.1", hop_port)).await.is_ok());
+            let remote_owner =
+                if entry(remote_ids[0]).run.as_ref().unwrap().phase == ForwardPhase::Listening {
+                    remote_ids[0]
+                } else {
+                    remote_ids[2]
+                };
+            let duplicate =
+                if remote_owner == remote_ids[0] { remote_ids[2] } else { remote_ids[0] };
+            assert_eq!(
+                entry(duplicate).run.as_ref().unwrap().last_issue,
+                Some(ForwardIssue::ListenFailed)
+            );
+            manager.forward_stop(&store, "terminal", &first, &duplicate.to_string())?;
+            assert_eq!(entry(remote_ids[1]).run.as_ref().unwrap().phase, ForwardPhase::Listening);
+            traffic(remote_ports[0], false).await?;
+            traffic(remote_ports[1], false).await?;
             traffic(ports[0], false).await?;
             traffic(ports[1], true).await?;
             traffic(ports[3], false).await?;
@@ -360,6 +423,24 @@ async fn run(args: &[String]) -> Result<()> {
             let mut reply = [0; 9];
             held.read_exact(&mut reply).await?;
             assert_eq!(&reply, b"held peer");
+            let remote_old = entry(remote_ids[1]).run.as_ref().unwrap().run_id.clone();
+            let mut remote_held = TcpStream::connect(("127.0.0.1", remote_ports[1])).await?;
+            remote_held.write_all(b"held peer").await?;
+            remote_held.read_exact(&mut reply).await?;
+            assert_eq!(&reply, b"held peer");
+            forwards.stop(&store, &entry(remote_owner).run.as_ref().unwrap().run_id)?;
+            loop {
+                if forwards
+                    .snapshot(&store, &entry(remote_owner).run.as_ref().unwrap().run_id)?
+                    .phase
+                    == ForwardPhase::Stopped
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            no_remote_traffic(remote_ports[0]).await?;
+            traffic(remote_ports[1], false).await?;
             forwards.stop(&store, &entry(ids[0]).run.as_ref().unwrap().run_id)?;
             manager.forward_stop(&store, "terminal", &first, &ids[1].to_string())?;
             Box::pin(files(&manager, &first, scratch.path())).await?;
@@ -378,6 +459,32 @@ async fn run(args: &[String]) -> Result<()> {
             assert_eq!(replacement.run.as_ref().unwrap().phase, ForwardPhase::Listening);
             assert_ne!(replacement.run.as_ref().unwrap().run_id, old);
             assert_eq!(forwards.snapshot(&store, &old)?.phase, ForwardPhase::Stopped);
+            for id in [remote_owner, duplicate] {
+                let entry =
+                    rebuilt.iter().find(|entry| entry.forward_id == id.to_string()).unwrap();
+                assert!(entry.stopped && entry.run.is_none());
+            }
+            let remote_rebuilt = rebuilt
+                .iter()
+                .find(|entry| entry.forward_id == remote_ids[1].to_string())
+                .unwrap()
+                .run
+                .as_ref()
+                .unwrap();
+            assert_eq!(remote_rebuilt.phase, ForwardPhase::Listening);
+            assert_ne!(remote_rebuilt.run_id, remote_old);
+            assert!(matches!(
+                forwards.snapshot(&store, &remote_old)?.phase,
+                ForwardPhase::Stopped | ForwardPhase::Failed
+            ));
+            if forwards.snapshot(&store, &remote_old)?.last_issue
+                == Some(ForwardIssue::ShutdownFailed)
+            {
+                expected_unknown = Some(remote_old);
+            }
+            assert!(remote_held.read_u8().await.is_err());
+            no_remote_traffic(remote_ports[0]).await?;
+            traffic(remote_ports[1], false).await?;
             assert!(held.read_u8().await.is_err());
             for port in &ports[..2] {
                 assert!(TcpListener::bind(("127.0.0.1", *port)).await.is_ok());
@@ -386,6 +493,17 @@ async fn run(args: &[String]) -> Result<()> {
             traffic(ports[3], false).await?;
             Box::pin(files(&manager, &second, scratch.path())).await?;
             shell(&manager, &second, &mut output, "RECONNECTED").await?;
+            manager.forward_stop(&store, "terminal", &second, &remote_ids[1].to_string())?;
+            loop {
+                if forwards.snapshot(&store, &remote_rebuilt.run_id)?.phase == ForwardPhase::Stopped
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            no_remote_traffic(remote_ports[1]).await?;
+            Box::pin(files(&manager, &second, scratch.path())).await?;
+            shell(&manager, &second, &mut output, "AFTER-REMOTE-STOP").await?;
             Ok::<(), Box<dyn std::error::Error>>(())
         }
         .await;
@@ -404,18 +522,31 @@ async fn run(args: &[String]) -> Result<()> {
         Ok(())
     };
     let cleanup = forwards.stop_all().await;
+    service.abort();
+    let _ = service.await;
     relay.abort();
     let _ = relay.await;
     let (terminal, exercise) = result?;
     exercise?;
     terminal?;
     independent?;
-    cleanup?;
+    let unknown: Vec<_> = forwards
+        .list(&store)?
+        .into_iter()
+        .filter(|run| run.last_issue == Some(ForwardIssue::ShutdownFailed))
+        .map(|run| run.run_id)
+        .collect();
+    assert_eq!(unknown, expected_unknown.into_iter().collect::<Vec<_>>());
+    if unknown.is_empty() {
+        cleanup?;
+    } else {
+        assert_eq!(cleanup, Err(ForwardIssue::ShutdownFailed));
+    }
     for port in ports {
         assert!(TcpListener::bind(("127.0.0.1", port)).await.is_ok());
     }
     println!(
-        "{}: real shell/SFTP/Local/SOCKS bytes, per-entry failures, both Stop paths and independent survival passed",
+        "{}: real shell/SFTP/Local/Remote/SOCKS bytes, exact Remote endpoints, duplicate refusal, both Stop paths and independent survival passed",
         args[1]
     );
     println!(

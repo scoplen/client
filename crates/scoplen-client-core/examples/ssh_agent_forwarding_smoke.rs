@@ -62,8 +62,8 @@ PY"#;
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 5 {
-        return Err("usage: ssh_agent_forwarding_smoke <host> <port> <selected-private-key> <other-private-key>".into());
+    if args.len() != 6 {
+        return Err("usage: ssh_agent_forwarding_smoke <host> <port> <selected-private-key> <other-private-key> <remote-port>".into());
     }
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -216,6 +216,25 @@ async fn tunnel(port: u16, dynamic: bool) -> Result<()> {
 }
 
 async fn run(args: &[String]) -> Result<()> {
+    let local_service = TcpListener::bind("127.0.0.1:0").await?;
+    let service_port = local_service.local_addr()?.port();
+    let service = tokio::spawn(async move {
+        let mut peers = tokio::task::JoinSet::new();
+        while let Ok((mut socket, _)) = local_service.accept().await {
+            peers.spawn(async move {
+                let mut bytes = [0; 16384];
+                while let Ok(count) = socket.read(&mut bytes).await {
+                    if count == 0 {
+                        break;
+                    }
+                    if socket.write_all(&bytes[..count]).await.is_err() {
+                        break;
+                    }
+                }
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
     let agent =
         support::forwarded_agent::SourceAgent::start(Path::new(&args[3]), Path::new(&args[4]))
             .await?;
@@ -247,19 +266,31 @@ async fn run(args: &[String]) -> Result<()> {
     })?;
     let mut ports = Vec::new();
     let mut forwards = Vec::new();
-    for kind in [ForwardKind::Local, ForwardKind::Dynamic] {
-        let port = TcpListener::bind("127.0.0.1:0").await?.local_addr()?.port();
+    for kind in [ForwardKind::Local, ForwardKind::Dynamic, ForwardKind::Remote] {
+        let port = if kind == ForwardKind::Remote {
+            2302
+        } else {
+            TcpListener::bind("127.0.0.1:0").await?.local_addr()?.port()
+        };
         let forward = Repository::<Forward>::new(&store).create(ForwardChange {
             name: Some(format!("Concurrent {kind:?}")),
             kind: Some(kind),
-            bind_address: Edit::Set("127.0.0.1".into()),
+            bind_address: Edit::Set(
+                if kind == ForwardKind::Remote { "0.0.0.0" } else { "127.0.0.1" }.into(),
+            ),
             bind_port: Edit::Set(port),
-            target_host: if kind == ForwardKind::Local {
+            target_host: if kind != ForwardKind::Dynamic {
                 Edit::Set("127.0.0.1".into())
             } else {
                 Edit::Clear
             },
-            target_port: if kind == ForwardKind::Local { Edit::Set(2300) } else { Edit::Clear },
+            target_port: if kind == ForwardKind::Remote {
+                Edit::Set(service_port)
+            } else if kind == ForwardKind::Local {
+                Edit::Set(2300)
+            } else {
+                Edit::Clear
+            },
             profile: Edit::Set(profile.meta.id),
         })?;
         ports.push(port);
@@ -268,7 +299,7 @@ async fn run(args: &[String]) -> Result<()> {
     Repository::<AccessProfile>::new(&store).update(
         profile.meta.id,
         AccessProfileChange {
-            forwards: forwards.into_iter().map(|id| (id, true)).collect(),
+            forwards: forwards.iter().map(|id| (*id, true)).collect(),
             ..Default::default()
         },
     )?;
@@ -332,7 +363,7 @@ async fn run(args: &[String]) -> Result<()> {
             tokio::time::timeout(Duration::from_secs(10), async {
                 loop {
                     let attached = sessions.forward_list(&store, "terminal", &second)?;
-                    if attached.len() == 2
+                    if attached.len() == 3
                         && attached.iter().all(|entry| {
                             entry
                                 .run
@@ -346,22 +377,43 @@ async fn run(args: &[String]) -> Result<()> {
                 }
             })
             .await??;
-            let (ssh, files, local, dynamic) = tokio::join!(
+            let (ssh, files_result, local, dynamic, remote) = tokio::join!(
                 command(&sessions, &second, &mut output, SECOND_HOP, "SECOND-HOP", 0),
                 Box::pin(files(&sessions, &second, directory.path())),
                 tunnel(ports[0], false),
                 tunnel(ports[1], true),
+                tunnel(args[5].parse()?, false),
             );
             assert!(ssh?.windows(b"second-hop-ok".len()).any(|bytes| bytes == b"second-hop-ok"));
-            files?;
+            files_result?;
             local?;
             dynamic?;
-            println!("second-hop SSH with concurrent SFTP and Local/Dynamic traffic passed");
+            remote?;
+            println!("second-hop SSH with concurrent SFTP and Local/Remote/Dynamic traffic passed");
             let before = agent.signatures();
             command(&sessions, &second, &mut output, SCOPE_CONTROL, "SCOPE", 0).await?;
             assert_eq!(agent.signatures(), before);
             agent.assert_scoped();
             println!("exact identity and forbidden-request controls passed");
+            sessions.forward_stop(&store, "terminal", &second, &forwards[2].to_string())?;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let attached = sessions.forward_list(&store, "terminal", &second)?;
+                    if attached.iter().any(|entry| {
+                        entry.forward_id == forwards[2].to_string()
+                            && entry
+                                .run
+                                .as_ref()
+                                .is_some_and(|run| run.phase == ForwardPhase::Stopped)
+                    }) {
+                        return Ok::<(), Box<dyn std::error::Error>>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await??;
+            command(&sessions, &second, &mut output, SECOND_HOP, "AFTER-REMOTE-STOP", 0).await?;
+            Box::pin(files(&sessions, &second, directory.path())).await?;
             agent.refuse(true);
             command(&sessions, &second, &mut output, SECOND_HOP, "REFUSED", 255).await?;
             agent.refuse(false);
@@ -409,8 +461,10 @@ async fn run(args: &[String]) -> Result<()> {
             .await?;
     terminal?;
     exercise?;
+    service.abort();
+    let _ = service.await;
     println!(
-        "saved default-off/exact-Agent forwarding, real second-hop SSH, concurrent shell/binary SFTP/Local/Dynamic, scoped refusals and reconnect/cancellation passed"
+        "saved default-off/exact-Agent forwarding, real second-hop SSH, concurrent shell/binary SFTP/Local/Remote/Dynamic, scoped refusals, Remote Stop survival and reconnect/cancellation passed"
     );
     Ok(())
 }

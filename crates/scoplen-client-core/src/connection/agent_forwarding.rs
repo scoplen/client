@@ -15,12 +15,12 @@ use std::{
 use scoplen_client_platform::ssh_agent::connect_system_agent;
 use scoplen_ssh::{
     AgentError, AgentForwardingAuthorizer, AgentForwardingPolicy, AgentIdentity, AgentKeyStore,
-    AgentServer, ForwardedChannel, ForwardedChannelKind, ForwardedChannelReceiver,
+    AgentServer, ForwardedChannel, ForwardedChannelKind,
 };
 use tokio::{
     runtime::Handle,
     sync::{Semaphore, watch},
-    task::{AbortHandle, JoinHandle, JoinSet},
+    task::{AbortHandle, JoinSet},
 };
 use uuid::Uuid;
 
@@ -188,42 +188,26 @@ impl AgentKeyStore for SelectedAgent {
 
 /// Owns only incoming agent channels and bounded system-agent workers for this attempt.
 pub(crate) struct AgentForwardingService {
-    state: Arc<ServingState>,
-    driver: Option<JoinHandle<()>>,
+    source: SelectedAgent,
+    workers: JoinSet<()>,
 }
 
 impl AgentForwardingService {
-    pub(crate) fn start(
-        selected: ForwardedAgent,
-        control: PreparationControl,
-        mut incoming: ForwardedChannelReceiver,
-    ) -> Self {
+    pub(crate) fn new(selected: ForwardedAgent, control: PreparationControl) -> Self {
         let state = ServingState::new(control);
         let source = SelectedAgent { selected, state: state.clone(), runtime: Handle::current() };
-        let driver = tokio::spawn(async move {
-            let mut workers = JoinSet::new();
-            loop {
-                let channel = tokio::select! { biased;
-                    _ = source.state.cancelled() => break,
-                    channel = incoming.recv() => channel,
-                };
-                let Some(channel) = channel else { break };
-                Self::accept(&source, &mut workers, channel);
-            }
-            source.state.stop();
-            while workers.join_next().await.is_some() {}
-        });
-        Self { state, driver: Some(driver) }
+        Self { source, workers: JoinSet::new() }
     }
 
-    fn accept(source: &SelectedAgent, workers: &mut JoinSet<()>, channel: ForwardedChannel) {
+    pub(crate) fn accept(&mut self, channel: ForwardedChannel) -> Option<ForwardedChannel> {
+        let source = &self.source;
         if !matches!(channel.kind(), ForwardedChannelKind::Agent) || source.state.check().is_err() {
-            return;
+            return Some(channel);
         }
-        while workers.try_join_next().is_some() {}
-        let Ok(permit) = CHANNELS.try_acquire() else { return };
+        while self.workers.try_join_next().is_some() {}
+        let Ok(permit) = CHANNELS.try_acquire() else { return Some(channel) };
         let source = source.clone();
-        workers.spawn_blocking(move || {
+        self.workers.spawn_blocking(move || {
             let _permit = permit;
             let runtime = source.runtime.clone();
             runtime.block_on(async {
@@ -236,22 +220,19 @@ impl AgentForwardingService {
                 }
             });
         });
+        None
     }
 
     pub(crate) async fn settle(&mut self) {
-        self.state.stop();
-        if let Some(driver) = self.driver.take() {
-            let _ = driver.await;
-        }
+        self.source.state.stop();
+        while self.workers.join_next().await.is_some() {}
     }
 }
 
 impl Drop for AgentForwardingService {
     fn drop(&mut self) {
-        self.state.stop();
-        if let Some(driver) = self.driver.take() {
-            driver.abort();
-        }
+        self.source.state.stop();
+        self.workers.abort_all();
     }
 }
 

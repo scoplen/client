@@ -88,8 +88,9 @@ The fixture uses a fresh owned source Agent socket or named pipe with two dispos
 identities, plus two pinned OpenSSH listeners. It never changes the system Agent.
 The saved Login starts with forwarding off. A saved edit preserves the live choice;
 reconnect captures the new opt-in and exposes exactly the selected public key.
-Real second-hop SSH runs concurrently with binary SFTP and attached Local and
-Dynamic traffic. Remote management, extensions and other-key signing must be refused
+Real second-hop SSH runs concurrently with binary SFTP and attached Local, Remote and
+Dynamic traffic. Stopping Remote preserves Agent signing and Files. Agent management,
+extensions and other-key signing must be refused
 without reaching the source, and a source signing refusal must preserve later use.
 Turning the saved flag off takes effect on reconnect. Closing a final held signature
 must release its source connection and reject late terminal input. Successful runs
@@ -793,27 +794,41 @@ cargo test --locked -p scoplen-client-core --lib session_manager::forwards::test
 pwsh -File scripts/test-ssh-attached-forwards.ps1
 ```
 
-The target Local or Personal Login's selected Local TCP and Dynamic SOCKS definitions run on
+The target Local or Personal Login's selected Local TCP, Remote TCP and Dynamic SOCKS definitions run on
 its authenticated terminal transport. Their default Logins and Jump-hop attachments do not
 select another connection. The independent run registry still owns admission and traffic
 snapshots; attached snapshots additionally identify their terminal and transport. Missing,
 unsupported, busy and refused definitions have separate results while the terminal remains
-usable. Remote tunnels can still be started independently.
+usable. Remote tunnels can also be started independently with their complete-route ownership.
+
+One bounded incoming receiver dispatches Agent channels to the selected identity and TCP
+channels only to acknowledged exact Remote endpoints. Controlled public-session tests cover
+duplicate tuple refusal before another request/cancel, unsupported and mismatched channels
+without a local dial, binary half-close and counters, registration refusal/timeout/Stop,
+and cancellation refusal/timeout with late-channel rejection. Unknown registration or
+cancellation retains Failed/ShutdownFailed without closing the terminal or retrying.
+Stop during held local resolution must close that delivered peer before releasing a late
+resolution result, with no local dial and a usable shell.
 
 `session_forward_list` and `session_forward_stop` require the current profile, terminal and
-transport. Stopping an attachment releases only its listener and peers, and suppresses that
+transport. Stopping an attachment ends only its local forwarding and peers, and suppresses that
 definition across reconnects of the same logical terminal. Closing the terminal discards this
 process-local choice. Transport replacement settles old attached resources before starting
 eligible definitions again. Existing independently started tunnels keep their own lifetime.
 
 The Docker fixture exercises public `run_target` with Direct and Jump routes, with binary SFTP,
-Local TCP and SOCKS roundtrips alongside the shell. It verifies per-entry failures, ignored
+Local/Remote TCP and SOCKS roundtrips alongside the shell. It verifies distinct exact Remote
+endpoints, duplicate tuple refusal, per-entry failures, ignored
 Forward defaults and Jump-hop attachments, both Stop paths, old listener/peer release,
 eligible recreation on Direct and Jump and independent-run survival. The owned target's OpenSSH
 log must show exactly six authentications: two independent runs, two Direct terminal transports
 and two Jump terminal transports, with forced network interruption between each terminal pair.
 The Jump log must show exactly three authentications: one independent run and the original and
 replacement terminal parents. Its container and successful temporary data are removed.
+An old Remote run may retain an unconfirmed-cancellation warning after forced transport loss;
+the fixture requires that exact historical result rather than claiming confirmed cancellation.
+New eligible Remote runs and their peers use the replacement transport; explicit Remote Stop
+remains effective and does not interrupt shell/SFTP or other tunnels.
 
 The published D-148 shared adapter preserves confirmed parent network loss through the Jump
 byte stream. The terminal uses its existing bounded reconnect policy and current trust and

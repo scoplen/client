@@ -139,8 +139,10 @@ export function SessionForwards({
                   {t("tunnels.stop")}
                 </Button>
               </div>
-              {!entry.stopped && issue ? (
-                <p className="mt-1 mb-0 break-words text-attention">{t(tunnelIssueKey(issue, true))}</p>
+              {issue && (!entry.stopped || issue === "shutdownFailed") ? (
+                <p className="mt-1 mb-0 break-words text-attention">
+                  {t(tunnelIssueKey(issue, true, run?.configuration.kind === "remote"))}
+                </p>
               ) : null}
               {controller.stopIssue?.forwardId === entry.forwardId ? (
                 <p role="alert" className="mt-1 mb-0 text-attention">

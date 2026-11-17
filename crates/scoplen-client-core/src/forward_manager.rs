@@ -37,11 +37,15 @@ use crate::{
 };
 
 mod attached;
+mod incoming;
 mod remote;
+#[cfg(test)]
+pub(crate) use remote::hold_resolution;
 mod socks;
 
 pub(crate) use attached::{AttachedForwardLease, AttachedForwardSelection, AttachedForwardState};
 pub use attached::{ForwardAttachment, SessionForwardSnapshot};
+pub(crate) use incoming::{IncomingForwardingService, IncomingForwardingState};
 
 /// Maximum live tunnels, including preparation and shutdown.
 pub const MAX_RUNNING_FORWARDS: usize = 16;
@@ -213,7 +217,7 @@ pub enum ForwardPhase {
     Stopping,
     /// Explicitly stopped and all owned resources released.
     Stopped,
-    /// Execution failed and all owned resources released.
+    /// Execution ended with an issue; `last_issue` identifies unconfirmed remote cleanup.
     Failed,
 }
 
@@ -1100,21 +1104,24 @@ async fn open_channel(
     }
 }
 
-async fn copy_peer(
+fn copy_peer(
     run: &Run,
     socket: TcpStream,
     channel: ClientChannel,
     trailing: Vec<u8>,
-) -> Result<(), ForwardIssue> {
+) -> impl std::future::Future<Output = Result<(), ForwardIssue>> {
+    // Construct the stream before polling so cancellation closes an admitted channel.
     let stream = channel.into_stream();
-    let (socket_read, socket_write) = tokio::io::split(socket);
-    let (remote_read, remote_write) = tokio::io::split(stream);
-    tokio::try_join!(
-        copy(std::io::Cursor::new(trailing).chain(socket_read), remote_write, &run.uploaded),
-        copy(remote_read, socket_write, &run.downloaded),
-    )
-    .map(|_| ())
-    .map_err(|_| ForwardIssue::PeerIo)
+    async move {
+        let (socket_read, socket_write) = tokio::io::split(socket);
+        let (remote_read, remote_write) = tokio::io::split(stream);
+        tokio::try_join!(
+            copy(std::io::Cursor::new(trailing).chain(socket_read), remote_write, &run.uploaded),
+            copy(remote_read, socket_write, &run.downloaded),
+        )
+        .map(|_| ())
+        .map_err(|_| ForwardIssue::PeerIo)
+    }
 }
 
 async fn copy(

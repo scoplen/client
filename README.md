@@ -254,7 +254,7 @@ forwarded. Jump Login flags do not enable forwarding on the target, and Team
 Logins cannot enable it. A refused forwarding request stops setup with an explicit
 error before starting a shell. Saved changes apply on the next connection.
 
-Forwarding runs alongside the terminal, SFTP and attached Local or Dynamic tunnels
+Forwarding runs alongside the terminal, SFTP and attached Local, Remote or Dynamic tunnels
 on the same authenticated connection. Closing, reconnecting or switching Accounts
 stops its channels and pending local Agent I/O. Each forwarded signature has a
 ten-second deadline, with at most four Agent channels and four local signers active
@@ -394,29 +394,36 @@ automatically. Temporary runs end on Stop, SSH loss, profile replacement or appl
 and are not restored after restart. Saved tunnels can be explicitly selected in a Workspace;
 Unix-socket forwarding remains incomplete.
 
-A Local or Personal Login's selected saved Local TCP and Dynamic SOCKS tunnels also start
+A Local or Personal Login's selected saved Local TCP, Remote TCP and Dynamic SOCKS tunnels also start
 with its terminal, sharing that target's authenticated SSH connection and Jump route with
 the shell and SFTP. A Forward's default Login and a Jump-hop Login's own attachments do not
 change this selection. Per-entry failures leave the terminal and other tunnels usable.
-Attached runs identify their terminal; Stop releases only that tunnel's listener and peers.
+Attached runs identify their terminal; Stop ends only that tunnel's local forwarding and peers.
 It stays stopped across reconnects of the same tab; closing the tab discards that choice.
 Reconnect releases old resources before starting eligible current definitions. Independently
-running tunnels retain their own lifetime. Attached Remote and Unix-socket forwarding remain
-unsupported. Direct and Jump routes use the existing bounded automatic reconnect after
+running tunnels retain their own lifetime. Unix-socket attachments remain unsupported.
+Direct and Jump routes use the existing bounded automatic reconnect after
 confirmed network loss, including a lost Jump parent. A replacement transport recreates
 eligible attached runs while preserving explicit Stop. Native Windows/macOS interaction
 remains unverified.
 
+Attached Remote tunnels share incoming-channel dispatch with the selected Agent identity.
+Only an acknowledged exact requested address and port can reach the captured local service.
+Duplicate endpoints on one transport are refused without another remote request or cancellation.
+Stop ends local forwarding and attempts one cancellation for up to one second. If registration
+or cancellation cannot be confirmed, the warning remains visible after Stop: the remote listener
+may remain until you close its owning terminal. Other tunnels, shell and Files stay usable.
+
 Remote requests a fixed nonzero listening port and numeric IPv4 or IPv6 address on the
 SSH server, and reaches a fixed local target whose hostname is resolved by this device.
-It opens no local listener or terminal. The editor and run view distinguish the requested
+It opens no local listener; an independent Start opens no terminal. The editor and run view distinguish the requested
 remote listener from the local service. Devices able to reach that listener can reach the
 local service; review the server's forwarding and listening policies before starting.
 Even a loopback request does not prove loopback-only access: OpenSSH `GatewayPorts` can
 override the requested address, and SSH does not report the actual listening interfaces.
 Incoming channels must match the acknowledged request exactly before a local connection
 is attempted. Local resolution and dialing share a 15-second deadline. Stop attempts
-remote cancellation, then closes the owned SSH route regardless of the reply. An unknown
+remote cancellation; an independent run then closes its owned SSH route regardless of the reply. An unknown
 registration or cancellation result reports unconfirmed cleanup; check the listener
 before starting again.
 
@@ -1001,8 +1008,10 @@ terminal and temporary run. Listing and core Open return intent without starting
 connections. Native pane focus and rendering need separate platform acceptance.
 
 `scripts/test-ssh-attached-forwards.ps1` uses public `run_target` with owned Direct and Jump
-OpenSSH peers. It checks shared shell/SFTP/Local/SOCKS binary traffic, per-entry failures,
-both Stop paths, Direct and Jump parent-loss reconnect and independent-run survival. Target
+OpenSSH peers. It checks shared shell/SFTP/Local/Remote/SOCKS binary traffic, multiple exact
+Remote endpoints, duplicate refusal, per-entry failures, both Stop paths, Direct and Jump
+parent-loss reconnect and independent-run survival. A lost transport retains the expected
+historical Remote cancellation warning while new eligible runs succeed. Target
 and Jump logs prove one authentication per owned transport, including fresh reconnects.
 
 `scripts/test-ssh-local-forward.ps1` checks saved and temporary standalone TCP tunnels against

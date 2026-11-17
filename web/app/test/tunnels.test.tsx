@@ -229,6 +229,30 @@ it.each(["en", "zh-Hans"] as const)("identifies attached owners and stops only t
   expect(f.calls.some((call) => call.command === "session_close_transport")).toBe(false);
 });
 
+it.each(["en", "zh-Hans"] as const)(
+  "explains attached Remote cleanup with its owning terminal in %s",
+  async (locale) => {
+    fixture({
+      locale,
+      runs: [
+        remoteSnapshot({
+          attachment: { sessionId: "pane-two", transportId: "transport-two" },
+          phase: "failed",
+          activeConnections: 0,
+          lastIssue: "shutdownFailed",
+        }),
+      ],
+      owners: { "pane-two": { label: "Database host · ops", tab: 2, pane: 3 } },
+    });
+    const list = await screen.findByRole("list", { name: locale === "en" ? "Runs" : "运行记录" });
+    expect(within(list).getByText(locale === "en" ? /Local forwarding has stopped/ : /本地转发已停止/)).toBeTruthy();
+    expect(list.textContent).toContain(
+      locale === "en" ? "Database host · ops · Tab 2 · Pane 3" : "Database host · ops · 标签页 2 · 窗格 3",
+    );
+    expect(within(list).queryByRole("button", { name: locale === "en" ? "Stop" : "停止" })).toBeNull();
+  },
+);
+
 it("subscribes before listing, fences older revisions without precision loss and detaches without Stop", async () => {
   const pendingList = deferred<ForwardSnapshot[]>();
   const f = fixture({ pendingList });

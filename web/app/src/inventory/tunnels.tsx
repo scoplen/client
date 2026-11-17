@@ -229,7 +229,7 @@ export function TunnelsHome() {
                   </dl>
                   {run.lastIssue ? (
                     <p className="mt-2 mb-0 text-sm text-attention">
-                      {t(tunnelIssueKey(run.lastIssue, !!run.attachment))}
+                      {t(tunnelIssueKey(run.lastIssue, !!run.attachment, run.configuration.kind === "remote"))}
                     </p>
                   ) : null}
                 </li>
