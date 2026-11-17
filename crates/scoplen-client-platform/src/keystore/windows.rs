@@ -521,7 +521,6 @@ mod tests {
         );
         assert!(matches!(result, Err(KeystoreError::Platform { operation: "delete", .. })));
         assert!(!keystore.file.exists());
-        keystore.delete().unwrap();
         directory.close().unwrap();
     }
 
