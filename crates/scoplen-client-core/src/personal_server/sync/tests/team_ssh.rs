@@ -574,6 +574,122 @@ async fn certificate_policy_denial_binds_the_authenticated_original_target() {
 }
 
 #[tokio::test]
+async fn terminal_preserves_certificate_policy_denial_while_closing_its_transport() {
+    use crate::{
+        connection::{
+            SessionTarget,
+            preparation::{PreparationEvent, PreparationResponse},
+        },
+        repository::{AccessProfileChange, Change, HostChange},
+        session_manager::{SessionEvent, SessionManager},
+    };
+
+    let (peer, _dir, store, manager, source, host) = setup().await;
+    let ssh = crate::connection::test_peer::Peer::start().await;
+    let profile = id();
+    let identity = record(&store).unwrap();
+    let organization = source.owner(&store).unwrap().organization;
+    let view = store.team_assets_record(&identity, organization).unwrap().unwrap();
+    let publication = TeamAssetPublication {
+        organization,
+        generation: store.begin_team_asset_pull(&identity, organization).unwrap(),
+        vault: view.vault.unwrap(),
+        revision: 2,
+        cursor: 2,
+    };
+    let objects = [
+        (
+            host,
+            ObjectType::HOST,
+            HostChange {
+                name: Some("Policy refusal Host".into()),
+                address: Some("127.0.0.1".into()),
+                port: crate::repository::Edit::Set(ssh.port),
+                ..Default::default()
+            }
+            .into_writes()
+            .unwrap(),
+        ),
+        (
+            profile,
+            ObjectType::ACCESS_PROFILE,
+            AccessProfileChange {
+                host: Some(host),
+                username: Some("trust-fixture".into()),
+                ..Default::default()
+            }
+            .into_writes()
+            .unwrap(),
+        ),
+    ]
+    .map(|(id, kind, fields)| {
+        let mut object = Object::new(id, kind, 1).unwrap();
+        for (path, value) in fields {
+            if value != Value::Null {
+                object
+                    .insert(path, FieldEntry::new(value, Hlc::at(1).unwrap(), host).unwrap())
+                    .unwrap();
+            }
+        }
+        object
+    });
+    store.publish_team_assets(&identity, &publication, &objects).unwrap();
+    create_ca(&manager, &store, &source).await;
+    peer.state.lock().unwrap().team_ssh.as_mut().unwrap().certificate_reply =
+        Some(problem("policy.denied", 403, false, false));
+    let expected = TeamSshPolicyDenial {
+        source: source.clone(),
+        host_id: host.to_string(),
+        remote_user: "trust-fixture".into(),
+    };
+    let target = SessionTarget::Organization { source, profile_id: profile.to_string() };
+    let sessions = SessionManager::default();
+    let session = "actual-policy-denial";
+    sessions.reserve(session, true).unwrap();
+    let terminal = sessions.run_target(
+        session,
+        &target,
+        &manager,
+        None,
+        true,
+        store.clone(),
+        |event| {
+            match event {
+                SessionEvent::Preparation { transport_id, event } => {
+                    if let PreparationEvent::Trust { prompt_id, .. } = *event {
+                        sessions.respond(
+                            session,
+                            &transport_id,
+                            &prompt_id,
+                            PreparationResponse::AcceptHostKey,
+                        )?;
+                    }
+                }
+                SessionEvent::Failed { error, team_ssh_policy_denial, .. } => {
+                    assert_eq!(team_ssh_policy_denial, Some(expected.clone()), "{error}");
+                    assert_eq!(
+                        sessions.team_access_request_denial(&store, session),
+                        Some(expected.clone())
+                    );
+                    sessions.close(session)?;
+                }
+                SessionEvent::Ready { .. } => panic!("policy denial must not authenticate SSH"),
+                _ => {}
+            }
+            Ok(())
+        },
+        |_, _| panic!("policy denial must not produce terminal output"),
+        |_, _| {},
+    );
+    tokio::time::timeout(Duration::from_secs(30), terminal).await.unwrap().unwrap();
+    assert!(manager.team_ssh_authority(&store, &expected.source).unwrap().is_none());
+    assert_eq!(ssh.authentications.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(ssh.session_channels.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(peer.state.lock().unwrap().team_ssh.as_ref().unwrap().requests.len(), 2);
+    peer.assert_healthy();
+}
+
+#[tokio::test]
 async fn missing_certificate_scope_and_ca_policy_denial_are_not_connection_policy_denials() {
     let (peer, _dir, store, manager, source, host) = setup().await;
     create_ca(&manager, &store, &source).await;
