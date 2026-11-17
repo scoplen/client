@@ -488,14 +488,18 @@ impl PersonalServer {
         let identity = record(store)?;
         let organization = parse_id(organization_id)?;
         let subject = match (input.membership_id.as_deref(), input.group_id.as_deref()) {
-            (Some(id), None) => SimpleRuleSubject::Membership(parse_id(id)?),
-            (None, Some(id)) => SimpleRuleSubject::Group(parse_id(id)?),
+            (Some(id), None) => SimpleRuleSubject::Membership(
+                parse_id(id).map_err(|_| TeamFailure::InvalidAuthoringData)?,
+            ),
+            (None, Some(id)) => SimpleRuleSubject::Group(
+                parse_id(id).map_err(|_| TeamFailure::InvalidAuthoringData)?,
+            ),
             _ => return Err(TeamFailure::InvalidAuthoringData.into()),
         };
         let mut selected = BTreeSet::new();
         for resource in &input.resources {
             let kind = resource.collection.inventory().ok_or(TeamFailure::InvalidAuthoringData)?;
-            let id = parse_id(&resource.id)?;
+            let id = parse_id(&resource.id).map_err(|_| TeamFailure::InvalidAuthoringData)?;
             if !selected.insert((kind, id)) {
                 return Err(TeamFailure::InvalidAuthoringData.into());
             }
