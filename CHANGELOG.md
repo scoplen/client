@@ -4,6 +4,14 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Import Organization CSV and Direct OpenSSH files in Settings > Data with an
+  explicit team, complete Ready/Blocked preview, explicit Ready selection and
+  final metadata disclosure. Retain exact encrypted batches across uncertain
+  results and restart, confirm only the original key/body inside its initial
+  24-hour window, and require current inventory review before expired archive.
+  Historical confirmation remains separate from current view/ACK and connection
+  authority. Local and Personal imports retain their existing workflows.
+
 - Change the installed Account's password in Settings with the current password
   and original Device keys. Preserve the Account, Device, ARK, recovery and vault
   keys; sign out browser sessions while retaining native Device access. Keep exact

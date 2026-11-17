@@ -29,8 +29,11 @@ pub(super) async fn verify(
     old_host: uuid::Uuid,
 ) -> (PairedDevice, scoplen_model::Object) {
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
-    let new_manager =
-        PersonalServer { operation: Mutex::new(()), transport: Ok(trusted_transport(&ca)) };
+    let new_manager = PersonalServer {
+        operation: Mutex::new(()),
+        transport: Ok(trusted_transport(&ca)),
+        import_preview: Default::default(),
+    };
     let profile = deployment.profiles[1].clone();
     let path = &profile.store;
     let key = profile.key();

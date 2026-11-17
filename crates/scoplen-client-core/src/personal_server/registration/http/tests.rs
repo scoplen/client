@@ -154,6 +154,7 @@ impl Peer {
         PersonalServer {
             operation: tokio::sync::Mutex::new(()),
             transport: Ok(Transport::fixture(self.certificate.clone(), timeout)),
+            import_preview: Default::default(),
         }
     }
 

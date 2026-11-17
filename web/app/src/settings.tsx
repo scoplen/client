@@ -17,6 +17,7 @@ import { PassphraseSettings } from "./local-data";
 import { PersonalSettings } from "./personal-settings";
 import { TerminalSettings } from "./terminal-settings";
 import { InventoryTransferSettings } from "./inventory-transfer-settings";
+import { TeamInventoryImportSettings } from "./team-inventory-import";
 
 export type SettingsSection = "appearance" | "terminal" | "data" | "personal";
 const sections: SettingsSection[] = ["appearance", "terminal", "data", "personal"];
@@ -93,6 +94,7 @@ export function SettingsView({
             <>
               <PassphraseSettings status={status} onStatus={onStatus} />
               <InventoryTransferSettings />
+              <TeamInventoryImportSettings onConnect={onConnect} />
             </>
           ) : null}
           {section === "personal" ? <PersonalSettings onConnect={onConnect} /> : null}

@@ -56,6 +56,7 @@ struct PeerState {
     teams: Option<teams::TeamPeer>,
     team_lifecycle: Option<team_lifecycle::TeamLifecyclePeer>,
     team_authoring: Option<team_authoring::AuthoringPeer>,
+    team_import: Option<team_inventory_import::ImportPeer>,
     team_ssh: Option<team_ssh::TeamSshPeer>,
     team_access_requests: Option<team_access_requests::AccessPeer>,
     pause: Option<(String, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
@@ -149,7 +150,11 @@ impl Peer {
                 .with_no_client_auth();
         tls.alpn_protocols = vec![b"h2".to_vec()];
         transport.notification_tls = Arc::new(tls);
-        PersonalServer { operation: tokio::sync::Mutex::new(()), transport: Ok(transport) }
+        PersonalServer {
+            operation: tokio::sync::Mutex::new(()),
+            transport: Ok(transport),
+            import_preview: Default::default(),
+        }
     }
 
     fn reply(&self, path: &str, reply: Reply) {
@@ -258,6 +263,7 @@ async fn answer(
         let team_lifecycle = path.starts_with("/api/v1/orgs/") && state.team_lifecycle.is_some();
         let team_ssh = path.starts_with("/api/v1/orgs/") && state.team_ssh.is_some();
         let team_authoring = path.starts_with("/api/v1/orgs/") && state.team_authoring.is_some();
+        let team_import = path.ends_with("/inventory/imports") && state.team_import.is_some();
         let team_access_requests =
             path.starts_with("/api/v1/orgs/") && state.team_access_requests.is_some();
         if request.headers().contains_key("cookie")
@@ -266,6 +272,7 @@ async fn answer(
                 && !team_lifecycle
                 && !team_ssh
                 && !team_authoring
+                && !team_import
                 && !team_access_requests
         {
             return Err("unexpected credential transport".into());
@@ -343,6 +350,7 @@ async fn answer(
                     && !team_lifecycle
                     && !team_ssh
                     && !team_authoring
+                    && !team_import
                     && !team_access_requests
                     && !(path.starts_with("/api/v1/orgs/")
                         && request.method() == http::Method::PATCH)
@@ -369,6 +377,8 @@ async fn answer(
                     proofs,
                     origin,
                 )?
+            } else if team_import {
+                state.team_import.as_mut().unwrap().answer(&request, &body)?
             } else if team_access_requests {
                 state.team_access_requests.as_mut().unwrap().answer(&request, &body)?
             } else if team_authoring {
@@ -442,6 +452,7 @@ mod revalidation;
 mod team_access_requests;
 mod team_assets;
 mod team_authoring;
+mod team_inventory_import;
 mod team_lifecycle;
 mod team_ssh;
 mod teams;

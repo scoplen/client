@@ -950,4 +950,29 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     WHEN OLD.phase=1 AND OLD.dispatch_generation!=OLD.unchanged_generation
     BEGIN SELECT RAISE(ABORT,'Unknown password change must retain its original bytes'); END;
     "#,
+    // 27: original typed Organization batches survive uncertain results and restart.
+    r#"
+    CREATE TABLE team_inventory_import (
+        origin TEXT NOT NULL,
+        account_id BLOB NOT NULL CHECK(length(account_id)=16),
+        device_id BLOB NOT NULL CHECK(length(device_id)=16),
+        organization_id BLOB NOT NULL CHECK(length(organization_id)=16),
+        operation_id BLOB NOT NULL CHECK(length(operation_id)=16),
+        payload BLOB NOT NULL CHECK(length(payload) BETWEEN 1 AND 2097152),
+        phase INTEGER NOT NULL DEFAULT 0 CHECK(phase IN(0,1,2)),
+        first_attempt_ms INTEGER CHECK(first_attempt_ms IS NULL OR first_attempt_ms>=0),
+        response BLOB CHECK(response IS NULL OR length(response) BETWEEN 1 AND 32768),
+        reviewed_ms INTEGER CHECK(reviewed_ms IS NULL OR reviewed_ms>=0),
+        PRIMARY KEY(origin,account_id,device_id,organization_id),
+        CHECK((phase=2)=(response IS NOT NULL)),
+        CHECK(phase=0 OR first_attempt_ms IS NOT NULL)
+    ) STRICT, WITHOUT ROWID;
+    CREATE TRIGGER team_import_immutable BEFORE UPDATE ON team_inventory_import
+    WHEN NEW.origin IS NOT OLD.origin OR NEW.account_id IS NOT OLD.account_id
+        OR NEW.device_id IS NOT OLD.device_id OR NEW.organization_id IS NOT OLD.organization_id
+        OR NEW.operation_id IS NOT OLD.operation_id OR NEW.payload IS NOT OLD.payload
+        OR (OLD.first_attempt_ms IS NOT NULL AND NEW.first_attempt_ms IS NOT OLD.first_attempt_ms)
+        OR (OLD.response IS NOT NULL AND NEW.response IS NOT OLD.response)
+    BEGIN SELECT RAISE(ABORT,'Original import cannot be replaced'); END;
+    "#,
 ];

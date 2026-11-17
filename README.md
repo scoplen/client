@@ -107,8 +107,36 @@ file was moved or renamed. Removing an entry from the archive does not delete it
 Source or destination changes require a fresh review. Confirmation commits the complete
 inventory, receipts and Personal sync changes together after full archive authentication;
 decrypted contents never enter frontend reports or plaintext temporary files. Exports create
-a new file and do not replace an existing one. Organization inventory, legal dangling-reference
-imports and native picker/rendered acceptance remain separate C10 outcomes.
+a new file and do not replace an existing one. Legal dangling-reference imports and native
+picker/rendered acceptance remain separate C10 outcomes.
+
+Settings > Data > Import team inventory adds new Hosts and default Logins to an
+explicitly selected current team. Choose CSV or Direct OpenSSH, then select one
+UTF-8 file up to 1 MiB. CSV uses the exact header
+`name,address,port,username,login_name` and 1–100 data rows; a blank port means 22
+and a blank Login name is omitted. Any invalid CSV row rejects the complete file.
+The Direct OpenSSH profile accepts `Host`, `HostName`, explicit `User` and `Port`;
+`Include` and `Match` reject the file, and other applicable options block their
+candidates. It never reads related files or runs commands. The complete preview
+shows Ready and Blocked candidates in source order, initially with no selection.
+Select the Ready rows, review the team and every selected field, then choose
+Import reviewed rows. This creates new pairs without merging existing assets;
+credentials, routes, trust files and commands are not imported.
+
+Before dispatch, the Rust core saves the original typed batch, ids and operation
+key in SQLCipher. An uncertain result offers Confirm original import for the same
+24-hour window, including after restart; reopening Settings never resends it.
+Later denial does not erase an earlier uncertain result. Saved imports for teams
+missing from current Membership discovery remain available for recovery only.
+Confirmation records the original outcome; current availability still requires
+ordinary member inventory refresh and acknowledgement. A failed refresh retains
+confirmation and offers another explicit refresh. After the confirmation window
+ends, explicitly refresh/review current inventory before archiving the unresolved
+operation; a refused read is sufficient for review, but missing or similar assets
+never establish the original outcome. Existing team access rules, default-Login
+connections, CA setup, SSH and Files remain the connection workflow. Native picker
+interaction, rendered desktop/mobile review and real deployment acceptance are
+separate verification outcomes.
 
 When adding a host, choose Key and Create a new key to generate an Ed25519 key
 in the Rust core. The private key stays in the encrypted store; the host, Login
@@ -878,6 +906,21 @@ pnpm typecheck
 pnpm test
 pnpm license-check
 ```
+
+The opt-in `live-server-integration` test
+`personal_server::live_server::password_entry::team_inventory_import::live_native_team_inventory_import_ssh_and_sftp`
+accepts the same private `SCOPLEN_LIVE_ACCOUNT_DEPLOYMENT` and
+`SCOPLEN_LIVE_TEAM_SSH_FIXTURE` descriptor paths as the existing team SSH fixture.
+It registers fresh Accounts, imports CSV and OpenSSH through the public native
+facade, verifies the original default-Login pairs without repair, checks hidden,
+authorized and withdrawn member views/ACK, and exercises real SSH and binary SFTP.
+An opt-in test-only transport control discards one fully received and verified
+production 201 per source, then closes and reopens the Account profile before
+confirming its original key/body. This verifies recovery after a client-side
+reply discard, not a real network outage. Ordinary production builds contain
+neither the control nor its state.
+Use only disposable HTTPS deployments and owned OpenSSH fixtures. This public-core
+integration does not establish rendered or native interaction acceptance.
 
 `scripts/test-ssh-command-password.ps1` uses PowerShell 7 and Docker for real
 Direct and Jump password authentication, exact literal helper arguments, optional

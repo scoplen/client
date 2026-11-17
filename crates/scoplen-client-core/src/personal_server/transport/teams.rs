@@ -154,13 +154,13 @@ impl Transport {
         let pragma = single("pragma").map(str::to_owned);
         let limit =
             if response.status().is_success() { limit } else { MAX_ORGANIZATION_PROBLEM_BYTES };
-        let body = read_body(response, limit).await?;
-        if status == 204 && !body.as_bytes().is_empty() {
+        let response_body = read_body(response, limit).await?;
+        if status == 204 && !response_body.as_bytes().is_empty() {
             return Err(PersonalServerError::InvalidResponse);
         }
-        Ok(Response {
+        let response = Response {
             status,
-            body,
+            body: response_body,
             etag,
             cache_control,
             pragma,
@@ -170,6 +170,46 @@ impl Transport {
             refresh_protocol: false,
             nonce: None,
             retry_after: None,
-        })
+        };
+        #[cfg(all(test, feature = "live-server-integration"))]
+        if self.discard_import_reply(path, body, &response) {
+            return Err(PersonalServerError::Network);
+        }
+        Ok(response)
+    }
+
+    #[cfg(all(test, feature = "live-server-integration"))]
+    fn discard_import_reply(&self, path: &str, body: Option<&[u8]>, response: &Response) -> bool {
+        use scoplen_api::inventory_import::{InventoryImportRequest, InventoryImportResult};
+        use std::sync::atomic::Ordering;
+        if !self.discard_next_import_reply.load(Ordering::SeqCst) || response.status != 201 {
+            return false;
+        }
+        let Some(organization) = path
+            .strip_prefix("/api/v1/orgs/")
+            .and_then(|path| path.strip_suffix("/inventory/imports"))
+        else {
+            return false;
+        };
+        if !Uuid::parse_str(organization)
+            .is_ok_and(|id| id.get_version_num() == 7 && id.to_string() == organization)
+        {
+            return false;
+        }
+        let Some(request) = body.and_then(|body| InventoryImportRequest::from_json(body).ok())
+        else {
+            return false;
+        };
+        if InventoryImportResult::from_http_json(
+            response.body.as_bytes(),
+            response.cache_control.as_deref(),
+            response.pragma.as_deref(),
+            &request,
+        )
+        .is_err()
+        {
+            return false;
+        }
+        self.discard_next_import_reply.swap(false, Ordering::SeqCst)
     }
 }

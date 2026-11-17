@@ -28,6 +28,7 @@ pub mod snippets;
 pub mod ssh;
 pub mod team_access_requests;
 pub mod team_authoring;
+pub mod team_inventory_import;
 pub mod team_ssh;
 pub mod teams;
 pub mod terminal_profiles;
@@ -207,6 +208,14 @@ pub fn ipc() -> Builder<tauri::Wry> {
             team_authoring::update_team_authoring,
             team_authoring::delete_team_authoring,
             team_authoring::preview_team_simple_rule,
+            team_inventory_import::choose_team_inventory_import,
+            team_inventory_import::retained_team_inventory_imports,
+            team_inventory_import::clear_team_inventory_import_preview,
+            team_inventory_import::prepare_team_inventory_import,
+            team_inventory_import::pending_team_inventory_import,
+            team_inventory_import::submit_team_inventory_import,
+            team_inventory_import::review_team_inventory_import,
+            team_inventory_import::discard_team_inventory_import,
             team_access_requests::check_team_access_request,
             team_access_requests::team_access_request_page,
             team_access_requests::review_team_access_request,

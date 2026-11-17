@@ -923,7 +923,7 @@ fn require_authoring_success(
     Err(error)
 }
 
-fn authoring_problem(problem: &ProblemDetails) -> Result<TeamError, TeamError> {
+pub(super) fn authoring_problem(problem: &ProblemDetails) -> Result<TeamError, TeamError> {
     Ok(match (problem.status, problem.code.as_str(), problem.changed, problem.retryable) {
         (401, "auth.authentication_required", false, false) => {
             PersonalServerError::AuthenticationRequired.into()

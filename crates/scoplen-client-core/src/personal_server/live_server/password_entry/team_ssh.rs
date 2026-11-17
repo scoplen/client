@@ -265,7 +265,7 @@ pub(super) async fn terminal_and_files_with_trust(
     assert!(recent[0].ended_at.is_some());
 }
 
-async fn provision_user_ca(
+pub(super) async fn provision_user_ca(
     personal: &PersonalServer,
     store: &Arc<Store>,
     source: &TeamSshSource,
