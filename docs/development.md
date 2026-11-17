@@ -260,6 +260,41 @@ removes its owned client stores; the fixture owner remains responsible for the s
 password files and OpenSSH container. Run once per database backend after actual console
 acceptance. Compilation alone does not establish the browser-to-native workflow.
 
+### Host Grant to native SSH
+
+The separate Host Grant consumer checks existing team assets and an already provisioned user CA.
+On each disposable SQLite and PostgreSQL HTTPS deployment, prepare the same owned OpenSSH Host,
+Direct `smoke` Login and default Login reference described above. Give the member view permission
+without an ordinary connect policy. Run the consumer three times, each with new local stores and
+Devices: before creating a Grant, with a finite active Grant, and after withdrawing that Grant.
+The producer manages Grants through public authenticated APIs; the consumer creates or repairs
+no team assets, policies, Grants or CA.
+
+The new private descriptor contains the ten browser-team fields above plus exactly
+`expected_outcome` and `certificate_not_after`. Set `expected_outcome` to `issuance_denied` and
+`certificate_not_after` explicitly to null before the Grant and after withdrawal. For the active
+Grant, set `expected_outcome` to `ssh_sftp` and `certificate_not_after` to its effective cutoff as
+an integer Unix second no greater than 253402300799. Keep the same descriptor, CA and password
+file bounds and the same separate owned OpenSSH descriptor. All descriptors and credentials
+remain in the private owned fixture outside Git.
+
+```powershell
+$env:SCOPLEN_LIVE_HOST_GRANT_DEPLOYMENT = '<absolute Host Grant descriptor path>'
+$env:SCOPLEN_LIVE_TEAM_SSH_FIXTURE = '<absolute owned OpenSSH descriptor path>'
+cargo test --locked -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::host_grant_ssh::live_host_grant_ssh_and_sftp -- --exact --test-threads=1
+```
+
+The successful check performs normal Host-key review and automatic certificate issuance through
+the real terminal before exercising the existing shell/resize/binary-SFTP roundtrip. It then
+reads that source-bound cached certificate and checks its signed expiry against the Grant cutoff.
+The denial checks first require a successful member CA read, then the exact issuance permission
+failure and a retained original certificate operation for the same source, Host and `smoke`
+with a dispatched-attempt deadline. A CA-read, connection, fixture, storage or other failure
+does not count as a passing denial. Require exactly one passing live test in
+each phase on each database. Broader interval, lifecycle, tenant and ordinary-policy cases belong
+to the genuine server HTTPS matrix. These checks establish neither immediate revocation of
+disclosed certificates nor existing-session termination, rendered interaction or native UI acceptance.
+
 ### Preconfirmed-profile integration
 
 The opt-in `live-server-integration` feature checks retained admitted-device authentication,
