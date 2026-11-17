@@ -945,6 +945,7 @@ function unknownTransfer(transportId: string, direction: "upload" | "download" =
     canAcknowledge: true,
     issue: "publicationUnknown",
     stagingMayRemain: false,
+    directoryCopy: null,
   };
 }
 

@@ -8,6 +8,7 @@ import {
   Folder,
   FolderPlus,
   FolderSync,
+  FolderUp,
   Pencil,
   RefreshCw,
   Trash2,
@@ -28,6 +29,7 @@ import { useSessionFileDrop } from "./use-session-file-drop";
 import { SessionEditor } from "./session-editor";
 import { useSessionEditor } from "./use-session-editor";
 import { SessionDirectorySync } from "./session-directory-sync";
+import { SessionDirectoryCopy } from "./session-directory-copy";
 
 type Location = { name: string; path: number[] };
 type Activity = "listing" | "creating" | "renaming" | "deleting" | "cancelling" | "waiting" | null;
@@ -92,6 +94,12 @@ export function SessionFiles({
   const [preview, setPreview] = useState<{ id: string; owner: string; entry: RemoteFileEntry } | null>(null);
   const [editDialog, setEditDialog] = useState<{ owner: string; entry: RemoteFileEntry } | null>(null);
   const [directoryDialog, setDirectoryDialog] = useState<string | null>(null);
+  const [copyDialog, setCopyDialog] = useState<{
+    owner: string;
+    commands: typeof commands;
+    direction: "upload" | "download";
+    path: number[];
+  } | null>(null);
   const operation = useRef<string | null>(null);
   const cancelled = useRef<string | null>(null);
   const pendingCancellation = useRef<Promise<unknown>>(Promise.resolve());
@@ -105,9 +113,12 @@ export function SessionFiles({
   if (preview && (!active || preview.owner !== previewOwner)) setPreview(null);
   if (editDialog && (!active || editDialog.owner !== previewOwner)) setEditDialog(null);
   if (directoryDialog && (!active || directoryDialog !== previewOwner)) setDirectoryDialog(null);
+  if (copyDialog && (!active || copyDialog.owner !== previewOwner || copyDialog.commands !== commands))
+    setCopyDialog(null);
   const previewOpen = active && preview?.owner === previewOwner;
   const editDialogOpen = active && editDialog?.owner === previewOwner;
   const directoryDialogOpen = active && directoryDialog === previewOwner;
+  const copyDialogOpen = active && copyDialog?.owner === previewOwner && copyDialog.commands === commands;
   const editor = useSessionEditor(sessionId, transportId, active);
   const queueReady = queue !== null;
   const queueBlocked = !queueReady || !!queue?.blocksFileOperations;
@@ -118,12 +129,14 @@ export function SessionFiles({
     selecting ||
     previewOpen ||
     editDialogOpen ||
-    directoryDialogOpen;
+    directoryDialogOpen ||
+    copyDialogOpen;
   const selectionDisabled =
     activity !== null ||
     previewOpen ||
     editDialogOpen ||
     directoryDialogOpen ||
+    copyDialogOpen ||
     editor.pending === "start" ||
     !transportId ||
     !queueReady ||
@@ -140,6 +153,7 @@ export function SessionFiles({
     !previewOpen &&
     !editDialogOpen &&
     !directoryDialogOpen &&
+    !copyDialogOpen &&
     editor.pending !== "start";
   const drop = useSessionFileDrop({
     sessionId,
@@ -363,11 +377,18 @@ export function SessionFiles({
     >
       <header className="flex shrink-0 items-center justify-between gap-2 px-3 py-2">
         <h2 className="m-0 text-sm font-semibold">{t("session.files.title")}</h2>
-        <div className="flex min-w-0 items-center gap-1">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1">
           <Button variant="ghost" className="gap-1 px-2" disabled={selectionDisabled} onClick={() => enqueue()}>
             <Upload aria-hidden="true" className="size-4" />
             {t("session.files.upload.action")}
           </Button>
+          <IconButton
+            label={t("session.directoryCopy.upload")}
+            disabled={selectionDisabled || !active || loadedLocation !== previewOwner || !!error || !!nameDialog}
+            onClick={() => setCopyDialog({ owner: previewOwner, commands, direction: "upload", path: currentPath })}
+          >
+            <FolderUp aria-hidden="true" className="size-4" />
+          </IconButton>
           <IconButton
             label={t("session.directorySync.action")}
             disabled={
@@ -550,6 +571,17 @@ export function SessionFiles({
                   <Download aria-hidden="true" className="size-4" />
                 </IconButton>
               ) : null}
+              {entry.kind === "directory" ? (
+                <IconButton
+                  label={t("session.directoryCopy.download", { name: entry.name })}
+                  disabled={selectionDisabled || !active || loadedLocation !== previewOwner || !!error || !!nameDialog}
+                  onClick={() =>
+                    setCopyDialog({ owner: previewOwner, commands, direction: "download", path: entry.path })
+                  }
+                >
+                  <Download aria-hidden="true" className="size-4" />
+                </IconButton>
+              ) : null}
               {entry.kind === "file" || entry.kind === "directory" ? (
                 <>
                   <IconButton
@@ -623,6 +655,18 @@ export function SessionFiles({
           availableSlots={queue ? Math.max(0, queue.capacity - queue.outstanding) : 0}
           onClose={() => setDirectoryDialog(null)}
           onQueued={(count) => setNotice(t("session.directorySync.queued", { count }))}
+        />
+      ) : null}
+      {copyDialogOpen && copyDialog && transportId ? (
+        <SessionDirectoryCopy
+          key={previewOwner}
+          sessionId={sessionId}
+          transportId={transportId}
+          remotePath={copyDialog.path}
+          direction={copyDialog.direction}
+          connectionLabel={connectionLabel}
+          onClose={() => setCopyDialog(null)}
+          onQueued={() => setNotice(t("session.directoryCopy.queued"))}
         />
       ) : null}
       <Dialog

@@ -261,6 +261,30 @@ it never triggers automatic comparison or replay. Already admitted transfers rem
 session-owned when Files closes. Actual native folder-picker and platform rendering remain
 separate acceptance from component checks.
 
+## Recursive folder copy
+
+Files > Upload folder chooses a local source; Download folder on a remote directory chooses
+a local destination parent. The review shows direction, source, destination parent and an
+editable new-root name. The root must be new: copying never merges or replaces an existing
+folder. Completed files and created folders remain after a failed or cancelled copy. Local
+copies are outside the encrypted store. The native picker and retained paths belong to Rust.
+
+`sessionPrepareDirectoryCopy(sessionId, transportId, remotePath, direction, locale)` reserves
+one queue slot and returns a five-minute selection. Closing or replacing the captured
+Account, session, transport or directory discards it through its original command owner,
+including a late picker reply. `sessionDiscardDirectoryCopy(sessionId, selectionId)` releases
+unused authority. `sessionEnqueueDirectoryCopy(sessionId, transportId, selectionId, rootName)`
+consumes a valid selection into one stable FIFO job. A rejected root name preserves the same
+review for an explicit correction; other failures require fresh selection. An uncertain
+queueing response permits queue review only and never automatic replay.
+
+Queue rows distinguish scanning, copying and finalizing, show file/folder counts, current
+relative name and aggregate byte progress, and report partial or uncertain results. Empty
+trees complete through directory counts without a byte percentage. Folder jobs expose no
+Pause/Resume; native capability controls when cancellation is available. Saved means the
+complete tree is confirmed. Native picker and rendered platform acceptance remain separate
+from command-line component verification.
+
 ## Personal account
 
 Settings → Personal account reads saved public status without network access or database
