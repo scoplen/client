@@ -681,6 +681,7 @@ impl Record for Snippet {
                     None | Some(Value::Null) => None,
                     Some(Value::Text(t)) => Some(t.clone()),
                     Some(Value::UInt(n)) => Some(n.to_string()),
+                    Some(Value::Int(n)) if kind == Integer => Some(n.to_string()),
                     Some(_) => return Err(shape()),
                 };
                 let choices = match fields::nested(value, 3) {
@@ -713,8 +714,9 @@ impl Change for SnippetChange {
         w.entries(3, self.variables, text_key, |v| {
             let mut spec = vec![(Value::UInt(1), Value::UInt(v.kind as u64))];
             if let Some(default) = v.default {
-                let default = match (v.kind, default.parse::<u64>()) {
-                    (VariableKind::Integer, Ok(n)) => Value::UInt(n),
+                let default = match (v.kind, default.parse::<i64>()) {
+                    (VariableKind::Integer, Ok(n)) if n < 0 => Value::Int(i128::from(n)),
+                    (VariableKind::Integer, Ok(n)) => Value::UInt(n.unsigned_abs()),
                     _ => Value::Text(default),
                 };
                 spec.push((Value::UInt(2), default));

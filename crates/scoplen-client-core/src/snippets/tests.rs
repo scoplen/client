@@ -3,6 +3,7 @@
 use super::*;
 use crate::repository::{Change, Host, HostChange};
 use crate::store::LocalWrite;
+use scoplen_api::inventory::InventoryFields;
 use scoplen_crypto::LocalDatabaseKey;
 use scoplen_model::{FieldPath, MapKey};
 
@@ -182,6 +183,10 @@ fn integer_values_and_defaults_are_canonical_signed_i64() {
             .unwrap()
             .unwrap();
         assert_eq!(record.variables["number"].default.as_deref(), Some(value));
+        let object = store.get(record.meta.id).unwrap().unwrap();
+        let fields = InventoryFields::from_object(&object).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&fields.to_json().unwrap()).unwrap();
+        assert_eq!(json["variables"]["number"]["default"], value);
     }
     let created = snippets
         .create(input(

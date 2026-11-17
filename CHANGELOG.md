@@ -10,6 +10,8 @@ All notable changes to the Scoplen desktop client are recorded here.
   command only to selected existing same-team terminals. View or origin changes
   invalidate review and stop later sends; individual target changes remain Not sent.
   Secret definitions stay inspection-only with hidden defaults.
+  Team Snippets with negative Integer defaults retain their complete definitions
+  and can be prepared for review.
 
 - Import Organization CSV and Direct OpenSSH files in Settings > Data with an
   explicit team, complete Ready/Blocked preview, explicit Ready selection and
