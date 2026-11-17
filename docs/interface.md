@@ -490,6 +490,8 @@ An authenticated certificate-policy denial exposes **Review access** for its exa
 team, Host and SSH username. `check_team_access_request` takes only the retained terminal id,
 duration and reason; Rust obtains the target from the completed native refusal. Generic errors,
 CA setup refusals and caller-authored target projections do not enable this entry point.
+Failure teardown retains the authenticated refusal even when that response invalidates
+the team's cached inventory. Authority withdrawal still interrupts active preparation.
 The exact duration and reason remain unchanged. A successful check permits an explicit
 `prepare_team_access_request`, followed by `submit_team_access_request`; checking creates
 no application, Grant, certificate or connection.

@@ -329,6 +329,10 @@ Each contains one compact JSON object followed by LF. Before reports exactly `re
 `status`, `ssh_sftp`; withdrawn reports exactly `request_id`, `status`, `issuance_denied`.
 Completion evidence excludes the private reason and credentials. Require one passing test in
 each phase on both databases; compilation does not establish genuine or rendered acceptance.
+The ordinary TLS/H2 and SSH-peer regression also checks that asynchronous transport cleanup
+preserves an authenticated certificate-policy refusal after inventory invalidation, while
+authority withdrawal interrupts an unanswered Host-key prompt. Unexpected live refusal
+assertions retain the existing safe terminal error and typed certificate failure.
 
 ### Preconfirmed-profile integration
 

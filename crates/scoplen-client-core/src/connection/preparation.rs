@@ -733,26 +733,7 @@ pub(crate) async fn prepare_resolved_target_connection(
     control: &PreparationControl,
     emit: impl Fn(PreparationEvent) -> Result<(), String> + Sync,
 ) -> Result<SshConnection, PreparationError> {
-    let team = plan.team().map(|snapshot| (snapshot.source.clone(), snapshot.authority));
-    let preparation = prepare_resolved_inner(store, plan, Some((store, personal)), control, emit);
-    let Some((source, authority)) = team else { return preparation.await };
-    let changes = async {
-        let mut changes = store.team_asset_changes();
-        loop {
-            if personal.team_ssh_authority(store, &source).map_err(|error| error.to_string())?
-                != Some(authority)
-            {
-                return Err(PreparationError::Local(
-                    "Team access changed. Refresh its assets before connecting again.".into(),
-                ));
-            }
-            changes.changed().await.map_err(|_| "Team access is unavailable.")?;
-        }
-    };
-    tokio::select! { biased;
-        result = changes => result,
-        result = preparation => result,
-    }
+    prepare_resolved_inner(store, plan, Some((store, personal)), control, emit).await
 }
 
 async fn prepare_resolved_inner(
@@ -762,8 +743,9 @@ async fn prepare_resolved_inner(
     control: &PreparationControl,
     emit: impl Fn(PreparationEvent) -> Result<(), String> + Sync,
 ) -> Result<SshConnection, PreparationError> {
+    let team = plan.team().map(|snapshot| (snapshot.source.clone(), snapshot.authority));
     let mut connections = ConnectionStack(Vec::new());
-    let result = async {
+    let preparation = async {
         for step in plan.steps {
             control.active(|| Ok(()))?;
             if let Some(team) = &step.team {
@@ -1010,9 +992,32 @@ async fn prepare_resolved_inner(
             )??;
         }
         Ok::<(), PreparationError>(())
-    }
-    .await;
+    };
+    let result = if let Some((source, authority)) = team {
+        let personal = team_provider.ok_or("Team certificate provider is unavailable.")?.1;
+        let changes = async {
+            let mut changes = store.team_asset_changes();
+            loop {
+                if personal.team_ssh_authority(store, &source).map_err(|error| error.to_string())?
+                    != Some(authority)
+                {
+                    return Err(PreparationError::Local(
+                        "Team access changed. Refresh its assets before connecting again.".into(),
+                    ));
+                }
+                changes.changed().await.map_err(|_| "Team access is unavailable.")?;
+            }
+        };
+        tokio::select! { biased;
+            result = changes => result,
+            result = preparation => result,
+        }
+    } else {
+        preparation.await
+    };
     if let Err(error) = result {
+        // A certificate refusal may invalidate its own authority. Keep its typed
+        // result while closing failed connections outside the authority watcher.
         // Expire interrupted prompts without turning a failure into user cancellation.
         if let Ok(mut state) = control.state.lock() {
             state.pending.take();
