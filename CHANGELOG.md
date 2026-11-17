@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Authenticate Local and Personal Logins with their generated platform-keystore
+  P-256 device Credentials. Validate the saved public identity before connecting,
+  retain ordinary per-hop Host trust, and reuse Direct/Jump terminals, Files and
+  reconnect while keeping private material on this device. A missing local key
+  never selects another credential.
+
 - Fetch Local and Personal SSH passwords through explicitly selected command
   Credentials. Review each hop's Host key and exact command before execution;
   keep bounded output only in zeroizing authentication memory. Jump hops fetch

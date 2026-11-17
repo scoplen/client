@@ -21,12 +21,13 @@ use base64::{
     engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
 };
 use scoplen_client_platform::credentials;
-use scoplen_crypto::{Ed25519SigningKey, SecretVec};
+use scoplen_crypto::{Ed25519SigningKey, P256SigningKey, SecretVec};
 use scoplen_ssh::{
     ChannelEvent, ClientChannel, ClientConfig, ClientConnection, ClientError, EcdsaSshSigner,
     Ed25519SshSigner, HostKey, HostKeyVerificationError, HostKeyVerifier,
-    KeyboardInteractiveInfoRequest, KeyboardInteractiveResponse, ProxyCredentials, PtyRequest,
-    RsaSshSigner, ServerRsaSha2Selection, SignatureAlgorithm, UserAuthContext, WindowChangeRequest,
+    KeyboardInteractiveInfoRequest, KeyboardInteractiveResponse, P256SshSigner, ProxyCredentials,
+    PtyRequest, RsaSshSigner, ServerRsaSha2Selection, SignatureAlgorithm, Signer, UserAuthContext,
+    WindowChangeRequest,
 };
 use sha2::{Digest as _, Sha256};
 use ssh_key::{Kdf, PrivateKey};
@@ -120,7 +121,7 @@ pub enum CredentialMaterial {
         public_key: Option<String>,
         /// Secret material stored directly for this device, when available.
         secret: Option<SecretVec>,
-        /// A platform-keystore or hardware handle, when the secret is non-exportable.
+        /// The device-local platform-keystore or hardware handle, when present.
         keystore_handle: Option<String>,
     },
     /// A short-lived certificate or certificate provider reference.
@@ -999,6 +1000,11 @@ pub(crate) fn validate_credential(
         CredentialMaterial::Agent { public_key } => {
             agent::parse_public_key(public_key.as_deref()).map(|_| ())
         }
+        CredentialMaterial::DeviceKey {
+            public_key: Some(public_key),
+            secret: Some(secret),
+            keystore_handle: Some(_),
+        } => parse_device_key(public_key, secret).map(|_| ()),
         CredentialMaterial::External { provider } => {
             command_credential::CommandCredential::parse(provider).map(|_| ())
         }
@@ -1030,6 +1036,25 @@ enum SoftwareKeySigner {
     Ed25519(Ed25519SshSigner),
     Ecdsa(Box<EcdsaSshSigner>),
     Rsa(Box<PrivateKey>),
+}
+
+fn parse_device_key(
+    public_key: &str,
+    secret: &SecretVec,
+) -> Result<P256SshSigner, SshConnectionError> {
+    if public_key.len() > MAX_SSH_INPUT {
+        return Err(SshConnectionError::InvalidPrivateKey);
+    }
+    let public_key = ssh_key::PublicKey::from_openssh(public_key)
+        .and_then(|key| key.to_bytes())
+        .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
+    let key = P256SigningKey::from_bytes(secret.as_bytes())
+        .map_err(|_| SshConnectionError::InvalidPrivateKey)?;
+    let signer = P256SshSigner::new(key);
+    if signer.public_key_blob().map_err(|_| SshConnectionError::InvalidPrivateKey)? != public_key {
+        return Err(SshConnectionError::InvalidPrivateKey);
+    }
+    Ok(signer)
 }
 
 fn read_software_key(material: &SecretVec) -> Result<PrivateKey, SshConnectionError> {
@@ -1162,7 +1187,8 @@ impl SshConnection {
     ///
     /// Omitting `trust` is fail-closed and rejects every host key. Jump chains
     /// require `prepare_connection`; managed routes remain explicit errors. Credentials support
-    /// passwords, software keys, and explicitly selected system-agent keys.
+    /// passwords, software keys, platform-keystore device keys, and explicitly
+    /// selected system-agent keys.
     pub async fn connect(
         plan: &ConnectionPlan,
         trust: Option<HostKeyTrust>,
@@ -1339,6 +1365,17 @@ impl SshConnection {
             }
             CredentialMaterial::Agent { public_key } => {
                 self.authenticate_agent(&username, public_key.as_deref()).await
+            }
+            CredentialMaterial::DeviceKey {
+                public_key: Some(public_key),
+                secret: Some(secret),
+                keystore_handle: Some(_),
+            } => {
+                let signer = parse_device_key(&public_key, &secret)?;
+                self.connection_mut()?
+                    .authenticate_publickey(&username, &signer)
+                    .await
+                    .map_err(Into::into)
             }
             _ => Err(SshConnectionError::UnsupportedCredential),
         }
@@ -1719,6 +1756,87 @@ mod tests {
         .expect("colon is allowed in HTTP password")
         .expect("configured credentials");
         assert!(!format!("{accepted:?}").contains("with:colon"));
+    }
+
+    #[test]
+    fn device_keys_require_matching_p256_identity_and_resolved_platform_material() {
+        let secret = SecretVec::new(vec![7; 32]);
+        let signer = P256SshSigner::new(P256SigningKey::from_bytes(secret.as_bytes()).unwrap());
+        let public_key = ssh_key::PublicKey::from_bytes(&signer.public_key_blob().unwrap())
+            .unwrap()
+            .to_openssh()
+            .unwrap();
+        let material = CredentialMaterial::DeviceKey {
+            public_key: Some(public_key.clone()),
+            secret: Some(secret.clone()),
+            keystore_handle: Some("device-keystore-v1:fixture".into()),
+        };
+        assert!(validate_credential(&material).is_ok());
+        assert!(!private_key_passphrase_required(&material).unwrap());
+        assert_eq!(
+            parse_device_key(&format!("{public_key} label"), &secret)
+                .unwrap()
+                .public_key_blob()
+                .unwrap(),
+            signer.public_key_blob().unwrap()
+        );
+        for invalid in [vec![], vec![7; 31], vec![7; 33], vec![0; 32], vec![8; 32]] {
+            assert!(matches!(
+                parse_device_key(&public_key, &SecretVec::new(invalid)),
+                Err(SshConnectionError::InvalidPrivateKey)
+            ));
+        }
+        let other = ssh_key::PrivateKey::random(
+            &mut ssh_key::rand_core::UnwrapErr(ssh_key::getrandom::SysRng),
+            Algorithm::Ed25519,
+        )
+        .unwrap();
+        for invalid in [
+            "invalid".into(),
+            "x".repeat(MAX_SSH_INPUT + 1),
+            other.public_key().to_openssh().unwrap(),
+        ] {
+            assert!(matches!(
+                parse_device_key(&invalid, &secret),
+                Err(SshConnectionError::InvalidPrivateKey)
+            ));
+        }
+        for (public_key, secret, keystore_handle) in [
+            (None, Some(secret.clone()), Some("unresolved".into())),
+            (Some(public_key.clone()), None, Some("unknown-hardware-provider".into())),
+            (Some(public_key), Some(secret), None),
+        ] {
+            assert!(matches!(
+                validate_credential(&CredentialMaterial::DeviceKey {
+                    public_key,
+                    secret,
+                    keystore_handle,
+                }),
+                Err(SshConnectionError::UnsupportedCredential)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_device_key_is_rejected_before_host_probe_or_connection() {
+        let plan = ConnectionPlan {
+            profile_id: Uuid::nil(),
+            host_id: Uuid::nil(),
+            address: "invalid target".into(),
+            port: 22,
+            username: "fixture".into(),
+            route: ConnectionRoute::Direct,
+            credential: CredentialMaterial::DeviceKey {
+                public_key: Some("not-a-public-key".into()),
+                secret: Some(SecretVec::new(vec![7; 32])),
+                keystore_handle: Some("device-keystore-v1:fixture".into()),
+            },
+        };
+        assert!(matches!(probe_host_key(&plan).await, Err(SshConnectionError::InvalidPrivateKey)));
+        assert!(matches!(
+            SshConnection::connect(&plan, None).await,
+            Err(SshConnectionError::InvalidPrivateKey)
+        ));
     }
 
     #[test]
