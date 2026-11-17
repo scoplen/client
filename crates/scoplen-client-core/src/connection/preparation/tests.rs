@@ -55,6 +55,116 @@ fn peer_login(store: &Store, port: u16, kind: CredentialKind, secret: Option<Vec
     id
 }
 
+#[cfg(any(target_os = "macos", windows))]
+#[tokio::test]
+async fn saved_local_and_personal_device_keys_reopen_and_authenticate_after_host_trust() {
+    use super::super::test_peer::{Authentication, Peer};
+    use crate::inventory::{
+        CredentialBindingInput, CredentialInput, CredentialKindInput, Inventory,
+    };
+
+    for personal in [false, true] {
+        let peer = Peer::with_authentication(Authentication::KeyThenInteractive).await;
+        let (directory, store) = store();
+        let store = Arc::new(store);
+        let inventory = Inventory::new(store.clone());
+        let credential = inventory
+            .create_credential(CredentialInput {
+                name: Some("device authentication".into()),
+                kind: CredentialKindInput::DeviceKey,
+                binding: CredentialBindingInput::Device,
+                secret: None,
+                device_secret: None,
+                public_key: None,
+                provider: Default::default(),
+                certificate_scope: None,
+            })
+            .unwrap();
+        let credential_id = Uuid::parse_str(&credential.id).unwrap();
+        let profile =
+            peer_login(&store, peer.port, CredentialKind::Password, Some(b"unused".to_vec()));
+        Repository::<AccessProfile>::new(&store)
+            .update(
+                profile,
+                AccessProfileChange { credential: Edit::Set(credential_id), ..Default::default() },
+            )
+            .unwrap();
+        if personal {
+            let identity = crate::personal_server::tests::fixture_profile(
+                &store,
+                "https://personal.example",
+                true,
+            );
+            let access = SecretVec::new(b"disposable-device-key-access".to_vec());
+            store
+                .save_personal_tokens(access.as_bytes(), b"disposable-refresh", 1000, 2000)
+                .unwrap();
+            let record = store.personal_record().unwrap().unwrap();
+            assert!(
+                store.save_personal_sync(&record, &access, None, &identity.snapshot, 100).unwrap()
+            );
+            let host = Repository::<AccessProfile>::new(&store).get(profile).unwrap().unwrap().host;
+            store
+                .adopt_personal_objects(record.personal_vault_id, &[host, profile, credential_id])
+                .unwrap();
+        }
+        drop(inventory);
+        drop(store);
+        let store = Arc::new(
+            Store::open(&directory.path().join("local.db"), &LocalDatabaseKey::new([7; 32]))
+                .unwrap(),
+        );
+        assert!(!resolve_steps(&store, profile).unwrap()[0].passphrase);
+
+        let refused = PreparationControl::default();
+        let result = prepare_connection(&store, profile, &refused, |event| {
+            if matches!(event, PreparationEvent::Trust { .. }) {
+                assert_eq!(peer.authentications.load(Ordering::SeqCst), 0);
+                refused.cancel();
+            }
+            Ok(())
+        })
+        .await;
+        assert!(result.is_err());
+        assert!(refused.is_cancelled());
+        assert_eq!(peer.authentications.load(Ordering::SeqCst), 0);
+        for attempt in 0..2 {
+            let control = PreparationControl::default();
+            let rounds = AtomicUsize::new(0);
+            let connection = prepare_connection(&store, profile, &control, |event| {
+                match event {
+                    PreparationEvent::Trust { prompt_id, .. } => {
+                        control.respond(&prompt_id, PreparationResponse::AcceptHostKey)?
+                    }
+                    PreparationEvent::KeyboardInteractive { prompt_id, .. } => {
+                        let answers = match rounds.fetch_add(1, Ordering::SeqCst) {
+                            0 => vec![b"visible".to_vec(), vec![]],
+                            1 => vec![],
+                            _ => vec![b"123456".to_vec()],
+                        };
+                        control.respond(
+                            &prompt_id,
+                            PreparationResponse::keyboard_interactive(answers).unwrap(),
+                        )?;
+                    }
+                    PreparationEvent::Passphrase { .. } => {
+                        panic!("device key requested a passphrase")
+                    }
+                    _ => {}
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+            assert_eq!(rounds.load(Ordering::SeqCst), 3);
+            assert_eq!(peer.authentications.load(Ordering::SeqCst), attempt + 1);
+            connection.close().await.unwrap();
+        }
+        Repository::<AccessProfile>::new(&store).delete(profile).unwrap();
+        Inventory::new(store).delete_credential(credential.id).unwrap();
+    }
+}
+
 #[tokio::test]
 async fn saved_interactive_and_accepted_password_or_software_key_complete_ordered_rounds() {
     use super::super::test_peer::{Authentication, Peer};

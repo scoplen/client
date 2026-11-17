@@ -10,7 +10,7 @@ Owner and operator: Plystra LLC. Responsible maintainer: Plystra LLC.
 
 Maturity: Exploration. Maintenance: Active.
 
-The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. OpenSSH migration previews new and previously imported aliases alongside existing inventory, including their usable identity, route and ordinary known host keys. SSH connects directly, through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, through an explicit saved Jump chain, or through a saved local ProxyCommand. Each SSH host uses its saved password, OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA software key, or an explicitly selected key in the system SSH agent, after independent host-key review. The target opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after that host's review. New or changed keys require explicit acceptance; wildcard-only and CA records do not authorize raw host keys. Other credential kinds and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
+The application shell is in place: a Tauri 2 application for macOS and Windows, the Scoplen identity and design tokens, typed IPC generated from Rust with a binary channel transport, and a design system foundation with keyboard navigation, screen-reader labels, light and dark themes, increased-contrast and reduced-motion support, and ICU localization in English and Simplified Chinese. It keeps an encrypted local store: a SQLCipher database whose key is held in the macOS Keychain or, on Windows, by the TPM or DPAPI, optionally with a local passphrase. The desktop can manage local hosts, groups, tags, favorites, notes, and credentials. OpenSSH migration previews new and previously imported aliases alongside existing inventory, including their usable identity, route and ordinary known host keys. SSH connects directly, through a saved SOCKS5 or HTTP CONNECT proxy with optional username/password authentication, through an explicit saved Jump chain, or through a saved local ProxyCommand. Each SSH host uses its saved password, OpenSSH Ed25519, ECDSA P-256/P-384/P-521, or RSA software key, a generated platform-keystore P-256 device key, or an explicitly selected key in the system SSH agent, after independent host-key review. The target opens an interactive terminal with ANSI rendering, keyboard input, and close handling. Encrypted private keys prompt for a one-time passphrase after that host's review. New or changed keys require explicit acceptance; wildcard-only and CA records do not authorize raw host keys. Other credential kinds and sync follow the client track of [`scoplen-docs/17-implementation-roadmap.md`](../scoplen-docs/17-implementation-roadmap.md).
 
 In Settings > Data > Import and export, choose Import OpenSSH config to select a
 configuration and review Create, Update and
@@ -117,6 +117,15 @@ details panel, where Copy public key copies only its OpenSSH public key. Install
 that public key in the remote user's `~/.ssh/authorized_keys` before connecting.
 Creating the key does not connect to or change the remote host. A failed clipboard
 write shows an error and can be retried without creating another key.
+
+In Credentials, create a Device-bound key with This device only binding to generate
+a P-256 key protected at rest by the platform keystore. Assign it to a Local or
+Personal Login, then use Copy public key in the Host details to install its public
+identity on the SSH server. The same saved key supports Direct and Jump terminal
+connections, Files and reconnect after reopening the encrypted store. Each hop
+still requires ordinary Host-key trust. SSH signing takes place in the Rust core;
+the private scalar and keystore handle never enter the frontend or synchronized
+objects. A missing local key is refused without choosing another credential.
 
 To use Jump, create a Jump route containing the ordered Logins for the jump
 hosts, then assign that route to the target Login. Every jump Login must select
@@ -936,6 +945,17 @@ public key, then reopens the encrypted store in another process and authenticate
 through the saved Login's ordinary connection plan.
 It removes its containers and temporary keys when finished.
 CI runs this fixture on Linux in addition to the macOS and Windows Rust checks.
+
+On Windows or macOS with PowerShell 7, Docker and `ssh-keygen`, run
+`scripts/test-ssh-device-key.ps1` for platform-keystore device Credentials. It creates
+keys through the public inventory API, installs only their public identities on
+independent OpenSSH target and Jump listeners, and reopens the saved inventory in
+separate processes. It checks interactive shell output, binary SFTP upload/download,
+manual reconnect, refused Host trust, unauthorized-key rejection and a missing
+platform slot. Successful runs remove their owned containers, files and keystore
+slots; a failed run retains its local diagnostic fixture. Platform-protected
+storage and public-core interoperability do not establish hardware signing or
+rendered desktop acceptance.
 
 `scripts/test-ssh-proxy-route.ps1` builds public-API smoke examples, starts a
 disposable OpenSSH server, and checks direct, SOCKS5, and HTTP CONNECT command
