@@ -7,6 +7,7 @@ import type {
   TeamAuthoringCollection,
   TeamAuthoringData,
   TeamMemberView,
+  TeamSimplePermission,
   TeamSimpleRulePreview,
   TeamSummary,
 } from "./ipc/bindings";
@@ -43,12 +44,13 @@ export function TeamRuleForm({
   const [name, setName] = useState("");
   const [subjectKind, setSubjectKind] = useState("member");
   const [subject, setSubject] = useState("");
-  const [permission, setPermission] = useState<"view" | "connect">("view");
+  const [permission, setPermission] = useState<TeamSimplePermission>("view");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [remoteUser, setRemoteUser] = useState("");
   const [preview, setPreview] = useState<TeamSimpleRulePreview | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const overRequestLimit = permission === "requestAccess" && selected.size > 64;
   const active = useRef(true);
   const revision = useRef(0);
   useEffect(() => {
@@ -64,7 +66,7 @@ export function TeamRuleForm({
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (disabled || busy || !subject || !selected.size) return;
+    if (disabled || busy || !subject || !selected.size || overRequestLimit) return;
     const captured = ++revision.current;
     setBusy(true);
     setFailed(false);
@@ -145,13 +147,14 @@ export function TeamRuleForm({
         label={t("teams.authoring.permission")}
         value={permission}
         onChange={(value) => {
-          setPermission(value as "view" | "connect");
+          setPermission(value as TeamSimplePermission);
           setSelected(new Set());
           changed();
         }}
         options={[
           { value: "view", label: t("teams.authoring.view") },
           { value: "connect", label: t("teams.authoring.connect") },
+          { value: "requestAccess", label: t("teams.authoring.requestAccess") },
         ]}
       />
       {permission === "connect" ? (
@@ -168,9 +171,20 @@ export function TeamRuleForm({
           <p className="text-sm text-muted-foreground">{t("teams.authoring.connectNotice")}</p>
         </>
       ) : null}
+      {permission === "requestAccess" ? (
+        <div className="space-y-2 text-sm text-muted-foreground">
+          <p>{t("teams.authoring.requestAccessNotice")}</p>
+          <p>{t("teams.authoring.requestAccessPoliciesNotice")}</p>
+        </div>
+      ) : null}
       <fieldset className="min-w-0 space-y-4 border-0 p-0">
         <legend className="mb-2 text-sm font-medium">{t("teams.authoring.ruleAssets")}</legend>
-        {(permission === "connect" ? (["host", "hostGroup"] as const) : assetCollections).map((kind) => (
+        {(permission === "requestAccess"
+          ? (["host"] as const)
+          : permission === "connect"
+            ? (["host", "hostGroup"] as const)
+            : assetCollections
+        ).map((kind) => (
           <section key={kind}>
             <h3 className="text-sm font-medium">{collectionLabel(t, kind)}</h3>
             {!references[kind] ? (
@@ -202,7 +216,16 @@ export function TeamRuleForm({
           </section>
         ))}
       </fieldset>
-      <Button type="submit" variant="secondary" disabled={disabled || busy || !subject || !selected.size}>
+      {overRequestLimit ? (
+        <p role="alert" className="text-sm text-attention">
+          {t("teams.authoring.requestAccessLimit")}
+        </p>
+      ) : null}
+      <Button
+        type="submit"
+        variant="secondary"
+        disabled={disabled || busy || !subject || !selected.size || overRequestLimit}
+      >
         {t("teams.authoring.preview")}
       </Button>
       {failed ? (

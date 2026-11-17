@@ -41,7 +41,7 @@ type OpenSession = {
 function savedTree(node: TerminalLayoutNode, sessions: OpenSession[]): WorkspaceTreeInput {
   if (node.type === "pane") {
     const session = sessions.find((entry) => entry.id === node.paneId)!;
-    return session.snapshot || session.target.kind === "organization"
+    return session.snapshot || session.target.kind !== "personal"
       ? { kind: "savedOutput" }
       : { kind: "terminal", profileId: session.target.profileId };
   }
@@ -370,7 +370,7 @@ export function Shell({
         <div className="relative min-h-0 flex-1 overflow-hidden">
           {workspacesOpen ? (
             <WorkspacesDialog
-              teamSessions={sessions.some((session) => session.target.kind === "organization")}
+              teamSessions={sessions.some((session) => session.target.kind !== "personal")}
               tabs={layout.tabs.map((tab) => ({
                 tree: savedTree(layout.layouts[tab.id]!, sessions),
                 focused: paneOrder(layout.layouts[tab.id]!).indexOf(layout.focusedPaneIds[tab.id]!),
@@ -496,6 +496,7 @@ export function Shell({
                     >
                       <SessionTerminal
                         target={session.target}
+                        onConnect={(target) => openSession(target, target.profileId)}
                         label={session.label}
                         active={view !== "settings" && session.id === layout.activePaneId}
                         savedOutput={session.snapshot}

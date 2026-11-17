@@ -14,6 +14,8 @@ const commands = vi.hoisted(() => ({
   prepareTeamCreation: vi.fn(),
   submitTeamCreation: vi.fn(),
   discardTeamCreation: vi.fn(),
+  pendingTeamAccessRequest: vi.fn(),
+  teamAccessRequestPage: vi.fn(),
 }));
 vi.mock("../src/account-profiles", () => ({ useProfileCommands: () => commands }));
 
@@ -40,6 +42,11 @@ beforeEach(() => {
   commands.prepareTeamCreation.mockResolvedValue({ status: "ok", data: pending });
   commands.submitTeamCreation.mockResolvedValue({ status: "ok", data: confirmed });
   commands.discardTeamCreation.mockResolvedValue({ status: "ok", data: null });
+  commands.pendingTeamAccessRequest.mockResolvedValue({ status: "ok", data: null });
+  commands.teamAccessRequestPage.mockResolvedValue({
+    status: "ok",
+    data: { view: "mine", items: [], nextCursor: null },
+  });
 });
 afterEach(() => cleanup());
 
@@ -58,6 +65,22 @@ async function ready() {
     expect((screen.getByRole("button", { name: "Refresh teams" }) as HTMLButtonElement).disabled).toBe(false),
   );
 }
+
+it("opens the selected team's request surface only from its settings action and returns keyboard focus", async () => {
+  fixture();
+  await ready();
+  expect(commands.teamAccessRequestPage).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Refresh teams" }));
+  const opener = await screen.findByRole("button", { name: "Access requests" });
+  opener.focus();
+  await userEvent.keyboard("{Enter}");
+  await screen.findByRole("dialog", { name: "Access requests" });
+  await screen.findByText(/No requests yet/);
+  expect(commands.teamAccessRequestPage).toHaveBeenCalledExactlyOnceWith(team.id, "mine", null);
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(opener));
+});
 
 it("only reads local pending state until membership discovery is explicitly requested by keyboard", async () => {
   const { container, busy } = fixture();

@@ -43,6 +43,7 @@ const sample = {
   directive: "Include",
   name: "prod-db-01",
   kind: "Host",
+  status: "future_state",
   roles: "Owner",
   query: "db",
   username: "deploy",

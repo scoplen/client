@@ -10,7 +10,7 @@ use scoplen_api::{
     ErrorCode, ProblemDetails,
     group_policy::{
         GroupCreateRequest, GroupReplaceRequest, GroupResource, GroupSource, PolicyCreateRequest,
-        PolicyReplaceRequest, PolicyResource,
+        PolicyReplaceRequest, PolicyResource, SimpleRule, SimpleRuleInput, SimpleRuleSubject,
     },
     inventory::{
         InventoryCreateRequest, InventoryReplaceRequest, InventoryResource, InventoryType,
@@ -662,5 +662,117 @@ async fn simple_rules_and_invalid_personal_fields_use_only_the_shared_supported_
         serde_json::json!({"name":"Secret","template":"echo","variables":{"password":{"kind":4,"default":"must reject"}}}),
     );
     assert!(manager.prepare_team_authoring(&store, &organization, invalid).is_err());
+    assert!(peer.state.lock().unwrap().paths.is_empty());
+}
+
+#[tokio::test]
+async fn request_access_preview_uses_the_shared_host_rule_for_members_and_groups() {
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    let organization = id_new();
+    let subject_id = id_new();
+    let mut hosts = (0..64).map(|_| id_new()).collect::<Vec<_>>();
+    hosts.sort();
+    for subject in [SimpleRuleSubject::Membership(subject_id), SimpleRuleSubject::Group(subject_id)]
+    {
+        for count in [1, 64] {
+            let preview = manager
+                .preview_team_simple_rule(
+                    &store,
+                    &organization.to_string(),
+                    TeamSimpleRuleInput {
+                        membership_id: matches!(subject, SimpleRuleSubject::Membership(_))
+                            .then(|| subject_id.to_string()),
+                        group_id: matches!(subject, SimpleRuleSubject::Group(_))
+                            .then(|| subject_id.to_string()),
+                        permission: TeamSimplePermission::RequestAccess,
+                        remote_user: None,
+                        resources: hosts[..count]
+                            .iter()
+                            .rev()
+                            .map(|id| TeamSimpleRuleResource {
+                                collection: Collection::Host,
+                                id: id.to_string(),
+                            })
+                            .collect(),
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                preview.source,
+                SimpleRuleInput {
+                    organization,
+                    subject,
+                    rule: SimpleRule::RequestAccess { hosts: hosts[..count].to_vec() },
+                }
+                .generate()
+                .unwrap()
+            );
+            assert!(preview.source.contains("Action::\"request_access\""));
+            assert!(preview.dependencies.is_empty());
+        }
+    }
+    assert!(peer.state.lock().unwrap().paths.is_empty());
+}
+
+#[tokio::test]
+async fn request_access_preview_rejects_invalid_hosts_subjects_and_remote_user() {
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    let organization = id_new().to_string();
+    let host = TeamSimpleRuleResource { collection: Collection::Host, id: id_new().to_string() };
+    let valid = TeamSimpleRuleInput {
+        membership_id: Some(id_new().to_string()),
+        group_id: None,
+        permission: TeamSimplePermission::RequestAccess,
+        remote_user: None,
+        resources: vec![host.clone()],
+    };
+    let mut invalid = vec![
+        TeamSimpleRuleInput { resources: Vec::new(), ..valid.clone() },
+        TeamSimpleRuleInput {
+            resources: (0..65)
+                .map(|_| TeamSimpleRuleResource {
+                    collection: Collection::Host,
+                    id: id_new().to_string(),
+                })
+                .collect(),
+            ..valid.clone()
+        },
+        TeamSimpleRuleInput { resources: vec![host.clone(), host.clone()], ..valid.clone() },
+        TeamSimpleRuleInput { membership_id: None, ..valid.clone() },
+        TeamSimpleRuleInput { group_id: Some(id_new().to_string()), ..valid.clone() },
+        TeamSimpleRuleInput { remote_user: Some("deploy".into()), ..valid.clone() },
+        TeamSimpleRuleInput { remote_user: Some(String::new()), ..valid.clone() },
+        TeamSimpleRuleInput {
+            resources: vec![TeamSimpleRuleResource { id: "not-an-id".into(), ..host.clone() }],
+            ..valid.clone()
+        },
+    ];
+    for collection in [
+        Collection::HostGroup,
+        Collection::Login,
+        Collection::Route,
+        Collection::TrustRecord,
+        Collection::Snippet,
+        Collection::GatewayNetwork,
+        Collection::Group,
+        Collection::Policy,
+    ] {
+        invalid.push(TeamSimpleRuleInput {
+            resources: vec![TeamSimpleRuleResource { collection, ..host.clone() }],
+            ..valid.clone()
+        });
+    }
+    for input in invalid {
+        assert!(matches!(
+            manager.preview_team_simple_rule(&store, &organization, input),
+            Err(TeamError::Team(TeamFailure::InvalidAuthoringData))
+        ));
+    }
     assert!(peer.state.lock().unwrap().paths.is_empty());
 }

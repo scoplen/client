@@ -333,6 +333,13 @@ struct SessionEntry {
     directory_copy: Option<directory_copy::PreparedSelection>,
     forward_stops: Arc<Mutex<std::collections::BTreeSet<Uuid>>>,
     attached_forwards: Option<Arc<AttachedForwardState>>,
+    policy_denial: Option<RetainedPolicyDenial>,
+}
+
+struct RetainedPolicyDenial {
+    value: TeamSshPolicyDenial,
+    store: std::sync::Weak<Store>,
+    auth_generation: i64,
 }
 
 struct CheckpointOwner {
@@ -573,6 +580,7 @@ impl SessionManager {
                 directory_copy: None,
                 forward_stops: Arc::default(),
                 attached_forwards: None,
+                policy_denial: None,
             },
         );
         Ok(())
@@ -581,6 +589,49 @@ impl SessionManager {
     /// Cancel the complete logical session, including timers and prompts.
     pub fn close(&self, session_id: &str) -> Result<(), String> {
         self.intent(session_id, Intent::Close)
+    }
+
+    /// Retrieve only an actual completed certificate-policy refusal in its current Account store.
+    pub(crate) fn team_access_request_denial(
+        &self,
+        store: &Arc<Store>,
+        session_id: &str,
+    ) -> Option<TeamSshPolicyDenial> {
+        let identity = store.personal_record().ok()??;
+        if !identity.authentication_allowed() {
+            return None;
+        }
+        let sessions = self.sessions.lock().ok()?;
+        let entry = sessions.get(session_id)?;
+        if entry.phase != Phase::Ended || *entry.intent.borrow() != Intent::None {
+            return None;
+        }
+        let retained = entry.policy_denial.as_ref()?;
+        if retained.auth_generation != identity.auth_generation
+            || !retained.store.upgrade().is_some_and(|owner| Arc::ptr_eq(&owner, store))
+            || retained.value.source.owner(store).is_err()
+        {
+            return None;
+        }
+        Some(retained.value.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_access_request_denial(
+        &self,
+        store: &Arc<Store>,
+        session_id: &str,
+        value: TeamSshPolicyDenial,
+    ) {
+        self.reserve(session_id, true).unwrap();
+        let mut sessions = self.sessions.lock().unwrap();
+        let entry = sessions.get_mut(session_id).unwrap();
+        entry.phase = Phase::Ended;
+        entry.policy_denial = Some(RetainedPolicyDenial {
+            value,
+            store: Arc::downgrade(store),
+            auth_generation: store.personal_record().unwrap().unwrap().auth_generation,
+        });
     }
 
     /// Cancel every logical session before replacing its owning profile.
@@ -1504,6 +1555,7 @@ impl SessionManager {
             entry.intent.send_replace(Intent::None);
             entry.phase = Phase::Running;
             entry.checkpoint = None;
+            entry.policy_denial = None;
             entry.active = Some(ActiveAttempt {
                 id: transport,
                 control: control.clone(),
@@ -1625,6 +1677,23 @@ impl SessionManager {
                 )
                 .await;
             let requested = *intents.borrow_and_update();
+            let denial = if requested == Intent::None {
+                result.as_ref().err().and_then(AttemptError::team_ssh_policy_denial)
+            } else {
+                None
+            };
+            if let Ok(mut sessions) = self.sessions.lock()
+                && let Some(entry) = sessions.get_mut(session_id)
+            {
+                entry.policy_denial = denial.and_then(|value| {
+                    let identity = store.personal_record().ok()??;
+                    Some(RetainedPolicyDenial {
+                        value,
+                        store: Arc::downgrade(&store),
+                        auth_generation: identity.auth_generation,
+                    })
+                });
+            }
             let completed = if requested == Intent::None { Some(result) } else { None };
             control.cancel();
             self.phase(session_id, Phase::Ended)?;
@@ -1745,7 +1814,8 @@ impl SessionManager {
         let id = Uuid::parse_str(target.profile_id())
             .map_err(|_| AttemptError::Local("the Login identifier is invalid".into()))?;
         let team_plan = match target {
-            SessionTarget::Organization { .. } => {
+            SessionTarget::Organization { .. }
+            | SessionTarget::OrganizationAccessRequest { .. } => {
                 Some(resolve_target_preparation_plan(store, personal, target)?)
             }
             SessionTarget::Personal { .. } => None,

@@ -57,6 +57,7 @@ struct PeerState {
     team_lifecycle: Option<team_lifecycle::TeamLifecyclePeer>,
     team_authoring: Option<team_authoring::AuthoringPeer>,
     team_ssh: Option<team_ssh::TeamSshPeer>,
+    team_access_requests: Option<team_access_requests::AccessPeer>,
     pause: Option<(String, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     notification: Option<notification::NotificationPeer>,
 }
@@ -257,12 +258,15 @@ async fn answer(
         let team_lifecycle = path.starts_with("/api/v1/orgs/") && state.team_lifecycle.is_some();
         let team_ssh = path.starts_with("/api/v1/orgs/") && state.team_ssh.is_some();
         let team_authoring = path.starts_with("/api/v1/orgs/") && state.team_authoring.is_some();
+        let team_access_requests =
+            path.starts_with("/api/v1/orgs/") && state.team_access_requests.is_some();
         if request.headers().contains_key("cookie")
             || request.headers().contains_key("idempotency-key")
                 && !team_create
                 && !team_lifecycle
                 && !team_ssh
                 && !team_authoring
+                && !team_access_requests
         {
             return Err("unexpected credential transport".into());
         }
@@ -339,6 +343,7 @@ async fn answer(
                     && !team_lifecycle
                     && !team_ssh
                     && !team_authoring
+                    && !team_access_requests
                     && !(path.starts_with("/api/v1/orgs/")
                         && request.method() == http::Method::PATCH)
                     && (request.method() != http::Method::GET || !body.is_empty())
@@ -364,6 +369,8 @@ async fn answer(
                     proofs,
                     origin,
                 )?
+            } else if team_access_requests {
+                state.team_access_requests.as_mut().unwrap().answer(&request, &body)?
             } else if team_authoring {
                 state.team_authoring.as_mut().unwrap().answer(&request, &body)?
             } else if path.starts_with("/api/v1/orgs") && state.team_ssh.is_some() {
@@ -432,6 +439,7 @@ fn local(dir: &tempfile::TempDir) -> Arc<Store> {
 mod account;
 mod membership;
 mod revalidation;
+mod team_access_requests;
 mod team_assets;
 mod team_authoring;
 mod team_lifecycle;

@@ -407,6 +407,7 @@ it("does not infer a definite certificate refusal from an untyped message", asyn
   });
   expect(screen.getByRole("alert").textContent).toContain("certificate.revoked");
   expect(screen.queryByText(en["teams.ssh.revoked"])).toBeNull();
+  expect(screen.queryByRole("button", { name: en["teams.requests.reviewAccess"] })).toBeNull();
   expect(f.matching("session_retry_transport")).toHaveLength(0);
 });
 
@@ -430,6 +431,9 @@ it.each(["en", "zh-Hans"] as const)("localizes %s typed team policy denial witho
   expect(screen.queryByText("backend fallback")).toBeNull();
   expect(f.matching("session_retry_transport")).toHaveLength(0);
   expect(f.connections).toHaveLength(1);
+  expect(screen.getByRole("button", { name: catalog["teams.requests.reviewAccess"] })).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: catalog["session.reconnect"] }));
+  expect(screen.queryByRole("button", { name: catalog["teams.requests.reviewAccess"] })).toBeNull();
 });
 
 function interactive(

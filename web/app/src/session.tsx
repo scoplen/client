@@ -23,7 +23,9 @@ import {
   type SessionTransferIssue,
   type SessionPreparationIntent,
   type SessionTarget,
+  type TeamSshPolicyDenial,
 } from "./ipc/bindings";
+import { TeamAccessRequests } from "./team-access-requests";
 import { useTerminalColors, xtermTheme } from "./terminal-colors";
 import { useTerminalProfiles } from "./terminal-profiles";
 import { SessionFiles, type EnqueueFeedback, type FileOperationOutcome } from "./session-files";
@@ -86,6 +88,7 @@ export function SessionTerminal({
   registerSnippetTarget,
   getSnippetTargets,
   forwardRuntime,
+  onConnect,
 }: {
   target: SessionTarget;
   label: string;
@@ -106,6 +109,8 @@ export function SessionTerminal({
   registerSnippetTarget?: (target: () => SnippetTarget | null) => () => void;
   getSnippetTargets?: () => SnippetTarget[];
   forwardRuntime?: ForwardController;
+  /** Open a separate ordinary connection after reviewing an approved request. */
+  onConnect?: (target: SessionTarget) => void;
   /** Told whenever the connection state changes, so the window can show it on the tab. */
   onStateChange?: (state: SessionState) => void;
   /** Current target label resolved through ordinary Login preparation. */
@@ -120,13 +125,23 @@ export function SessionTerminal({
     accountId = "",
     organizationId = "",
     deviceId = "",
-  } = target.kind === "organization" ? target.source : {};
+  } = target.kind !== "personal" ? target.source : {};
+  const hostId = target.kind === "organizationAccessRequest" ? target.hostId : "";
+  const remoteUser = target.kind === "organizationAccessRequest" ? target.remoteUser : "";
   const connectionTarget = useMemo<SessionTarget>(
     () =>
       targetKind === "personal"
         ? { kind: "personal", profileId }
-        : { kind: "organization", profileId, source: { origin, accountId, organizationId, deviceId } },
-    [targetKind, profileId, origin, accountId, organizationId, deviceId],
+        : targetKind === "organizationAccessRequest"
+          ? {
+              kind: "organizationAccessRequest",
+              profileId,
+              source: { origin, accountId, organizationId, deviceId },
+              hostId,
+              remoteUser,
+            }
+          : { kind: "organization", profileId, source: { origin, accountId, organizationId, deviceId } },
+    [targetKind, profileId, origin, accountId, organizationId, deviceId, hostId, remoteUser],
   );
   const commands = useProfileCommands();
   const profiles = useTerminalProfiles();
@@ -149,6 +164,8 @@ export function SessionTerminal({
   const quietWaiters = useRef(new Set<() => void>());
   const checkpointTail = useRef<Promise<void>>(Promise.resolve());
   const [error, setError] = useState<string | null>(null);
+  const [policyDenial, setPolicyDenial] = useState<TeamSshPolicyDenial | null>(null);
+  const [requestsOpen, setRequestsOpen] = useState(false);
   const [hostPrompt, setHostPrompt] = useState<Extract<PreparationEvent, { kind: "trust" }> | null>(null);
   const [commandPrompt, setCommandPrompt] = useState<Extract<PreparationEvent, { kind: "commandExecution" }> | null>(
     null,
@@ -218,6 +235,8 @@ export function SessionTerminal({
     setTransportPending(true);
     setState("connecting");
     setError(null);
+    setPolicyDenial(null);
+    setRequestsOpen(false);
     setSource({
       subscribe(onChunk, { signal }) {
         let active = true;
@@ -330,6 +349,7 @@ export function SessionTerminal({
               setAutomatic(false);
               setRetry(null);
               setError(null);
+              setPolicyDenial(null);
               void loadForwards(event.transportId);
               break;
             case "forwards":
@@ -337,6 +357,8 @@ export function SessionTerminal({
               receiveForwards(event.transportId, event.entries);
               break;
             case "retrying":
+              setPolicyDenial(null);
+              setRequestsOpen(false);
               beginForwards(null);
               clearPreparation();
               currentTransport.current = null;
@@ -359,6 +381,10 @@ export function SessionTerminal({
               setAutomatic(false);
               setRetry(null);
               setState(localEnd.current?.state ?? event.kind);
+              setPolicyDenial(
+                event.kind === "failed" && !localEnd.current ? (event.teamSshPolicyDenial ?? null) : null,
+              );
+              setRequestsOpen(false);
               setError(
                 localEnd.current?.message ??
                   (event.kind === "failed"
@@ -736,6 +762,8 @@ export function SessionTerminal({
       return;
     }
     if (!mounted.current || transportPending || retrying.current || (state !== "closed" && state !== "failed")) return;
+    setPolicyDenial(null);
+    setRequestsOpen(false);
     if (!connecting.current) {
       retrying.current = true;
       setTransportPending(true);
@@ -841,7 +869,7 @@ export function SessionTerminal({
             <h2 id={titleId} className="ui-display truncate text-base">
               {label}
             </h2>
-            {target.kind === "organization" ? (
+            {target.kind !== "personal" ? (
               <p className="m-0 break-all text-xs text-muted-foreground">
                 {t("teams.title")} · {target.source.organizationId}
               </p>
@@ -891,6 +919,15 @@ export function SessionTerminal({
           {automatic ? (
             <Button variant="ghost" onClick={() => interruptTransport(false, null)}>
               {t("session.reconnecting.stop")}
+            </Button>
+          ) : null}
+          {state === "failed" && policyDenial ? (
+            <Button
+              variant="secondary"
+              disabled={!active || closingView || transportPending}
+              onClick={() => setRequestsOpen(true)}
+            >
+              {t("teams.requests.reviewAccess")}
             </Button>
           ) : null}
           {state === "closed" || state === "failed" ? (
@@ -943,6 +980,15 @@ export function SessionTerminal({
           </Button>
         </div>
       </header>
+      {active && requestsOpen && state === "failed" && policyDenial && !closingView ? (
+        <TeamAccessRequests
+          organizationId={policyDenial.source.organizationId}
+          name={label}
+          denial={{ sessionId, target: policyDenial }}
+          onConnect={onConnect}
+          onClose={() => setRequestsOpen(false)}
+        />
+      ) : null}
       <SessionForwards
         controller={forwards}
         connected={state === "connected" && transportId !== null}
