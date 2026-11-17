@@ -3,6 +3,55 @@
 // Messages use ICU MessageFormat.
 
 export const en = {
+  "passwordChange.title": "Change account password",
+  "passwordChange.consequences":
+    "Changing your password signs out all browser sessions. Your registered desktop devices, saved data and recovery key are unchanged.",
+  "passwordChange.oldPassword": "Current account password",
+  "passwordChange.newPassword": "New account password",
+  "passwordChange.passwordHint": "Use 15–128 characters and choose a different password.",
+  "passwordChange.prepare": "Verify current password",
+  "passwordChange.submit": "Change password",
+  "passwordChange.confirm": "Check this change",
+  "passwordChange.retry": "Retry this change",
+  "passwordChange.discard": "Cancel this change",
+  "passwordChange.acknowledge": "Done",
+  "passwordChange.reload": "Reload saved change",
+  "passwordChange.loading": "Checking for an unfinished password change…",
+  "passwordChange.working": "Checking your password…",
+  "passwordChange.operation": "Change reference: {id}",
+  "passwordChange.retryAfter": "Retry is available after {time}.",
+  "passwordChange.phase.ready": "The new password is ready. Choose Change password to apply it.",
+  "passwordChange.phase.outcomeUnknown":
+    "The connection ended before the result was confirmed. Check this change before trying again. You can close Settings and return later.",
+  "passwordChange.phase.retryAvailable":
+    "The last attempt did not change your password. Retry this change or cancel it.",
+  "passwordChange.phase.signInRequired":
+    "This change has expired or cannot be completed. Cancel it, then enter your current password again.",
+  "passwordChange.phase.committed":
+    "This password change succeeded. If you changed it again later, use your most recent password. Your registered devices and saved data are unchanged.",
+  "passwordChange.error.busy": "Another account action is running. Wait for it to finish.",
+  "passwordChange.error.profileChanged": "The open account changed. Reopen its Settings before continuing.",
+  "passwordChange.error.invalidInput": "Enter valid current and new account passwords using the stated limits.",
+  "passwordChange.error.samePassword": "Choose a new password different from the current password.",
+  "passwordChange.error.verification":
+    "The password change could not be verified. Check this change before trying again.",
+  "passwordChange.error.storage": "Your local data is unavailable. Unlock it and reload the saved change.",
+  "passwordChange.error.notPrepared": "No unfinished password change was found. Reload to check its state.",
+  "passwordChange.error.outcomeUnknown": "Your password may have changed. Check this change before trying again.",
+  "passwordChange.error.signInRequired": "Cancel this change, then enter your current password again.",
+  "passwordChange.error.explicitRetryRequired":
+    "Check this change before trying again. Use Retry this change when it is available.",
+  "passwordChange.error.retryDeferred": "Wait before trying again.",
+  "passwordChange.error.cancelled": "Stopped. You can return later to check the saved change.",
+  "passwordChange.error.network":
+    "The connection ended before we could confirm the result. Check this change before trying again.",
+  "passwordChange.error.unsupportedService":
+    "This server does not support changing your password in the app. Contact its operator.",
+  "passwordChange.error.authenticationDenied":
+    "The current password could not be verified, or this change is no longer available. Check the result before starting again.",
+  "passwordChange.error.policyDenied": "The server does not permit this password change. Contact its operator.",
+  "passwordChange.error.serviceUnavailable":
+    "Your server is temporarily unavailable. Keep this change and try again when Retry is available.",
   "teams.requests.title": "Access requests",
   "teams.requests.close": "Close access requests",
   "teams.requests.reviewAccess": "Review access",

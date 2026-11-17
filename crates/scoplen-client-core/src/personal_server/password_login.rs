@@ -35,7 +35,7 @@ use crate::{
     },
 };
 
-mod exchange;
+pub(super) mod exchange;
 mod install;
 
 /// Historical admission state. Only a separately authenticated, verified installation is usable.

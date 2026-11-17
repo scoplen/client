@@ -83,6 +83,21 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	discardPasswordSignIn: (operationId: string) => typedError<null, string>(__TAURI_INVOKE("discard_password_sign_in", { operationId })),
 	/**  Install exact confirmed admission only after fresh normal Device authentication and complete K-4. */
 	installPasswordSignInProfile: (generation: string, ticket: string, operationId: string, localPassphrase: string | null) => typedError<ProfileSnapshot, string>(__TAURI_INVOKE("install_password_sign_in_profile", { generation, ticket, operationId, localPassphrase })),
+	/**  Inspect durable state without requesting options, password derivation or a session. */
+	passwordChangeStatus: () => typedError<{
+	/**  Safe next action for this original operation. */
+	phase: PasswordChangeStep,
+	/**  Stable operation identity. */
+	operationId: string,
+	/**  Bounded retry deadline as decimal Unix milliseconds. */
+	retryNotBeforeMs: string | null,
+} | null, string>(__TAURI_INVOKE("password_change_status")),
+	/**  Verify the current password and save one original replacement in the Account store. */
+	beginPasswordChange: (ticket: string, oldPassword: string, newPassword: string) => typedError<PasswordChangeView, string>(__TAURI_INVOKE("begin_password_change", { ticket, oldPassword, newPassword })),
+	/**  Submit, confirm or explicitly retry only the saved original operation. */
+	exchangePasswordChange: (ticket: string, operationId: string, intent: RegistrationIntent) => typedError<PasswordChangeView, string>(__TAURI_INVOKE("exchange_password_change", { ticket, operationId, intent })),
+	/**  Discard only never-sent/known-unchanged data, or acknowledge verified historical success. */
+	discardPasswordChange: (operationId: string) => typedError<null, string>(__TAURI_INVOKE("discard_password_change", { operationId })),
 	/**  Start a saved or temporary tunnel using the explicitly selected Login. */
 	forwardStart: (intent: ForwardStartIntent) => typedError<ForwardSnapshot, ForwardIssue>(__TAURI_INVOKE("forward_start", { intent })),
 	/**  List the current store's live runs and retained terminal snapshots. */
@@ -1890,6 +1905,29 @@ export type OpenedWorkspace = {
 	active: number | null,
 	/**  Saved starts dispatched through the ordinary forwarding owner, in order. */
 	forwards: WorkspaceForward[],
+};
+
+/**  Explicit next action, independent of the current native access session. */
+export type PasswordChangeStep =
+/**  Verified bytes are ready for explicit Submit. */
+"ready" |
+/**  Only fresh exact confirmation is available. */
+"outcomeUnknown" |
+/**  A trusted unchanged result permits explicit Retry or discard. */
+"retryAvailable" |
+/**  Discard unchanged work before verifying the current password again. */
+"signInRequired" |
+/**  Historical success; it establishes no current authority. */
+"committed";
+
+/**  Safe password-change metadata, without protected payloads or credentials. */
+export type PasswordChangeView = {
+	/**  Safe next action for this original operation. */
+	phase: PasswordChangeStep,
+	/**  Stable operation identity. */
+	operationId: string,
+	/**  Bounded retry deadline as decimal Unix milliseconds. */
+	retryNotBeforeMs: string | null,
 };
 
 /**  Explicit next action for one original Device admission. */

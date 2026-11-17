@@ -560,6 +560,24 @@ reuses another Device, or overwrites an existing local Account profile. Invitati
 invitation replacement, and device pairing have been retired.
 An unfinished old setup is preserved and cannot resume its retired entry protocol.
 
+In an installed Account, Settings -> Personal account -> Change account password
+verifies the current password, saves one encrypted replacement, then requires an
+explicit Change password action. Equivalent normalized passwords are rejected
+locally before network access or password derivation. Changing the password signs
+out browser sessions; native Devices, the Account, Personal vault and recovery key
+remain unchanged. Password inputs are cleared immediately after invoking Rust.
+Closing Settings or restarting retains an unresolved operation. An unknown result
+offers only Check this change, even when the device needs to sign in again.
+An unsubmitted change can be cancelled. Only an attempt that the server confirms
+did not change the password permits Retry this change; that attempt can also be cancelled.
+Choose Done after success. If the password was changed again later, use the most
+recent password.
+
+The disposable SQLite and PostgreSQL password-change acceptance uses this public Rust
+workflow with a Personal Host uploaded before the change, continued synchronization on
+both original Devices, and the same Host decrypted by a third Device admitted with the
+new password. See [the development guide](docs/development.md#existing-device-password-change).
+
 Rust has a separate registration preparation API with the real fixed D-127 password derivation,
 locally verified key wrappers, a mandatory saved recovery key and explicit confirmation.
 Its independent SQLCipher pending record keeps the original Device keys and signed business

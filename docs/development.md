@@ -102,6 +102,29 @@ saved flags. These tests do not establish rendered or native platform acceptance
 
 ## Disposable Personal server integration
 
+### Existing-Device password change
+
+Use a new disposable strict HTTPS deployment with registration enabled, independently
+for SQLite and PostgreSQL. The private descriptor has exactly `disposable: true`,
+`origin` (`https://localhost:<port>`), `operator_lifecycle_verified: true` and
+`ca_certificate` (an absolute PEM path). The operator supplies frozen binary evidence
+separately; the client consumes only this bounded descriptor and CA, never server source.
+
+```powershell
+$env:SCOPLEN_LIVE_PASSWORD_CHANGE_DEPLOYMENT = '<absolute descriptor path>'
+cargo test --locked -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::password_change::live_existing_device_password_change -- --exact --test-threads=1
+```
+
+The scenario registers a new Account, installs two independent native Devices and uploads
+a Personal Host before changing the password twice through the public Rust facade. Both
+original Devices continue synchronizing signed encrypted edits of that Host after each
+change, and a third Device admitted with the final password downloads the same Host.
+It rejects the old password and checks immutable provenance, unchanged roots and Device
+identities, monotone generation, continued native sessions and fresh Device authentication,
+exact confirmation without an access session, and admission into the same Account/vault. The server's
+separate acceptance owns browser logout, operator restart and cross-database transaction
+fault evidence. Passing these checks does not establish native rendered Settings acceptance.
+
 ### Password registration and independent-device sign-in
 
 Use a fresh empty disposable HTTPS deployment with Account registration enabled. The client

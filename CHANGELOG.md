@@ -4,6 +4,12 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Change the installed Account's password in Settings with the current password
+  and original Device keys. Preserve the Account, Device, ARK, recovery and vault
+  keys; sign out browser sessions while retaining native Device access. Keep exact
+  encrypted pending state through uncertain results and restart, with explicit
+  original-result confirmation, unchanged retries and historical acknowledgement.
+
 - Save and reopen each Workspace terminal's Files panel and exact remote directory
   with internal layout version four. List only after ordinary trust/authentication,
   on the terminal's new SSH connection. Keep failed paths available for Retry, Home

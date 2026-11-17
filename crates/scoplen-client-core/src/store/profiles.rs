@@ -108,6 +108,16 @@ pub(crate) fn same(a: &ProfileRecord, b: &ProfileRecord) -> bool {
 }
 
 impl Store {
+    pub(crate) fn account_profile_binding(&self) -> Result<Option<ProfileRecord>, StoreError> {
+        Ok(self
+            .conn()
+            .query_row(
+                &format!("SELECT {COLUMNS} FROM account_profile_binding WHERE singleton=1"),
+                [],
+                |row| read(row, true),
+            )
+            .optional()?)
+    }
     pub(crate) fn start_profile_catalog(&self) -> Result<(i64, Option<Uuid>), StoreError> {
         let mut conn = self.conn();
         conn.pragma_update(None, "synchronous", "FULL")?;
