@@ -333,6 +333,30 @@ impl PersonalServer {
                 .ok_or_else(|| TeamSshFailure::OperationMissing.into());
         }
         let problem = super::super::problem(&response).map_err(|_| unknown(pending.kind))?;
+        let policy_denial = if (
+            sent.kind,
+            problem.status,
+            problem.code.as_str(),
+            problem.changed,
+            problem.retryable,
+        ) == (1, 403, "policy.denied", false, false)
+        {
+            let request = CertificateIssuanceRequest::from_json(sent.payload.as_bytes())
+                .map_err(|_| unknown(1))?;
+            let CertificateTargets::Hosts(hosts) = request.targets else {
+                return Err(unknown(1));
+            };
+            let [host] = hosts.as_slice() else {
+                return Err(unknown(1));
+            };
+            Some(TeamSshPolicyDenial {
+                source: source.clone(),
+                host_id: host.to_string(),
+                remote_user: request.remote_user,
+            })
+        } else {
+            None
+        };
         let definite = match (
             sent.kind,
             problem.status,
@@ -368,6 +392,9 @@ impl PersonalServer {
         }
         if problem.code.as_str() == "organization.commit_outcome_unknown" {
             return Err(unknown(pending.kind));
+        }
+        if let Some(denial) = policy_denial {
+            return Err(denial.into());
         }
         Err(super::super::response_error(&problem)
             .map(TeamSshError::from)

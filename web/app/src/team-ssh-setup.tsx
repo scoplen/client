@@ -3,7 +3,7 @@ import { Button, Dialog, TextAreaField } from "@scoplen/ui";
 import { useEffect, useRef, useState } from "react";
 import { useProfileCommands } from "./account-profiles";
 import { useI18n } from "./i18n";
-import type { TeamSshOperationView, TeamSshSource, TeamSummary, TeamUserCaView } from "./ipc/bindings";
+import type { TeamSshError, TeamSshOperationView, TeamSshSource, TeamSummary, TeamUserCaView } from "./ipc/bindings";
 import { TeamSelect } from "./team-authoring-fields";
 
 export function TeamSshSetup({ team, onClose }: { team: TeamSummary; onClose: () => void }) {
@@ -14,7 +14,7 @@ export function TeamSshSetup({ team, onClose }: { team: TeamSummary; onClose: ()
   const [operations, setOperations] = useState<TeamSshOperationView[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(true);
-  const [failed, setFailed] = useState<string | null>(null);
+  const [failed, setFailed] = useState<TeamSshError | null>(null);
   const [reviewed, setReviewed] = useState<Set<string>>(new Set());
   const [reload, setReload] = useState(0);
   const [profile, setProfile] = useState("");
@@ -155,7 +155,7 @@ export function TeamSshSetup({ team, onClose }: { team: TeamSummary; onClose: ()
       ? "teams.ssh.revoked"
       : failed === "certificateQuotaExceeded"
         ? "teams.ssh.quotaExceeded"
-        : failed === "permissionDenied"
+        : failed === "permissionDenied" || (failed !== null && typeof failed === "object")
           ? "teams.error.accessDenied"
           : failed === "authenticationRequired" || failed === "membershipScopeRequired"
             ? "teams.error.authentication"

@@ -161,6 +161,27 @@ it.each([
   expect(commands.discardTeamSshOperation).not.toHaveBeenCalled();
 });
 
+it.each(["en", "zh-Hans"] as const)(
+  "keeps the original unknown issuance after a %s typed policy refusal",
+  async (locale) => {
+    const catalog = locale === "en" ? en : zhHans;
+    const issuance = { ...operation, kind: "certificate", phase: "unknown", hostId: "host-1", remoteUser: "deploy" };
+    commands.teamSshOperations.mockResolvedValue({ status: "ok", data: [issuance] });
+    commands.confirmTeamSshOperation.mockResolvedValue({
+      status: "error",
+      error: { source, hostId: issuance.hostId, remoteUser: issuance.remoteUser },
+    });
+    fixture(locale);
+    const confirm = await screen.findByRole("button", { name: catalog["teams.authoring.confirm"] });
+    await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(confirm);
+    expect((await screen.findByRole("alert")).textContent).toBe(catalog["teams.error.accessDenied"]);
+    expect(screen.getByRole("button", { name: catalog["teams.authoring.confirm"] })).toBeTruthy();
+    expect(commands.prepareTeamUserCa).not.toHaveBeenCalled();
+    expect(commands.discardTeamSshOperation).not.toHaveBeenCalled();
+  },
+);
+
 it("requires explicit successful refresh before archiving expired uncertainty", async () => {
   commands.teamSshOperations.mockResolvedValue({ status: "ok", data: [{ ...operation, phase: "expired" }] });
   fixture();

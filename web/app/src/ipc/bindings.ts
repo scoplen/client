@@ -2992,7 +2992,9 @@ error: string;
 /**  All five automatic attempts have been consumed. */
 exhausted: boolean;
 /**  Validated definite certificate refusal; never inferred from a message or status alone. */
-teamSshFailure: TeamSshFailure | null };
+teamSshFailure: TeamSshFailure | null;
+/**  Authenticated connection-policy denial and its original exact target. */
+teamSshPolicyDenial: TeamSshPolicyDenial | null };
 
 /**  Application-owned drag feedback; framework path-bearing drag events are never subscribed to. */
 export type SessionFileDrag = {
@@ -4141,7 +4143,9 @@ PersonalServerError |
 /**  Current team authority or resource failure. */
 TeamFailure |
 /**  Certificate or source-specific failure. */
-TeamSshFailure;
+TeamSshFailure |
+/**  An authenticated certificate policy refusal for its exact original target. */
+TeamSshPolicyDenial;
 
 /**  Fixed, content-free errors for Organization SSH preparation. */
 export type TeamSshFailure =
@@ -4211,6 +4215,16 @@ export type TeamSshOperationView = {
 	hostId: string | null,
 	/**  Ordinary SSH username; absent for CA setup. */
 	remoteUser: string | null,
+};
+
+/**  Validated certificate-policy refusal, without granting any request or connection authority. */
+export type TeamSshPolicyDenial = {
+	/**  Exact authenticated origin, Account, Organization and Device of this issuance. */
+	source: TeamSshSource,
+	/**  Single Host from the original certificate request. */
+	hostId: string,
+	/**  Exact unnormalized remote username from that same request. */
+	remoteUser: string,
 };
 
 /**  Immutable source of a team SSH intent, verified against the captured Account store. */

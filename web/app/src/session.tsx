@@ -366,7 +366,9 @@ export function SessionTerminal({
                       ? translate.current("teams.ssh.revoked")
                       : event.teamSshFailure === "certificateQuotaExceeded"
                         ? translate.current("teams.ssh.quotaExceeded")
-                        : event.error
+                        : event.teamSshPolicyDenial
+                          ? translate.current("teams.error.accessDenied")
+                          : event.error
                     : null),
               );
               break;

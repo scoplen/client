@@ -45,7 +45,7 @@ pub use teams::{
 };
 pub use teams::{
     TeamSshCertificate, TeamSshError, TeamSshFailure, TeamSshHostSetup, TeamSshOperationKind,
-    TeamSshOperationView, TeamSshSource, TeamUserCaView,
+    TeamSshOperationView, TeamSshPolicyDenial, TeamSshSource, TeamUserCaView,
 };
 
 use std::sync::Arc;
