@@ -852,7 +852,7 @@ export const zhHans: Messages = {
   "objects.credential.publicKey": "公钥",
   "objects.credential.provider": "提供方信息",
   "objects.credential.providerHint":
-    "命令取密请分行填写 type=command、path= 后接程序与参数、field=password。这里只填引用，不要填写秘密。",
+    "命令取密请分行填写 type=command、path= 后接程序与参数、field=password（密码）或 field=private_key（私钥）。这里只填引用，不要填写秘密。",
   "objects.credential.certificateScope": "组织范围",
   "objects.credential.hasSecret": "已保存秘密",
   "objects.credential.noSecret": "没有保存秘密",
