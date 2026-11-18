@@ -219,14 +219,14 @@ async fn absolute_deadline_starts_after_folder_selection_and_clears_unfinished_c
 }
 
 #[tokio::test]
-async fn whole_batch_capacity_failure_keeps_the_plan_for_one_explicit_retry() {
+async fn full_queue_refusal_retains_plan_then_one_slot_admits_the_complete_tree() {
     let root = tempfile::tempdir().unwrap();
     tokio::fs::write(root.path().join("a"), b"a").await.unwrap();
     tokio::fs::write(root.path().join("b"), b"b").await.unwrap();
     let (manager, transport, mut requests) = ready_manager();
     let id = prepare(&manager, transport, &mut requests, root.path()).await;
     let mut unknown = Vec::new();
-    for _ in 0..15 {
+    for _ in 0..16 {
         let source = session_files::open_upload_source(&root.path().join("a")).await.unwrap();
         let mut sessions = manager.sessions.lock().unwrap();
         let queue = &mut sessions.get_mut("terminal").unwrap().transfers;
@@ -268,7 +268,7 @@ async fn whole_batch_capacity_failure_keeps_the_plan_for_one_explicit_retry() {
     };
     let (result, ()) = tokio::join!(apply, validate);
     assert_eq!(result, Err(Issue::QueueFull));
-    assert_eq!(manager.transfer_queue_snapshot("terminal").unwrap().outstanding, 15);
+    assert_eq!(manager.transfer_queue_snapshot("terminal").unwrap().outstanding, 16);
     assert!(
         manager
             .sessions
@@ -298,34 +298,28 @@ async fn whole_batch_capacity_failure_keeps_the_plan_for_one_explicit_retry() {
         reply.send(Ok(plan)).ok();
     };
     let (result, ()) = tokio::join!(apply, validate);
-    let ApplyResult::Queued { items, .. } = result.unwrap() else { panic!() };
-    assert_eq!(items.len(), 2);
+    let ApplyResult::Queued { item_id, execution_id, .. } = result.unwrap() else { panic!() };
+    assert!(!item_id.is_empty());
+    assert!(!execution_id.is_empty());
     assert_eq!(manager.transfer_queue_snapshot("terminal").unwrap().outstanding, 16);
     let transfer = async {
-        for name in [b"./root/a", b"./root/b"] {
-            let FileCommand::PreflightUpload { target, reply } = requests.recv().await.unwrap()
-            else {
-                panic!()
-            };
-            assert_eq!(target, name);
-            reply
-                .send(Ok(UploadPreflight { target_attributes: None, replacement_supported: true }))
-                .ok();
-            let FileCommand::TransferUpload { reply, .. } = requests.recv().await.unwrap() else {
-                panic!()
-            };
-            reply.send(UploadExecution::Published).ok();
-        }
+        let FileCommand::SynchronizeDirectory { plan, reply, .. } = requests.recv().await.unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(plan.summary.files_create, 2);
+        reply
+            .send(session_files::directory_sync::execute::ExecutionResult {
+                issue: None,
+                staging_may_remain: false,
+            })
+            .ok();
     };
     tokio::time::timeout(Duration::from_secs(3), transfer).await.unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             let snapshot = manager.transfer_queue_snapshot("terminal").unwrap();
-            if snapshot.recent.len() == 2 {
-                assert_eq!(
-                    snapshot.recent.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
-                    ["a", "b"]
-                );
+            if snapshot.recent.len() == 1 {
                 assert!(snapshot.recent.iter().all(|row| row.state == SessionTransferState::Saved));
                 break;
             }

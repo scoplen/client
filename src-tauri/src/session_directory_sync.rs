@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Native folder selection and explicit current-directory synchronization intents.
+//! Native folder selection and explicit recursive synchronization intents.
 
 use scoplen_client_core::locale::Locale;
 use scoplen_client_core::session_directory_sync::{
@@ -54,7 +54,7 @@ pub async fn session_prepare_directory_sync(
         .await
 }
 
-/// Queue only the reviewed Create and Changed files through the existing FIFO.
+/// Admit the reviewed recursive mutations as one existing FIFO job.
 #[tauri::command]
 #[specta::specta]
 pub async fn session_apply_directory_sync(

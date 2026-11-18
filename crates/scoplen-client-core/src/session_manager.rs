@@ -165,6 +165,12 @@ enum TransportCommand {
 }
 
 enum FileCommand {
+    SynchronizeDirectory {
+        plan: Box<session_files::directory_sync::ComparedDirectory>,
+        control: watch::Receiver<TransferControl>,
+        callbacks: session_files::directory_sync::execute::Callbacks,
+        reply: oneshot::Sender<session_files::directory_sync::execute::ExecutionResult>,
+    },
     TransferDirectory {
         input: session_files::directory_copy::DirectoryCopy,
         control: watch::Receiver<TransferControl>,
@@ -2077,6 +2083,13 @@ async fn serve_files(
 ) {
     while let Some(request) = files.recv().await {
         match request {
+            FileCommand::SynchronizeDirectory { plan, control, callbacks, reply } => {
+                let result = session_files::directory_sync::execute::synchronize(
+                    connection, *plan, control, callbacks,
+                )
+                .await;
+                let _ = reply.send(result);
+            }
             FileCommand::TransferDirectory {
                 input,
                 control,

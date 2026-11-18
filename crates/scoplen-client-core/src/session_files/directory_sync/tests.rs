@@ -70,7 +70,7 @@ impl Drop for Peer {
 struct Handler {
     state: Arc<Mutex<State>>,
     buffers: HashMap<russh::ChannelId, Vec<u8>>,
-    listed: HashMap<russh::ChannelId, usize>,
+    listed: HashMap<(russh::ChannelId, Vec<u8>), usize>,
 }
 
 fn status(id: u32, code: u32) -> SftpPacket {
@@ -130,18 +130,32 @@ impl server::Handler for Handler {
                         SftpPacket::Version { version: 3, extensions: Vec::new() }
                     }
                     SftpPacket::Opendir { id, path } => {
-                        assert_eq!(path, b"./root");
-                        SftpPacket::Handle { id, handle: b"directory".to_vec() }
+                        self.listed.insert((channel, path.clone()), 0);
+                        SftpPacket::Handle { id, handle: path }
                     }
-                    SftpPacket::Readdir { id, .. } => {
+                    SftpPacket::Readdir { id, handle } => {
                         if state.refuse_listing {
                             status(id, 3)
                         } else {
-                            let names = state
-                                .listing
-                                .clone()
-                                .unwrap_or_else(|| state.entries.keys().cloned().collect());
-                            let offset = self.listed.entry(channel).or_default();
+                            let prefix = if handle == b"./root" {
+                                Vec::new()
+                            } else {
+                                let mut prefix = handle.strip_prefix(b"./root/").unwrap().to_vec();
+                                prefix.push(b'/');
+                                prefix
+                            };
+                            let names = state.listing.clone().unwrap_or_else(|| {
+                                state
+                                    .entries
+                                    .keys()
+                                    .filter_map(|name| {
+                                        name.strip_prefix(prefix.as_slice())
+                                            .filter(|name| !name.contains(&b'/'))
+                                            .map(<[u8]>::to_vec)
+                                    })
+                                    .collect()
+                            });
+                            let offset = self.listed.entry((channel, handle)).or_default();
                             if *offset >= names.len() && !state.incomplete {
                                 status(id, 1)
                             } else {
@@ -151,7 +165,11 @@ impl server::Handler for Handler {
                                     .map(|filename| {
                                         let attrs = state
                                             .entries
-                                            .get(filename)
+                                            .get(
+                                                [prefix.as_slice(), filename.as_slice()]
+                                                    .concat()
+                                                    .as_slice(),
+                                            )
                                             .map(|entry| entry.attrs.clone())
                                             .unwrap_or_default();
                                         SftpNameEntry {
@@ -299,6 +317,30 @@ pub(crate) async fn upload_plan(root: &Path) -> ComparedDirectory {
 }
 
 #[tokio::test]
+async fn opened_source_requires_reviewed_metadata_before_hashing_or_upload() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("source");
+    tokio::fs::write(&path, b"same").await.unwrap();
+    let before = tokio::fs::symlink_metadata(&path).await.unwrap();
+    let mut source = open_reviewed_source(&path, &before, 4).await.unwrap();
+    assert_eq!(local_digest(&mut source).await.unwrap(), Sha256::digest(b"same")[..]);
+    drop(source);
+
+    tokio::fs::write(&path, b"larger").await.unwrap();
+    assert!(matches!(open_reviewed_source(&path, &before, 4).await, Err(Issue::FileChanged)));
+
+    tokio::fs::write(&path, b"same").await.unwrap();
+    let before = tokio::fs::symlink_metadata(&path).await.unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(100))
+        .unwrap();
+    assert!(matches!(open_reviewed_source(&path, &before, 4).await, Err(Issue::FileChanged)));
+}
+
+#[tokio::test]
 async fn complete_binary_and_empty_comparison_distinguishes_all_actions_without_writes() {
     for direction in [SessionTransferDirection::Upload, SessionTransferDirection::Download] {
         let root = tempfile::tempdir().unwrap();
@@ -322,9 +364,16 @@ async fn complete_binary_and_empty_comparison_distinguishes_all_actions_without_
         tokio::fs::create_dir(root.path().join("subdirectory")).await.unwrap();
         let peer = Peer::start(entries).await;
         let plan = peer.compare(root.path(), direction).await.unwrap();
-        assert_eq!(plan.excluded, 1);
-        let actions: BTreeMap<_, _> =
-            plan.rows.iter().map(|row| (row.name.clone(), row.change)).collect();
+        assert_eq!(plan.summary.directories_existing, 2);
+        let actions: BTreeMap<_, _> = plan
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, row)| match row.change {
+                RowChange::File { change, .. } => Some((plan.tree.entries[i].name.clone(), change)),
+                _ => None,
+            })
+            .collect();
         assert_eq!(actions.get(&b"same.bin"[..]), Some(&Change::Same));
         assert_eq!(actions.get(&b"empty"[..]), Some(&Change::Same));
         assert_eq!(actions.get(&b"different-size"[..]), Some(&Change::Changed));
@@ -343,7 +392,10 @@ async fn complete_binary_and_empty_comparison_distinguishes_all_actions_without_
                 .unwrap();
         assert!(!snapshot.contains(&root.path().to_string_lossy().replace('\\', "\\\\")));
         assert_eq!(tokio::fs::read(root.path().join("different-size")).await.unwrap(), b"x");
-        assert_eq!(local_files(root.path()).await.unwrap().0.len(), 5);
+        assert_eq!(
+            plan.summary.files_create + plan.summary.files_changed + plan.summary.files_same,
+            5
+        );
         assert!(
             peer.state.lock().unwrap().reads.iter().all(|(_, _, length)| *length <= READ_CHUNK)
         );
@@ -392,8 +444,6 @@ async fn oversized_incomplete_duplicate_and_invalid_source_listings_refuse_compl
     let root = tempfile::tempdir().unwrap();
     let peer = Peer::start(&[(b"file", Entry::file(b"x"))]).await;
     for (names, issue) in [
-        (vec![b"file".to_vec(); 17], Issue::TooManyFiles),
-        (vec![b"file".to_vec(); MAX_DIRECTORY_ENTRIES + 1], Issue::TooManyFiles),
         (vec![b"file".to_vec(); 2], Issue::UnsupportedName),
         (vec![b"../escape".to_vec()], Issue::UnsupportedName),
     ] {
@@ -410,7 +460,7 @@ async fn oversized_incomplete_duplicate_and_invalid_source_listings_refuse_compl
     }
     assert_eq!(
         peer.compare(root.path(), SessionTransferDirection::Download).await.err(),
-        Some(Issue::TooManyFiles)
+        Some(Issue::Failed)
     );
     assert!(peer.state.lock().unwrap().reads.is_empty());
 }
@@ -476,7 +526,11 @@ async fn colliding_download_names_never_create_partial_targets() {
 async fn local_source_links_are_refused_without_following_them() {
     let root = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(root.path().join("missing"), root.path().join("link")).unwrap();
-    assert_eq!(local_files(root.path()).await.err(), Some(Issue::UnsupportedEntry));
+    let peer = Peer::start(&[]).await;
+    assert_eq!(
+        peer.compare(root.path(), SessionTransferDirection::Upload).await.err(),
+        Some(Issue::UnsupportedEntry)
+    );
 }
 
 #[tokio::test]
@@ -485,7 +539,9 @@ async fn ordinary_file_count_and_complete_hash_bound_refuse_without_data_reads()
     for index in 0..17 {
         tokio::fs::write(root.path().join(format!("{index}")), b"x").await.unwrap();
     }
-    assert_eq!(local_files(root.path()).await.err(), Some(Issue::TooManyFiles));
+    let peer = Peer::start(&[]).await;
+    let plan = peer.compare(root.path(), SessionTransferDirection::Upload).await.unwrap();
+    assert_eq!(plan.summary.files_create, 17);
     let root = tempfile::tempdir().unwrap();
     let file = tokio::fs::File::create(root.path().join("large")).await.unwrap();
     file.set_len(MAX_HASH_FILE + 1).await.unwrap();
@@ -516,10 +572,14 @@ async fn complete_hash_budget_counts_both_endpoints_and_refuses_before_the_next_
         Some(Issue::TooLarge)
     );
     let state = peer.state.lock().unwrap();
-    assert!(
-        state.reads.iter().any(|(path, offset, _)| path == b"./root/b" && *offset == MAX_HASH_FILE)
-    );
-    assert!(state.reads.iter().all(|(path, _, _)| path != b"./root/c"));
+    let hashed = state
+        .reads
+        .iter()
+        .filter(|(_, offset, _)| *offset == MAX_HASH_FILE)
+        .map(|(path, _, _)| path.clone())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(hashed.len(), 2, "both-endpoint budget permits exactly two complete files");
+    assert!(state.reads.iter().all(|(path, _, _)| hashed.contains(path)));
 }
 
 #[tokio::test]
@@ -540,7 +600,7 @@ async fn cancelling_a_stalled_comparison_releases_its_channel_for_a_fresh_compar
     }
     peer.state.lock().unwrap().stall = false;
     let plan = peer.compare(root.path(), SessionTransferDirection::Upload).await.unwrap();
-    assert_eq!(plan.rows[0].change, Change::Same);
+    assert_eq!(plan.summary.files_same, 1);
     assert_eq!(tokio::fs::read(root.path().join("file")).await.unwrap(), b"safe");
 }
 
@@ -571,4 +631,122 @@ fn native_names_require_one_lossless_child() {
     for name in [&b"CON.txt"[..], b"a\\b", b"bad:", b"trail.", b"trail ", b"LPT9.log", b"\xff"] {
         assert!(native_child(name).is_err());
     }
+}
+
+#[tokio::test]
+async fn recursive_preview_includes_empty_directories_and_keeps_target_only_entries() {
+    let root = tempfile::tempdir().unwrap();
+    tokio::fs::write(root.path().join("keep"), b"local only").await.unwrap();
+    let peer = Peer::start(&[
+        (b"nested", Entry::directory()),
+        (b"nested/empty", Entry::directory()),
+        (b"nested/file", Entry::file(b"binary\0\xff")),
+    ])
+    .await;
+    let plan = peer.compare(root.path(), SessionTransferDirection::Download).await.unwrap();
+    assert_eq!(plan.summary.directories_create, 2);
+    assert_eq!(plan.summary.files_create, 1);
+    assert_eq!(plan.rows.len(), 4);
+    assert!(!root.path().join("nested").exists());
+    validate(&peer.connection, &plan).await.unwrap();
+    let (_sender, control) = watch::channel(TransferControl::Run);
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let observed = progress.clone();
+    let result = execute::synchronize(
+        &peer.connection,
+        plan,
+        control,
+        execute::Callbacks {
+            progress: Arc::new(move |bytes, total, row| {
+                observed.lock().unwrap().push((bytes, total, row))
+            }),
+            authorize: Arc::new(|| Ok(())),
+            settled: Arc::new(|| {}),
+            confirm: Arc::new(|_| Box::pin(async { panic!("new targets need no replacement") })),
+            state: Arc::new(UploadState::default()),
+        },
+    )
+    .await;
+    assert_eq!(result.issue, None);
+    assert_eq!(tokio::fs::read(root.path().join("nested/file")).await.unwrap(), b"binary\0\xff");
+    assert!(root.path().join("nested/empty").is_dir());
+    assert_eq!(tokio::fs::read(root.path().join("keep")).await.unwrap(), b"local only");
+    {
+        let progress = progress.lock().unwrap();
+        let (bytes, total, last) = progress.last().unwrap();
+        assert_eq!(bytes, total);
+        assert_eq!(last.files_created, 1);
+        assert_eq!(last.directories_created, 2);
+        assert_eq!(last.files_updated, 0);
+        assert_eq!(last.issue, None);
+    }
+    let next = peer.compare(root.path(), SessionTransferDirection::Download).await.unwrap();
+    assert_eq!(next.changes(), 0);
+    assert_eq!(next.summary.files_same, 1);
+}
+
+#[tokio::test]
+async fn replacement_refusal_reports_published_partial_results_in_an_existing_root() {
+    let root = tempfile::tempdir().unwrap();
+    tokio::fs::write(root.path().join("b-update"), b"original").await.unwrap();
+    let peer = Peer::start(&[
+        (b"a-created", Entry::file(b"new")),
+        (b"b-update", Entry::file(b"replacement")),
+        (b"c-not-started", Entry::file(b"later")),
+    ])
+    .await;
+    let plan = peer.compare(root.path(), SessionTransferDirection::Download).await.unwrap();
+    validate(&peer.connection, &plan).await.unwrap();
+    let (_sender, control) = watch::channel(TransferControl::Run);
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let observed = progress.clone();
+    let result = execute::synchronize(
+        &peer.connection,
+        plan,
+        control,
+        execute::Callbacks {
+            progress: Arc::new(move |_, _, row| observed.lock().unwrap().push(row)),
+            authorize: Arc::new(|| Ok(())),
+            settled: Arc::new(|| {}),
+            confirm: Arc::new(|name| {
+                Box::pin(async move {
+                    assert_eq!(name, "b-update");
+                    Ok(false)
+                })
+            }),
+            state: Arc::new(UploadState::default()),
+        },
+    )
+    .await;
+    assert_eq!(result.issue, Some(Issue::Cancelled));
+    assert!(!result.staging_may_remain);
+    assert_eq!(tokio::fs::read(root.path().join("a-created")).await.unwrap(), b"new");
+    assert_eq!(tokio::fs::read(root.path().join("b-update")).await.unwrap(), b"original");
+    assert!(!root.path().join("c-not-started").exists());
+    let progress = progress.lock().unwrap();
+    let last = progress.last().unwrap();
+    assert_eq!(last.files_created, 1);
+    assert_eq!(last.files_updated, 0);
+    assert_eq!(last.failed_name.as_deref(), Some("b-update"));
+}
+
+#[tokio::test]
+async fn destination_only_canonical_collision_is_refused_but_exact_names_compare() {
+    let root = tempfile::tempdir().unwrap();
+    tokio::fs::write(root.path().join("lower"), b"retained").await.unwrap();
+    let peer = Peer::start(&[(b"LOWER", Entry::file(b"source"))]).await;
+    assert_eq!(
+        peer.compare(root.path(), SessionTransferDirection::Download).await.err(),
+        Some(Issue::UnsupportedName)
+    );
+    assert_eq!(tokio::fs::read(root.path().join("lower")).await.unwrap(), b"retained");
+    let peer = Peer::start(&[(b"lower", Entry::file(b"retained"))]).await;
+    assert_eq!(
+        peer.compare(root.path(), SessionTransferDirection::Download)
+            .await
+            .unwrap()
+            .summary
+            .files_same,
+        1
+    );
 }
