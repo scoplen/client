@@ -516,20 +516,40 @@ or closing the session never deletes your local copy or closes the external edit
 A replacement connection does not inherit upload authority. Native editor and picker
 interaction on each platform remain separate acceptance.
 
-Choose Compare folder files in the Files toolbar to compare the current remote directory
+Choose Compare folders in the Files toolbar to compare the current remote directory
 with an existing local folder. Choose upload or download, select the local folder, then
-review Create, Changed and Same before Apply. This first profile processes at most sixteen
-ordinary source files directly in that folder; the preview reports excluded subfolders.
-Content-identical files are skipped, and target-only files stay unchanged.
-Download names must be valid UTF-8; potentially equivalent native names refuse the entire
-comparison without renaming files, including on a case-sensitive destination. Equal-size
-contents use complete streaming comparison, with a 64 MiB per-file hash limit, 256 MiB total
-read budget and a 120-second comparison deadline after folder selection. Comparison writes
-nothing. Apply requires capacity for the entire changed batch, then each transfer uses the
-normal confirmation, cancellation and result rules. Files finish separately. A changed
-preview requires comparison again; an uncertain Apply requires reviewing the transfer queue.
-Local files remain outside encrypted application storage. Native folder-picker and rendered
-Windows/macOS interaction remain separate acceptance.
+review the complete relative tree before Apply. Both roots already exist. Comparison
+includes nested and empty folders; files show Create, Changed or Same, and folders show
+Create or Existing. Content-identical files are skipped regardless of timestamps.
+Target-only files and folders stay unchanged.
+
+The complete source tree has limits of 10,000 entries including the root, depth 32,
+16 MiB retained comparison metadata and 4096-byte remote paths. Complete enumeration
+supports flat directories beyond the browser's 1,024-entry display limit. Links, special
+entries, type conflicts, incomplete listings and unsafe corresponding targets refuse the
+whole comparison. Download names must be valid UTF-8; potentially equivalent native names
+refuse comparison without renaming files, including conflicts with different existing
+target names on a case-sensitive destination.
+
+Equal-size files use complete streaming content comparison, with a 64 MiB per-file hash
+limit, 256 MiB total read budget and one 120-second scan/comparison deadline after folder
+selection. These hash limits do not cap ordinary transfers of missing or different-size
+files. Comparison writes nothing. Apply rechecks the complete source membership and every
+reviewed row, including Same files and Existing folders, within its own 120-second deadline.
+A changed preview requires comparison again.
+
+Apply admits one FIFO job for the whole tree and requires one free queue slot. A tree
+containing only Same files and Existing folders uses no slot; creating an empty child
+folder still requires a job. Missing parents are created before children. Each replacement
+uses a fresh ordinary confirmation; declining stops the job and preserves earlier completed
+changes. Progress reports confirmed created folders, created/updated/skipped files, bytes
+and the current or first failed relative name. Saved means every planned change completed.
+Failure, cancellation or an uncertain mutation preserves completed and target-only data.
+Review an unknown result before another explicit attempt; an uncertain Apply reply requires
+reviewing the queue without replay. Synchronization has no rollback, automatic retry,
+background watch, deletion or directory-wide Pause/Resume. Local files remain outside encrypted
+application storage. Native folder-picker and rendered Windows/macOS interaction remain
+separate acceptance.
 
 Upload folder copies a native-selected source folder into a new root in the current remote
 directory. A remote folder's Download folder action selects a native destination parent.
@@ -1100,7 +1120,14 @@ transfer progress and finalization, including a failed local save after all byte
 arrive, on the same authenticated connection, plus folder creation, file rename
 and collision handling, delete-confirmation outcomes, empty-directory deletion,
 cancellation and failure recovery while terminal input and resizing remain available. It requires
-PowerShell 7 and Docker, and removes its container and temporary files afterward.
+PowerShell 7 and Docker. The same journey checks recursive comparison and one-job Apply in
+both directions between existing roots, genuine Same skipping, empty directories, complete
+1,025-file enumeration, preserved target-only data, name/type/link refusals and partial
+replacement cancellation. A separate connection passes requests to the real OpenSSH SFTP
+server and withholds only its second successful mkdir reply to check confirmed partial
+counts, an Unknown reminder, remote data and explicit acknowledgement without replay.
+Successful runs remove owned containers and temporary files. Failed runs stop their owned
+container and retain private diagnostics.
 
 On macOS, `scripts/check-offline.sh target/release/bundle/macos/Scoplen.app` verifies that a built application makes no network connection while sync is disabled.
 
