@@ -191,7 +191,7 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	sessionEditorStop: (sessionId: string, editorId: string) => typedError<null, SessionEditorIssue>(__TAURI_INVOKE("session_editor_stop", { sessionId, editorId })),
 	/**  Select an ordinary local folder and compare contents without writing files. */
 	sessionPrepareDirectorySync: (sessionId: string, transportId: string, operationId: string, remotePath: number[], direction: SessionTransferDirection, locale: Locale) => typedError<SessionDirectorySyncPrepareResult, SessionDirectorySyncIssue>(__TAURI_INVOKE("session_prepare_directory_sync", { sessionId, transportId, operationId, remotePath, direction, locale })),
-	/**  Queue only the reviewed Create and Changed files through the existing FIFO. */
+	/**  Admit the reviewed recursive mutations as one existing FIFO job. */
 	sessionApplyDirectorySync: (sessionId: string, transportId: string, planId: string, locale: Locale) => typedError<SessionDirectorySyncApplyResult, SessionDirectorySyncIssue>(__TAURI_INVOKE("session_apply_directory_sync", { sessionId, transportId, planId, locale })),
 	/**  Discard one unapplied comparison without changing admitted queue rows. */
 	sessionDiscardDirectorySync: (sessionId: string, planId: string) => typedError<null, SessionDirectorySyncIssue>(__TAURI_INVOKE("session_discard_directory_sync", { sessionId, planId })),
@@ -2886,9 +2886,11 @@ export type SessionDirectorySyncApplyResult =
 { kind: "queued";
 /**  Captured queue lifetime. */
 queueId: string;
-/**  Initial FIFO admission order. */
-items: SessionDirectorySyncItem[] } |
-/**  Every source was Same or there were no ordinary source files. */
+/**  One stable queue item for the complete reviewed tree. */
+itemId: string;
+/**  Exact initial execution. */
+executionId: string } |
+/**  Every source file was Same and every directory was Existing. */
 { kind: "unchanged" };
 
 /**  Content comparison of one source file with its destination. */
@@ -2900,17 +2902,31 @@ export type SessionDirectorySyncChange =
 /**  Complete contents match and will be skipped. */
 "same";
 
-/**  One bounded filename and its comparison result. */
-export type SessionDirectorySyncEntry = {
-	/**  Safe source basename; never used to reconstruct a target. */
-	name: string,
-	/**  Planned action or genuine content equality. */
-	change: SessionDirectorySyncChange,
-	/**  Decimal source length. */
-	sourceSizeBytes: string,
-	/**  Decimal destination length, or absence. */
-	targetSizeBytes: string | null,
-};
+/**  A corresponding directory is either present or explicitly planned for creation. */
+export type SessionDirectorySyncDirectoryChange =
+/**  This ordinary directory must be created. */
+"create" |
+/**  This ordinary directory already exists. */
+"existing";
+
+/**  One bounded relative display name and its comparison result. */
+export type SessionDirectorySyncEntry =
+/**  One ordinary source file. */
+{ kind: "file";
+/**  Safe relative name, never used to reconstruct a path. */
+name: string;
+/**  Planned action or genuine complete-content equality. */
+change: SessionDirectorySyncChange;
+/**  Decimal source length. */
+sourceSizeBytes: string;
+/**  Decimal destination length, or absence. */
+targetSizeBytes: string | null } |
+/**  An ordinary directory, including the existing root displayed as a dot. */
+{ kind: "directory";
+/**  Safe relative name, never used to reconstruct a path. */
+name: string;
+/**  Whether explicit creation is required. */
+change: SessionDirectorySyncDirectoryChange };
 
 /**  Fixed operational categories without native paths, contents or digests. */
 export type SessionDirectorySyncIssue =
@@ -2922,8 +2938,12 @@ export type SessionDirectorySyncIssue =
 "unsupportedEntry" |
 /**  A name cannot map losslessly or conflicts with another destination. */
 "unsupportedName" |
-/**  The source-file count or complete directory listing exceeded its bound. */
-"tooManyFiles" |
+/**  The complete tree exceeds its entry count. */
+"tooManyEntries" |
+/**  The complete tree exceeds its depth bound. */
+"tooDeep" |
+/**  Retained comparison metadata exceeds its bound. */
+"tooMuchMetadata" |
 /**  Complete hashing exceeded its per-file or total byte bound. */
 "tooLarge" |
 /**  The absolute comparison or an existing request deadline expired. */
@@ -2939,15 +2959,18 @@ export type SessionDirectorySyncIssue =
 /**  The SSH server refused an operation. */
 "remoteDenied" |
 /**  The comparison could not complete. */
-"failed";
+"failed" |
+/**  Cleanup of the current owned staging file could not be confirmed. */
+"cleanupIncomplete" |
+/**  A dispatched mutation or publication has an unknown result. */
+"publicationUnknown";
 
-/**  One admitted execution remains owned by the existing transfer queue. */
-export type SessionDirectorySyncItem = {
-	/**  Stable queue item. */
-	itemId: string,
-	/**  Exact initial execution. */
-	executionId: string,
-};
+/**  Phase of an admitted synchronization job. */
+export type SessionDirectorySyncPhase =
+/**  Creating directories or transferring ordinary files. */
+"copying" |
+/**  Verifying and publishing the current ordinary file. */
+"finalizing";
 
 /**  A read-only observation whose native resources remain in Rust. */
 export type SessionDirectorySyncPlan = {
@@ -2963,10 +2986,10 @@ export type SessionDirectorySyncPlan = {
 	remoteName: string,
 	/**  Safe selected local directory basename. */
 	localName: string,
-	/**  At most sixteen ordinary source files. */
+	/**  Complete bounded file and directory rows, including the existing root. */
 	entries: SessionDirectorySyncEntry[],
-	/**  Source subdirectories deliberately excluded from this shallow profile. */
-	excludedDirectories: number,
+	/**  Complete counts of planned actions. */
+	summary: SessionDirectorySyncSummary,
 };
 
 /**  Native folder selection either produced a complete plan or was cancelled. */
@@ -2977,6 +3000,46 @@ export type SessionDirectorySyncPrepareResult =
 plan: SessionDirectorySyncPlan } |
 /**  The native folder picker was closed. */
 { kind: "cancelled" };
+
+/**  Incremental results remain meaningful when the destination root already existed. */
+export type SessionDirectorySyncProgress = {
+	/**  Current child phase, which never implies whole-job completion. */
+	phase: SessionDirectorySyncPhase,
+	/**  Planned Create and Changed files. */
+	filesTotal: number,
+	/**  Planned directory creations. */
+	directoriesTotal: number,
+	/**  Confirmed new file publications. */
+	filesCreated: number,
+	/**  Confirmed replacement publications. */
+	filesUpdated: number,
+	/**  Same files verified by successful Apply. */
+	filesSkipped: number,
+	/**  Confirmed directory creations. */
+	directoriesCreated: number,
+	/**  Safe bounded relative name of the current row. */
+	currentName: string | null,
+	/**  Safe bounded relative name where execution first stopped. */
+	failedName: string | null,
+	/**  Fixed localized failure category. */
+	issue: SessionDirectorySyncIssue | null,
+};
+
+/**  Complete counts for one bounded recursive comparison. */
+export type SessionDirectorySyncSummary = {
+	/**  Missing ordinary files. */
+	filesCreate: number,
+	/**  Existing ordinary files with different contents. */
+	filesChanged: number,
+	/**  Files whose complete contents match. */
+	filesSame: number,
+	/**  Missing directories, including empty children. */
+	directoriesCreate: number,
+	/**  Existing ordinary directories, including the root. */
+	directoriesExisting: number,
+	/**  Source bytes requiring transfer, as unsigned decimal text. */
+	transferSizeBytes: string,
+};
 
 /**  Fixed operational categories without paths, contents or native errors. */
 export type SessionEditorIssue =
@@ -3313,6 +3376,8 @@ export type SessionTransferItem = {
 	stagingMayRemain: boolean,
 	/**  Whole-tree progress, or None for an ordinary file transfer. */
 	directoryCopy: SessionDirectoryCopyProgress | null,
+	/**  Incremental synchronization progress and partial results. */
+	directorySync: SessionDirectorySyncProgress | null,
 };
 
 /**  A complete on-demand snapshot of one logical session's transfer queue. */

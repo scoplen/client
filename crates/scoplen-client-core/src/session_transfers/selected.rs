@@ -2,6 +2,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::session_files::directory_copy::DirectoryCopy;
 use crate::session_files::{DownloadCheckpoint, UploadCheckpoint, UploadSource};
@@ -15,9 +16,21 @@ pub(crate) type ReplaceConfirmation = Box<
         + Send,
 >;
 
+pub(crate) type RepeatedConfirmation = Arc<
+    dyn Fn(
+            SessionTransferReview,
+        ) -> Pin<Box<dyn Future<Output = Result<bool, SessionTransferIssue>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Selected handles, paths and native interaction callbacks are never IPC data.
 pub(crate) enum SelectedTransfer {
     Directory(DirectoryCopy),
+    DirectorySync {
+        plan: Box<crate::session_files::directory_sync::ComparedDirectory>,
+        confirm: RepeatedConfirmation,
+    },
     Upload {
         source: UploadSource,
         directory: Vec<u8>,
