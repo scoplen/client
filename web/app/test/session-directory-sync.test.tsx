@@ -46,11 +46,20 @@ function plan(changes: Partial<SessionDirectorySyncPlan> = {}): SessionDirectory
     direction: "upload",
     remoteName: "./config",
     localName: "config",
-    excludedDirectories: 2,
+    summary: {
+      filesCreate: 1,
+      filesChanged: 1,
+      filesSame: 1,
+      directoriesCreate: 0,
+      directoriesExisting: 2,
+      transferSizeBytes: "12",
+    },
     entries: [
-      { name: "new.conf", change: "create", sourceSizeBytes: "4", targetSizeBytes: null },
-      { name: "changed.conf", change: "changed", sourceSizeBytes: "8", targetSizeBytes: "8" },
-      { name: "same.conf", change: "same", sourceSizeBytes: "0", targetSizeBytes: "0" },
+      { kind: "directory", name: ".", change: "existing" },
+      { kind: "directory", name: "config", change: "existing" },
+      { kind: "file", name: "config/new.conf", change: "create", sourceSizeBytes: "4", targetSizeBytes: null },
+      { kind: "file", name: "changed.conf", change: "changed", sourceSizeBytes: "8", targetSizeBytes: "8" },
+      { kind: "file", name: "same.conf", change: "same", sourceSizeBytes: "0", targetSizeBytes: "0" },
     ],
     ...changes,
   };
@@ -100,10 +109,8 @@ beforeEach(() => {
     data: {
       kind: "queued",
       queueId: "queue-1",
-      items: [
-        { itemId: "item-1", executionId: "execution-1" },
-        { itemId: "item-2", executionId: "execution-2" },
-      ],
+      itemId: "item-1",
+      executionId: "execution-1",
     },
   });
   api.discard.mockReset().mockResolvedValue({ status: "ok", data: null });
@@ -113,10 +120,10 @@ beforeEach(() => {
 afterEach(() => clearMocks());
 
 async function open() {
-  const button = await screen.findByRole("button", { name: "Compare folder files" });
+  const button = await screen.findByRole("button", { name: "Compare folders" });
   await waitFor(() => expect(button).toHaveProperty("disabled", false));
   await userEvent.click(button);
-  return screen.findByRole("dialog", { name: "Compare folder files" });
+  return screen.findByRole("dialog", { name: "Compare folders" });
 }
 
 async function compare(direction: "upload" | "download" = "upload") {
@@ -126,19 +133,19 @@ async function compare(direction: "upload" | "download" = "upload") {
       name: direction === "upload" ? "Compare for upload" : "Compare for download",
     }),
   );
-  await screen.findByRole("list", { name: "Compared files" });
+  await screen.findByRole("list", { name: "Compared folder contents" });
   return dialog;
 }
 
-it("discloses the current-layer scope and selects a direction before native comparison", async () => {
+it("discloses recursive scope and selects a direction before native comparison", async () => {
   render(view());
   const dialog = await open();
-  expect(within(dialog).getByText(/up to 16 ordinary source files/)).toBeTruthy();
+  expect(within(dialog).getByText(/Includes all subfolders and empty folders/)).toBeTruthy();
   expect(within(dialog).getByText(/outside Scoplen's encrypted storage/)).toBeTruthy();
   expect(api.prepare).not.toHaveBeenCalled();
   expect(api.apply).not.toHaveBeenCalled();
   await userEvent.click(within(dialog).getByRole("button", { name: "Compare for download" }));
-  await screen.findByRole("list", { name: "Compared files" });
+  await screen.findByRole("list", { name: "Compared folder contents" });
   expect(api.prepare).toHaveBeenCalledExactlyOnceWith(
     "session-1",
     "transport-1",
@@ -157,11 +164,15 @@ it("shows Create, Changed and Same without writing and explicitly queues only th
   expect(screen.getByText("Create")).toBeTruthy();
   expect(screen.getByText("Changed")).toBeTruthy();
   expect(screen.getByText("Same — skip")).toBeTruthy();
-  expect(screen.getByText("2 subfolders are excluded.")).toBeTruthy();
+  expect(screen.getByText("config/new.conf")).toBeTruthy();
+  expect(
+    screen.getByText(/Files to create: 1 · Files to update: 1 · Same files: 1 · Folders to create: 0/),
+  ).toBeTruthy();
+  expect(screen.getAllByText("Already exists")).toHaveLength(2);
   expect(api.apply).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "Apply 2 changes" }));
   expect(api.apply).toHaveBeenCalledExactlyOnceWith("session-1", "transport-1", "plan-1", "en");
-  await screen.findByText("2 files were added to the transfer queue.");
+  await screen.findByText("Folder synchronization was added to the transfer queue.");
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(api.discard).not.toHaveBeenCalled();
 });
@@ -172,26 +183,99 @@ it.each(["same", "empty"])("%s input cannot request zero-slot admission", async 
     data: {
       kind: "prepared",
       plan: plan({
-        entries: kind === "empty" ? [] : [plan().entries[2]!],
+        entries: kind === "empty" ? [plan().entries[0]!] : [plan().entries[0]!, plan().entries[4]!],
+        summary: {
+          filesCreate: 0,
+          filesChanged: 0,
+          filesSame: kind === "empty" ? 0 : 1,
+          directoriesCreate: 0,
+          directoriesExisting: 1,
+          transferSizeBytes: "0",
+        },
       }),
     },
   });
   render(view());
   const dialog = await open();
   await userEvent.click(within(dialog).getByRole("button", { name: "Compare for upload" }));
-  await screen.findByText(
-    kind === "empty" ? /No ordinary files in this source folder/ : /All source files have matching contents/,
-  );
+  await screen.findByText(/All files match and all folders already exist/);
   expect(screen.getByRole("button", { name: "Apply 0 changes" })).toHaveProperty("disabled", true);
   expect(api.apply).not.toHaveBeenCalled();
 });
 
-it("waits for capacity for the complete batch without automatically retrying", async () => {
-  const rendered = render(view({ transfers: { ...queue, outstanding: 15 } }));
+it("queues a missing empty folder even when no file needs transferring", async () => {
+  api.prepare.mockResolvedValueOnce({
+    status: "ok",
+    data: {
+      kind: "prepared",
+      plan: plan({
+        entries: [plan().entries[0]!, { kind: "directory", name: "nested/empty", change: "create" }],
+        summary: {
+          filesCreate: 0,
+          filesChanged: 0,
+          filesSame: 0,
+          directoriesCreate: 1,
+          directoriesExisting: 1,
+          transferSizeBytes: "0",
+        },
+      }),
+    },
+  });
+  render(view({ transfers: { ...queue, outstanding: 15 } }));
   await compare();
-  expect(screen.getByText("This batch needs 2 free transfer slots. Available: 1.")).toBeTruthy();
+  expect(screen.getByText("nested/empty")).toBeTruthy();
+  expect(screen.queryByText(/All files match/)).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Apply 1 change" }));
+  expect(api.apply).toHaveBeenCalledExactlyOnceWith("session-1", "transport-1", "plan-1", "en");
+  await screen.findByText("Folder synchronization was added to the transfer queue.");
+});
+
+it("shows every row of a larger recursive plan while requiring only one queue slot", async () => {
+  api.prepare.mockResolvedValueOnce({
+    status: "ok",
+    data: {
+      kind: "prepared",
+      plan: plan({
+        entries: [
+          plan().entries[0]!,
+          { kind: "directory", name: "nested", change: "create" },
+          ...Array.from({ length: 25 }, (_, index) => ({
+            kind: "file" as const,
+            name: `nested/file-${index}.bin`,
+            change: "create" as const,
+            sourceSizeBytes: "4",
+            targetSizeBytes: null,
+          })),
+        ],
+        summary: {
+          filesCreate: 25,
+          filesChanged: 0,
+          filesSame: 0,
+          directoriesCreate: 1,
+          directoriesExisting: 1,
+          transferSizeBytes: "100",
+        },
+      }),
+    },
+  });
+  render(view({ transfers: { ...queue, outstanding: 15 } }));
+  await compare();
+  expect(within(screen.getByRole("list", { name: "Compared folder contents" })).getAllByRole("listitem")).toHaveLength(
+    27,
+  );
+  expect(screen.getByRole("button", { name: "Apply 26 changes" })).toHaveProperty("disabled", false);
+  expect(api.apply).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Apply 26 changes" }));
+  expect(api.apply).toHaveBeenCalledTimes(1);
+  await screen.findByText("Folder synchronization was added to the transfer queue.");
+});
+
+it("requires one slot for the whole tree without automatically retrying", async () => {
+  const rendered = render(view({ transfers: { ...queue, outstanding: 16 } }));
+  await compare();
+  expect(screen.getByText(/Folder synchronization needs one free transfer slot/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "Apply 2 changes" })).toHaveProperty("disabled", true);
-  rendered.rerender(view());
+  rendered.rerender(view({ transfers: { ...queue, outstanding: 15 } }));
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "Apply 2 changes" })).toHaveProperty("disabled", false),
   );
@@ -205,7 +289,7 @@ it("a full-queue rejection keeps explicit retry available without a second invoc
   render(view());
   await compare();
   await userEvent.click(screen.getByRole("button", { name: "Apply 2 changes" }));
-  await screen.findByText(/No files were queued. The complete batch needs/);
+  await screen.findByText(/Nothing was queued. Folder synchronization needs one free transfer slot/);
   expect(api.apply).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("button", { name: "Apply 2 changes" })).toHaveProperty("disabled", false);
 });
@@ -215,7 +299,7 @@ it("changed metadata requires a new comparison and cannot reuse its plan", async
   render(view());
   await compare();
   await userEvent.click(screen.getByRole("button", { name: "Apply 2 changes" }));
-  await screen.findByText(/The folder contents or a reviewed file changed/);
+  await screen.findByText(/The reviewed source or destination changed/);
   expect(api.discard).toHaveBeenCalledExactlyOnceWith("session-1", "plan-1");
   expect(screen.queryByRole("button", { name: "Apply 2 changes" })).toBeNull();
   expect(api.prepare).toHaveBeenCalledTimes(1);
@@ -228,9 +312,7 @@ it("closing an unapplied preview discards it and restores keyboard focus", async
   await userEvent.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(api.discard).toHaveBeenCalledExactlyOnceWith("session-1", "plan-1");
-  await waitFor(() =>
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Compare folder files" })),
-  );
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Compare folders" })));
   expect(api.apply).not.toHaveBeenCalled();
 });
 
@@ -267,7 +349,7 @@ it("a mismatched plan is discarded without enabling Apply", async () => {
   await userEvent.click(within(dialog).getByRole("button", { name: "Compare for upload" }));
   await screen.findByText(/This connection is unavailable/);
   expect(api.discard).toHaveBeenCalledExactlyOnceWith("session-1", "plan-1");
-  expect(screen.queryByRole("list", { name: "Compared files" })).toBeNull();
+  expect(screen.queryByRole("list", { name: "Compared folder contents" })).toBeNull();
 });
 
 it("one pending Apply prevents duplicate batch admission", async () => {
@@ -298,7 +380,7 @@ it("native cancellation permits another explicit selection without queueing", as
   render(view());
   const dialog = await open();
   await userEvent.click(within(dialog).getByRole("button", { name: "Compare for upload" }));
-  await screen.findByText("Comparison was cancelled. No files were queued.");
+  await screen.findByText("The operation was cancelled. Check the queue for any completed changes.");
   expect(screen.getByRole("button", { name: "Compare for download" })).toBeTruthy();
   expect(api.apply).not.toHaveBeenCalled();
 });
@@ -316,13 +398,13 @@ it("shows fixed comparison failures without native exception details", async () 
 
 it("keeps Chinese direction, scope and change labels consistent", async () => {
   render(view({ locale: "zh-Hans" }));
-  const button = await screen.findByRole("button", { name: "比较文件夹内文件" });
+  const button = await screen.findByRole("button", { name: "比较文件夹" });
   await waitFor(() => expect(button).toHaveProperty("disabled", false));
   await userEvent.click(button);
   await userEvent.click(screen.getByRole("button", { name: "比较要下载的文件" }));
   expect(await screen.findByText("下载：远端文件夹 → 本地文件夹")).toBeTruthy();
   expect(screen.getByText("相同，跳过")).toBeTruthy();
-  expect(screen.getByText("已排除 2 个子文件夹。")).toBeTruthy();
+  expect(screen.getByText(/待新建文件：1 · 待更新文件：1 · 相同文件：1 · 待创建文件夹：0/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "应用 2 项变化" })).toBeTruthy();
   expect(api.prepare.mock.calls[0]![5]).toBe("zh-Hans");
   expect(api.apply).not.toHaveBeenCalled();

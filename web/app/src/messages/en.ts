@@ -736,7 +736,7 @@ export const en = {
   "session.files.drop.invalid":
     "No files were added. Drop 1–16 ordinary files into this directory list, or choose Upload file.",
   "session.files.download": "Download {name}",
-  "session.directorySync.action": "Compare folder files",
+  "session.directorySync.action": "Compare folders",
   "session.directoryCopy.upload": "Upload folder",
   "session.directoryCopy.download": "Download folder {name}",
   "session.directoryCopy.title.upload": "Upload folder",
@@ -801,41 +801,52 @@ export const en = {
     "A folder or file save could not be confirmed. Review the destination; the operation will not be replayed.",
   "session.directoryCopy.issue.failed":
     "The folder copy could not be completed. Check the connection and review the destination before another attempt.",
-  "session.directorySync.title": "Compare folder files",
+  "session.directorySync.title": "Compare folders",
   "session.directorySync.description":
-    "Compare files on {connection} with a folder you choose. Nothing is written during comparison.",
+    "Compare the folder on {connection} with a local folder. Comparison writes nothing.",
   "session.directorySync.scope":
-    "Current folder only: up to 16 ordinary source files. Subfolders are excluded. Files present only at the destination stay unchanged.",
+    "Includes all subfolders and empty folders. Items present only at the destination stay unchanged. Nothing is deleted.",
   "session.directorySync.localDisclosure":
     "The chosen local folder is outside Scoplen's encrypted storage. Choose upload or download to open the folder picker.",
   "session.directorySync.compareUpload": "Compare for upload",
   "session.directorySync.compareDownload": "Compare for download",
   "session.directorySync.compareAgain": "Compare again",
-  "session.directorySync.preparing": "Choose a local folder, then wait for complete content comparison…",
+  "session.directorySync.preparing": "Choose a local folder, then wait for the complete folder comparison…",
   "session.directorySync.direction.upload": "Upload: local folder → remote folder",
   "session.directorySync.direction.download": "Download: remote folder → local folder",
   "session.directorySync.remote": "Remote folder",
   "session.directorySync.local": "Local folder",
-  "session.directorySync.changes": "Compared files",
+  "session.directorySync.changes": "Compared folder contents",
+  "session.directorySync.root": "Root folder",
+  "session.directorySync.kind.file": "File",
+  "session.directorySync.kind.directory": "Folder",
   "session.directorySync.change.create": "Create",
   "session.directorySync.change.changed": "Changed",
   "session.directorySync.change.same": "Same — skip",
+  "session.directorySync.change.existing": "Already exists",
   "session.directorySync.sizes": "Source: {source} · Destination: {target}",
   "session.directorySync.bytes": "{bytes} bytes",
   "session.directorySync.missing": "Missing",
-  "session.directorySync.excluded":
-    "{count, plural, =0 {No subfolders were excluded.} one {# subfolder is excluded.} other {# subfolders are excluded.}}",
-  "session.directorySync.empty": "No ordinary files in this source folder. Nothing will be queued.",
-  "session.directorySync.same": "All source files have matching contents. Nothing needs to be queued.",
+  "session.directorySync.summary":
+    "Files to create: {create} · Files to update: {changed} · Same files: {same} · Folders to create: {directories}",
+  "session.directorySync.same": "All files match and all folders already exist. Nothing needs to be queued.",
   "session.directorySync.capacity":
-    "This batch needs {count, plural, one {# free transfer slot} other {# free transfer slots}}. Available: {available}.",
+    "Folder synchronization needs one free transfer slot. Review the queue, then apply again.",
   "session.directorySync.review":
-    "Apply adds changed files to the transfer queue. Each existing target requires fresh replacement confirmation; files finish separately. Check the queue for progress and results.",
+    "Apply queues one folder synchronization. Existing files require fresh replacement confirmation. Declining stops the job; completed changes are kept. Check the queue for results.",
   "session.directorySync.apply": "Apply {count, plural, one {# change} other {# changes}}",
   "session.directorySync.queued":
-    "{count, plural, =0 {No files were queued.} one {# file was added to the transfer queue.} other {# files were added to the transfer queue.}}",
+    "{count, plural, =0 {Nothing was queued.} other {Folder synchronization was added to the transfer queue.}}",
   "session.directorySync.unknown":
-    "The queueing result could not be confirmed. Close this preview and review the transfer queue before starting another comparison. This batch will not be retried automatically.",
+    "The queueing result could not be confirmed. Close this preview and review the transfer queue before another comparison. Synchronization will not be retried automatically.",
+  "session.directorySync.phase.copying": "Synchronizing folder contents",
+  "session.directorySync.phase.finalizing": "Verifying and saving folder contents",
+  "session.directorySync.progress":
+    "Created: {created} · Updated: {updated} · Files to transfer: {filesTotal} · Skipped: {skipped} · Folders created: {directories} / {directoriesTotal}",
+  "session.directorySync.current": "Current: {name}",
+  "session.directorySync.failedEntry": "Stopped at: {name}",
+  "session.directorySync.partial":
+    "Synchronization stopped. Completed changes were kept; review both folders before comparing again.",
   "session.directorySync.cancel": "Cancel comparison",
   "session.directorySync.close": "Close",
   "session.directorySync.issue.unavailable": "This connection is unavailable. Reconnect and start a new comparison.",
@@ -844,20 +855,26 @@ export const en = {
     "A link, special entry or unsupported destination prevented comparison. Choose another folder or use individual file transfers.",
   "session.directorySync.issue.unsupportedName":
     "A filename cannot be used unchanged at the destination, or names map to the same target. Use individual file transfers.",
-  "session.directorySync.issue.tooManyFiles":
-    "This folder has too many files or subfolders to compare. Choose a smaller folder; up to 16 source files can be compared at once.",
+  "session.directorySync.issue.tooManyEntries": "The folder exceeds 10,000 entries. Choose a smaller folder.",
+  "session.directorySync.issue.tooDeep": "The folder exceeds 32 nested levels. Choose a shallower folder.",
+  "session.directorySync.issue.tooMuchMetadata":
+    "The folder has too many long names to compare together. Choose a smaller folder.",
   "session.directorySync.issue.tooLarge":
     "Content comparison allows at most 64 MiB per file needing a hash and 256 MiB of total reads. Transfer these files individually.",
   "session.directorySync.issue.timeout":
     "Comparison took too long. Try a smaller folder or transfer files individually.",
-  "session.directorySync.issue.cancelled": "Comparison was cancelled. No files were queued.",
+  "session.directorySync.issue.cancelled": "The operation was cancelled. Check the queue for any completed changes.",
   "session.directorySync.issue.fileChanged":
-    "The folder contents or a reviewed file changed. Compare again before applying.",
+    "The reviewed source or destination changed. Review completed queue results and compare again.",
   "session.directorySync.issue.queueFull":
-    "No files were queued. The complete batch needs more free transfer slots; review the queue before applying again.",
+    "Nothing was queued. Folder synchronization needs one free transfer slot; review the queue before applying again.",
   "session.directorySync.issue.localIo":
     "The local folder could not be read or checked. Check access and compare again.",
   "session.directorySync.issue.remoteDenied": "The server refused file access. Check the folder permissions.",
+  "session.directorySync.issue.cleanupIncomplete":
+    "A temporary file may remain at the destination. Review it before comparing again.",
+  "session.directorySync.issue.publicationUnknown":
+    "A file or folder's saved state could not be confirmed. Review the destination; this operation will not be replayed.",
   "session.directorySync.issue.failed":
     "Folder synchronization could not be completed. Check the connection and chosen folder, then compare again.",
   "session.editor.action": "Edit {name} locally",

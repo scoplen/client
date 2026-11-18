@@ -248,30 +248,39 @@ messages, and the renderer receives no native path or file contents.
 
 ## Directional folder comparison
 
-Files > Compare folder files explains the current-layer, sixteen-source-file scope before
-the person chooses upload or download and opens a native folder picker. The preview names
-both captured folders, reports excluded subfolders and lists Create, Changed and Same with
-source and destination byte sizes. Same files and empty input disable Apply. Capacity must
-be available for the complete changed batch; transfer rows own progress and individual
-results after admission, with fresh replacement review for existing targets. Download names
-must be valid UTF-8, and potentially equivalent native names refuse the complete comparison
-without changing filenames, including on case-sensitive destinations.
+Files > Compare folders includes the complete relative tree and empty subfolders. The person
+chooses upload or download before the native folder picker. Both roots already exist, and
+destination-only contents remain unchanged. The complete preview distinguishes files from
+directories: files show Create, Changed or Same with byte sizes; directories show Create or
+Already exists. Summary counts distinguish file updates from folder creation. An unchanged
+tree, including an empty root, disables Apply; a missing empty subfolder is a change.
+The whole synchronization needs only one free transfer slot, regardless of the number of
+entries. Download names must be lossless UTF-8, and potentially equivalent destination names
+refuse the complete plan without renaming, including on case-sensitive destinations.
 
 `sessionPrepareDirectorySync(sessionId, transportId, operationId, remotePath, direction, locale)`
 compares contents without writing and returns a Rust-owned plan or cancelled selection.
 `sessionApplyDirectorySync(sessionId, transportId, planId, locale)` explicitly admits a
-reviewed batch to the existing FIFO. `sessionDiscardDirectorySync(sessionId, planId)` releases
+reviewed tree as one FIFO job. `sessionDiscardDirectorySync(sessionId, planId)` releases
 unapplied authority, and the existing file-operation cancellation command stops comparison.
 All commands retain profile generation and original transport ownership. No native path,
 digest or file contents enter the projection.
 
 Comparison and Apply require separate intent. Closing, inactive panes, navigation and
 transport or Account replacement discard an unapplied plan; late replies cannot restore it.
-A changed file requires a fresh comparison. A queue-capacity rejection permits only another
+A changed tree or reviewed row requires a fresh comparison. A queue-capacity rejection permits only another
 explicit Apply. An uncertain invocation requires closing and reviewing the transfer queue;
 it never triggers automatic comparison or replay. Already admitted transfers remain
 session-owned when Files closes. Actual native folder-picker and platform rendering remain
 separate acceptance from component checks.
+
+The queue shows confirmed file creations, replacements and Same skips, created-folder totals,
+aggregate transferred bytes and the current or first failed relative name. Folder-only work
+uses counts without a byte percentage. Existing files still require fresh replacement
+confirmation; declining stops the job. A failed, cancelled or uncertain job preserves and
+reports completed changes even though the destination root already existed. It never deletes
+target-only entries, rolls back completed files or offers folder-wide Pause/Resume. Inspect
+the queue and destination before a new comparison after an uncertain result.
 
 ## Recursive folder copy
 
