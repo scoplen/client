@@ -129,6 +129,9 @@ After `pnpm tauri build --bundles app` on macOS or `pnpm tauri build --bundles n
 Windows, `node scripts/check-packaged-cli.mjs` exercises help/version/empty generation and
 standard `ssh -G` from the packaged helper. The Windows check extracts the installer with
 the CI runner's existing `7z` command; it does not run the installer or open a window.
+The fixture uses a private Windows directory and checks the resolved publication path while
+preserving the original native-keystore namespace. Failures report an exit/timeout category
+and the last fixed verification phase; captured process output remains in the local fixture.
 Runtime and package acceptance, the separate `ssh-proxy` command, and the complete C10
 migration gate remain tracked in the roadmap.
 

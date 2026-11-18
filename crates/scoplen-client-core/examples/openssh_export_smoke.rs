@@ -55,11 +55,14 @@ fn main() -> Result<()> {
 }
 
 async fn packaged_helper(helper: &Path, directory: &Path) -> Result<()> {
+    eprintln!("packaged-helper: phase=fixture");
     let local = fixture_local_data(directory)?;
     let inventory = Inventory::new(local.store().ok_or("packaged fixture store did not open")?);
     let preview = inventory.preview_generated_open_ssh(vec![])?;
     assert!(preview.report.entries.is_empty());
-    let wrapper = directory.join("openssh/local/active.conf");
+    // Publication resolves the destination; keep the original directory for the keystore.
+    let wrapper = directory.canonicalize()?.join("openssh/local/active.conf");
+    eprintln!("packaged-helper: phase=helper");
     let generation = publish_generation(
         &inventory,
         &preview,
@@ -70,12 +73,15 @@ async fn packaged_helper(helper: &Path, directory: &Path) -> Result<()> {
     )
     .await?;
     assert!(!fs::read_to_string(generation.join("config"))?.contains("Host "));
+    eprintln!("packaged-helper: phase=openssh");
     let effective = effective_config(&wrapper, "unconfigured.example").await?;
     assert!(effective.lines().any(|line| line == "hostname unconfigured.example"));
     assert!(!effective.contains("hostkeyalias scoplen-host-"));
+    eprintln!("packaged-helper: phase=recheck");
     assert!(inventory.preview_generated_open_ssh(vec![])?.report.entries.is_empty());
     drop(inventory);
     drop(local);
+    eprintln!("packaged-helper: phase=cleanup");
     clear_fixture_key(directory)?;
     println!("Packaged helper generated a complete empty Include consumed by unmodified OpenSSH.");
     Ok(())
@@ -422,7 +428,7 @@ async fn generated_include(
     }
     let helper = env::var_os("SCOPLEN_EXPORT_HELPER").map(PathBuf::from);
     let wrapper = if helper.is_some() {
-        scratch.join("openssh/local/active.conf")
+        scratch.canonicalize()?.join("openssh/local/active.conf")
     } else {
         scratch.join("active.conf")
     };
