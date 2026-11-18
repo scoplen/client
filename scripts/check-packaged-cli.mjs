@@ -18,11 +18,44 @@ function run(executable, args, label, options = {}) {
   });
   writeFileSync(join(scratch, `${label}.stdout`), result.stdout ?? "");
   writeFileSync(join(scratch, `${label}.stderr`), result.stderr ?? "");
-  assert(!result.error && result.status === 0, `${label} failed`);
+  const phase = ["fixture", "helper", "openssh", "recheck", "cleanup"].findLast((value) =>
+    (result.stderr ?? "").includes(`packaged-helper: phase=${value}\n`),
+  );
+  const failure = result.error
+    ? result.error.code === "ETIMEDOUT"
+      ? "timeout"
+      : "spawn-error"
+    : result.signal
+      ? `signal=${result.signal}`
+      : `exit=${result.status}`;
+  assert(!result.error && result.status === 0, `${label} failed (${failure}${phase ? `, phase=${phase}` : ""})`);
   return result.stdout;
 }
 
 try {
+  if (process.platform === "win32") {
+    // OpenSSH rejects Include files with broad inherited permissions.
+    run(
+      "pwsh",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$ErrorActionPreference = 'Stop'
+$owner = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [Security.AccessControl.DirectorySecurity]::new()
+$acl.SetOwner($owner)
+$acl.SetAccessRuleProtection($true, $false)
+$inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
+foreach ($sid in @($owner, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'), [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))) {
+  $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', $inherit, 'None', 'Allow'))
+}
+Set-Acl -LiteralPath $env:SCOPLEN_CLI_PACKAGE_SCRATCH -AclObject $acl`,
+      ],
+      "fixture-permissions",
+      { env: { ...process.env, SCOPLEN_CLI_PACKAGE_SCRATCH: scratch } },
+    );
+  }
   const target = JSON.parse(
     run("cargo", ["metadata", "--locked", "--no-deps", "--format-version", "1"], "metadata"),
   ).target_directory;
@@ -54,7 +87,8 @@ try {
   );
   run(
     join(target, `release/examples/openssh_export_smoke${suffix}`),
-    ["--packaged-helper", helper, join(scratch, "data")],
+    // Keep a noncanonical spelling to verify the keystore namespace and resolved output separately.
+    ["--packaged-helper", helper, `${join(scratch, "data")}/.`],
     "generate",
     { timeout: 120_000 },
   );
@@ -64,5 +98,5 @@ try {
   );
 } finally {
   if (passed) rmSync(scratch, { recursive: true });
-  else console.error(`Packaged helper diagnostics retained: ${scratch}`);
+  else console.error("Packaged helper failed; local process diagnostics retained.");
 }
