@@ -14,7 +14,7 @@ use super::*;
 
 const MAX_ENTRIES: usize = 10_000;
 const MAX_DEPTH: u8 = 32;
-const MAX_METADATA: usize = 16 * 1024 * 1024;
+pub(super) const MAX_METADATA: usize = 16 * 1024 * 1024;
 const ENUMERATION_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The original selected native path and captured remote path never cross IPC.
@@ -39,25 +39,25 @@ pub(crate) struct Callbacks {
 }
 
 #[derive(Clone, Copy)]
-enum EntryKind {
+pub(super) enum EntryKind {
     Directory,
     File { size: u64, local_modified: Option<SystemTime>, remote_modified: Option<u32> },
 }
 
-struct Entry {
-    parent: Option<usize>,
-    name: Vec<u8>,
-    native: OsString,
-    kind: EntryKind,
+pub(super) struct Entry {
+    pub(super) parent: Option<usize>,
+    pub(super) name: Vec<u8>,
+    pub(super) native: OsString,
+    pub(super) kind: EntryKind,
     depth: u8,
 }
 
-struct Tree {
-    entries: Vec<Entry>,
+pub(super) struct Tree {
+    pub(super) entries: Vec<Entry>,
     bytes: u64,
     files: u32,
     directories: u32,
-    metadata: usize,
+    pub(super) metadata: usize,
 }
 
 impl Tree {
@@ -122,7 +122,7 @@ impl Tree {
         entries
     }
 
-    fn remote_path(&self, root: &[u8], index: usize) -> Result<Vec<u8>, Issue> {
+    pub(super) fn remote_path(&self, root: &[u8], index: usize) -> Result<Vec<u8>, Issue> {
         let mut path = root.to_vec();
         for index in self.ancestors(index) {
             path = child_path(&path, &self.entries[index].name).map_err(Issue::from)?;
@@ -130,7 +130,7 @@ impl Tree {
         Ok(path)
     }
 
-    fn local_path(&self, root: &Path, index: usize) -> PathBuf {
+    pub(super) fn local_path(&self, root: &Path, index: usize) -> PathBuf {
         let mut path = root.to_path_buf();
         for index in self.ancestors(index) {
             path.push(&self.entries[index].native);
@@ -138,7 +138,7 @@ impl Tree {
         path
     }
 
-    fn display(&self, index: usize) -> String {
+    pub(super) fn display(&self, index: usize) -> String {
         let mut path = Vec::new();
         for index in self.ancestors(index) {
             if !path.is_empty() {
@@ -200,7 +200,7 @@ pub(crate) async fn local_directory(path: &Path) -> Result<(), Issue> {
     Ok(())
 }
 
-fn ordinary_local(metadata: &std::fs::Metadata) -> Result<(), Issue> {
+pub(super) fn ordinary_local(metadata: &std::fs::Metadata) -> Result<(), Issue> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt as _;
@@ -239,7 +239,7 @@ async fn remote_directory(session: &mut SftpSession, path: &[u8]) -> Result<(), 
     Ok(())
 }
 
-async fn scan(
+pub(super) async fn scan(
     connection: &SshConnection,
     input: &DirectoryCopy,
     control: &watch::Receiver<TransferControl>,
@@ -308,6 +308,9 @@ async fn scan(
                     match response(&mut session, request).await {
                         Err(FileAccessError::RemoteStatus(1)) => break,
                         Ok(SftpPacket::Name { entries, .. }) => {
+                            if entries.is_empty() {
+                                return Err(FileAccessError::ListingIncomplete.into());
+                            }
                             for entry in entries {
                                 check_cancel(control)?;
                                 if entry.filename == b"." || entry.filename == b".." {
@@ -377,10 +380,11 @@ impl Reporter {
     }
 }
 
-async fn create_remote(
+pub(super) async fn create_remote(
     connection: &SshConnection,
     path: Vec<u8>,
-    callbacks: &Callbacks,
+    authorize: Arc<dyn Fn() -> Result<(), FileAccessError> + Send + Sync>,
+    settled: Arc<dyn Fn() + Send + Sync>,
     dispatched: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<(), Issue> {
     let mut session = remote_session(connection).await?;
@@ -391,7 +395,7 @@ async fn create_remote(
         .client_mut()
         .mkdir(path, SftpAttributes::default())
         .map_err(FileAccessError::from)?;
-    (callbacks.authorize)()?;
+    authorize()?;
     if let Some(dispatched) = dispatched {
         dispatched();
     }
@@ -408,17 +412,17 @@ async fn create_remote(
     }
     .await;
     if result != Err(Issue::PublicationUnknown) {
-        (callbacks.settled)();
+        settled();
     }
     result
 }
 
-async fn create_local(
+pub(super) async fn create_local(
     path: PathBuf,
-    callbacks: Callbacks,
+    authorize: Arc<dyn Fn() -> Result<(), FileAccessError> + Send + Sync>,
+    settled: Arc<dyn Fn() + Send + Sync>,
     dispatched: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<(), Issue> {
-    let authorize = callbacks.authorize.clone();
     let result = tokio::task::spawn_blocking(move || {
         authorize()?;
         if let Some(dispatched) = dispatched {
@@ -434,16 +438,16 @@ async fn create_local(
     })
     .await
     .map_err(|_| Issue::PublicationUnknown)?;
-    (callbacks.settled)();
+    settled();
     result
 }
 
-async fn publish_local(
+pub(super) async fn publish_local(
     prepared: PreparedDownload,
     destination: DownloadDestination,
-    callbacks: Callbacks,
+    authorize: Arc<dyn Fn() -> Result<(), FileAccessError> + Send + Sync>,
+    settled: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<(), (Issue, bool)> {
-    let authorize = callbacks.authorize.clone();
     let result = tokio::task::spawn_blocking(move || {
         let mut prepared = prepared;
         let result = destination
@@ -456,7 +460,7 @@ async fn publish_local(
     })
     .await
     .map_err(|_| (Issue::PublicationUnknown, true))?;
-    (callbacks.settled)();
+    settled();
     result
 }
 
@@ -519,7 +523,8 @@ async fn execute(
                         create_remote(
                             connection,
                             tree.remote_path(&remote_root, index).map_err(|e| (e, false))?,
-                            &reporter.callbacks,
+                            reporter.callbacks.authorize.clone(),
+                            reporter.callbacks.settled.clone(),
                             dispatched,
                         )
                         .await
@@ -527,7 +532,8 @@ async fn execute(
                     Direction::Download => {
                         create_local(
                             tree.local_path(&local_root, index),
-                            reporter.callbacks.clone(),
+                            reporter.callbacks.authorize.clone(),
+                            reporter.callbacks.settled.clone(),
                             dispatched,
                         )
                         .await
@@ -626,8 +632,13 @@ async fn execute(
                         .await
                         {
                             DownloadExecution::Ready { prepared, destination } => {
-                                publish_local(prepared, destination, reporter.callbacks.clone())
-                                    .await?
+                                publish_local(
+                                    prepared,
+                                    destination,
+                                    reporter.callbacks.authorize.clone(),
+                                    reporter.callbacks.settled.clone(),
+                                )
+                                .await?
                             }
                             DownloadExecution::Failed { error, staging_may_remain } => {
                                 return Err((error.into(), staging_may_remain));

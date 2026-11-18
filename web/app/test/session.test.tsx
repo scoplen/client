@@ -1056,6 +1056,7 @@ function unknownTransfer(transportId: string, direction: "upload" | "download" =
     issue: "publicationUnknown",
     stagingMayRemain: false,
     directoryCopy: null,
+    directorySync: null,
   };
 }
 

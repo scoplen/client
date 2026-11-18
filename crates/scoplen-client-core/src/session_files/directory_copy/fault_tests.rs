@@ -16,6 +16,7 @@ use super::*;
 #[derive(Clone, Copy)]
 enum Fault {
     IncompleteListing,
+    EmptyListing,
     DelayedListing,
     ChangedSecondSource,
     LostMkdirAck(usize),
@@ -137,16 +138,22 @@ impl server::Handler for Handler {
                     let mut state = self.state.lock().unwrap();
                     if matches!(state.fault, Fault::DelayedListing) {
                         state.delayed_listings += 1;
-                        true
+                        let name = format!("entry-{}", state.delayed_listings).into_bytes();
+                        let node = Node { bytes: Some(Vec::new()), modified: 100 };
+                        let attrs = node.attrs();
+                        let mut path = b"./root/".to_vec();
+                        path.extend_from_slice(&name);
+                        state.nodes.insert(path, node);
+                        Some(SftpNameEntry { filename: name, longname: Vec::new(), attrs })
                     } else {
-                        false
+                        None
                     }
                 };
-                if delayed {
+                if let Some(entry) = delayed {
                     tokio::time::sleep(Duration::from_secs(10)).await;
                     session.data(
                         channel,
-                        SftpPacket::Name { id: *id, entries: Vec::new() }.encode().unwrap(),
+                        SftpPacket::Name { id: *id, entries: vec![entry] }.encode().unwrap(),
                     )?;
                     continue;
                 }
@@ -378,6 +385,20 @@ async fn incomplete_remote_listing_never_creates_destination_root() {
     let peer = Peer::start(Fault::IncompleteListing).await;
     let (result, bytes, total, progress) = peer.run(root.path(), Direction::Download).await;
     assert!(matches!(result.issue, Some(Issue::Failed | Issue::Unavailable)));
+    assert!(!result.staging_may_remain);
+    assert_eq!((bytes, total, progress.files_total), (0, None, None));
+    assert!(!progress.root_created && !progress.root_creation_unknown);
+    assert_eq!((progress.files_completed, progress.directories_created), (0, 0));
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    assert!(peer.state.lock().unwrap().opened_sources.is_empty());
+}
+
+#[tokio::test]
+async fn empty_remote_name_packet_never_creates_destination_root() {
+    let root = tempfile::tempdir().unwrap();
+    let peer = Peer::start(Fault::EmptyListing).await;
+    let (result, bytes, total, progress) = peer.run(root.path(), Direction::Download).await;
+    assert_eq!(result.issue, Some(Issue::Failed));
     assert!(!result.staging_may_remain);
     assert_eq!((bytes, total, progress.files_total), (0, None, None));
     assert!(!progress.root_created && !progress.root_creation_unknown);

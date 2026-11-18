@@ -182,10 +182,13 @@ All notable changes to the Scoplen desktop client are recorded here.
   provides the public half for manual installation on the remote host and reports
   clipboard failures with a retry; generation never connects automatically.
 
-- Added directional current-folder comparison for up to sixteen ordinary source files.
-  Content-identical files are skipped; explicit Apply admits the complete changed batch to
-  the existing queue with fresh replacement review and independent per-file results.
-  Native folder-picker and rendered platform acceptance remain unverified.
+- Compare existing local and remote directory trees in an explicit upload or download
+  direction, including nested and empty folders. Review every file and directory action,
+  preserve target-only data and genuinely skip content-identical files. Apply rechecks the
+  complete plan and admits one FIFO job with ordinary fresh replacement review and confirmed
+  created/updated/skipped counts. Refusal, cancellation and uncertain results stop later work
+  while retaining completed changes. Replace the earlier sixteen-file shallow profile;
+  native folder-picker and rendered platform acceptance remain unverified.
 
 - Added explicit local editing for complete remote UTF-8 files up to 256 KiB. A native-selected
   working copy opens in the platform text editor; saved-change detection never uploads by

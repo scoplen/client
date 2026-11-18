@@ -129,7 +129,7 @@ export function SessionDirectorySync({
         }
       } else {
         retained.current = null;
-        onQueued(result.data.kind === "queued" ? result.data.items.length : 0);
+        onQueued(result.data.kind === "queued" ? 1 : 0);
         onClose();
       }
     } catch {
@@ -145,9 +145,10 @@ export function SessionDirectorySync({
     closing.current = true;
     onClose();
   };
-  const changed = state.plan?.entries.filter((entry) => entry.change !== "same").length ?? 0;
+  const summary = state.plan?.summary;
+  const changed = summary ? summary.filesCreate + summary.filesChanged + summary.directoriesCreate : 0;
   const busy = state.phase === "preparing" || state.phase === "applying";
-  const full = changed > availableSlots;
+  const full = changed > 0 && availableSlots < 1;
 
   return (
     <Dialog
@@ -215,26 +216,25 @@ export function SessionDirectorySync({
             <dd className="m-0 break-words">{state.plan.localName}</dd>
           </dl>
           <p className="text-xs text-muted-foreground">
-            {t("session.directorySync.excluded", { count: state.plan.excludedDirectories })}
+            {t("session.directorySync.summary", {
+              create: state.plan.summary.filesCreate,
+              changed: state.plan.summary.filesChanged,
+              same: state.plan.summary.filesSame,
+              directories: state.plan.summary.directoriesCreate,
+            })}
           </p>
-          {state.plan.entries.length === 0 ? (
-            <p role="status" className="text-sm">
-              {t("session.directorySync.empty")}
-            </p>
-          ) : (
-            <ul
-              aria-label={t("session.directorySync.changes")}
-              className="m-0 max-h-[36vh] list-none overflow-auto p-0"
-            >
-              {state.plan.entries.map((entry, index) => (
-                <li
-                  key={index}
-                  className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 border-b border-border py-2 text-sm"
-                >
-                  <span className="min-w-0 flex-1 break-words" title={entry.name}>
-                    {entry.name}
-                  </span>
-                  <span>{t(`session.directorySync.change.${entry.change}`)}</span>
+          <ul aria-label={t("session.directorySync.changes")} className="m-0 max-h-[36vh] list-none overflow-auto p-0">
+            {state.plan.entries.map((entry, index) => (
+              <li
+                key={index}
+                className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 border-b border-border py-2 text-sm"
+              >
+                <span className="min-w-0 flex-1 break-words" title={entry.name}>
+                  {entry.name === "." ? t("session.directorySync.root") : entry.name}
+                </span>
+                <span className="text-muted-foreground">{t(`session.directorySync.kind.${entry.kind}`)}</span>
+                <span>{t(`session.directorySync.change.${entry.change}`)}</span>
+                {entry.kind === "file" ? (
                   <span className="w-full text-xs text-muted-foreground">
                     {t("session.directorySync.sizes", {
                       source: t("session.directorySync.bytes", { bytes: entry.sourceSizeBytes }),
@@ -244,10 +244,10 @@ export function SessionDirectorySync({
                           : t("session.directorySync.bytes", { bytes: entry.targetSizeBytes }),
                     })}
                   </span>
-                </li>
-              ))}
-            </ul>
-          )}
+                ) : null}
+              </li>
+            ))}
+          </ul>
           {changed === 0 && state.plan.entries.length > 0 ? (
             <p role="status" className="text-sm">
               {t("session.directorySync.same")}
@@ -255,7 +255,7 @@ export function SessionDirectorySync({
           ) : null}
           {full ? (
             <p role="status" className="text-sm text-attention">
-              {t("session.directorySync.capacity", { count: changed, available: availableSlots })}
+              {t("session.directorySync.capacity")}
             </p>
           ) : null}
           <p className="mb-0 text-xs text-muted-foreground">{t("session.directorySync.review")}</p>

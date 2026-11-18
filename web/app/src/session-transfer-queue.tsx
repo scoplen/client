@@ -25,9 +25,9 @@ function actionAvailable(item: SessionTransferItem, action: TransferAction) {
     case "cancel":
       return item.canCancel;
     case "pause":
-      return !item.directoryCopy && item.state === "transferring" && item.canPause;
+      return !item.directoryCopy && !item.directorySync && item.state === "transferring" && item.canPause;
     case "resume":
-      return !item.directoryCopy && item.state === "paused" && item.canResume;
+      return !item.directoryCopy && !item.directorySync && item.state === "paused" && item.canResume;
     case "acknowledge":
       return item.canAcknowledge;
   }
@@ -65,7 +65,8 @@ export function SessionTransferQueue({
   const currentIssue = visibleAction?.issue ?? issue;
   const rows = snapshot ? [...snapshot.items, ...snapshot.recent.slice().reverse()] : [];
   const hasUnknown = snapshot?.items.some((item) => item.state === "unknown") ?? false;
-  const hasPaused = snapshot?.items.some((item) => !item.directoryCopy && item.state === "paused") ?? false;
+  const hasPaused =
+    snapshot?.items.some((item) => !item.directoryCopy && !item.directorySync && item.state === "paused") ?? false;
   const format = new Intl.NumberFormat(locale);
 
   const request = async (item: SessionTransferItem, kind: TransferAction) => {
@@ -147,6 +148,10 @@ export function SessionTransferQueue({
       <ol className="m-0 max-h-64 list-none overflow-y-auto p-0 px-3 text-xs">
         {rows.map((item) => {
           const directory = item.directoryCopy;
+          const sync = item.directorySync;
+          const syncActive = !!sync && (item.state === "transferring" || item.state === "finalizing");
+          const syncStopped =
+            !!sync && ["cancelled", "conflict", "failed", "interrupted", "unknown"].includes(item.state);
           const directoryActive = !!directory && (item.state === "transferring" || item.state === "finalizing");
           const directoryStopped =
             !!directory && ["cancelled", "conflict", "failed", "interrupted", "unknown"].includes(item.state);
@@ -184,9 +189,11 @@ export function SessionTransferQueue({
                     {" · "}
                     <span>
                       {t(
-                        directoryActive
-                          ? `session.directoryCopy.phase.${directory.phase}`
-                          : `session.transfers.state.${item.state}`,
+                        syncActive
+                          ? `session.directorySync.phase.${sync.phase}`
+                          : directoryActive
+                            ? `session.directoryCopy.phase.${directory.phase}`
+                            : `session.transfers.state.${item.state}`,
                       )}
                     </span>
                   </p>
@@ -273,7 +280,32 @@ export function SessionTransferQueue({
                   ) : null}
                 </div>
               ) : null}
-              {(moving || directory) && progress && (!directory || (directory.phase !== "scanning" && total !== 0n)) ? (
+              {sync ? (
+                <div className="mt-2">
+                  <p className="m-0 break-words tabular-nums">
+                    {t("session.directorySync.progress", {
+                      created: sync.filesCreated,
+                      updated: sync.filesUpdated,
+                      skipped: sync.filesSkipped,
+                      filesTotal: sync.filesTotal,
+                      directories: sync.directoriesCreated,
+                      directoriesTotal: sync.directoriesTotal,
+                    })}
+                  </p>
+                  {(sync.failedName ?? sync.currentName) ? (
+                    <p className="m-0 mt-1 break-all text-muted">
+                      {t(sync.failedName ? "session.directorySync.failedEntry" : "session.directorySync.current", {
+                        name: sync.failedName ?? sync.currentName!,
+                      })}
+                    </p>
+                  ) : null}
+                  {syncStopped ? <p className="m-0 mt-1 text-attention">{t("session.directorySync.partial")}</p> : null}
+                </div>
+              ) : null}
+              {(moving || directory || sync) &&
+              progress &&
+              (!directory || (directory.phase !== "scanning" && total !== 0n)) &&
+              (!sync || total !== 0n) ? (
                 <div className="mt-2">
                   <p className="m-0 break-all tabular-nums">{progress}</p>
                   {moving ? (
@@ -287,7 +319,9 @@ export function SessionTransferQueue({
                   ) : null}
                 </div>
               ) : null}
-              {directory?.issue ? (
+              {sync?.issue ? (
+                <p className="m-0 mt-1 break-words text-attention">{t(`session.directorySync.issue.${sync.issue}`)}</p>
+              ) : directory?.issue ? (
                 <p className="m-0 mt-1 break-words text-attention">
                   {t(`session.directoryCopy.issue.${directory.issue}`)}
                 </p>

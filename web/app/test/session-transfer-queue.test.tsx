@@ -32,6 +32,7 @@ function row(changes: Partial<SessionTransferItem> = {}): SessionTransferItem {
     issue: null,
     stagingMayRemain: false,
     directoryCopy: null,
+    directorySync: null,
     ...changes,
   };
 }
@@ -472,4 +473,102 @@ it("localizes directory phase, partial counts and fixed issue", () => {
   expect(screen.getByText("当前：nested/data.bin")).toBeTruthy();
   expect(screen.getByText(/已完成的文件和已创建的文件夹仍保留/)).toBeTruthy();
   expect(screen.getByText("服务器拒绝文件访问，请检查权限并核对目标。")).toBeTruthy();
+});
+
+function synchronization(changes: Partial<NonNullable<SessionTransferItem["directorySync"]>> = {}) {
+  return {
+    phase: "copying" as const,
+    filesTotal: 4,
+    directoriesTotal: 2,
+    filesCreated: 1,
+    filesUpdated: 2,
+    filesSkipped: 8,
+    directoriesCreated: 1,
+    currentName: "nested/data.bin",
+    failedName: null,
+    issue: null,
+    ...changes,
+  };
+}
+
+it("shows incremental synchronization counts independently of new-root folder copy", () => {
+  render(view(snapshot([row({ state: "transferring", transferredBytes: "2048", directorySync: synchronization() })])));
+  expect(screen.getByText("Synchronizing folder contents")).toBeTruthy();
+  expect(
+    screen.getByText("Created: 1 · Updated: 2 · Files to transfer: 4 · Skipped: 8 · Folders created: 1 / 2"),
+  ).toBeTruthy();
+  expect(screen.getByText("Current: nested/data.bin")).toBeTruthy();
+  expect(screen.getByRole("progressbar", { name: "Transfer progress for archive.bin" })).toBeTruthy();
+  expect(screen.queryByText("Saved")).toBeNull();
+});
+
+it.each(["cancelled", "failed", "interrupted", "unknown"] as const)(
+  "discloses retained incremental changes for %s with an already existing root",
+  (state) => {
+    render(
+      view(
+        snapshot(
+          [],
+          [
+            row({
+              state,
+              canCancel: false,
+              directorySync: synchronization({ failedName: "nested/next.bin", issue: "publicationUnknown" }),
+            }),
+          ],
+        ),
+      ),
+    );
+    expect(screen.getByText("Stopped at: nested/next.bin")).toBeTruthy();
+    expect(screen.queryByText("Current: nested/data.bin")).toBeNull();
+    expect(screen.getByText(/Synchronization stopped. Completed changes were kept/)).toBeTruthy();
+    expect(screen.getByText(/A file or folder's saved state could not be confirmed/)).toBeTruthy();
+    expect(screen.getByText(/Created: 1 · Updated: 2/)).toBeTruthy();
+    expect(actions.resume).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps empty-directory synchronization progress separate from byte percentages", () => {
+  render(
+    view(
+      snapshot([
+        row({
+          state: "transferring",
+          totalBytes: "0",
+          directorySync: synchronization({ filesTotal: 0, filesCreated: 0, filesUpdated: 0, filesSkipped: 0 }),
+        }),
+      ]),
+    ),
+  );
+  expect(screen.getByText(/Folders created: 1 \/ 2/)).toBeTruthy();
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect(screen.queryByText(/100%/)).toBeNull();
+});
+
+it.each(["transferring", "paused"] as const)("offers no synchronization Pause or Resume in %s", (state) => {
+  render(view(snapshot([row({ state, canPause: true, canResume: true, directorySync: synchronization() })])));
+  expect(screen.queryByRole("button", { name: /Pause transfer|Resume transfer/ })).toBeNull();
+  expect(screen.queryByText(/Resume joins the end of the queue/)).toBeNull();
+});
+
+it("localizes synchronization results and partial completion", () => {
+  render(
+    view(
+      snapshot(
+        [],
+        [
+          row({
+            state: "failed",
+            canCancel: false,
+            directorySync: synchronization({ failedName: "nested/next.bin", issue: "remoteDenied" }),
+          }),
+        ],
+      ),
+      "zh-Hans",
+    ),
+  );
+  expect(screen.getByText("已新建：1 · 已更新：2 · 待传输文件总数：4 · 已跳过：8 · 已创建文件夹：1 / 2")).toBeTruthy();
+  expect(screen.getByText("停止于：nested/next.bin")).toBeTruthy();
+  expect(screen.getByText(/同步已停止，已完成的变化予以保留/)).toBeTruthy();
+  expect(screen.getByText("服务器拒绝了文件访问。请检查文件夹权限。")).toBeTruthy();
 });
