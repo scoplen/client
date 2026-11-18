@@ -116,17 +116,7 @@ impl LocalKeys {
         let store_exists = self.store_path().exists();
         match &self.keystore {
             Some(keystore) => match keystore.load()? {
-                Some(slot) => match slot.split_first() {
-                    Some((&SLOT_KEY, key)) => {
-                        let key =
-                            LocalDatabaseKey::from_slice(key).ok_or(LocalKeyError::Malformed)?;
-                        Ok(Unlock::Ready(key, Protection::Keystore))
-                    }
-                    Some((&SLOT_ENVELOPE, _)) => {
-                        Ok(Unlock::NeedsPassphrase(Protection::KeystoreAndPassphrase))
-                    }
-                    _ => Err(LocalKeyError::Malformed),
-                },
+                Some(slot) => stored_slot(&slot),
                 None if store_exists => Err(LocalKeyError::KeyMissing(keystore.name())),
                 None => {
                     let key = generate_symmetric_key().map_err(LocalKeyError::Crypto)?;
@@ -139,6 +129,18 @@ impl LocalKeys {
             }
             None if store_exists => Err(LocalKeyError::KeyMissing("local key file")),
             None => Ok(Unlock::NeedsNewPassphrase),
+        }
+    }
+
+    pub(crate) fn existing(&self) -> Result<Unlock, LocalKeyError> {
+        match &self.keystore {
+            Some(keystore) => {
+                stored_slot(&keystore.load()?.ok_or(LocalKeyError::KeyMissing(keystore.name()))?)
+            }
+            None if self.envelope_path().is_file() => {
+                Ok(Unlock::NeedsPassphrase(Protection::PassphraseOnly))
+            }
+            None => Err(LocalKeyError::KeyMissing("local key file")),
         }
     }
 
@@ -258,6 +260,17 @@ fn slot(tag: u8, bytes: &[u8]) -> zeroize::Zeroizing<Vec<u8>> {
     slot.push(tag);
     slot.extend_from_slice(bytes);
     slot
+}
+
+fn stored_slot(slot: &[u8]) -> Result<Unlock, LocalKeyError> {
+    match slot.split_first() {
+        Some((&SLOT_KEY, key)) => {
+            let key = LocalDatabaseKey::from_slice(key).ok_or(LocalKeyError::Malformed)?;
+            Ok(Unlock::Ready(key, Protection::Keystore))
+        }
+        Some((&SLOT_ENVELOPE, _)) => Ok(Unlock::NeedsPassphrase(Protection::KeystoreAndPassphrase)),
+        _ => Err(LocalKeyError::Malformed),
+    }
 }
 
 #[cfg(test)]

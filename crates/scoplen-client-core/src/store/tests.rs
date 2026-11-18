@@ -54,6 +54,41 @@ fn a_new_store_is_migrated_and_given_a_device_identity() {
 }
 
 #[test]
+fn cli_opening_reproduction_second_store_invalidates_existing_team_views() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("local.db");
+    let original = Store::open(&path, &key(1)).unwrap();
+    let account = scoplen_model::new_uuid_v7().unwrap();
+    let vault = scoplen_model::new_uuid_v7().unwrap();
+    for phase in [0_i64, 1] {
+        let organization = scoplen_model::new_uuid_v7().unwrap();
+        let generation = scoplen_model::new_uuid_v7().unwrap();
+        original.conn().execute(
+            "INSERT INTO team_asset_views(origin,account_id,organization_id,generation,vault_id,revision,cursor,phase,acknowledged)
+             VALUES('https://example.test',?1,?2,?3,?4,?5,?5,?6,?6)",
+            params![account.as_bytes().as_slice(), organization.as_bytes().as_slice(),
+                generation.as_bytes().as_slice(), vault.as_bytes().as_slice(),
+                1_u64.to_be_bytes().as_slice(), phase],
+        ).unwrap();
+    }
+    let states = || {
+        original
+            .conn()
+            .prepare("SELECT phase,acknowledged FROM team_asset_views ORDER BY phase")
+            .unwrap()
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    assert_eq!(states(), [(0, 0), (1, 1)]);
+
+    let second = Store::open(&path, &key(1)).unwrap();
+    assert_eq!(original.device_id(), second.device_id());
+    assert_eq!(states(), [(2, 0), (2, 0)]);
+}
+
+#[test]
 fn registration_dispatch_migration_retains_legacy_prepared_unknown_and_committed_material() {
     for phase in 0..=2 {
         let dir = tempfile::tempdir().unwrap();

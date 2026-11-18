@@ -107,16 +107,37 @@ pub(crate) fn same(a: &ProfileRecord, b: &ProfileRecord) -> bool {
         && a.confirmation == b.confirmation
 }
 
+fn binding(conn: &rusqlite::Connection) -> Result<Option<ProfileRecord>, StoreError> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {COLUMNS} FROM account_profile_binding WHERE singleton=1"),
+            [],
+            |row| read(row, true),
+        )
+        .optional()?)
+}
+
+pub(super) fn export_preflight(
+    conn: &rusqlite::Connection,
+    expected: Option<&ProfileRecord>,
+) -> Result<(), StoreError> {
+    preflight(conn, expected)?;
+    match (binding(conn)?, expected) {
+        (Some(actual), Some(expected)) if same(&actual, expected) => Ok(()),
+        (None, None) => {
+            let local: bool =
+                conn.query_row("SELECT NOT EXISTS(SELECT 1 FROM personal_server)", [], |row| {
+                    row.get(0)
+                })?;
+            if local { Ok(()) } else { Err(StoreError::AccountContext) }
+        }
+        _ => Err(StoreError::AccountContext),
+    }
+}
+
 impl Store {
     pub(crate) fn account_profile_binding(&self) -> Result<Option<ProfileRecord>, StoreError> {
-        Ok(self
-            .conn()
-            .query_row(
-                &format!("SELECT {COLUMNS} FROM account_profile_binding WHERE singleton=1"),
-                [],
-                |row| read(row, true),
-            )
-            .optional()?)
+        binding(&self.conn())
     }
     pub(crate) fn start_profile_catalog(&self) -> Result<(i64, Option<Uuid>), StoreError> {
         let mut conn = self.conn();

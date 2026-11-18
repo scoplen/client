@@ -153,13 +153,13 @@ impl Scope {
 }
 
 impl GeneratedOpenSshState {
-    fn status(&self, store: &Arc<Store>) -> Result<OpenSshGeneratedStatus, Error> {
+    pub(crate) fn status(&self, store: &Arc<Store>) -> Result<OpenSshGeneratedStatus, Error> {
         let _review = self.review.lock().unwrap_or_else(|error| error.into_inner());
         let scope = Scope::new(store)?;
         scope.status(scope.target()?.as_deref())
     }
 
-    fn preview(
+    pub(crate) fn preview(
         &self,
         store: &Arc<Store>,
         opening: String,
@@ -182,7 +182,7 @@ impl GeneratedOpenSshState {
         Ok(preview)
     }
 
-    fn generate(
+    pub(crate) fn generate(
         &self,
         store: &Arc<Store>,
         opening: &str,

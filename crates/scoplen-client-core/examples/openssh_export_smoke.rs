@@ -4,9 +4,10 @@
 
 use scoplen_client_core::{
     inventory::{
-        Inventory, NewHost, OpenSshExportAuthentication, OpenSshExportEntry, OpenSshImportChoice,
-        SignIn, generated_open_ssh_include_line,
+        Inventory, NewHost, OpenSshExportAuthentication, OpenSshExportEntry,
+        OpenSshGeneratedPreview, OpenSshImportChoice, SignIn, generated_open_ssh_include_line,
     },
+    local_data::{LocalData, Status},
     repository::{
         AccessProfile, AccessProfileChange, Credential, CredentialBinding, CredentialChange,
         CredentialKind, Edit, Host, HostChange, Provenance, Repository, Route, RouteChange,
@@ -14,12 +15,13 @@ use scoplen_client_core::{
     },
     store::Store,
 };
+use scoplen_client_platform::keystore::local_key_store;
 use scoplen_crypto::{Ed25519SigningKey, LocalDatabaseKey};
 use scoplen_ssh::{AgentIdentity, AgentMessage};
 use std::{
     collections::BTreeMap,
     env, fs, io,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -37,6 +39,12 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let args = env::args().collect::<Vec<_>>();
+    if args.len() == 4 && args[1] == "--packaged-helper" {
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(packaged_helper(Path::new(&args[2]), Path::new(&args[3])));
+    }
     if args.len() != 7 {
         return Err("usage: openssh_export_smoke <port> <source-key> <key-passphrase-file> <password-file> <known-hosts> <scratch-directory>".into());
     }
@@ -46,12 +54,74 @@ fn main() -> Result<()> {
         .block_on(Box::pin(run(&args)))
 }
 
+async fn packaged_helper(helper: &Path, directory: &Path) -> Result<()> {
+    let local = fixture_local_data(directory)?;
+    let inventory = Inventory::new(local.store().ok_or("packaged fixture store did not open")?);
+    let preview = inventory.preview_generated_open_ssh(vec![])?;
+    assert!(preview.report.entries.is_empty());
+    let wrapper = directory.join("openssh/local/active.conf");
+    let generation = publish_generation(
+        &inventory,
+        &preview,
+        directory,
+        "packaged-helper",
+        Some(helper),
+        &wrapper,
+    )
+    .await?;
+    assert!(!fs::read_to_string(generation.join("config"))?.contains("Host "));
+    let effective = effective_config(&wrapper, "unconfigured.example").await?;
+    assert!(effective.lines().any(|line| line == "hostname unconfigured.example"));
+    assert!(!effective.contains("hostkeyalias scoplen-host-"));
+    assert!(inventory.preview_generated_open_ssh(vec![])?.report.entries.is_empty());
+    drop(inventory);
+    drop(local);
+    clear_fixture_key(directory)?;
+    println!("Packaged helper generated a complete empty Include consumed by unmodified OpenSSH.");
+    Ok(())
+}
+
 async fn run(args: &[String]) -> Result<()> {
-    let scratch = tempfile::tempdir_in(&args[6])?;
-    let store = Arc::new(Store::open(
-        &scratch.path().join("inventory.db"),
-        &LocalDatabaseKey::new([52; 32]),
-    )?);
+    let scratch = tempfile::tempdir_in(&args[6])?.keep();
+    run_in_directory(args, &scratch).await?;
+    if env::var_os("SCOPLEN_EXPORT_HELPER").is_some() {
+        clear_fixture_key(&scratch)?;
+    }
+    fs::remove_dir_all(scratch)?;
+    Ok(())
+}
+
+fn fixture_local_data(directory: &Path) -> Result<LocalData> {
+    fs::create_dir_all(directory)?;
+    let local = LocalData::start(directory, local_key_store(directory))?;
+    let passphrase = "disposable local export passphrase";
+    match local.status() {
+        Status::Open { .. } => local.set_passphrase(passphrase)?,
+        Status::NeedsNewPassphrase => local.create(passphrase)?,
+        _ => return Err("fresh fixture local data did not open".into()),
+    };
+    fs::write(directory.join("local-passphrase"), passphrase)?;
+    Ok(local)
+}
+
+fn clear_fixture_key(directory: &Path) -> Result<()> {
+    if let Some(keystore) = local_key_store(directory) {
+        keystore.delete()?;
+    }
+    Ok(())
+}
+
+async fn run_in_directory(args: &[String], scratch: &Path) -> Result<()> {
+    let local = if env::var_os("SCOPLEN_EXPORT_HELPER").is_some() {
+        Some(fixture_local_data(scratch)?)
+    } else {
+        None
+    };
+    let store = if let Some(local) = &local {
+        local.store().ok_or("fixture Local store did not open")?
+    } else {
+        Arc::new(Store::open(&scratch.join("inventory.db"), &LocalDatabaseKey::new([52; 32]))?)
+    };
     let inventory = Inventory::new(store.clone());
     let port = args[1].parse::<u16>()?;
     let password_host = inventory.add_host(NewHost {
@@ -67,7 +137,7 @@ async fn run(args: &[String]) -> Result<()> {
         .unwrap()
         .credential
         .unwrap();
-    let source = scratch.path().join("import.conf");
+    let source = scratch.join("import.conf");
     let quote = |file: &str| format!("\"{}\"", file.replace('\\', "/"));
     fs::write(
         &source,
@@ -174,7 +244,7 @@ async fn run(args: &[String]) -> Result<()> {
     assert!(preview.skipped.is_empty());
     let entries = preview.entries.clone();
     let expected_trust = preview.trust_records;
-    let exported = inventory.export_open_ssh_config(preview, scratch.path().into())?;
+    let exported = inventory.export_open_ssh_config(preview, scratch.into())?;
     assert_eq!(exported.files, 3);
     let config = Path::new(&exported.directory).join("config");
     let signs = Arc::new(AtomicUsize::new(0));
@@ -184,7 +254,7 @@ async fn run(args: &[String]) -> Result<()> {
     assert_eq!(signs.load(Ordering::SeqCst), 2);
     // Fresh imports recover key and exact-Agent rows; passwords require a saved explicit choice.
     let fresh_store =
-        Arc::new(Store::open(&scratch.path().join("fresh.db"), &LocalDatabaseKey::new([53; 32]))?);
+        Arc::new(Store::open(&scratch.join("fresh.db"), &LocalDatabaseKey::new([53; 32]))?);
     let fresh = Inventory::new(fresh_store.clone());
     let password_copy = fresh.add_host(NewHost {
         name: Some("Password choice".into()),
@@ -239,7 +309,7 @@ async fn run(args: &[String]) -> Result<()> {
         HostChange { address: Some("changed.example".into()), ..Default::default() },
     )?;
     assert!(matches!(
-        inventory.export_open_ssh_config(reviewed, scratch.path().into()),
+        inventory.export_open_ssh_config(reviewed, scratch.into()),
         Err(scoplen_client_core::inventory::OpenSshExportError::InventoryChanged)
     ));
     Repository::<Host>::new(&store).update(
@@ -249,7 +319,7 @@ async fn run(args: &[String]) -> Result<()> {
     generated_include(
         &inventory,
         &store,
-        scratch.path(),
+        scratch,
         args,
         &[
             (password_host.summary.id.as_str(), "prod-api"),
@@ -350,7 +420,12 @@ async fn generated_include(
             HostChange { name: Some((*name).into()), ..Default::default() },
         )?;
     }
-    let wrapper = scratch.join("active.conf");
+    let helper = env::var_os("SCOPLEN_EXPORT_HELPER").map(PathBuf::from);
+    let wrapper = if helper.is_some() {
+        scratch.join("openssh/local/active.conf")
+    } else {
+        scratch.join("active.conf")
+    };
     let user_config = scratch.join("user-config");
     let user_bytes =
         format!("# Owned fixture user config.\n{}\n", generated_open_ssh_include_line(&wrapper)?);
@@ -362,14 +437,8 @@ async fn generated_include(
         .filter_map(|alias| Some((alias.profile_id.clone()?, alias.alias.clone()?)))
         .collect::<BTreeMap<_, _>>();
     assert_eq!(aliases.len(), 4);
-    let generated = inventory.write_generated_open_ssh(&preview, &scratch.join("generated-one"))?;
-    fs::write(
-        &wrapper,
-        format!(
-            "{}\n",
-            generated_open_ssh_include_line(&Path::new(&generated.directory).join("config"))?
-        ),
-    )?;
+    publish_generation(inventory, &preview, scratch, "generated-one", helper.as_deref(), &wrapper)
+        .await?;
     check_connections(&user_config, &preview.report.entries, args, rejected_hosts, &aliases)
         .await?;
 
@@ -409,14 +478,15 @@ async fn generated_include(
         },
     )?;
     let preview = inventory.preview_generated_open_ssh(vec![])?;
-    let generated = inventory.write_generated_open_ssh(&preview, &scratch.join("generated-two"))?;
-    fs::write(
+    let generated = publish_generation(
+        inventory,
+        &preview,
+        scratch,
+        "generated-two",
+        helper.as_deref(),
         &wrapper,
-        format!(
-            "{}\n",
-            generated_open_ssh_include_line(&Path::new(&generated.directory).join("config"))?
-        ),
-    )?;
+    )
+    .await?;
     let effective = effective_config(&user_config, "prod-api").await?;
     assert!(effective.lines().any(|line| line == "port 2299"));
     assert!(effective.lines().any(|line| line == "user regenerated-user"));
@@ -426,7 +496,7 @@ async fn generated_include(
     assert!(!removed.contains("hostkeyalias scoplen-host-"));
     assert!(effective_config(&user_config, "jump-target").await?.contains("hostname 127.0.0.1"));
     assert!(
-        fs::read_to_string(Path::new(&generated.directory).join("known_hosts"))?
+        fs::read_to_string(generated.join("known_hosts"))?
             .contains(&replacement.public_key().to_openssh()?)
     );
     Repository::<Host>::new(store).update(
@@ -438,15 +508,15 @@ async fn generated_include(
         AccessProfileChange { username: Some("smoke".into()), ..Default::default() },
     )?;
     let preview = inventory.preview_generated_open_ssh(vec![])?;
-    let generated =
-        inventory.write_generated_open_ssh(&preview, &scratch.join("generated-trust"))?;
-    fs::write(
+    publish_generation(
+        inventory,
+        &preview,
+        scratch,
+        "generated-trust",
+        helper.as_deref(),
         &wrapper,
-        format!(
-            "{}\n",
-            generated_open_ssh_include_line(&Path::new(&generated.directory).join("config"))?
-        ),
-    )?;
+    )
+    .await?;
     let password_entry = preview.report.entries.iter().find(|row| row.host_id == password).unwrap();
     check_connections(
         &user_config,
@@ -461,24 +531,78 @@ async fn generated_include(
     }
     let empty = inventory.preview_generated_open_ssh(vec![])?;
     assert!(empty.report.entries.is_empty());
-    let generated = inventory.write_generated_open_ssh(&empty, &scratch.join("generated-empty"))?;
-    fs::write(
-        &wrapper,
-        format!(
-            "{}\n",
-            generated_open_ssh_include_line(&Path::new(&generated.directory).join("config"))?
-        ),
-    )?;
+    publish_generation(inventory, &empty, scratch, "generated-empty", helper.as_deref(), &wrapper)
+        .await?;
     let effective = effective_config(&user_config, "prod-api").await?;
     assert!(effective.lines().any(|line| line == "hostname prod-api"));
     assert!(!effective.contains("hostkeyalias scoplen-host-"));
-    fs::write(&wrapper, "# Cleared fixture Include.\n")?;
-    assert_eq!(effective_config(&user_config, "prod-api").await?, effective);
+    if helper.is_none() {
+        fs::write(&wrapper, "# Cleared fixture Include.\n")?;
+        assert_eq!(effective_config(&user_config, "prod-api").await?, effective);
+    }
     assert_eq!(fs::read(&user_config)?, user_bytes.as_bytes());
     println!(
-        "Generated OpenSSH Include: friendly password/key/Agent/Jump connections, port/user/trust regeneration, removed entries, empty inventory and clear passed; user config unchanged"
+        "Generated OpenSSH Include: friendly password/key/Agent/Jump connections, port/user/trust regeneration, removed entries and empty inventory passed; user config unchanged"
     );
     Ok(())
+}
+
+async fn publish_generation(
+    inventory: &Inventory,
+    preview: &OpenSshGeneratedPreview,
+    scratch: &Path,
+    name: &str,
+    helper: Option<&Path>,
+    wrapper: &Path,
+) -> Result<PathBuf> {
+    if let Some(helper) = helper {
+        let output = tokio::time::timeout(
+            Duration::from_secs(60),
+            tokio::process::Command::new(helper)
+                .args(["config", "generate", "--profile", "local", "--passphrase-file"])
+                .arg(scratch.join("local-passphrase"))
+                .arg("--yes")
+                .env("SPL_DATA_DIR", scratch)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await??;
+        let diagnostics = scratch.parent().ok_or("fixture diagnostics parent missing")?;
+        fs::write(diagnostics.join(format!("{name}-helper.stdout")), &output.stdout)?;
+        fs::write(diagnostics.join(format!("{name}-helper.stderr")), &output.stderr)?;
+        if !output.status.success() {
+            return Err(
+                "actual generated-Include helper failed; private process evidence required".into(),
+            );
+        }
+        let report = String::from_utf8(output.stdout)?;
+        assert!(report.contains(&generated_open_ssh_include_line(wrapper)?));
+        assert!(!report.contains("disposable local export passphrase"));
+        assert!(!report.contains("disposable-export-password"));
+        let active = fs::read_to_string(wrapper)?;
+        let generation = active
+            .lines()
+            .find_map(|line| line.strip_prefix("# Generation "))
+            .ok_or("helper omitted native generation ownership")?;
+        let generation = Uuid::parse_str(generation)?;
+        let directory = wrapper
+            .parent()
+            .ok_or("wrapper parent missing")?
+            .join("generations")
+            .join(generation.to_string());
+        assert!(directory.join(".scoplen-generation").is_file());
+        Ok(directory)
+    } else {
+        let generated = inventory.write_generated_open_ssh(preview, &scratch.join(name))?;
+        fs::write(
+            wrapper,
+            format!(
+                "{}\n",
+                generated_open_ssh_include_line(&Path::new(&generated.directory).join("config"))?
+            ),
+        )?;
+        Ok(PathBuf::from(generated.directory))
+    }
 }
 
 async fn effective_config(config: &Path, alias: &str) -> Result<String> {

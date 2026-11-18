@@ -5,6 +5,7 @@
 //! (`scoplen-docs/11-client-architecture.md` §1, §4).
 
 pub mod account_registration;
+pub mod cli;
 pub mod commands;
 pub mod events;
 pub mod file_drop;
