@@ -85,8 +85,52 @@ a valid empty Include wrapper, then removes only that namespace's marked generat
 not change inventory, external private-key files, or the user's OpenSSH config. A stale review,
 changed key source or target, or failed publication preserves the previous active generation;
 failed cleanup identifies the retained directory. Generated configuration is an output and is
-never read back into inventory. The separate `spl config generate`/`ssh-proxy` helper workflow
-and the complete C10 migration gate remain in the roadmap.
+never read back into inventory.
+
+The `spl` console helper provides the same explicit generation without opening the desktop:
+
+```sh
+spl config generate --list-profiles
+spl config generate --profile local --dry-run
+spl config generate --profile local --yes
+spl config generate --profile <profile-uuid> --identity-file <login-uuid> <existing-key-path> --yes
+```
+
+Choose the device-local profile UUID printed by `--list-profiles`, rather than an Account or
+vault ID. It reads only the selected existing Local namespace or ready Account's Personal
+store, independently of the open desktop selection. The existing desktop data and key must
+already be present; open the desktop first for setup or schema migration. It does not start
+synchronization or initialize missing data. `SPL_DATA_DIR` selects the same existing custom
+data directory as the desktop, when needed.
+
+For locally passphrase-protected data, use `--passphrase-file <path>`. Personal generation
+may also need `--catalog-passphrase-file <path>` for the independently protected Local
+catalog; listing uses only the catalog option. These files contain the complete nonempty
+UTF-8 passphrase, including any spaces and final newline. Account passwords are not local
+data passphrases. Passphrases are not accepted as argument values or printed.
+
+Every generation prints the destination, a standalone Include line, compatible Logins and
+their external authentication requirements, excluded rows, and each friendly alias outcome.
+`--dry-run` stops after review without creating generated files or directories. Otherwise,
+an interactive terminal must explicitly answer `yes`; noninteractive use requires `--yes`.
+The reviewed compatible set may be partial or empty. Add the printed Include line to your
+own OpenSSH config manually. Regenerate explicitly after inventory edits.
+
+Exit status is 0 for help, version, listing, successful review or publication; 1 for
+store/unlock/verification/I/O/publication failures; 2 for invalid usage or noninteractive
+publication without `--yes`; and 3 for declined interactive confirmation or EOF.
+
+The macOS application bundle carries `Contents/MacOS/spl`; Windows installs `spl.exe` beside
+`scoplen.exe`. No PATH entry is added. From source, run
+`cargo run -p scoplen-client-app --bin spl -- config generate --profile local --dry-run`.
+`cargo run -p scoplen-client-app` continues to launch the desktop. Run
+`pwsh ./scripts/test-openssh-export.ps1 -CliHelper` for real OpenSSH helper acceptance.
+After `pnpm tauri build --bundles app` on macOS or `pnpm tauri build --bundles nsis` on
+Windows, `node scripts/check-packaged-cli.mjs` exercises help/version/empty generation and
+standard `ssh -G` from the packaged helper. The Windows check extracts the installer with
+the CI runner's existing `7z` command; it does not run the installer or open a window.
+Runtime and package acceptance, the separate `ssh-proxy` command, and the complete C10
+migration gate remain tracked in the roadmap.
 
 The same Settings page provides Scoplen JSON/age import and export for Local inventory or
 the selected Account's Personal vault. JSON exports omit passwords, software private keys

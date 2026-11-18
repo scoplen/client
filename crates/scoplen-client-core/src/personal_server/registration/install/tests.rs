@@ -384,6 +384,22 @@ fn catalog(local: Arc<LocalData>, slots: &Slots) -> AccountProfiles {
     .unwrap()
 }
 
+type ExportSlots = Arc<dyn Fn(&Path) -> Option<Box<dyn Keystore>> + Send + Sync>;
+
+fn export_slots(harness: &Harness) -> ExportSlots {
+    let root = harness.f.dir.path().to_path_buf();
+    let local = harness.f.keys.clone();
+    let slots = harness.slots.clone();
+    Arc::new(move |path| {
+        let slot = if path == root {
+            Some(local.clone())
+        } else {
+            slots.lock().unwrap().get(path).cloned()
+        };
+        slot.map(|slot| Box::new(slot) as Box<dyn Keystore>)
+    })
+}
+
 struct Harness {
     // Release profile-owned database handles before Fixture removes its directory on Windows.
     profiles: AccountProfiles,
@@ -1038,12 +1054,147 @@ async fn archival_allows_a_second_account_with_independent_keys_and_keeps_both_a
     let keys = slots.values().map(|slot| slot.0.lock().unwrap().clone()).collect::<Vec<_>>();
     assert!(keys[0] != keys[1], "Account profiles must use independent database keys");
     drop(slots);
+    let factory = export_slots(&h);
+    let ready =
+        crate::profiles::OpenSshExportProfile::list_with_keystores(h.f.dir.path(), None, &factory)
+            .unwrap();
+    assert_eq!(ready.len(), 2);
+    for (id, count, expected_origin) in [
+        (None, 1, None),
+        (Some(first_id), 1, Some(h.f.status.origin.as_str())),
+        (Some(second.account().unwrap().id), 0, Some(peer.origin.as_str())),
+    ] {
+        let opening = crate::profiles::OpenSshExportProfile::with_keystores(
+            h.f.dir.path(),
+            id,
+            None,
+            None,
+            &factory,
+        )
+        .unwrap();
+        assert_eq!(opening.store().list(ObjectType::HOST).unwrap().len(), count);
+        assert_eq!(
+            opening
+                .store()
+                .personal_record()
+                .unwrap()
+                .as_ref()
+                .map(|record| record.origin.as_str()),
+            expected_origin
+        );
+        opening.recheck().unwrap();
+        assert!(!Arc::ptr_eq(&opening.store(), &second.store));
+    }
+    assert_eq!(h.profiles.current().unwrap().generation(), second.generation());
+    h.profiles.with_current_store(&second, |_| ()).unwrap();
     let local_again = h.profiles.open_local().unwrap();
     assert_eq!(local_again.store.get(local.id).unwrap(), Some(local));
     let first_again = h.profiles.open(first_id, None).unwrap();
     assert_eq!(first_again.store.list(ObjectType::HOST).unwrap().len(), 1);
     assert_eq!(first_again.store.personal_record().unwrap().unwrap().origin, h.f.status.origin);
     peer.healthy();
+    h.f.peer.healthy();
+}
+
+#[tokio::test]
+async fn export_opening_requires_ready_profile_separate_exact_passphrases_and_verified_bootstrap() {
+    use crate::{
+        local_key::LocalKeys,
+        profiles::{OpenSshExportProfile, OpenSshExportProfileError as Error},
+        testing::FAST,
+    };
+
+    let h = Harness::new().await;
+    h.peer.lock().unwrap().fault = Fault::Authentication;
+    assert!(h.install().await.is_err());
+    let candidate = h.profiles.list().unwrap().into_iter().next().unwrap();
+    let factory = export_slots(&h);
+    assert!(!candidate.ready);
+    assert!(
+        OpenSshExportProfile::list_with_keystores(h.f.dir.path(), None, &factory)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        OpenSshExportProfile::with_keystores(
+            h.f.dir.path(),
+            Some(candidate.id),
+            None,
+            None,
+            &factory
+        ),
+        Err(Error::ProfileUnavailable)
+    ));
+
+    h.peer.lock().unwrap().fault = Fault::None;
+    let installed = h.install().await.unwrap();
+    let id = installed.account().unwrap().id;
+    let path = h.f.dir.path().join("accounts").join(id.to_string());
+    let slot = h.slots.lock().unwrap().get(&path).unwrap().clone();
+    let keys = LocalKeys::new(&path, Some(Box::new(slot))).with_params(FAST);
+    let crate::local_key::Unlock::Ready(key, _) = keys.existing().unwrap() else {
+        panic!("fixture key");
+    };
+    keys.set_passphrase(&key, " account local \n").unwrap();
+    h.f.local.set_passphrase(" catalog local \n").unwrap();
+    assert!(matches!(
+        OpenSshExportProfile::with_keystores(
+            h.f.dir.path(),
+            Some(id),
+            None,
+            Some(" account local \n"),
+            &factory
+        ),
+        Err(Error::Locked)
+    ));
+    assert!(matches!(
+        OpenSshExportProfile::with_keystores(
+            h.f.dir.path(),
+            Some(id),
+            Some(" catalog local \n"),
+            Some("account local"),
+            &factory
+        ),
+        Err(Error::WrongPassphrase)
+    ));
+    let opening = OpenSshExportProfile::with_keystores(
+        h.f.dir.path(),
+        Some(id),
+        Some(" catalog local \n"),
+        Some(" account local \n"),
+        &factory,
+    )
+    .unwrap();
+    opening.recheck().unwrap();
+    h.profiles.with_current_store(&installed, |_| ()).unwrap();
+    assert_eq!(
+        OpenSshExportProfile::list_with_keystores(
+            h.f.dir.path(),
+            Some(" catalog local \n"),
+            &factory
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+
+    let conn = rusqlite::Connection::open(path.join("local.db")).unwrap();
+    let hex =
+        Zeroizing::new(key.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect::<String>());
+    let pragma = Zeroizing::new(format!("x'{}'", hex.as_str()));
+    conn.pragma_update(None, "key", pragma.as_str()).unwrap();
+    conn.execute("DELETE FROM personal_sync", []).unwrap();
+    assert_eq!(opening.recheck(), Err(Error::Verification));
+    assert!(matches!(
+        OpenSshExportProfile::with_keystores(
+            h.f.dir.path(),
+            Some(id),
+            Some(" catalog local \n"),
+            Some(" account local \n"),
+            &factory
+        ),
+        Err(Error::Verification)
+    ));
     h.f.peer.healthy();
 }
 
@@ -1092,6 +1243,10 @@ async fn bound_identity_catalog_generation_and_original_keys_resist_update_delet
     wrong.profile.account_id = scoplen_model::new_uuid_v7().unwrap();
     assert!(matches!(
         Store::open_profile(&path.join("local.db"), &key, Some(&wrong)),
+        Err(StoreError::AccountContext)
+    ));
+    assert!(matches!(
+        Store::open_export_profile(&path.join("local.db"), &key, Some(&wrong)),
         Err(StoreError::AccountContext)
     ));
     let source = h.profiles.open_local().unwrap();

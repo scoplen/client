@@ -26,7 +26,7 @@ arboard = { version = "=3.6.1", default-features = false }
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_TpmBaseServices"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_TpmBaseServices", "Win32_UI_Shell"] }
 
 [dev-dependencies]
 tempfile.workspace = true

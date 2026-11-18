@@ -10,6 +10,7 @@
 
 pub mod clipboard;
 pub mod credentials;
+pub mod data_directory;
 pub mod file_identity;
 pub mod keystore;
 pub mod ssh_agent;

@@ -8,6 +8,7 @@ rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish = false
+default-run = "scoplen"
 
 [lib]
 name = "scoplen_client_app"
@@ -15,6 +16,10 @@ name = "scoplen_client_app"
 [[bin]]
 name = "scoplen"
 path = "src/main.rs"
+
+[[bin]]
+name = "spl"
+path = "src/bin/spl.rs"
 
 [build-dependencies]
 tauri-build.workspace = true

@@ -4,6 +4,14 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Generate standard OpenSSH configuration with the `spl config generate` console helper.
+  Explicitly list or select an existing device-local Local or ready Personal profile,
+  supply local passphrases through exact UTF-8 files, and review every compatible Login,
+  exclusion and friendly alias before explicit publication. Reuse Settings' stable Include
+  and atomic generation without changing the desktop selection, migrating data, starting
+  synchronization, or writing the user's OpenSSH config. Keep the desktop as Cargo's
+  default binary and carry the helper alongside it in application bundles.
+
 - Start Login-selected Remote TCP tunnels on the existing Local or Personal terminal's
   authenticated SSH transport, alongside shell, Files, Local/Dynamic tunnels and the
   selected Agent identity. Route only exact acknowledged endpoints to captured local

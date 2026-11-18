@@ -66,6 +66,9 @@ pub enum StoreError {
         /// The newest version this build knows.
         supported: u32,
     },
+    /// A read-only export requires the desktop to complete ordinary schema migration first.
+    #[error("open this store in the matching desktop client to complete its schema migration")]
+    MigrationRequired,
     /// Creating an object would exceed the objects-per-vault limit.
     #[error("a vault holds at most {MAX_OBJECTS_PER_VAULT} objects")]
     VaultFull,
@@ -228,7 +231,38 @@ impl Store {
         migrate(&mut conn)?;
         conn.execute("UPDATE team_asset_views SET phase=2,acknowledged=0 WHERE phase IN(0,1)", [])?;
         let device_id = ensure_device(&conn, profile.map(|p| p.profile.device_id))?;
-        Ok(Store {
+        Ok(Self::from_connection(conn, path, device_id))
+    }
+
+    pub(crate) fn open_export_profile(
+        path: &Path,
+        key: &LocalDatabaseKey,
+        profile: Option<&profiles::ProfileRecord>,
+    ) -> Result<Store, StoreError> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        apply_key(&conn, key)?;
+        let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let supported = MIGRATIONS.len() as u32;
+        if current > supported {
+            return Err(StoreError::NewerSchema { found: current, supported });
+        }
+        if current < supported {
+            return Err(StoreError::MigrationRequired);
+        }
+        profiles::export_preflight(&conn, profile)?;
+        let device_id = retained_device(&conn, profile.map(|record| record.profile.device_id))?
+            .ok_or(StoreError::AccountContext)?;
+        if device_id.get_version_num() != 7 {
+            return Err(StoreError::InvalidIdentifier);
+        }
+        Ok(Self::from_connection(conn, path, device_id))
+    }
+
+    fn from_connection(conn: Connection, path: &Path, device_id: Uuid) -> Store {
+        Store {
             conn: Mutex::new(conn),
             data_dir: path.parent().unwrap_or_else(|| Path::new(".")).to_owned(),
             device_id,
@@ -237,7 +271,7 @@ impl Store {
             personal_changes: tokio::sync::watch::channel(0).0,
             team_changes: tokio::sync::watch::channel(0).0,
             personal_rotation: std::sync::atomic::AtomicU64::new(0),
-        })
+        }
     }
 
     /// The identity of this device, used as the origin of its writes.
@@ -981,14 +1015,7 @@ fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
 }
 
 fn ensure_device(conn: &Connection, expected: Option<Uuid>) -> Result<Uuid, StoreError> {
-    let existing: Option<Vec<u8>> = conn
-        .query_row("SELECT device_id FROM device WHERE singleton = 1", [], |row| row.get(0))
-        .optional()?;
-    if let Some(id) = existing {
-        let id = uuid_from(&id)?;
-        if expected.is_some_and(|expected| expected != id) {
-            return Err(StoreError::AccountContext);
-        }
+    if let Some(id) = retained_device(conn, expected)? {
         return Ok(id);
     }
     let id = match expected {
@@ -1001,6 +1028,20 @@ fn ensure_device(conn: &Connection, expected: Option<Uuid>) -> Result<Uuid, Stor
         params![id.as_bytes().as_slice(), now as i64],
     )?;
     Ok(id)
+}
+
+fn retained_device(conn: &Connection, expected: Option<Uuid>) -> Result<Option<Uuid>, StoreError> {
+    let existing: Option<Vec<u8>> = conn
+        .query_row("SELECT device_id FROM device WHERE singleton = 1", [], |row| row.get(0))
+        .optional()?;
+    if let Some(id) = existing {
+        let id = uuid_from(&id)?;
+        if expected.is_some_and(|expected| expected != id) {
+            return Err(StoreError::AccountContext);
+        }
+        return Ok(Some(id));
+    }
+    Ok(None)
 }
 
 /// Advances and persists the device clock for one local write.

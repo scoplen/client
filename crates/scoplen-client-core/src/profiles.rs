@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Independent Account stores; Local remains the catalog and never changes account identity.
 
+mod export;
+pub use export::{OpenSshExportProfile, OpenSshExportProfileError};
+
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
