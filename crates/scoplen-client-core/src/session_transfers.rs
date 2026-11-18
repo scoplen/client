@@ -10,13 +10,14 @@ use uuid::Uuid;
 
 use crate::connection::preparation::PreparationContext;
 use crate::session_directory_copy::SessionDirectoryCopyProgress;
+use crate::session_directory_sync::{SessionDirectorySyncIssue, SessionDirectorySyncProgress};
 use crate::session_files::{FileTransferProgress, SessionFileTransferPhase};
 
 mod local;
 mod selected;
 
 pub(crate) use local::DownloadDestination;
-pub(crate) use selected::{ReplaceConfirmation, SelectedTransfer};
+pub(crate) use selected::{RepeatedConfirmation, ReplaceConfirmation, SelectedTransfer};
 
 pub(crate) const TRANSFER_CAPACITY: usize = 16;
 const TRANSFER_HISTORY: usize = 32;
@@ -210,6 +211,8 @@ pub struct SessionTransferItem {
     pub staging_may_remain: bool,
     /// Whole-tree progress, or None for an ordinary file transfer.
     pub directory_copy: Option<SessionDirectoryCopyProgress>,
+    /// Incremental synchronization progress and partial results.
+    pub directory_sync: Option<SessionDirectorySyncProgress>,
 }
 
 /// A complete on-demand snapshot of one logical session's transfer queue.
@@ -284,6 +287,7 @@ struct TransferRecord<T> {
     publication_started: bool,
     pause_supported: bool,
     directory_copy: Option<SessionDirectoryCopyProgress>,
+    directory_sync: Option<SessionDirectorySyncProgress>,
     resources: Option<T>,
 }
 
@@ -317,6 +321,7 @@ impl<T> TransferRecord<T> {
             issue: self.issue,
             staging_may_remain: self.staging_may_remain,
             directory_copy: self.directory_copy.clone(),
+            directory_sync: self.directory_sync.clone(),
         }
     }
 }
@@ -511,6 +516,22 @@ impl<T> TransferQueue<T> {
         Ok(result)
     }
 
+    pub fn enqueue_directory_sync(
+        &mut self,
+        selected: SelectionReservation,
+        name: &str,
+        direction: SessionTransferDirection,
+        total: u64,
+        progress: SessionDirectorySyncProgress,
+        resources: T,
+    ) -> Result<SessionTransferEnqueueResult, SessionTransferIssue> {
+        let result = self.enqueue_selected(selected, name, direction, Some(total), resources)?;
+        let record = self.items.back_mut().expect("new synchronization item");
+        record.pause_supported = false;
+        record.directory_sync = Some(progress);
+        Ok(result)
+    }
+
     fn accept_selection(
         &mut self,
         selected: SelectionReservation,
@@ -554,6 +575,7 @@ impl<T> TransferQueue<T> {
             publication_started: false,
             pause_supported: direction == SessionTransferDirection::Download,
             directory_copy: None,
+            directory_sync: None,
             resources: Some(resources),
         });
         SessionTransferEnqueueResult::Queued {
@@ -693,9 +715,35 @@ impl<T> TransferQueue<T> {
         self.changed();
     }
 
+    pub fn synchronization_progress(
+        &mut self,
+        identity: TransferIdentity,
+        transferred: u64,
+        total: u64,
+        update: SessionDirectorySyncProgress,
+    ) {
+        let Some(record) = self.running_mut(identity) else { return };
+        if record.directory_sync.is_none()
+            || transferred < record.transferred
+            || transferred > total
+        {
+            return;
+        }
+        record.transferred = transferred;
+        record.total = Some(total);
+        record.directory_sync = Some(update);
+        if !matches!(
+            record.state,
+            SessionTransferState::Cancelling | SessionTransferState::AwaitingConfirmation
+        ) {
+            record.state = SessionTransferState::Transferring;
+        }
+        self.changed();
+    }
+
     pub fn finish_directory_effect(&mut self, identity: TransferIdentity) {
         let Some(record) = self.running_mut(identity) else { return };
-        if record.directory_copy.is_some() {
+        if record.directory_copy.is_some() || record.directory_sync.is_some() {
             record.publication_started = false;
             self.changed();
         }
@@ -808,6 +856,18 @@ impl<T> TransferQueue<T> {
                 SessionTransferState::Unknown => DirectoryIssue::PublicationUnknown,
                 _ => DirectoryIssue::Failed,
             });
+        }
+        if let Some(progress) = record.directory_sync.as_mut()
+            && progress.issue.is_none()
+            && completion.state != SessionTransferState::Saved
+        {
+            progress.issue = Some(match completion.state {
+                SessionTransferState::Cancelled => SessionDirectorySyncIssue::Cancelled,
+                SessionTransferState::Interrupted => SessionDirectorySyncIssue::Unavailable,
+                SessionTransferState::Unknown => SessionDirectorySyncIssue::PublicationUnknown,
+                _ => SessionDirectorySyncIssue::Failed,
+            });
+            progress.failed_name = progress.current_name.clone();
         }
         if completion.state != SessionTransferState::Unknown {
             let record = self.items.remove(index).expect("matching item exists");

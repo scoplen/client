@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Display-only plans for explicitly directed current-directory synchronization.
+//! Display-only plans and results for explicitly directed recursive synchronization.
 
 use serde::Serialize;
 use specta::Type;
@@ -19,18 +19,56 @@ pub enum SessionDirectorySyncChange {
     Same,
 }
 
-/// One bounded filename and its comparison result.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+/// A corresponding directory is either present or explicitly planned for creation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionDirectorySyncEntry {
-    /// Safe source basename; never used to reconstruct a target.
-    pub name: String,
-    /// Planned action or genuine content equality.
-    pub change: SessionDirectorySyncChange,
-    /// Decimal source length.
-    pub source_size_bytes: String,
-    /// Decimal destination length, or absence.
-    pub target_size_bytes: Option<String>,
+pub enum SessionDirectorySyncDirectoryChange {
+    /// This ordinary directory must be created.
+    Create,
+    /// This ordinary directory already exists.
+    Existing,
+}
+
+/// One bounded relative display name and its comparison result.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum SessionDirectorySyncEntry {
+    /// One ordinary source file.
+    File {
+        /// Safe relative name, never used to reconstruct a path.
+        name: String,
+        /// Planned action or genuine complete-content equality.
+        change: SessionDirectorySyncChange,
+        /// Decimal source length.
+        source_size_bytes: String,
+        /// Decimal destination length, or absence.
+        target_size_bytes: Option<String>,
+    },
+    /// An ordinary directory, including the existing root displayed as a dot.
+    Directory {
+        /// Safe relative name, never used to reconstruct a path.
+        name: String,
+        /// Whether explicit creation is required.
+        change: SessionDirectorySyncDirectoryChange,
+    },
+}
+
+/// Complete counts for one bounded recursive comparison.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDirectorySyncSummary {
+    /// Missing ordinary files.
+    pub files_create: u32,
+    /// Existing ordinary files with different contents.
+    pub files_changed: u32,
+    /// Files whose complete contents match.
+    pub files_same: u32,
+    /// Missing directories, including empty children.
+    pub directories_create: u32,
+    /// Existing ordinary directories, including the root.
+    pub directories_existing: u32,
+    /// Source bytes requiring transfer, as unsigned decimal text.
+    pub transfer_size_bytes: String,
 }
 
 /// A read-only observation whose native resources remain in Rust.
@@ -49,10 +87,10 @@ pub struct SessionDirectorySyncPlan {
     pub remote_name: String,
     /// Safe selected local directory basename.
     pub local_name: String,
-    /// At most sixteen ordinary source files.
+    /// Complete bounded file and directory rows, including the existing root.
     pub entries: Vec<SessionDirectorySyncEntry>,
-    /// Source subdirectories deliberately excluded from this shallow profile.
-    pub excluded_directories: u32,
+    /// Complete counts of planned actions.
+    pub summary: SessionDirectorySyncSummary,
 }
 
 /// Fixed operational categories without native paths, contents or digests.
@@ -71,9 +109,15 @@ pub enum SessionDirectorySyncIssue {
     /// A name cannot map losslessly or conflicts with another destination.
     #[error("a filename cannot be used at the destination")]
     UnsupportedName,
-    /// The source-file count or complete directory listing exceeded its bound.
-    #[error("this directory exceeds the file or listing limit")]
-    TooManyFiles,
+    /// The complete tree exceeds its entry count.
+    #[error("this directory contains too many entries")]
+    TooManyEntries,
+    /// The complete tree exceeds its depth bound.
+    #[error("this directory is nested too deeply")]
+    TooDeep,
+    /// Retained comparison metadata exceeds its bound.
+    #[error("this directory contains too much filename metadata")]
+    TooMuchMetadata,
     /// Complete hashing exceeded its per-file or total byte bound.
     #[error("this comparison exceeds its limits")]
     TooLarge,
@@ -98,6 +142,12 @@ pub enum SessionDirectorySyncIssue {
     /// The comparison could not complete.
     #[error("the directory comparison failed")]
     Failed,
+    /// Cleanup of the current owned staging file could not be confirmed.
+    #[error("temporary file cleanup could not be confirmed")]
+    CleanupIncomplete,
+    /// A dispatched mutation or publication has an unknown result.
+    #[error("the destination result is unknown; review it before trying again")]
+    PublicationUnknown,
 }
 
 /// Native folder selection either produced a complete plan or was cancelled.
@@ -113,16 +163,6 @@ pub enum SessionDirectorySyncPrepareResult {
     Cancelled,
 }
 
-/// One admitted execution remains owned by the existing transfer queue.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionDirectorySyncItem {
-    /// Stable queue item.
-    pub item_id: String,
-    /// Exact initial execution.
-    pub execution_id: String,
-}
-
 /// Explicit Apply either queued its complete changes or had nothing to write.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -131,9 +171,47 @@ pub enum SessionDirectorySyncApplyResult {
     Queued {
         /// Captured queue lifetime.
         queue_id: String,
-        /// Initial FIFO admission order.
-        items: Vec<SessionDirectorySyncItem>,
+        /// One stable queue item for the complete reviewed tree.
+        item_id: String,
+        /// Exact initial execution.
+        execution_id: String,
     },
-    /// Every source was Same or there were no ordinary source files.
+    /// Every source file was Same and every directory was Existing.
     Unchanged,
+}
+
+/// Phase of an admitted synchronization job.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionDirectorySyncPhase {
+    /// Creating directories or transferring ordinary files.
+    Copying,
+    /// Verifying and publishing the current ordinary file.
+    Finalizing,
+}
+
+/// Incremental results remain meaningful when the destination root already existed.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDirectorySyncProgress {
+    /// Current child phase, which never implies whole-job completion.
+    pub phase: SessionDirectorySyncPhase,
+    /// Planned Create and Changed files.
+    pub files_total: u32,
+    /// Planned directory creations.
+    pub directories_total: u32,
+    /// Confirmed new file publications.
+    pub files_created: u32,
+    /// Confirmed replacement publications.
+    pub files_updated: u32,
+    /// Same files verified by successful Apply.
+    pub files_skipped: u32,
+    /// Confirmed directory creations.
+    pub directories_created: u32,
+    /// Safe bounded relative name of the current row.
+    pub current_name: Option<String>,
+    /// Safe bounded relative name where execution first stopped.
+    pub failed_name: Option<String>,
+    /// Fixed localized failure category.
+    pub issue: Option<SessionDirectorySyncIssue>,
 }

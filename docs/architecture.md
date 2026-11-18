@@ -980,29 +980,31 @@ own or stop the Rust observer. Stop and owner replacement end further upload aut
 preserving the user-selected ordinary file and external editor. A new connection or process
 does not restore that authority. File contents and native paths never enter the projection.
 
-## Directional folder comparison
+## Directional recursive directory synchronization
 
-Rust owns a bounded, process-local directory plan under the captured profile, logical
-session, transport and original remote/local folders. The first profile compares at most
-sixteen ordinary source files in the current layer. Missing targets are Create, different
-sizes are Changed and equal-size files require complete streaming SHA-256 comparison. Same
-files are skipped; source subfolders are reported without traversal, and target-only files
-remain untouched. Hash work uses bounded chunks, per-file/aggregate read budgets and an
-absolute deadline. Comparison creates no local or remote file. Download basenames require
-valid UTF-8; a canonically decomposed Unicode uppercase key conservatively rejects colliding
-names without changing their original path bytes, including on case-sensitive destinations.
+Rust compares the relative source tree between an existing native folder and the connected
+terminal's current remote directory. Explicit Upload/Download retains the original profile,
+logical session and transport. The complete plan includes ordinary and empty directories,
+file Create/Changed/Same and directory Create/Existing actions. Target-only entries remain
+untouched. Complete-tree scanning reuses the folder-copy entry/depth/metadata budgets;
+equal-size files require complete SHA-256 comparison within the existing read and time
+budgets. Comparison writes nothing, retains bounded metadata rather than open file handles,
+and rejects incomplete listings, unsupported types and lossless-name/collision failures.
 
-Explicit Apply rechecks the source set and all retained metadata, then admits every changed
-file together through the existing FIFO reservation. Per-file publication, replacement,
-pause/cancellation and uncertain-result behavior stays in the existing transfer owner.
-Admission does not make the batch a filesystem transaction. Existing metadata and retained
-handle limitations apply without an immutable-source or compare-and-swap promise.
+Apply rechecks the complete tree and every retained baseline without hashing again. One
+FIFO slot owns the reviewed tree; only an all-Same/Existing plan uses no slot. The worker
+consumes that plan without discovering extra files, creates parents first and opens only
+the current source file. Ordinary fresh replacement confirmation and single-file private
+staging, verification and publication remain authoritative. Refusal or the first failure
+stops the job and preserves completed changes; the operation is not a tree transaction.
 
-The profile-bound Prepare, Apply and Discard commands expose only safe names, sizes,
-dispositions, counts and opaque plan/queue identities. `SessionDirectorySync` renders the
-preview, supplies explicit intents and discards obsolete results. Its cleanup cancels a
-comparison or releases a plan, while accepted transfers retain session ownership. Native
-paths, comparison digests and contents remain in Rust.
+Incremental progress records confirmed created directories, created/updated files, Apply-
+verified Same skips, aggregate bytes and the current or first failed relative display name.
+It does not depend on the separate new-root copy workflow's root-created flag. Cancellation,
+uncertain-result acknowledgement and transport ownership retain the existing queue rules;
+directory-wide pause, durable continuation, deletion and bidirectional merging are absent.
+Prepare/Apply/Discard expose only bounded safe rows and identities. Native paths, contents
+and comparison digests remain in Rust; hiding Files does not cancel admitted queue work.
 
 ## Localization
 

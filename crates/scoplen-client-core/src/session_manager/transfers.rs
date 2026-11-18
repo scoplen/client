@@ -483,6 +483,11 @@ impl SessionManager {
             upload_state: state,
         };
         let completion = match selected.resources {
+            SelectedTransfer::DirectorySync { plan, confirm } => {
+                return self
+                    .execute_directory_sync(session, queue, identity, context, guard, plan, confirm)
+                    .await;
+            }
             SelectedTransfer::Directory(input) => {
                 return self.execute_directory_copy(session, identity, guard, input).await;
             }
@@ -945,7 +950,7 @@ impl SessionManager {
         }
     }
 
-    async fn confirm_transfer(
+    pub(super) async fn confirm_transfer(
         &self,
         session: &str,
         queue: Uuid,
