@@ -531,3 +531,37 @@ fn storage(error: crate::store::StoreError) -> AccountProfileError {
         _ => AccountProfileError::Storage,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::MemoryKeystore;
+
+    #[test]
+    fn cli_opening_reproduction_second_catalog_invalidates_the_original_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let keys = MemoryKeystore::default();
+        let original =
+            Arc::new(LocalData::start(directory.path(), Some(Box::new(keys.clone()))).unwrap());
+        let desktop =
+            AccountProfiles::new(original.clone(), Arc::new(PersonalSyncRuntime::default()))
+                .unwrap();
+        let captured = desktop.current().unwrap();
+        let first = original.store().unwrap();
+
+        let second = Arc::new(LocalData::start(directory.path(), Some(Box::new(keys))).unwrap());
+        assert!(!Arc::ptr_eq(&first, &second.store().unwrap()));
+        assert_eq!(first.device_id(), second.store().unwrap().device_id());
+        assert_eq!(desktop.current().unwrap().generation(), captured.generation());
+
+        let helper =
+            AccountProfiles::new(second, Arc::new(PersonalSyncRuntime::default())).unwrap();
+        assert_eq!(helper.current().unwrap().generation(), captured.generation() + 1);
+        assert_eq!(first.profile_generation().unwrap() as u64, captured.generation() + 1);
+        assert!(matches!(desktop.current(), Err(AccountProfileError::ContextChanged)));
+        assert!(matches!(
+            desktop.with_current_store(&captured, |store| store.device_id()),
+            Err(AccountProfileError::ContextChanged)
+        ));
+    }
+}
