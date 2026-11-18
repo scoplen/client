@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
+param([switch]$CliHelper)
+
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $scratchRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
 $scratch = Join-Path $scratchRoot ('scoplen-export-' + [guid]::NewGuid().ToString('N'))
 $container = 'scoplen-export-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
 $previousSocket = $env:SSH_AUTH_SOCK
+$previousHelper = $env:SCOPLEN_EXPORT_HELPER
 $passed = $false
 
 function Check-LastExit([string]$description) {
@@ -42,6 +45,16 @@ try {
     Check-LastExit 'read managed Cargo target directory'
     $suffix = if ($IsWindows) { '.exe' } else { '' }
     $smoke = Join-Path $metadata.target_directory "debug/examples/openssh_export_smoke$suffix"
+    if ($CliHelper) {
+        & cargo build --locked -p scoplen-client-app --bin spl *> (Join-Path $scratch 'helper-build.log')
+        if ($LASTEXITCODE -ne 0) {
+            Get-Content -LiteralPath (Join-Path $scratch 'helper-build.log') -Tail 35
+            throw 'build generated-Include helper failed'
+        }
+        $env:SCOPLEN_EXPORT_HELPER = Join-Path $metadata.target_directory "debug/spl$suffix"
+    } else {
+        $env:SCOPLEN_EXPORT_HELPER = $null
+    }
     $public = (Get-Content -LiteralPath "$identity.pub" -Raw).Trim()
     & docker run --rm -d --name $container -p '127.0.0.1::2222' `
         -e 'USER_NAME=smoke' -e "PUBLIC_KEY=$public" -e 'PASSWORD_ACCESS=true' `
@@ -89,10 +102,15 @@ pkill -HUP -o sshd
     $passed = $true
 } finally {
     $env:SSH_AUTH_SOCK = $previousSocket
+    $env:SCOPLEN_EXPORT_HELPER = $previousHelper
     if (-not $passed -and (Test-Path -LiteralPath $scratch)) {
         & docker logs --tail 80 $container *> (Join-Path $scratch 'server.log')
     }
-    & docker rm -f $container 2>$null | Out-Null
+    if ($passed) {
+        & docker rm -f --volumes $container 2>$null | Out-Null
+    } else {
+        & docker stop --time 5 $container 2>$null | Out-Null
+    }
     if ($passed -and (Test-Path -LiteralPath $scratch)) {
         $resolved = [IO.Path]::GetFullPath($scratch)
         if (-not $resolved.StartsWith($scratchRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {

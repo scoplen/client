@@ -189,6 +189,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build
         run: ${{ matrix.build }}
+      - name: Verify the packaged console helper independently
+        run: node scripts/check-packaged-cli.mjs
       - name: Launch until the first screen renders
         shell: bash
         env:
