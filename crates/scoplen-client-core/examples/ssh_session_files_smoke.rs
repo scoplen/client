@@ -14,8 +14,9 @@ use scoplen_client_core::session_directory_copy::{
     SessionDirectoryCopyIssue, SessionDirectoryCopyPhase, SessionDirectoryCopyPrepareResult,
 };
 use scoplen_client_core::session_directory_sync::{
-    SessionDirectorySyncApplyResult, SessionDirectorySyncChange, SessionDirectorySyncIssue,
-    SessionDirectorySyncPlan, SessionDirectorySyncPrepareResult,
+    SessionDirectorySyncApplyResult, SessionDirectorySyncChange,
+    SessionDirectorySyncDirectoryChange, SessionDirectorySyncEntry, SessionDirectorySyncIssue,
+    SessionDirectorySyncPlan, SessionDirectorySyncPrepareResult, SessionDirectorySyncProgress,
 };
 use scoplen_client_core::session_editor::{
     SessionEditorIssue, SessionEditorSnapshot, SessionEditorStartResult, SessionEditorState,
@@ -38,8 +39,10 @@ use uuid::Uuid;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = env::args().collect::<Vec<_>>();
-    if args.len() != 4 {
-        return Err("usage: ssh_session_files_smoke <host> <port> <password-file>".into());
+    if !(args.len() == 4 || args.len() == 5 && args[4] == "--unknown") {
+        return Err(
+            "usage: ssh_session_files_smoke <host> <port> <password-file> [--unknown]".into()
+        );
     }
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -92,12 +95,16 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         |_, _| {},
     ));
     let exercise = async {
-        let result = exercise(&manager, scratch.path(), &mut ready_rx, &mut output_rx).await;
+        let result = if args.len() == 5 {
+            exercise_sync_unknown(&manager, scratch.path(), &mut ready_rx, &mut output_rx).await
+        } else {
+            exercise(&manager, scratch.path(), &mut ready_rx, &mut output_rx).await
+        };
         let _ = manager.close("fixture-terminal");
         result
     };
     let (terminal, exercise) =
-        tokio::time::timeout(Duration::from_secs(360), async { tokio::join!(terminal, exercise) })
+        tokio::time::timeout(Duration::from_secs(600), async { tokio::join!(terminal, exercise) })
             .await?;
     exercise?;
     terminal?;
@@ -929,27 +936,167 @@ async fn apply_directory(
     manager: &SessionManager,
     transport: &str,
     plan: &SessionDirectorySyncPlan,
-    decline: bool,
-) -> Result<Vec<SessionTransferItem>, Box<dyn std::error::Error>> {
+    decline: Option<usize>,
+) -> Result<SessionTransferItem, Box<dyn std::error::Error>> {
+    let direction = plan.direction;
+    let confirmations = Arc::new(AtomicUsize::new(0));
+    let confirmed = confirmations.clone();
     let result = manager
-        .apply_directory_sync(
-            "fixture-terminal",
-            transport,
-            &plan.plan_id,
-            move |review| async move {
-                assert!(matches!(review.name.as_str(), "b-size" | "c-bytes"));
-                Ok(!(decline && review.name == "b-size"))
-            },
-        )
+        .apply_directory_sync("fixture-terminal", transport, &plan.plan_id, move |review| {
+            let confirmed = confirmed.clone();
+            async move {
+                assert_eq!(review.host, "disposable file fixture");
+                assert_eq!(review.username, "smoke");
+                assert_eq!(review.direction, direction);
+                Ok(decline != Some(confirmed.fetch_add(1, Ordering::SeqCst) + 1))
+            }
+        })
         .await?;
-    let SessionDirectorySyncApplyResult::Queued { items, .. } = result else {
-        return Err("changed directory batch was not queued".into());
+    let SessionDirectorySyncApplyResult::Queued { queue_id, item_id, execution_id } = result else {
+        return Err("changed recursive directory was not queued".into());
     };
-    let mut results = Vec::new();
-    for item in items {
-        results.push(wait_queue_item(manager, &item.item_id).await?);
+    let settled = tokio::time::timeout(Duration::from_secs(120), async {
+        loop {
+            let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+            assert_eq!(snapshot.queue_id, queue_id);
+            if let Some(row) = snapshot.recent.into_iter().find(|row| row.item_id == item_id) {
+                assert_eq!(row.execution_id, execution_id);
+                assert_eq!(row.transport_id, transport);
+                assert!(row.directory_copy.is_none());
+                assert_eq!(snapshot.outstanding, 0);
+                return Ok::<_, Box<dyn std::error::Error>>(row);
+            }
+            let row = snapshot
+                .items
+                .iter()
+                .find(|row| row.item_id == item_id)
+                .ok_or("recursive sync job disappeared")?;
+            assert_eq!(row.execution_id, execution_id);
+            assert_eq!(row.transport_id, transport);
+            assert_eq!(snapshot.outstanding, 1, "one tree must occupy exactly one slot");
+            assert!(!row.can_pause && !row.can_resume);
+            assert!(row.directory_sync.is_some() && row.directory_copy.is_none());
+            if row.state == SessionTransferState::Unknown {
+                return Err("recursive sync publication was unknown; no replay attempted".into());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    if let Some(count) = decline {
+        assert_eq!(
+            confirmations.load(Ordering::SeqCst),
+            count,
+            "a refusal must stop later confirmations"
+        );
     }
-    Ok(results)
+    settled
+}
+
+fn sync_progress(row: &SessionTransferItem) -> &SessionDirectorySyncProgress {
+    row.directory_sync.as_ref().expect("recursive synchronization progress")
+}
+
+fn assert_sync_file(
+    plan: &SessionDirectorySyncPlan,
+    name: &str,
+    change: SessionDirectorySyncChange,
+) {
+    assert!(
+        plan.entries.iter().any(|row| matches!(row,
+            SessionDirectorySyncEntry::File { name: found, change: actual, .. }
+                if found == name && *actual == change
+        )),
+        "missing expected file action for {name}"
+    );
+}
+
+fn assert_sync_directory(
+    plan: &SessionDirectorySyncPlan,
+    name: &str,
+    change: SessionDirectorySyncDirectoryChange,
+) {
+    assert!(
+        plan.entries.iter().any(|row| matches!(row,
+            SessionDirectorySyncEntry::Directory { name: found, change: actual }
+                if found == name && *actual == change
+        )),
+        "missing expected directory action for {name}"
+    );
+}
+
+async fn remote_sync_metadata(
+    manager: &SessionManager,
+    transport: &str,
+    remote: &[u8],
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    Ok(serde_json::to_value(
+        manager
+            .list_files("fixture-terminal", transport, &Uuid::now_v7().to_string(), remote.to_vec())
+            .await?,
+    )?)
+}
+
+async fn sync_shell(
+    manager: &SessionManager,
+    transport: &str,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+    command: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    manager.input(
+        "fixture-terminal",
+        transport,
+        format!("(set -eu; {command}); status=$?; if test $status -eq 0; then printf '%s%s\\n' SCOPLEN- SYNC-SHELL-READY; else printf '%s%s\\n' SCOPLEN- SYNC-SHELL-FAILED; fi\n").into_bytes(),
+    )?;
+    tokio::time::timeout(Duration::from_secs(60), wait_for(output, b"SCOPLEN-SYNC-SHELL-READY"))
+        .await?
+}
+
+fn create_sync_tree(root: &std::path::Path, source: bool) -> Result<(), std::io::Error> {
+    fs::create_dir_all(root.join("nested"))?;
+    for (name, bytes) in [
+        ("b-size", if source { b"x".as_slice() } else { b"longer".as_slice() }),
+        ("c-bytes", if source { b"new".as_slice() } else { b"old".as_slice() }),
+        ("d-same", b"same"),
+        ("e-empty", b""),
+    ] {
+        fs::write(root.join(name), bytes)?;
+    }
+    if source {
+        fs::create_dir_all(root.join("nested/deeper"))?;
+        fs::create_dir(root.join("empty"))?;
+        fs::write(root.join("a-create"), [0, 255, 3])?;
+        fs::write(root.join("nested/deeper/payload.bin"), [255, 0, 8, 7])?;
+        for index in 0..20 {
+            fs::write(root.join("nested").join(format!("child-{index:02}")), b"tree")?;
+        }
+    } else {
+        fs::create_dir_all(root.join("kept"))?;
+        fs::write(root.join("kept/leaf"), b"target directory preserved")?;
+        fs::write(root.join("target-only"), b"target file preserved")?;
+    }
+    Ok(())
+}
+
+async fn assert_sync_unchanged(
+    manager: &SessionManager,
+    transport: &str,
+    plan: &SessionDirectorySyncPlan,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let before = manager.transfer_queue_snapshot("fixture-terminal")?;
+    assert_eq!(
+        manager
+            .apply_directory_sync("fixture-terminal", transport, &plan.plan_id, |_| async {
+                panic!("Same/Existing rows cannot ask for replacement")
+            },)
+            .await?,
+        SessionDirectorySyncApplyResult::Unchanged
+    );
+    let after = manager.transfer_queue_snapshot("fixture-terminal")?;
+    assert_eq!(before.outstanding, after.outstanding);
+    assert_eq!(before.items, after.items);
+    assert_eq!(before.recent, after.recent);
+    Ok(())
 }
 
 async fn exercise_directory_sync(
@@ -958,254 +1105,389 @@ async fn exercise_directory_sync(
     local: &std::path::Path,
     output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    manager.input("fixture-terminal", transport, b"mkdir -p .scoplen-files-smoke/sync-upload/remote-dir .scoplen-files-smoke/sync-download/source-dir .scoplen-files-smoke/sync-links; printf longer > .scoplen-files-smoke/sync-upload/b-size; printf old > .scoplen-files-smoke/sync-upload/c-bytes; printf same > .scoplen-files-smoke/sync-upload/d-same; : > .scoplen-files-smoke/sync-upload/e-empty; printf preserved > .scoplen-files-smoke/sync-upload/remote-only; touch -t 200001010000 .scoplen-files-smoke/sync-upload/d-same; ln -s missing .scoplen-files-smoke/sync-links/link; printf '%s%s\\n' SCOPLEN- DIRECTORY-READY\n".to_vec())?;
-    wait_for(output, b"SCOPLEN-DIRECTORY-READY").await?;
-    let upload = local.join("directory-upload");
-    fs::create_dir_all(upload.join("excluded-empty"))?;
-    fs::create_dir_all(upload.join("excluded-nested"))?;
-    fs::write(upload.join("excluded-nested/ignored"), b"not traversed")?;
-    for (name, bytes) in [
-        ("a-create", &[0, 255, 3][..]),
-        ("b-size", b"x"),
-        ("c-bytes", b"new"),
-        ("d-same", b"same"),
-        ("e-empty", b""),
-    ] {
-        fs::write(upload.join(name), bytes)?;
-    }
-    let remote_upload = b"./.scoplen-files-smoke/sync-upload";
-    let before = manager
-        .list_files(
-            "fixture-terminal",
-            transport,
-            &Uuid::now_v7().to_string(),
-            remote_upload.to_vec(),
-        )
-        .await?;
-    let plan = directory_plan(
-        manager,
-        transport,
-        remote_upload,
-        &upload,
-        SessionTransferDirection::Upload,
-    )
-    .await?;
-    assert_eq!(plan.excluded_directories, 2);
-    assert_eq!(plan.entries.len(), 5);
-    for (name, change) in [
-        ("a-create", SessionDirectorySyncChange::Create),
-        ("b-size", SessionDirectorySyncChange::Changed),
-        ("c-bytes", SessionDirectorySyncChange::Changed),
-        ("d-same", SessionDirectorySyncChange::Same),
-        ("e-empty", SessionDirectorySyncChange::Same),
-    ] {
-        assert_eq!(plan.entries.iter().find(|row| row.name == name).unwrap().change, change);
-    }
-    assert_eq!(fs::read_dir(&upload)?.count(), 7);
-    let after = manager
-        .list_files(
-            "fixture-terminal",
-            transport,
-            &Uuid::now_v7().to_string(),
-            remote_upload.to_vec(),
-        )
-        .await?;
-    assert_eq!(
-        serde_json::to_value(before)?,
-        serde_json::to_value(after)?,
-        "comparison must not write"
-    );
-    let rows = apply_directory(manager, transport, &plan, true).await?;
-    assert_eq!(
-        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
-        ["a-create", "b-size", "c-bytes"]
-    );
-    assert_eq!(
-        rows.iter().map(|row| row.state).collect::<Vec<_>>(),
-        [SessionTransferState::Saved, SessionTransferState::Cancelled, SessionTransferState::Saved]
-    );
-    assert_eq!(
-        manager
-            .apply_directory_sync("fixture-terminal", transport, &plan.plan_id, |_| async {
-                panic!("consumed plan cannot ask again")
-            })
-            .await,
-        Err(SessionDirectorySyncIssue::Unavailable)
-    );
-    for (name, bytes) in [
-        ("a-create", &[0, 255, 3][..]),
-        ("b-size", b"longer"),
-        ("c-bytes", b"new"),
-        ("remote-only", b"preserved"),
-    ] {
-        assert_drop_bytes(manager, local, transport, remote_upload, name, bytes).await?;
-    }
-    let plan = directory_plan(
-        manager,
-        transport,
-        remote_upload,
-        &upload,
-        SessionTransferDirection::Upload,
-    )
-    .await?;
-    let rows = apply_directory(manager, transport, &plan, false).await?;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].state, SessionTransferState::Saved);
-    assert_drop_bytes(manager, local, transport, remote_upload, "b-size", b"x").await?;
-    let plan = directory_plan(
-        manager,
-        transport,
-        remote_upload,
-        &upload,
-        SessionTransferDirection::Upload,
-    )
-    .await?;
-    assert!(plan.entries.iter().all(|row| row.change == SessionDirectorySyncChange::Same));
-    let outstanding = manager.transfer_queue_snapshot("fixture-terminal")?.outstanding;
-    assert_eq!(
-        manager
-            .apply_directory_sync("fixture-terminal", transport, &plan.plan_id, |_| async {
-                panic!("Same rows cannot ask for replacement")
-            })
-            .await?,
-        SessionDirectorySyncApplyResult::Unchanged
-    );
-    assert_eq!(manager.transfer_queue_snapshot("fixture-terminal")?.outstanding, outstanding);
-    for membership in [false, true] {
-        let plan = directory_plan(
-            manager,
-            transport,
-            remote_upload,
-            &upload,
-            SessionTransferDirection::Upload,
-        )
-        .await?;
-        if membership {
-            fs::write(upload.join("new-member"), b"x")?;
+    sync_shell(manager, transport, output,
+        "mkdir -p .scoplen-files-smoke/sync-links; ln -s missing .scoplen-files-smoke/sync-links/link").await?;
+    for direction in [SessionTransferDirection::Upload, SessionTransferDirection::Download] {
+        let label = match direction {
+            SessionTransferDirection::Upload => "upload",
+            SessionTransferDirection::Download => "download",
+        };
+        let root = local.join(format!("directory-{label}"));
+        create_sync_tree(&root, direction == SessionTransferDirection::Upload)?;
+        let remote = format!("./.scoplen-files-smoke/sync-{label}");
+        let contents = if direction == SessionTransferDirection::Upload {
+            format!(
+                "mkdir -p {remote}/kept; printf longer > {remote}/b-size; printf old > {remote}/c-bytes; printf 'target file preserved' > {remote}/target-only; printf 'target directory preserved' > {remote}/kept/leaf; ln -s missing {remote}/kept/link"
+            )
         } else {
-            fs::write(upload.join("d-same"), b"metadata change")?;
+            format!(
+                "mkdir -p {remote}/empty {remote}/nested/deeper; printf x > {remote}/b-size; printf new > {remote}/c-bytes; printf '\\000\\377\\003' > {remote}/a-create; printf '\\377\\000\\010\\007' > {remote}/nested/deeper/payload.bin; i=0; while test $i -lt 20; do name=$(printf child-%02d $i); printf tree > {remote}/nested/$name; i=$((i+1)); done"
+            )
+        };
+        sync_shell(manager, transport, output, &format!(
+            "mkdir -p {remote}/nested; {contents}; printf same > {remote}/d-same; : > {remote}/e-empty; touch -t 200001010000 {remote}/d-same {remote}/e-empty"
+        )).await?;
+        let before = remote_sync_metadata(manager, transport, remote.as_bytes()).await?;
+        let nested_remote = format!("{remote}/nested");
+        let before_nested =
+            remote_sync_metadata(manager, transport, nested_remote.as_bytes()).await?;
+        let same_modified = fs::metadata(root.join("d-same"))?.modified()?;
+        let empty_modified = fs::metadata(root.join("e-empty"))?.modified()?;
+        let plan = directory_plan(manager, transport, remote.as_bytes(), &root, direction).await?;
+        assert_eq!(plan.direction, direction);
+        assert_eq!(plan.entries.len(), 30);
+        assert_eq!(
+            (plan.summary.files_create, plan.summary.files_changed, plan.summary.files_same),
+            (22, 2, 2)
+        );
+        assert_eq!((plan.summary.directories_create, plan.summary.directories_existing), (2, 2));
+        assert_eq!(plan.summary.transfer_size_bytes, "91");
+        for (name, change) in [
+            ("a-create", SessionDirectorySyncChange::Create),
+            ("b-size", SessionDirectorySyncChange::Changed),
+            ("c-bytes", SessionDirectorySyncChange::Changed),
+            ("d-same", SessionDirectorySyncChange::Same),
+            ("e-empty", SessionDirectorySyncChange::Same),
+            ("nested/deeper/payload.bin", SessionDirectorySyncChange::Create),
+        ] {
+            assert_sync_file(&plan, name, change);
         }
+        for index in 0..20 {
+            assert_sync_file(
+                &plan,
+                &format!("nested/child-{index:02}"),
+                SessionDirectorySyncChange::Create,
+            );
+        }
+        for (name, change) in [
+            (".", SessionDirectorySyncDirectoryChange::Existing),
+            ("nested", SessionDirectorySyncDirectoryChange::Existing),
+            ("empty", SessionDirectorySyncDirectoryChange::Create),
+            ("nested/deeper", SessionDirectorySyncDirectoryChange::Create),
+        ] {
+            assert_sync_directory(&plan, name, change);
+        }
+        assert_eq!(
+            before,
+            remote_sync_metadata(manager, transport, remote.as_bytes()).await?,
+            "comparison must not write"
+        );
+        assert_eq!(
+            before_nested,
+            remote_sync_metadata(manager, transport, nested_remote.as_bytes()).await?
+        );
+        if direction == SessionTransferDirection::Download {
+            assert!(!root.join("a-create").exists() && !root.join("empty").exists());
+            assert_eq!(fs::read(root.join("b-size"))?, b"longer");
+            assert_eq!(fs::read(root.join("c-bytes"))?, b"old");
+        }
+        let saved = apply_directory(manager, transport, &plan, None).await?;
+        assert_eq!(saved.state, SessionTransferState::Saved);
+        assert_eq!(
+            (saved.transferred_bytes.as_str(), saved.total_bytes.as_deref()),
+            ("91", Some("91"))
+        );
+        let progress = sync_progress(&saved);
+        assert_eq!((progress.files_total, progress.directories_total), (24, 2));
+        assert_eq!(
+            (
+                progress.files_created,
+                progress.files_updated,
+                progress.files_skipped,
+                progress.directories_created
+            ),
+            (22, 2, 2, 2)
+        );
+        assert!(progress.failed_name.is_none() && progress.issue.is_none());
         assert_eq!(
             manager
                 .apply_directory_sync("fixture-terminal", transport, &plan.plan_id, |_| async {
-                    panic!("changed plan cannot ask for replacement")
+                    panic!("consumed plan cannot ask again")
                 })
+                .await,
+            Err(SessionDirectorySyncIssue::Unavailable)
+        );
+        let after = remote_sync_metadata(manager, transport, remote.as_bytes()).await?;
+        if direction == SessionTransferDirection::Upload {
+            for name in ["d-same", "e-empty"] {
+                let metadata = |snapshot: &serde_json::Value| {
+                    snapshot["entries"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|row| row["name"] == name)
+                        .unwrap()
+                        .clone()
+                };
+                assert_eq!(
+                    metadata(&before),
+                    metadata(&after),
+                    "Same files must retain destination metadata"
+                );
+            }
+            for (name, expected) in [
+                ("a-create", &[0, 255, 3][..]),
+                ("b-size", b"x"),
+                ("c-bytes", b"new"),
+                ("d-same", b"same"),
+                ("e-empty", b""),
+                ("target-only", b"target file preserved"),
+            ] {
+                assert_drop_bytes(manager, local, transport, remote.as_bytes(), name, expected)
+                    .await?;
+            }
+            for index in 0..20 {
+                assert_drop_bytes(
+                    manager,
+                    local,
+                    transport,
+                    nested_remote.as_bytes(),
+                    &format!("child-{index:02}"),
+                    b"tree",
+                )
+                .await?;
+            }
+            assert_drop_bytes(
+                manager,
+                local,
+                transport,
+                format!("{remote}/nested/deeper").as_bytes(),
+                "payload.bin",
+                &[255, 0, 8, 7],
+            )
+            .await?;
+            assert_drop_bytes(
+                manager,
+                local,
+                transport,
+                format!("{remote}/kept").as_bytes(),
+                "leaf",
+                b"target directory preserved",
+            )
+            .await?;
+            let empty =
+                remote_sync_metadata(manager, transport, format!("{remote}/empty").as_bytes())
+                    .await?;
+            assert!(empty["entries"].as_array().unwrap().is_empty());
+        } else {
+            for (name, expected) in [
+                ("a-create", &[0, 255, 3][..]),
+                ("b-size", b"x"),
+                ("c-bytes", b"new"),
+                ("d-same", b"same"),
+                ("e-empty", b""),
+                ("target-only", b"target file preserved"),
+                ("kept/leaf", b"target directory preserved"),
+                ("nested/deeper/payload.bin", &[255, 0, 8, 7]),
+            ] {
+                assert_eq!(fs::read(root.join(name))?, expected);
+            }
+            for index in 0..20 {
+                assert_eq!(fs::read(root.join(format!("nested/child-{index:02}")))?, b"tree");
+            }
+            assert_eq!(fs::read_dir(root.join("empty"))?.count(), 0);
+            assert_eq!(fs::metadata(root.join("d-same"))?.modified()?, same_modified);
+            assert_eq!(fs::metadata(root.join("e-empty"))?.modified()?, empty_modified);
+        }
+        let same = directory_plan(manager, transport, remote.as_bytes(), &root, direction).await?;
+        assert_eq!((same.summary.files_same, same.summary.directories_existing), (26, 4));
+        assert_eq!(
+            (
+                same.summary.files_create,
+                same.summary.files_changed,
+                same.summary.directories_create
+            ),
+            (0, 0, 0)
+        );
+        assert_sync_unchanged(manager, transport, &same).await?;
+        for membership in [false, true] {
+            let stale =
+                directory_plan(manager, transport, remote.as_bytes(), &root, direction).await?;
+            if direction == SessionTransferDirection::Upload {
+                if membership {
+                    fs::write(root.join("nested/new-member"), b"x")?;
+                } else {
+                    fs::write(root.join("d-same"), b"changed source metadata")?;
+                }
+            } else {
+                let change = if membership {
+                    format!("printf x > {remote}/nested/new-member")
+                } else {
+                    format!("printf 'changed source metadata' > {remote}/d-same")
+                };
+                sync_shell(manager, transport, output, &change).await?;
+            }
+            assert_eq!(
+                manager
+                    .apply_directory_sync(
+                        "fixture-terminal",
+                        transport,
+                        &stale.plan_id,
+                        |_| async { panic!("stale plan cannot ask for replacement") }
+                    )
+                    .await,
+                Err(SessionDirectorySyncIssue::FileChanged)
+            );
+            assert_eq!(manager.transfer_queue_snapshot("fixture-terminal")?.outstanding, 0);
+            if direction == SessionTransferDirection::Upload {
+                if membership {
+                    fs::remove_file(root.join("nested/new-member"))?;
+                } else {
+                    fs::write(root.join("d-same"), b"same")?;
+                }
+            } else {
+                let restore = if membership {
+                    format!("rm {remote}/nested/new-member")
+                } else {
+                    format!("printf same > {remote}/d-same")
+                };
+                sync_shell(manager, transport, output, &restore).await?;
+            }
+        }
+        let stale_target =
+            directory_plan(manager, transport, remote.as_bytes(), &root, direction).await?;
+        if direction == SessionTransferDirection::Upload {
+            sync_shell(
+                manager,
+                transport,
+                output,
+                &format!("printf 'changed target metadata' > {remote}/d-same"),
+            )
+            .await?;
+        } else {
+            fs::write(root.join("d-same"), b"changed target metadata")?;
+        }
+        assert_eq!(
+            manager
+                .apply_directory_sync(
+                    "fixture-terminal",
+                    transport,
+                    &stale_target.plan_id,
+                    |_| async { panic!("a changed Same target needs renewed comparison") },
+                )
                 .await,
             Err(SessionDirectorySyncIssue::FileChanged)
         );
-        if membership {
-            fs::remove_file(upload.join("new-member"))?;
+        if direction == SessionTransferDirection::Upload {
+            sync_shell(manager, transport, output, &format!("printf same > {remote}/d-same"))
+                .await?;
         } else {
-            fs::write(upload.join("d-same"), b"same")?;
+            fs::write(root.join("d-same"), b"same")?;
         }
+        println!(
+            "OpenSSH recursive {label}: complete 30-row read-only review, one stable job, 22 created/2 updated/2 skipped files, 2 created directories, exact bytes, target-only preservation and stale-plan refusal passed"
+        );
     }
-    let empty = local.join("empty-directory");
-    fs::create_dir(&empty)?;
-    let plan =
-        directory_plan(manager, transport, remote_upload, &empty, SessionTransferDirection::Upload)
-            .await?;
-    assert!(plan.entries.is_empty());
-    assert_eq!(
-        manager
-            .apply_directory_sync("fixture-terminal", transport, &plan.plan_id, |_| async {
-                Ok(true)
-            })
-            .await?,
-        SessionDirectorySyncApplyResult::Unchanged
+    exercise_sync_empty_and_wide(manager, transport, local, output).await?;
+    exercise_sync_refusals(manager, transport, local, output).await?;
+    exercise_sync_partial(manager, transport, local, output).await?;
+    exercise_sync_large(manager, transport, local, output).await?;
+    sync_shell(manager, transport, output, "true").await?;
+    println!(
+        "recursive directory sync public-core OpenSSH acceptance passed; native folder selection was injected"
     );
-    for index in 0..17 {
-        fs::write(empty.join(format!("{index}")), b"x")?;
-    }
-    assert_eq!(
-        manager
-            .prepare_directory_sync_with_picker(
-                "fixture-terminal",
-                transport,
-                &Uuid::now_v7().to_string(),
-                remote_upload.to_vec(),
-                SessionTransferDirection::Upload,
-                || async { Ok(Some(empty.clone())) }
-            )
-            .await,
-        Err(SessionDirectorySyncIssue::TooManyFiles)
-    );
+    Ok(())
+}
 
-    manager.input("fixture-terminal", transport, b"printf '\\000\\377\\003' > .scoplen-files-smoke/sync-download/a-create; printf remote > .scoplen-files-smoke/sync-download/b-size; printf new > .scoplen-files-smoke/sync-download/c-bytes; printf same > .scoplen-files-smoke/sync-download/d-same; : > .scoplen-files-smoke/sync-download/e-empty; touch -t 200001010000 .scoplen-files-smoke/sync-download/d-same; printf '%s%s\\n' SCOPLEN- DIRECTORY-DOWNLOAD\n".to_vec())?;
-    wait_for(output, b"SCOPLEN-DIRECTORY-DOWNLOAD").await?;
-    let download = local.join("directory-download");
-    fs::create_dir(&download)?;
-    for (name, bytes) in [
-        ("b-size", &b"x"[..]),
-        ("c-bytes", b"old"),
-        ("d-same", b"same"),
-        ("e-empty", b""),
-        ("local-only", b"preserved"),
-    ] {
-        fs::write(download.join(name), bytes)?;
+async fn exercise_sync_empty_and_wide(
+    manager: &SessionManager,
+    transport: &str,
+    local: &std::path::Path,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let empty = local.join("sync-empty");
+    fs::create_dir(&empty)?;
+    let remote = b"./.scoplen-files-smoke/sync-empty";
+    sync_shell(manager, transport, output, "mkdir .scoplen-files-smoke/sync-empty").await?;
+    for direction in [SessionTransferDirection::Upload, SessionTransferDirection::Download] {
+        let plan = directory_plan(manager, transport, remote, &empty, direction).await?;
+        assert_eq!(plan.entries.len(), 1);
+        assert_sync_directory(&plan, ".", SessionDirectorySyncDirectoryChange::Existing);
+        assert_sync_unchanged(manager, transport, &plan).await?;
     }
-    let remote_download = b"./.scoplen-files-smoke/sync-download";
+    fs::create_dir(empty.join("missing-empty"))?;
+    let plan = directory_plan(manager, transport, remote, &empty, SessionTransferDirection::Upload)
+        .await?;
+    assert_eq!(plan.summary.directories_create, 1);
+    let saved = apply_directory(manager, transport, &plan, None).await?;
+    assert_eq!(saved.state, SessionTransferState::Saved);
+    assert_eq!(saved.transferred_bytes, "0");
+    assert_eq!(sync_progress(&saved).directories_created, 1);
+    let existing = remote_sync_metadata(
+        manager,
+        transport,
+        b"./.scoplen-files-smoke/sync-empty/missing-empty",
+    )
+    .await?;
+    assert!(existing["entries"].as_array().unwrap().is_empty());
+    let wide = local.join("sync-wide");
+    fs::create_dir(&wide)?;
+    sync_shell(manager, transport, output, "mkdir .scoplen-files-smoke/sync-wide; i=0; while test $i -lt 1025; do printf x > .scoplen-files-smoke/sync-wide/file-$i; i=$((i+1)); done").await?;
     let plan = directory_plan(
         manager,
         transport,
-        remote_download,
-        &download,
+        b"./.scoplen-files-smoke/sync-wide",
+        &wide,
         SessionTransferDirection::Download,
     )
     .await?;
-    assert_eq!(plan.excluded_directories, 1);
-    assert_eq!(
-        plan.entries.iter().map(|row| row.change).collect::<Vec<_>>(),
-        [
-            SessionDirectorySyncChange::Create,
-            SessionDirectorySyncChange::Changed,
-            SessionDirectorySyncChange::Changed,
-            SessionDirectorySyncChange::Same,
-            SessionDirectorySyncChange::Same
-        ]
-    );
-    assert!(!download.join("a-create").exists());
-    assert_eq!(fs::read(download.join("b-size"))?, b"x");
-    assert_eq!(fs::read_dir(&download)?.count(), 5);
-    assert!(
-        apply_directory(manager, transport, &plan, false)
-            .await?
-            .iter()
-            .all(|row| row.state == SessionTransferState::Saved)
-    );
-    for (name, bytes) in [
-        ("a-create", &[0, 255, 3][..]),
-        ("b-size", b"remote"),
-        ("c-bytes", b"new"),
-        ("d-same", b"same"),
-        ("e-empty", b""),
-        ("local-only", b"preserved"),
-    ] {
-        assert_eq!(fs::read(download.join(name))?, bytes);
+    assert_eq!(plan.entries.len(), 1026);
+    assert_eq!(plan.summary.files_create, 1025);
+    let saved = apply_directory(manager, transport, &plan, None).await?;
+    assert_eq!(saved.state, SessionTransferState::Saved);
+    assert_eq!(saved.transferred_bytes, "1025");
+    assert_eq!(sync_progress(&saved).files_created, 1025);
+    assert_eq!(fs::read_dir(&wide)?.count(), 1025);
+    for index in 0..1025 {
+        assert_eq!(fs::read(wide.join(format!("file-{index}")))?, b"x");
     }
-    assert!(!download.join("source-dir").exists());
-    assert_eq!(
-        manager
-            .prepare_directory_sync_with_picker(
-                "fixture-terminal",
-                transport,
-                &Uuid::now_v7().to_string(),
-                b"./.scoplen-files-smoke/sync-links".to_vec(),
-                SessionTransferDirection::Download,
-                || async { Ok(Some(download.clone())) }
-            )
-            .await,
-        Err(SessionDirectorySyncIssue::UnsupportedEntry)
+    println!(
+        "OpenSSH recursive sync: empty roots consume no slot; missing empty child consumes one job; complete 1025-file shallow enumeration and exact destination bytes passed"
     );
-    for (label, first, second) in [
-        ("ascii", "A.txt", "a.txt"),
-        ("unicode-case", "\u{00c4}.txt", "\u{00e4}.txt"),
-        ("unicode-form", "\u{00e9}.txt", "e\u{0301}.txt"),
+    Ok(())
+}
+
+async fn exercise_sync_refusals(
+    manager: &SessionManager,
+    transport: &str,
+    local: &std::path::Path,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let destination = local.join("sync-refusals");
+    fs::create_dir(&destination)?;
+    for (label, entries, expected) in [
+        ("link", "ln -s missing {root}/entry", SessionDirectorySyncIssue::UnsupportedEntry),
+        ("fifo", "mkfifo {root}/entry", SessionDirectorySyncIssue::UnsupportedEntry),
+        (
+            "invalid-utf8",
+            "printf x > {root}/$(printf '\\377')",
+            SessionDirectorySyncIssue::UnsupportedName,
+        ),
+        (
+            "ascii",
+            "printf a > {root}/A.txt; printf b > {root}/a.txt",
+            SessionDirectorySyncIssue::UnsupportedName,
+        ),
+        (
+            "unicode-case",
+            "printf a > {root}/\u{00c4}.txt; printf b > {root}/\u{00e4}.txt",
+            SessionDirectorySyncIssue::UnsupportedName,
+        ),
+        (
+            "unicode-form",
+            "printf a > {root}/\u{00e9}.txt; printf b > {root}/e\u{0301}.txt",
+            SessionDirectorySyncIssue::UnsupportedName,
+        ),
     ] {
-        let remote = format!("./.scoplen-files-smoke/collision-{label}");
-        manager.input("fixture-terminal", transport, format!(
-            "mkdir -p '{remote}'; printf a > '{remote}/{first}'; printf b > '{remote}/{second}'; printf '%s%s\\n' SCOPLEN- DIRECTORY-COLLISION-READY\n"
-        ).into_bytes())?;
-        wait_for(output, b"SCOPLEN-DIRECTORY-COLLISION-READY").await?;
+        let remote = format!("./.scoplen-files-smoke/sync-refused-{label}");
+        sync_shell(
+            manager,
+            transport,
+            output,
+            &format!("mkdir {remote}; {}", entries.replace("{root}", &remote)),
+        )
+        .await?;
+        let selected = destination.clone();
         assert_eq!(
             manager
                 .prepare_directory_sync_with_picker(
@@ -1214,21 +1496,326 @@ async fn exercise_directory_sync(
                     &Uuid::now_v7().to_string(),
                     remote.into_bytes(),
                     SessionTransferDirection::Download,
-                    || async { Ok(Some(download.clone())) },
+                    move || async { Ok(Some(selected)) }
+                )
+                .await,
+            Err(expected)
+        );
+        assert_eq!(fs::read_dir(&destination)?.count(), 0);
+        assert_eq!(manager.transfer_queue_snapshot("fixture-terminal")?.outstanding, 0);
+    }
+    fs::write(destination.join("entry"), b"source retained")?;
+    for (label, entry) in
+        [("type", "mkdir {root}/entry"), ("target-link", "ln -s missing {root}/entry")]
+    {
+        let remote = format!("./.scoplen-files-smoke/sync-refused-{label}");
+        sync_shell(
+            manager,
+            transport,
+            output,
+            &format!("mkdir {remote}; {}", entry.replace("{root}", &remote)),
+        )
+        .await?;
+        let selected = destination.clone();
+        assert_eq!(
+            manager
+                .prepare_directory_sync_with_picker(
+                    "fixture-terminal",
+                    transport,
+                    &Uuid::now_v7().to_string(),
+                    remote.into_bytes(),
+                    SessionTransferDirection::Upload,
+                    move || async { Ok(Some(selected)) }
+                )
+                .await,
+            Err(SessionDirectorySyncIssue::UnsupportedEntry)
+        );
+        assert_eq!(fs::read(destination.join("entry"))?, b"source retained");
+    }
+    fs::remove_file(destination.join("entry"))?;
+    for (label, remote_name, native_name) in
+        [("ascii-target", "A.txt", "a.txt"), ("unicode-target", "\u{00e9}.txt", "e\u{0301}.txt")]
+    {
+        let remote = format!("./.scoplen-files-smoke/sync-refused-{label}");
+        sync_shell(
+            manager,
+            transport,
+            output,
+            &format!("mkdir {remote}; printf x > '{remote}/{remote_name}'"),
+        )
+        .await?;
+        fs::write(destination.join(native_name), b"existing target retained")?;
+        let selected = destination.clone();
+        assert_eq!(
+            manager
+                .prepare_directory_sync_with_picker(
+                    "fixture-terminal",
+                    transport,
+                    &Uuid::now_v7().to_string(),
+                    remote.into_bytes(),
+                    SessionTransferDirection::Download,
+                    move || async { Ok(Some(selected)) }
                 )
                 .await,
             Err(SessionDirectorySyncIssue::UnsupportedName)
         );
-        assert_eq!(fs::read_dir(&download)?.count(), 6);
+        assert_eq!(fs::read(destination.join(native_name))?, b"existing target retained");
+        fs::remove_file(destination.join(native_name))?;
     }
-    manager.input(
-        "fixture-terminal",
-        transport,
-        b"printf '%s%s\\n' SCOPLEN- DIRECTORY-TERMINAL-ALIVE\n".to_vec(),
-    )?;
-    wait_for(output, b"SCOPLEN-DIRECTORY-TERMINAL-ALIVE").await?;
     println!(
-        "directory sync core: read-only Upload/Download comparison, complete equality, empty/binary bytes, excluded directories, target preservation, explicit FIFO Apply, replacement refusal/acceptance, stale-plan refusal and terminal input passed; folder selection was injected"
+        "OpenSSH recursive sync refusals: source link/FIFO/invalid UTF-8, ASCII/Unicode case/composition collision, existing-target name collision, type conflict and unsafe target; no partial plan, queue admission or destination mutation"
+    );
+    Ok(())
+}
+
+async fn exercise_sync_partial(
+    manager: &SessionManager,
+    transport: &str,
+    local: &std::path::Path,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for direction in [SessionTransferDirection::Upload, SessionTransferDirection::Download] {
+        let label =
+            if direction == SessionTransferDirection::Upload { "upload" } else { "download" };
+        let root = local.join(format!("sync-partial-{label}"));
+        fs::create_dir(&root)?;
+        let remote = format!("./.scoplen-files-smoke/sync-partial-{label}");
+        let local_bytes =
+            if direction == SessionTransferDirection::Upload { b"new" } else { b"old" };
+        for name in ["a-replace", "b-replace", "c-replace"] {
+            fs::write(root.join(name), local_bytes)?;
+        }
+        fs::write(root.join("d-same"), b"same")?;
+        let remote_bytes =
+            if direction == SessionTransferDirection::Upload { "old" } else { "new" };
+        sync_shell(manager, transport, output, &format!("mkdir {remote}; printf {remote_bytes} > {remote}/a-replace; printf {remote_bytes} > {remote}/b-replace; printf {remote_bytes} > {remote}/c-replace; printf same > {remote}/d-same")).await?;
+        if direction == SessionTransferDirection::Upload {
+            sync_shell(
+                manager,
+                transport,
+                output,
+                &format!("printf preserved > {remote}/target-only"),
+            )
+            .await?;
+        } else {
+            fs::write(root.join("target-only"), b"preserved")?;
+        }
+        let plan = directory_plan(manager, transport, remote.as_bytes(), &root, direction).await?;
+        let cancelled = apply_directory(manager, transport, &plan, Some(2)).await?;
+        assert_eq!(cancelled.state, SessionTransferState::Cancelled);
+        assert_eq!(cancelled.transferred_bytes, "3");
+        let progress = sync_progress(&cancelled);
+        assert_eq!(
+            (progress.files_created, progress.files_updated, progress.files_skipped),
+            (0, 1, 1)
+        );
+        let failed =
+            progress.failed_name.as_deref().ok_or("refusal must name its relative file")?;
+        assert!(["a-replace", "b-replace", "c-replace"].contains(&failed));
+        assert!(!cancelled.staging_may_remain);
+        if direction == SessionTransferDirection::Upload {
+            sync_shell(manager, transport, output, &format!("test $(grep -l '^new$' {remote}/a-replace {remote}/b-replace {remote}/c-replace | wc -l) -eq 1; test $(grep -l '^old$' {remote}/a-replace {remote}/b-replace {remote}/c-replace | wc -l) -eq 2")).await?;
+            assert_drop_bytes(manager, local, transport, remote.as_bytes(), failed, b"old").await?;
+            assert_drop_bytes(
+                manager,
+                local,
+                transport,
+                remote.as_bytes(),
+                "target-only",
+                b"preserved",
+            )
+            .await?;
+            let entries = remote_sync_metadata(manager, transport, remote.as_bytes()).await?;
+            assert!(
+                entries["entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|row| !row["name"].as_str().unwrap().starts_with(".scoplen-upload-"))
+            );
+        } else {
+            let contents = ["a-replace", "b-replace", "c-replace"]
+                .map(|name| fs::read(root.join(name)).unwrap());
+            assert_eq!(contents.iter().filter(|bytes| bytes.as_slice() == b"new").count(), 1);
+            assert_eq!(contents.iter().filter(|bytes| bytes.as_slice() == b"old").count(), 2);
+            assert_eq!(fs::read(root.join(failed))?, b"old");
+            assert_eq!(fs::read(root.join("target-only"))?, b"preserved");
+            assert!(fs::read_dir(&root)?.all(|row| {
+                !row.unwrap().file_name().to_string_lossy().starts_with(".scoplen-download-")
+            }));
+        }
+        let renewed =
+            directory_plan(manager, transport, remote.as_bytes(), &root, direction).await?;
+        let saved = apply_directory(manager, transport, &renewed, None).await?;
+        assert_eq!(saved.state, SessionTransferState::Saved);
+        assert_eq!(
+            (
+                sync_progress(&saved).files_created,
+                sync_progress(&saved).files_updated,
+                sync_progress(&saved).files_skipped
+            ),
+            (0, 2, 2)
+        );
+        println!(
+            "OpenSSH recursive {label} partial result: first confirmed replacement retained, next refusal cancels the whole job before later confirmation, target-only data preserved; renewed explicit review completes remaining changes"
+        );
+    }
+    Ok(())
+}
+
+async fn exercise_sync_large(
+    manager: &SessionManager,
+    transport: &str,
+    local: &std::path::Path,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read as _, Seek as _, Write as _};
+
+    let source = local.join("sync-large-source");
+    fs::create_dir(&source)?;
+    let length = 64 * 1024 * 1024 + 1;
+    let mut file = fs::File::create(source.join("large.bin"))?;
+    file.set_len(length)?;
+    file.seek(std::io::SeekFrom::End(-4))?;
+    file.write_all(&[255, 0, 7, 3])?;
+    drop(file);
+    let remote = b"./.scoplen-files-smoke/sync-large";
+    sync_shell(manager, transport, output,
+        &format!("mkdir .scoplen-files-smoke/sync-large; truncate -s {length} .scoplen-files-smoke/sync-large/large.bin")).await?;
+    for direction in [SessionTransferDirection::Upload, SessionTransferDirection::Download] {
+        let selected = source.clone();
+        assert_eq!(
+            manager
+                .prepare_directory_sync_with_picker(
+                    "fixture-terminal",
+                    transport,
+                    &Uuid::now_v7().to_string(),
+                    remote.to_vec(),
+                    direction,
+                    move || async { Ok(Some(selected)) },
+                )
+                .await,
+            Err(SessionDirectorySyncIssue::TooLarge),
+            "an equal-size file above the hash bound must refuse the complete plan",
+        );
+    }
+    sync_shell(
+        manager,
+        transport,
+        output,
+        "printf old > .scoplen-files-smoke/sync-large/large.bin",
+    )
+    .await?;
+    let plan =
+        directory_plan(manager, transport, remote, &source, SessionTransferDirection::Upload)
+            .await?;
+    assert_sync_file(&plan, "large.bin", SessionDirectorySyncChange::Changed);
+    assert_eq!(plan.summary.transfer_size_bytes, length.to_string());
+    let saved = apply_directory(manager, transport, &plan, None).await?;
+    assert_eq!(saved.state, SessionTransferState::Saved);
+    assert_eq!(saved.transferred_bytes, length.to_string());
+    assert_eq!(sync_progress(&saved).files_updated, 1);
+    let destination = local.join("sync-large-destination");
+    fs::create_dir(&destination)?;
+    fs::write(destination.join("large.bin"), b"x")?;
+    let plan = directory_plan(
+        manager,
+        transport,
+        remote,
+        &destination,
+        SessionTransferDirection::Download,
+    )
+    .await?;
+    assert_sync_file(&plan, "large.bin", SessionDirectorySyncChange::Changed);
+    let saved = apply_directory(manager, transport, &plan, None).await?;
+    assert_eq!(saved.state, SessionTransferState::Saved);
+    assert_eq!(saved.transferred_bytes, length.to_string());
+    assert_eq!(sync_progress(&saved).files_updated, 1);
+    let mut expected = fs::File::open(source.join("large.bin"))?;
+    let mut actual = fs::File::open(destination.join("large.bin"))?;
+    assert_eq!(actual.metadata()?.len(), length);
+    let mut expected_bytes = [0; 32 * 1024];
+    let mut actual_bytes = [0; 32 * 1024];
+    loop {
+        let count = expected.read(&mut expected_bytes)?;
+        actual.read_exact(&mut actual_bytes[..count])?;
+        assert_eq!(expected_bytes[..count], actual_bytes[..count]);
+        if count == 0 {
+            break;
+        }
+    }
+    println!(
+        "OpenSSH recursive sync: equal-size 64 MiB + 1 byte hashing refused in both directions; different-size changes streamed in both directions with complete bounded-buffer byte equality"
+    );
+    Ok(())
+}
+
+async fn exercise_sync_unknown(
+    manager: &SessionManager,
+    local: &std::path::Path,
+    ready: &mut mpsc::UnboundedReceiver<String>,
+    output: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let transport = ready.recv().await.ok_or("unknown fixture terminal did not become ready")?;
+    let source = local.join("sync-unknown");
+    fs::create_dir_all(source.join("parent/child"))?;
+    let remote = b"./.scoplen-files-smoke/sync-unknown";
+    sync_shell(manager, &transport, output,
+        "mkdir -p .scoplen-files-smoke/sync-unknown; printf retained > .scoplen-files-smoke/sync-unknown/target-only").await?;
+    let plan =
+        directory_plan(manager, &transport, remote, &source, SessionTransferDirection::Upload)
+            .await?;
+    assert_eq!((plan.summary.directories_create, plan.summary.directories_existing), (2, 1));
+    let SessionDirectorySyncApplyResult::Queued { queue_id, item_id, execution_id } = manager
+        .apply_directory_sync("fixture-terminal", &transport, &plan.plan_id, |_| async {
+            panic!("directory creation cannot request file replacement")
+        })
+        .await?
+    else {
+        return Err("unknown fixture directory job was not admitted".into());
+    };
+    let unknown = tokio::time::timeout(Duration::from_secs(40), async {
+        loop {
+            let snapshot = manager.transfer_queue_snapshot("fixture-terminal")?;
+            assert_eq!(snapshot.queue_id, queue_id);
+            assert_eq!(snapshot.outstanding, 1);
+            let row = snapshot
+                .items
+                .into_iter()
+                .find(|row| row.item_id == item_id)
+                .ok_or("unknown fixture job left the outstanding queue")?;
+            assert_eq!(row.execution_id, execution_id);
+            if row.state == SessionTransferState::Unknown {
+                return Ok::<_, Box<dyn std::error::Error>>(row);
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await??;
+    let progress = sync_progress(&unknown);
+    assert_eq!((progress.directories_total, progress.directories_created), (2, 1));
+    assert_eq!((progress.files_created, progress.files_updated, progress.files_skipped), (0, 0, 0));
+    assert_eq!(progress.failed_name.as_deref(), Some("parent/child"));
+    assert_eq!(progress.issue, Some(SessionDirectorySyncIssue::PublicationUnknown));
+    assert_eq!(unknown.transferred_bytes, "0");
+    assert!(unknown.can_acknowledge && !unknown.can_cancel);
+    assert_eq!(
+        manager
+            .apply_directory_sync("fixture-terminal", &transport, &plan.plan_id, |_| async {
+                panic!("lost acknowledgement cannot replay a consumed plan")
+            })
+            .await,
+        Err(SessionDirectorySyncIssue::Unavailable)
+    );
+    sync_shell(manager, &transport, output,
+        "test -d .scoplen-files-smoke/sync-unknown/parent; test -d .scoplen-files-smoke/sync-unknown/parent/child; test $(cat .scoplen-files-smoke/sync-unknown/target-only) = retained").await?;
+    let current = manager.transfer_queue_snapshot("fixture-terminal")?;
+    let retained = current.items.iter().find(|row| row.item_id == item_id).unwrap();
+    assert_eq!(retained, &unknown, "unknown work must stay visible without automatic replay");
+    manager.acknowledge_transfer("fixture-terminal", &queue_id, &item_id, &execution_id)?;
+    assert_eq!(manager.transfer_queue_snapshot("fixture-terminal")?.outstanding, 0);
+    println!(
+        "OpenSSH recursive sync Unknown: one confirmed created directory, second mkdir genuinely created remotely with its success STATUS withheld, exact failed relative name, retained target-only bytes, stable reminder, no replay and explicit acknowledgement passed"
     );
     Ok(())
 }
@@ -2118,6 +2705,12 @@ async fn wait_for(
     loop {
         let bytes = output.recv().await.ok_or("terminal output ended")?;
         received.extend(bytes);
+        if received
+            .windows(b"SCOPLEN-SYNC-SHELL-FAILED".len())
+            .any(|part| part == b"SCOPLEN-SYNC-SHELL-FAILED")
+        {
+            return Err("disposable synchronization shell assertion failed".into());
+        }
         if received.windows(marker.len()).any(|part| part == marker) {
             return Ok(());
         }
