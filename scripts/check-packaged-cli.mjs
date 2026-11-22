@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -110,6 +110,8 @@ Set-Acl -LiteralPath $env:SCOPLEN_CLI_PACKAGE_SCRATCH -AclObject $acl`,
     "build-fixture",
     { timeout: 600_000 },
   );
+  // Unix mkdir(data/.) requires data to exist before testing the noncanonical spelling.
+  mkdirSync(join(scratch, "data"));
   run(
     join(target, `release/examples/openssh_export_smoke${suffix}`),
     // Keep a noncanonical spelling to verify the keystore namespace and resolved output separately.
