@@ -593,6 +593,23 @@ async fn generated_include(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn check_fixture_writer(directory: &Path) -> &'static str {
+    use scoplen_client_core::profiles::OpenSshExportProfile;
+    use scoplen_client_platform::keystore::suppress_keychain_prompts;
+    use zeroize::Zeroizing;
+
+    let Ok(_policy) = suppress_keychain_prompts() else { return "unavailable" };
+    let Ok(passphrase) = fs::read_to_string(directory.join("local-passphrase")).map(Zeroizing::new)
+    else {
+        return "unavailable";
+    };
+    match OpenSshExportProfile::open(directory, None, None, Some(&passphrase)) {
+        Ok(_) => "reopened",
+        Err(_) => "refused",
+    }
+}
+
 async fn publish_generation(
     inventory: &Inventory,
     preview: &OpenSshGeneratedPreview,
@@ -617,6 +634,10 @@ async fn publish_generation(
         fs::write(diagnostics.join(format!("{name}-helper.stdout")), &output.stdout)?;
         fs::write(diagnostics.join(format!("{name}-helper.stderr")), &output.stderr)?;
         if !output.status.success() {
+            #[cfg(target_os = "macos")]
+            if name == "packaged-helper" {
+                eprintln!("packaged-helper: writer={}", check_fixture_writer(scratch));
+            }
             return Err(
                 "actual generated-Include helper failed; private process evidence required".into(),
             );

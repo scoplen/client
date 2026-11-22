@@ -13,7 +13,7 @@ use security_framework::passwords::{
 };
 use zeroize::Zeroizing;
 
-use super::{Keystore, KeystoreError};
+use super::{Keystore, KeystoreError, MacKeychain};
 
 const SERVICE: &str = "com.scoplen.client";
 const NAME: &str = "macOS Keychain";
@@ -80,10 +80,10 @@ impl Keychain {
         KeystoreError::Platform { keystore: NAME, operation, detail: error.to_string() }
     }
 
-    fn read_error(error: security_framework::base::Error) -> KeystoreError {
+    fn read_error(error: security_framework::base::Error, keychain: MacKeychain) -> KeystoreError {
         match error.code() {
             INTERACTION_NOT_ALLOWED | INTERACTION_REQUIRED => KeystoreError::InteractionRequired,
-            AUTH_FAILED => KeystoreError::AuthorizationFailed,
+            AUTH_FAILED => KeystoreError::AuthorizationFailed(keychain),
             _ => Self::platform("read", error),
         }
     }
@@ -95,11 +95,13 @@ impl Keystore for Keychain {
     }
 
     fn load(&self) -> Result<Option<Zeroizing<Vec<u8>>>, KeystoreError> {
-        for options in [self.protected(), self.login()] {
+        for (keychain, options) in
+            [(MacKeychain::DataProtection, self.protected()), (MacKeychain::Login, self.login())]
+        {
             match generic_password(options) {
                 Ok(secret) => return Ok(Some(Zeroizing::new(secret))),
                 Err(e) if e.code() == ITEM_NOT_FOUND || e.code() == MISSING_ENTITLEMENT => continue,
-                Err(e) => return Err(Self::read_error(e)),
+                Err(e) => return Err(Self::read_error(e, keychain)),
             }
         }
         Ok(None)
@@ -151,16 +153,18 @@ mod tests {
         use security_framework::base::Error;
         for status in [INTERACTION_NOT_ALLOWED, INTERACTION_REQUIRED] {
             assert!(matches!(
-                Keychain::read_error(Error::from_code(status)),
+                Keychain::read_error(Error::from_code(status), MacKeychain::Login),
                 KeystoreError::InteractionRequired
             ));
         }
+        for keychain in [MacKeychain::DataProtection, MacKeychain::Login] {
+            assert!(matches!(
+                Keychain::read_error(Error::from_code(AUTH_FAILED), keychain),
+                KeystoreError::AuthorizationFailed(actual) if actual == keychain
+            ));
+        }
         assert!(matches!(
-            Keychain::read_error(Error::from_code(AUTH_FAILED)),
-            KeystoreError::AuthorizationFailed
-        ));
-        assert!(matches!(
-            Keychain::read_error(Error::from_code(-50)),
+            Keychain::read_error(Error::from_code(-50), MacKeychain::Login),
             KeystoreError::Platform { operation: "read", .. }
         ));
     }

@@ -31,9 +31,17 @@ const cases = [
     category: "key-not-found",
   },
   {
-    name: "distinguishes failed keychain authorization",
-    helperError: "The system keychain could not authorize this helper to read the saved local key.",
-    category: "keychain-authorization-failed",
+    name: "identifies a data protection Keychain refusal after a successful writer reopen",
+    helperError: "The data protection Keychain could not authorize this helper to read the saved local key.",
+    category: "protected-keychain-authorization-failed",
+    fixtureError: "packaged-helper: writer=reopened",
+    writer: "reopened",
+  },
+  {
+    name: "identifies a login Keychain refusal without echoing unknown writer output",
+    helperError: "The login Keychain could not authorize this helper to read the saved local key.",
+    category: "login-keychain-authorization-failed",
+    fixtureError: "packaged-helper: writer=private detail",
   },
   {
     name: "keeps other system keystore errors private",
@@ -70,7 +78,7 @@ const cases = [
   { name: "retains failure evidence when the subprocess result is unavailable", category: "helper-result-unavailable" },
 ];
 
-for (const { name, fixtureError, helperError, helperOutput, category } of cases) {
+for (const { name, fixtureError, helperError, helperOutput, category, writer } of cases) {
   test(`macOS fixture prepares the aliased directory and ${name}`, () => {
     const root = mkdtempSync(join(tmpdir(), "scoplen-package-runner-test-"));
     const packageRoot = join(root, "package");
@@ -134,7 +142,10 @@ for (const { name, fixtureError, helperError, helperOutput, category } of cases)
             assert.fail("unexpected subprocess in packaged helper runner");
           },
         });
-      if (category) assert.throws(invoke, { message: `generate failed (exit=1, phase=helper, category=${category})` });
+      if (category)
+        assert.throws(invoke, {
+          message: `generate failed (exit=1, phase=helper, category=${category}${writer ? `, writer=${writer}` : ""})`,
+        });
       else assert.doesNotThrow(invoke);
       assert.equal(generated, true);
       assert.equal(existsSync(scratch), Boolean(category));

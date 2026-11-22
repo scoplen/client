@@ -23,8 +23,10 @@ function generationFailure(fixtureStderr) {
         return "keychain-interaction-required";
       case "The saved local key was not found. Check the selected desktop data directory.":
         return "key-not-found";
-      case "The system keychain could not authorize this helper to read the saved local key.":
-        return "keychain-authorization-failed";
+      case "The data protection Keychain could not authorize this helper to read the saved local key.":
+        return "protected-keychain-authorization-failed";
+      case "The login Keychain could not authorize this helper to read the saved local key.":
+        return "login-keychain-authorization-failed";
       case "The system keystore could not read the saved local key. Check it in the desktop client.":
         return "keystore-read-failed";
       case "The saved local key has an invalid format. Check it in the desktop client.":
@@ -64,6 +66,7 @@ function run(executable, args, label, options = {}) {
   let phase;
   let step;
   let category;
+  let writer;
   for (const line of (result.stderr ?? "").split(/\r?\n/)) {
     const phaseMarker = /^packaged-helper: phase=(fixture|helper|openssh|recheck|cleanup)$/.exec(line);
     const stepMarker =
@@ -87,6 +90,7 @@ function run(executable, args, label, options = {}) {
   }
   if (label === "generate" && phase === "helper" && result.status !== 0) {
     category = generationFailure(result.stderr ?? "");
+    writer = /^packaged-helper: writer=(reopened|refused|unavailable)\r?$/m.exec(result.stderr ?? "")?.[1];
   }
   const failure = result.error
     ? result.error.code === "ETIMEDOUT"
@@ -97,7 +101,7 @@ function run(executable, args, label, options = {}) {
       : `exit=${result.status}`;
   assert(
     !result.error && result.status === 0,
-    `${label} failed (${failure}${phase ? `, phase=${phase}` : ""}${step ? `, step=${step}` : ""}${category ? `, category=${category}` : ""})`,
+    `${label} failed (${failure}${phase ? `, phase=${phase}` : ""}${step ? `, step=${step}` : ""}${category ? `, category=${category}` : ""}${writer ? `, writer=${writer}` : ""})`,
   );
   return result.stdout;
 }

@@ -21,6 +21,24 @@ pub use macos::suppress_keychain_prompts;
 #[allow(unsafe_code)]
 mod windows;
 
+/// The macOS keychain used by a particular lookup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MacKeychain {
+    /// The entitlement-based data protection keychain.
+    DataProtection,
+    /// The user's file-based login keychain.
+    Login,
+}
+
+impl std::fmt::Display for MacKeychain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::DataProtection => "data protection Keychain",
+            Self::Login => "login Keychain",
+        })
+    }
+}
+
 /// A failure of the platform keystore.
 #[derive(Debug, thiserror::Error)]
 pub enum KeystoreError {
@@ -28,8 +46,8 @@ pub enum KeystoreError {
     #[error("access to the protected secret requires user interaction")]
     InteractionRequired,
     /// The operating system refused to authorize the read.
-    #[error("the operating system could not authorize access to the protected secret")]
-    AuthorizationFailed,
+    #[error("the {0} could not authorize access to the protected secret")]
+    AuthorizationFailed(MacKeychain),
     /// The keystore refused or failed the operation.
     #[error("the {keystore} could not {operation} the protected secret: {detail}")]
     Platform {

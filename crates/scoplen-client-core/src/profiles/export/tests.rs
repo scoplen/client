@@ -41,8 +41,12 @@ fn existing_export_refuses_a_keychain_prompt_without_replacing_the_slot() {
             OpenSshExportProfileError::InteractionRequired,
         ),
         (
-            RefusedRead(|| KeystoreError::AuthorizationFailed),
-            OpenSshExportProfileError::KeyAuthorizationFailed,
+            RefusedRead(|| KeystoreError::AuthorizationFailed(MacKeychain::DataProtection)),
+            OpenSshExportProfileError::KeyAuthorizationFailed(MacKeychain::DataProtection),
+        ),
+        (
+            RefusedRead(|| KeystoreError::AuthorizationFailed(MacKeychain::Login)),
+            OpenSshExportProfileError::KeyAuthorizationFailed(MacKeychain::Login),
         ),
         (
             RefusedRead(|| KeystoreError::Platform {
