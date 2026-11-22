@@ -62,9 +62,9 @@ async fn roundtrip(
     deployment: PasswordDeployment,
     ssh: SshFixture,
     directory: &Path,
-    sign_in: SignIn,
+    authentication: SignIn,
 ) {
-    let generated_key = matches!(&sign_in, SignIn::GenerateKey);
+    let generated_key = matches!(&authentication, SignIn::GenerateKey);
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
     let first = Device::new(&directory.join("first"));
     let first_manager = manager(&ca);
@@ -88,7 +88,7 @@ async fn roundtrip(
             address: "127.0.0.1".into(),
             port: Some(ssh.port),
             username: "smoke".into(),
-            sign_in,
+            sign_in: authentication,
         })
         .expect("save the ordinary Host, Login and shared Credential");
     let host: uuid::Uuid = details.summary.id.parse().unwrap();
@@ -203,7 +203,7 @@ async fn roundtrip(
     terminal_and_files_with_trust(&offline, reopened_store, &target, directory, 0).await;
 }
 
-async fn run(sign_in: SignIn) {
+async fn run(authentication: SignIn) {
     let artifact = std::env::var_os("SCOPLEN_LIVE_ACCOUNT_DEPLOYMENT")
         .expect("provide the private disposable HTTPS descriptor");
     let deployment: PasswordDeployment =
@@ -221,7 +221,7 @@ async fn run(sign_in: SignIn) {
     let ssh: SshFixture =
         serde_json::from_slice(&bounded_file(Path::new(&artifact), 8192)).unwrap();
     let directory = OwnedDirectory::new();
-    roundtrip(deployment, ssh, directory.path(), sign_in).await;
+    roundtrip(deployment, ssh, directory.path(), authentication).await;
     directory.close();
 }
 
