@@ -895,6 +895,10 @@ device uses a fresh challenge with the retained identity when required; saved ke
 and recovery copies remain available offline. A verified unchanged rate-limit response retains
 the credential and its Retry-After deadline for a later operation. Older saved sessions
 without a verified scope ceiling require fresh authentication after this update.
+An existing Device session keeps its original permissions during refresh. To obtain the
+Organization issuer draft scope (`auth-drafts:manage`), use **Authenticate this device**
+with a deployment that supports issuer drafts. The scope is checked alongside current
+Organization membership and policy when the deployment handles a draft operation.
 
 The Rust-owned `sync_personal_inventory` API implements a bounded Personal
 roundtrip. Its typed intent names the retained vault and exact local object ids to adopt;

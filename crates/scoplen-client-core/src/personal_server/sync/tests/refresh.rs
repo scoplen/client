@@ -8,7 +8,7 @@ use scoplen_api::{
     ErrorCode, ProblemDetails,
     auth::{
         AuthChallengeRequest, AuthChallengeResponse, AuthDeviceRequest, AuthRefreshRequest,
-        AuthTokenResponse, INITIAL_DEVICE_ACCESS_SCOPE,
+        AuthTokenResponse, DeviceAccessOperation, INITIAL_DEVICE_ACCESS_SCOPE,
     },
 };
 use scoplen_crypto::{DeviceAuthContext, DeviceOrganizationSnapshot, p256_verify};
@@ -21,6 +21,7 @@ pub(super) enum Mode {
     #[default]
     Success,
     Narrow,
+    BeforeIssuerDrafts,
     MissingScope,
     ForeignAccount,
     ForeignDevice,
@@ -189,6 +190,9 @@ impl RefreshPeer {
         let mut key = expected.signing_public.clone();
         match mode {
             Mode::Narrow => claims.scope = "keys:read sync:read sync:write".into(),
+            Mode::BeforeIssuerDrafts => {
+                claims.scope = INITIAL_DEVICE_ACCESS_SCOPE.replace(" auth-drafts:manage", "");
+            }
             Mode::MissingScope => claims.scope = "account:read".into(),
             Mode::ForeignAccount => claims.sub = scoplen_model::new_uuid_v7().unwrap(),
             Mode::ForeignDevice => claims.did = scoplen_model::new_uuid_v7().unwrap(),
@@ -436,6 +440,57 @@ async fn expired_access_refreshes_once_and_new_credentials_survive_restart() {
         Err(PersonalSyncError::Personal(PersonalServerError::InvalidResponse))
     ));
     assert_eq!(calls(&peer), 2);
+    peer.assert_healthy();
+}
+
+#[tokio::test]
+async fn existing_device_family_retains_its_scope_until_fresh_authentication() {
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    let original_scope = INITIAL_DEVICE_ACCESS_SCOPE.replace(" auth-drafts:manage", "");
+    peer.install_token(&store, |claims| claims.scope.clone_from(&original_scope), None);
+    let mut existing = record(&store).unwrap();
+    existing.auth_scope = Some(original_scope.clone());
+    store.set_personal_session_metadata_for_test(&existing).unwrap();
+    drop(store);
+
+    let reopened = local(&dir);
+    install(&peer, &reopened, vec![Mode::BeforeIssuerDrafts, Mode::Success]);
+    manager.bootstrap_sync(reopened.clone()).await.unwrap();
+    assert_eq!(record(&reopened).unwrap().auth_scope.as_deref(), Some(original_scope.as_str()));
+    assert!(!DeviceAccessOperation::AuthDraftRead.has_accepted_scope(&original_scope));
+    due(&reopened);
+    assert!(matches!(
+        manager.bootstrap_sync(reopened.clone()).await,
+        Err(PersonalSyncError::Personal(PersonalServerError::InvalidResponse))
+    ));
+    assert!(reopened.personal_access_token(now().unwrap()).unwrap().is_none());
+    assert!(manager.load_sync_bootstrap(&reopened).unwrap().is_some());
+    assert!(matches!(
+        manager.bootstrap_sync(reopened.clone()).await,
+        Err(PersonalSyncError::AuthenticationRequired)
+    ));
+    assert_eq!(calls(&peer), 2);
+
+    manager.authenticate(reopened.clone()).await.unwrap();
+    let renewed = record(&reopened).unwrap();
+    assert_eq!(renewed.account_id, existing.account_id);
+    assert_eq!(renewed.personal_vault_id, existing.personal_vault_id);
+    let scope = renewed.auth_scope.unwrap();
+    assert_eq!(scope, INITIAL_DEVICE_ACCESS_SCOPE);
+    for op in [
+        DeviceAccessOperation::AuthDraftRead,
+        DeviceAccessOperation::AuthDraftCreate,
+        DeviceAccessOperation::AuthDraftCancel,
+    ] {
+        assert!(op.has_accepted_scope(&scope));
+    }
+    let state = peer.state.lock().unwrap();
+    let auth = state.refresh.as_ref().unwrap();
+    assert_eq!((auth.calls, auth.challenges, auth.devices), (2, 1, 1));
+    drop(state);
     peer.assert_healthy();
 }
 
