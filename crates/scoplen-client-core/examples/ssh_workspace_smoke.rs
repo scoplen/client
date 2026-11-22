@@ -2,15 +2,15 @@
 
 //! Explicit mixed Workspace restoration against owned disposable OpenSSH peers.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use scoplen_client_core::connection::preparation::{PreparationEvent, PreparationResponse};
 use scoplen_client_core::forward_manager::{
-    ForwardDefinition, ForwardIssue, ForwardManager, ForwardPhase, ForwardSnapshot,
-    ForwardStartIntent,
+    ForwardConfiguration, ForwardDefinition, ForwardIssue, ForwardManager, ForwardPhase,
+    ForwardSnapshot, ForwardSource, ForwardStartIntent,
 };
 use scoplen_client_core::inventory::{Inventory, NewHost, SignIn};
 use scoplen_client_core::repository::{
@@ -80,8 +80,17 @@ impl Tunnel {
                 match state.phase {
                     ForwardPhase::Listening => return Ok(trusted),
                     ForwardPhase::Failed | ForwardPhase::Stopped => {
+                        let kind = match state.configuration {
+                            ForwardConfiguration::Local { .. } => "saved local",
+                            ForwardConfiguration::Remote { .. } => "saved remote",
+                            ForwardConfiguration::Dynamic {
+                                source: ForwardSource::Temporary,
+                                ..
+                            } => "temporary dynamic",
+                            ForwardConfiguration::Dynamic { .. } => "saved dynamic",
+                        };
                         return Err(format!(
-                            "workspace tunnel failed before listening: {:?}",
+                            "{kind} workspace tunnel failed before listening: {:?}",
                             state.last_issue
                         )
                         .into());
@@ -118,8 +127,25 @@ impl Tunnel {
     }
 }
 
-async fn unused_port() -> Result<u16> {
-    Ok(TcpListener::bind("127.0.0.1:0").await?.local_addr()?.port())
+async fn reserve_port() -> Result<(TcpListener, u16)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    Ok((listener, port))
+}
+
+#[tokio::test]
+async fn saved_tunnel_ports_cannot_be_claimed_by_another_fixture_listener_before_handoff()
+-> Result<()> {
+    let (local, local_port) = reserve_port().await?;
+    let (dynamic, dynamic_port) = reserve_port().await?;
+    assert_ne!(local_port, dynamic_port);
+    assert!(TcpListener::bind(("127.0.0.1", local_port)).await.is_err());
+    drop(local);
+    let _local_tunnel = TcpListener::bind(("127.0.0.1", local_port)).await?;
+    assert!(TcpListener::bind(("127.0.0.1", dynamic_port)).await.is_err());
+    drop(dynamic);
+    let _dynamic_tunnel = TcpListener::bind(("127.0.0.1", dynamic_port)).await?;
+    Ok(())
 }
 
 async fn traffic(port: u16, socks: bool) -> Result<usize> {
@@ -488,10 +514,9 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         username: "smoke".into(),
         sign_in: SignIn::Password { password: std::fs::read_to_string(&args[3])? },
     })?;
-    let local_port = unused_port().await?;
-    let dynamic_port = unused_port().await?;
-    let echo = TcpListener::bind("127.0.0.1:0").await?;
-    let echo_port = echo.local_addr()?.port();
+    let (local_reservation, local_port) = reserve_port().await?;
+    let (dynamic_reservation, dynamic_port) = reserve_port().await?;
+    let (echo, echo_port) = reserve_port().await?;
     let echo_task = tokio::spawn(async move {
         while let Ok((stream, _)) = echo.accept().await {
             tokio::spawn(async move {
@@ -501,10 +526,11 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let mut selected = Vec::new();
-    for (kind, port) in [
-        (ForwardKind::Local, local_port),
-        (ForwardKind::Remote, 2302),
-        (ForwardKind::Dynamic, dynamic_port),
+    let mut reservations = BTreeMap::new();
+    for (kind, port, reservation) in [
+        (ForwardKind::Local, local_port, Some(local_reservation)),
+        (ForwardKind::Remote, 2302, None),
+        (ForwardKind::Dynamic, dynamic_port, Some(dynamic_reservation)),
     ] {
         let forward = Repository::<Forward>::new(&store).create(ForwardChange {
             name: Some(format!("Workspace {kind:?}")),
@@ -525,6 +551,9 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             },
             profile: Edit::Clear,
         })?;
+        if let Some(reservation) = reservation {
+            reservations.insert(forward.meta.id.to_string(), reservation);
+        }
         selected.push(WorkspaceForwardInput {
             forward_id: forward.meta.id.to_string(),
             profile_id: tunnel_profile.to_string(),
@@ -619,6 +648,8 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut unrelated = Pane::start(manager.clone(), reopened.clone(), terminal("unrelated-pane"))?;
     let unrelated_transport = unrelated.ready(&manager).await?;
     let unrelated_queue = manager.transfer_queue_snapshot(&unrelated.terminal.session_id)?;
+    let (reservation, temporary_port) = reserve_port().await?;
+    drop(reservation);
     let mut temporary = Tunnel::start(
         &forward_manager,
         reopened.clone(),
@@ -627,7 +658,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             definition: ForwardDefinition::Dynamic {
                 name: "Pre-existing temporary run".into(),
                 bind_address: "127.0.0.1".into(),
-                bind_port: unused_port().await?,
+                bind_port: temporary_port,
             },
         },
     )?;
@@ -638,6 +669,7 @@ async fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             forward_id: forward.forward_id.clone(),
             profile_id: forward.profile_id.clone(),
         };
+        drop(reservations.remove(&forward.forward_id));
         let mut run = Tunnel::start(&forward_manager, reopened.clone(), intent.clone())?;
         let trusted = run.ready(&forward_manager, &reopened).await?;
         if runs.is_empty() {
