@@ -9,8 +9,9 @@ use crate::personal_server::{
 use scoplen_api::{
     ErrorCode, ProblemDetails,
     group_policy::{
-        GroupCreateRequest, GroupReplaceRequest, GroupResource, GroupSource, PolicyCreateRequest,
-        PolicyReplaceRequest, PolicyResource, SimpleRule, SimpleRuleInput, SimpleRuleSubject,
+        GroupCreateRequest, GroupFields, GroupReplaceRequest, GroupResource, GroupSource,
+        PolicyCreateRequest, PolicyReplaceRequest, PolicyResource, SimpleRule, SimpleRuleInput,
+        SimpleRuleSubject,
     },
     inventory::{
         InventoryCreateRequest, InventoryReplaceRequest, InventoryResource, InventoryType,
@@ -367,6 +368,51 @@ fn optional_authoring_fields_accept_omission_and_null_without_serializing_placeh
             .is_err()
         );
     }
+}
+
+#[tokio::test]
+async fn group_lists_and_details_preserve_server_owned_provenance() {
+    let peer = Peer::new().await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = local(&dir);
+    let manager = peer.prepare(&store).await;
+    install(&peer, &store);
+    let organization = id_new();
+    let groups = [(id_new(), GroupSource::Local), (id_new(), GroupSource::Idp)];
+    {
+        let mut state = peer.state.lock().unwrap();
+        let fixture = state.team_authoring.as_mut().unwrap();
+        for (id, source) in groups {
+            let resource = GroupResource {
+                id,
+                etag: "\"current\"".into(),
+                created_at: TIME.into(),
+                updated_at: TIME.into(),
+                fields: GroupFields { name: "Operations".into(), members: vec![] },
+                source,
+            };
+            fixture
+                .resources
+                .insert((organization, "groups".into(), id), resource.to_json().unwrap());
+        }
+    }
+    let organization_id = organization.to_string();
+    let page = manager
+        .team_authoring_page(store.clone(), &organization_id, Collection::Group, None)
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), groups.len());
+    for (id, source) in groups {
+        let id = id.to_string();
+        let listed = page.items.iter().find(|group| group.id == id).unwrap();
+        let detail = manager
+            .team_authoring_resource(store.clone(), &organization_id, Collection::Group, &id)
+            .await
+            .unwrap();
+        assert_eq!(listed.read_only, source == GroupSource::Idp);
+        assert_eq!(detail.read_only, listed.read_only);
+    }
+    peer.assert_healthy();
 }
 
 #[tokio::test]
