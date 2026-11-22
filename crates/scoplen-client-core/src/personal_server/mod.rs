@@ -43,12 +43,12 @@ pub use teams::{
     TeamAssetSummary, TeamAssetsPhase, TeamAssetsView, TeamAuthoringCollection,
     TeamAuthoringCreatePhase, TeamAuthoringCreateView, TeamAuthoringData, TeamAuthoringPageView,
     TeamAuthoringResourceView, TeamCreationPhase, TeamCreationView, TeamError, TeamFailure,
-    TeamGatewayNetworkFields, TeamGroupFields, TeamHostFields, TeamHostGroupFields,
-    TeamInvitationPageView, TeamInvitationView, TeamLoginFields, TeamMemberPageView,
-    TeamMemberView, TeamOperationKind, TeamOperationView, TeamPageView, TeamPolicyFields,
-    TeamRouteFields, TeamRouteReference, TeamSettingsView, TeamSimplePermission,
-    TeamSimpleRuleInput, TeamSimpleRulePreview, TeamSimpleRuleResource, TeamSnippetFields,
-    TeamSnippetVariable, TeamSummary, TeamTrustAttribution, TeamTrustFields,
+    TeamGatewayNetworkFields, TeamGrantPageView, TeamGrantStatus, TeamGrantView, TeamGroupFields,
+    TeamHostFields, TeamHostGroupFields, TeamInvitationPageView, TeamInvitationView,
+    TeamLoginFields, TeamMemberPageView, TeamMemberView, TeamOperationKind, TeamOperationView,
+    TeamPageView, TeamPolicyFields, TeamRouteFields, TeamRouteReference, TeamSettingsView,
+    TeamSimplePermission, TeamSimpleRuleInput, TeamSimpleRulePreview, TeamSimpleRuleResource,
+    TeamSnippetFields, TeamSnippetVariable, TeamSummary, TeamTrustAttribution, TeamTrustFields,
 };
 pub use teams::{
     TeamImportCandidate, TeamImportDiagnostic, TeamImportError, TeamImportFields,

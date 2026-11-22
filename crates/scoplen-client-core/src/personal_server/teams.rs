@@ -4,12 +4,14 @@
 mod access_requests;
 pub(super) mod assets;
 mod authoring;
+mod grants;
 pub(super) mod inventory_import;
 mod membership;
 mod ssh;
 pub use access_requests::*;
 pub use assets::{TeamAssetSummary, TeamAssetsPhase, TeamAssetsView};
 pub use authoring::*;
+pub use grants::*;
 pub use inventory_import::*;
 pub use membership::{
     TeamInvitationPageView, TeamInvitationView, TeamMemberPageView, TeamMemberView,

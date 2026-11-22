@@ -531,6 +531,10 @@ export function makeCommands(__TAURI_INVOKE: typeof import("@tauri-apps/api/core
 	discardTeamAccessRequest: (organizationId: string, operationId: string) => typedError<null, TeamAccessRequestError>(__TAURI_INVOKE("discard_team_access_request", { organizationId, operationId })),
 	/**  Offer a separate ordinary Connect for an exact approved original Host and username. */
 	teamAccessRequestLogins: (intentId: string) => typedError<TeamAccessRequestLogin[], TeamAccessRequestError>(__TAURI_INVOKE("team_access_request_logins", { intentId })),
+	/**  Read one current, server-authorized Grant page. */
+	teamGrantsPage: (organizationId: string, cursor: string | null) => typedError<TeamGrantPageView, TeamError>(__TAURI_INVOKE("team_grants_page", { organizationId, cursor })),
+	/**  Withdraw one Grant using the exact strong ETag visible in the current page. */
+	withdrawTeamGrant: (organizationId: string, grantId: string, etag: string) => typedError<null, TeamError>(__TAURI_INVOKE("withdraw_team_grant", { organizationId, grantId, etag })),
 	/**  Read safe local recovery state without starting or retrying a server request. */
 	teamSshOperations: (source: TeamSshSource) => typedError<TeamSshOperationView[], TeamSshError>(__TAURI_INVOKE("team_ssh_operations", { source })),
 	/**  Fetch only this team's current authenticated public user CA. */
@@ -4163,6 +4167,58 @@ export type TeamGatewayNetworkFields_Serialize = {
 	name: string,
 	/**  Optional ordinary description. */
 	description?: string | null,
+};
+
+/**  One bounded current Grant page, including expired but unwithdrawn rows. */
+export type TeamGrantPageView = {
+	/**  The authenticated deployment origin. */
+	origin: string,
+	/**  The Account that loaded this projection. */
+	accountId: string,
+	/**  The owning Organization. */
+	organizationId: string,
+	/**  Current page items in server UUID order. */
+	items: TeamGrantView[],
+	/**  Opaque next UUIDv7 continuation, when present. */
+	nextCursor: string | null,
+};
+
+/**  Whether the current whole-second Grant interval has started or ended. */
+export type TeamGrantStatus =
+/**  The Grant starts in the future. */
+"future" |
+/**  The Grant currently contributes connection authority. */
+"active" |
+/**  The Grant is retained for history but no longer contributes authority. */
+"expired";
+
+/**
+ *  One current Grant projection. Membership and Host ids remain opaque typed
+ *  references; resolving their names is a separate authorized read.
+ */
+export type TeamGrantView = {
+	/**  The authenticated deployment origin. */
+	origin: string,
+	/**  The Account that loaded this projection. */
+	accountId: string,
+	/**  The owning Organization. */
+	organizationId: string,
+	/**  Immutable Grant id. */
+	id: string,
+	/**  Strong ETag captured for an explicit withdrawal. */
+	etag: string,
+	/**  Current Membership reference. */
+	membershipId: string,
+	/**  Current Host reference. */
+	hostId: string,
+	/**  Exact SSH username authorized by the Grant. */
+	remoteUser: string,
+	/**  Inclusive whole-second UTC start. */
+	validFrom: string,
+	/**  Exclusive whole-second UTC end, or None for an explicit nonexpiring Grant. */
+	validUntil: string | null,
+	/**  Derived display state at the time the page was decoded. */
+	status: TeamGrantStatus,
 };
 
 /**  Writable local Group values. */
