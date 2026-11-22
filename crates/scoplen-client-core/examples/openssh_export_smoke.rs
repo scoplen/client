@@ -7,7 +7,7 @@ use scoplen_client_core::{
         Inventory, NewHost, OpenSshExportAuthentication, OpenSshExportEntry,
         OpenSshGeneratedPreview, OpenSshImportChoice, SignIn, generated_open_ssh_include_line,
     },
-    local_data::{LocalData, Status},
+    local_data::{LocalData, LocalDataError, Status},
     repository::{
         AccessProfile, AccessProfileChange, Credential, CredentialBinding, CredentialChange,
         CredentialKind, Edit, Host, HostChange, Provenance, Repository, Route, RouteChange,
@@ -57,11 +57,15 @@ fn main() -> Result<()> {
 async fn packaged_helper(helper: &Path, directory: &Path) -> Result<()> {
     eprintln!("packaged-helper: phase=fixture");
     let local = fixture_local_data(directory)?;
-    let inventory = Inventory::new(local.store().ok_or("packaged fixture store did not open")?);
-    let preview = inventory.preview_generated_open_ssh(vec![])?;
+    let inventory = fixture_step("inventory-open", || {
+        Ok(Inventory::new(local.store().ok_or("packaged fixture store did not open")?))
+    })?;
+    let preview =
+        fixture_step("inventory-preview", || Ok(inventory.preview_generated_open_ssh(vec![])?))?;
     assert!(preview.report.entries.is_empty());
     // Publication resolves the destination; keep the original directory for the keystore.
-    let wrapper = directory.canonicalize()?.join("openssh/local/active.conf");
+    let wrapper = fixture_step("resolve-directory", || Ok(directory.canonicalize()?))?
+        .join("openssh/local/active.conf");
     eprintln!("packaged-helper: phase=helper");
     let generation = publish_generation(
         &inventory,
@@ -98,16 +102,52 @@ async fn run(args: &[String]) -> Result<()> {
 }
 
 fn fixture_local_data(directory: &Path) -> Result<LocalData> {
-    fs::create_dir_all(directory)?;
-    let local = LocalData::start(directory, local_key_store(directory))?;
+    fixture_step("create-directory", || Ok(fs::create_dir_all(directory)?))?;
+    let local = fixture_step("local-data-start", || {
+        Ok(LocalData::start(directory, local_key_store(directory))?)
+    })?;
     let passphrase = "disposable local export passphrase";
+    eprintln!("packaged-helper: step=local-data-status");
     match local.status() {
-        Status::Open { .. } => local.set_passphrase(passphrase)?,
-        Status::NeedsNewPassphrase => local.create(passphrase)?,
-        _ => return Err("fresh fixture local data did not open".into()),
+        Status::Open { .. } => {
+            fixture_step("passphrase-set", || Ok(local.set_passphrase(passphrase)?))?;
+        }
+        Status::NeedsNewPassphrase => {
+            fixture_step("passphrase-create", || Ok(local.create(passphrase)?))?;
+        }
+        _ => {
+            eprintln!("packaged-helper: error=local-data-invalid-state");
+            return Err("fresh fixture local data did not open".into());
+        }
     };
-    fs::write(directory.join("local-passphrase"), passphrase)?;
+    fixture_step("passphrase-write", || {
+        Ok(fs::write(directory.join("local-passphrase"), passphrase)?)
+    })?;
     Ok(local)
+}
+
+fn fixture_step<T>(step: &'static str, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    eprintln!("packaged-helper: step={step}");
+    operation().inspect_err(|error| {
+        let category = if let Some(error) = error.downcast_ref::<LocalDataError>() {
+            match error {
+                LocalDataError::WrongPassphrase => "local-data-wrong-passphrase",
+                LocalDataError::EmptyPassphrase => "local-data-empty-passphrase",
+                LocalDataError::PassphraseRequired => "local-data-passphrase-required",
+                LocalDataError::InvalidState => "local-data-invalid-state",
+                LocalDataError::Failed { .. } => "local-data-failed",
+            }
+        } else if let Some(error) = error.downcast_ref::<io::Error>() {
+            match error.kind() {
+                io::ErrorKind::NotFound => "io-not-found",
+                io::ErrorKind::PermissionDenied => "io-permission-denied",
+                _ => "io-other",
+            }
+        } else {
+            "unexpected"
+        };
+        eprintln!("packaged-helper: error={category}");
+    })
 }
 
 fn clear_fixture_key(directory: &Path) -> Result<()> {
