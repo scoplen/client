@@ -209,3 +209,58 @@ fn actual_local_process_requires_exact_nonempty_utf8_passphrase_files_and_accept
     );
     assert!(listing.status.success());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_differently_signed_helper_cannot_export_a_fresh_desktop_store() {
+    use scoplen_client_core::profiles::OpenSshExportProfileError;
+    use scoplen_client_platform::keystore::MacKeychain;
+
+    let fixture = Fixture::new();
+    let directory = fixture.directory.path();
+    let slot = local_key_store(directory).unwrap();
+    let original = slot.load().unwrap().expect("the writer created the native key");
+    let inventory = Inventory::new(fixture.data.store().unwrap());
+    inventory
+        .add_host(NewHost {
+            name: Some("Private fixture".into()),
+            address: "private-fixture.example".into(),
+            port: None,
+            username: "deploy".into(),
+            sign_in: SignIn::Password { password: "fixture-only-secret".into() },
+        })
+        .unwrap();
+
+    let untrusted = tempfile::tempdir().unwrap();
+    let executable = untrusted.path().join("spl");
+    std::fs::copy(env!("CARGO_BIN_EXE_spl"), &executable).unwrap();
+    let signed = Command::new("/usr/bin/codesign")
+        .args(["--force", "--sign", "-", "--identifier", "org.example.unapproved-helper"])
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(signed.status.success(), "could not sign the test-owned executable copy");
+    let refused = Command::new(&executable)
+        .env("SPL_DATA_DIR", directory)
+        .args(["config", "generate", "--profile", "local", "--yes"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(refused.stdout.is_empty());
+    // A separate application can receive a refusal or be unable to see the item.
+    let message = std::str::from_utf8(&refused.stderr).unwrap();
+    let refusals = [
+        OpenSshExportProfileError::KeyAuthorizationFailed(MacKeychain::Login),
+        OpenSshExportProfileError::KeyAuthorizationFailed(MacKeychain::DataProtection),
+        OpenSshExportProfileError::InteractionRequired,
+        OpenSshExportProfileError::KeyUnavailable,
+    ];
+    let reason = message.lines().last().expect("the helper explains the refusal");
+    assert!(refusals.iter().any(|error| reason == error.to_string()));
+    assert!(!message.contains("private-fixture.example"));
+    assert!(!message.contains("fixture-only-secret"));
+    assert!(!directory.join("openssh").exists());
+    let after = slot.load().unwrap().expect("the writer can still read the native key");
+    assert!(after.as_slice() == original.as_slice(), "the test-owned slot changed");
+}
