@@ -91,9 +91,14 @@ function Requests({ organizationId, name, denial, onClose, onConnect }: Props) {
       const result = await commands.teamAccessRequestPage(organizationId, view, cursor);
       if (!current()) return;
       if (result.status === "error") {
-        // Keep the last confirmed page visible so a transient refresh or an
-        // explicitly requested next-page failure does not erase reviewable
-        // requests. The failed read remains visible for an explicit retry.
+        // Only transport or deferred-refresh failures leave the last page
+        // reviewable. Lost authority or an invalid context clears its projection.
+        if (
+          result.error !== "network" &&
+          result.error !== "connectionBeforeRequest" &&
+          result.error !== "refreshDeferred"
+        )
+          setPage(null);
         setReview(null);
         setLogins([]);
         setIssue(result.error);
