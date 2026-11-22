@@ -18,9 +18,31 @@ function run(executable, args, label, options = {}) {
   });
   writeFileSync(join(scratch, `${label}.stdout`), result.stdout ?? "");
   writeFileSync(join(scratch, `${label}.stderr`), result.stderr ?? "");
-  const phase = ["fixture", "helper", "openssh", "recheck", "cleanup"].findLast((value) =>
-    (result.stderr ?? "").includes(`packaged-helper: phase=${value}\n`),
-  );
+  // Only fixed fixture markers may reach CI; raw stderr can contain local paths.
+  let phase;
+  let step;
+  let category;
+  for (const line of (result.stderr ?? "").split(/\r?\n/)) {
+    const phaseMarker = /^packaged-helper: phase=(fixture|helper|openssh|recheck|cleanup)$/.exec(line);
+    const stepMarker =
+      /^packaged-helper: step=(create-directory|local-data-start|local-data-status|passphrase-set|passphrase-create|passphrase-write|inventory-open|inventory-preview|resolve-directory)$/.exec(
+        line,
+      );
+    const categoryMarker =
+      /^packaged-helper: error=(io-not-found|io-permission-denied|io-other|local-data-wrong-passphrase|local-data-empty-passphrase|local-data-passphrase-required|local-data-invalid-state|local-data-failed|unexpected)$/.exec(
+        line,
+      );
+    if (phaseMarker) {
+      phase = phaseMarker[1];
+      step = undefined;
+      category = undefined;
+    }
+    if (stepMarker) {
+      step = stepMarker[1];
+      category = undefined;
+    }
+    if (categoryMarker) category = categoryMarker[1];
+  }
   const failure = result.error
     ? result.error.code === "ETIMEDOUT"
       ? "timeout"
@@ -28,7 +50,10 @@ function run(executable, args, label, options = {}) {
     : result.signal
       ? `signal=${result.signal}`
       : `exit=${result.status}`;
-  assert(!result.error && result.status === 0, `${label} failed (${failure}${phase ? `, phase=${phase}` : ""})`);
+  assert(
+    !result.error && result.status === 0,
+    `${label} failed (${failure}${phase ? `, phase=${phase}` : ""}${step ? `, step=${step}` : ""}${category ? `, category=${category}` : ""})`,
+  );
   return result.stdout;
 }
 
