@@ -6,6 +6,7 @@ use crate::{
     local_key::{LocalKeyError, STORE_FILE, Unlock},
     store::StoreError,
 };
+use scoplen_client_platform::keystore::MacKeychain;
 
 /// A content-free refusal to open existing Local or Personal data for OpenSSH generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -26,8 +27,8 @@ pub enum OpenSshExportProfileError {
     #[error("The saved local key was not found. Check the selected desktop data directory.")]
     KeyUnavailable,
     /// The operating system refused to authorize the helper's key read.
-    #[error("The system keychain could not authorize this helper to read the saved local key.")]
-    KeyAuthorizationFailed,
+    #[error("The {0} could not authorize this helper to read the saved local key.")]
+    KeyAuthorizationFailed(MacKeychain),
     /// The native keystore returned another failure when reading the slot.
     #[error(
         "The system keystore could not read the saved local key. Check it in the desktop client."
@@ -223,8 +224,8 @@ fn key_error(error: LocalKeyError) -> OpenSshExportProfileError {
         LocalKeyError::Keystore(KeystoreError::InteractionRequired) => {
             OpenSshExportProfileError::InteractionRequired
         }
-        LocalKeyError::Keystore(KeystoreError::AuthorizationFailed) => {
-            OpenSshExportProfileError::KeyAuthorizationFailed
+        LocalKeyError::Keystore(KeystoreError::AuthorizationFailed(keychain)) => {
+            OpenSshExportProfileError::KeyAuthorizationFailed(keychain)
         }
         LocalKeyError::Keystore(_) => OpenSshExportProfileError::KeyReadFailed,
         LocalKeyError::KeyMissing(_) => OpenSshExportProfileError::KeyUnavailable,

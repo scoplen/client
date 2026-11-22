@@ -137,6 +137,9 @@ process output remains in the local fixture; the CI summary uses only fixed mark
 The helper distinguishes a key it cannot find, required Keychain interaction, failed
 Keychain authorization, other keystore read errors, malformed key material and a database
 unreadable with its saved key. A missing key can also mean the helper cannot see the item.
+For a macOS authorization failure, the category identifies which Keychain refused the
+lookup. After the packaged process exits unsuccessfully, the original fixture writer
+tries the same read-only export opening with prompts disabled and reports a fixed outcome.
 When standard input or output is redirected on macOS, the helper suppresses Keychain dialogs.
 If the system requires interaction to read the existing key, the command exits with status 1.
 Unlock the keychain or authorize the helper in an interactive session before automation.
