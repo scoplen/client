@@ -238,6 +238,30 @@ it("requires an explicit successful current refresh before archiving an expired 
   expect(commands.submitTeamAccessRequest).not.toHaveBeenCalled();
 });
 
+it("keeps the confirmed page when an explicitly requested next page fails and can be retried", async () => {
+  const second = { ...resource, id: "request-2" };
+  commands.teamAccessRequestPage
+    .mockResolvedValueOnce(ok({ source, view: "mine", items: [resource], nextCursor: "request" }))
+    .mockResolvedValueOnce({ status: "error", error: "network" })
+    .mockResolvedValueOnce(ok({ source, view: "mine", items: [second], nextCursor: null }));
+  fixture();
+  await loaded();
+  expect(screen.getByText(resource.id)).toBeTruthy();
+
+  await userEvent.click(screen.getByRole("button", { name: "Load more teams" }));
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(screen.getByText(resource.id)).toBeTruthy();
+  expect(screen.queryByText(second.id)).toBeNull();
+
+  await userEvent.click(screen.getByRole("button", { name: "Load more teams" }));
+  expect(await screen.findByText(second.id)).toBeTruthy();
+  expect(commands.teamAccessRequestPage.mock.calls).toEqual([
+    ["team", "mine", null],
+    ["team", "mine", "request"],
+    ["team", "mine", "request"],
+  ]);
+});
+
 it.each(["approve", "deny", "cancel"] as const)(
   "reviews the full native Resource before explicit %s",
   async (action) => {

@@ -91,7 +91,9 @@ function Requests({ organizationId, name, denial, onClose, onConnect }: Props) {
       const result = await commands.teamAccessRequestPage(organizationId, view, cursor);
       if (!current()) return;
       if (result.status === "error") {
-        setPage(null);
+        // Keep the last confirmed page visible so a transient refresh or an
+        // explicitly requested next-page failure does not erase reviewable
+        // requests. The failed read remains visible for an explicit retry.
         setReview(null);
         setLogins([]);
         setIssue(result.error);
