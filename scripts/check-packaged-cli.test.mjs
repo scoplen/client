@@ -12,8 +12,39 @@ const source = readFileSync(new URL("./check-packaged-cli.mjs", import.meta.url)
   "",
 );
 
-for (const failGeneration of [false, true]) {
-  test(`macOS fixture prepares the aliased directory and ${failGeneration ? "retains failure evidence" : "cleans successful output"}`, () => {
+const cases = [
+  { name: "cleans successful output" },
+  {
+    name: "identifies an expired helper subprocess deadline",
+    fixtureError: "Error: Elapsed(())",
+    category: "helper-timeout",
+  },
+  {
+    name: "reports a content-free refusal when the helper cannot open its native key",
+    helperError: "The existing local key is unavailable. Unlock this store in the desktop client first.",
+    category: "key-unavailable",
+  },
+  {
+    name: "reports an unknown helper refusal without echoing it",
+    helperError: "unrecognized private child diagnostic",
+    fixtureError: 'Error: "actual generated-Include helper failed; private process evidence required"',
+    category: "helper-refused",
+  },
+  {
+    name: "separates verification after publication from a helper refusal",
+    helperOutput: "Published 0 compatible Logins in 2 files.\n",
+    category: "published-output-check",
+  },
+  {
+    name: "preserves an unconfirmed outcome when the helper output is incomplete",
+    helperOutput: "Compatible Logins (0):\n",
+    category: "helper-result-unconfirmed",
+  },
+  { name: "retains failure evidence when the subprocess result is unavailable", category: "helper-result-unavailable" },
+];
+
+for (const { name, fixtureError, helperError, helperOutput, category } of cases) {
+  test(`macOS fixture prepares the aliased directory and ${name}`, () => {
     const root = mkdtempSync(join(tmpdir(), "scoplen-package-runner-test-"));
     const packageRoot = join(root, "package");
     const helper = join(packageRoot, "release/bundle/macos/Scoplen.app/Contents/MacOS/spl");
@@ -34,6 +65,7 @@ for (const failGeneration of [false, true]) {
             return scratch;
           },
           readdirSync,
+          readFileSync,
           rmSync,
           writeFileSync,
           tmpdir: () => root,
@@ -59,19 +91,27 @@ for (const failGeneration of [false, true]) {
                     "packaged-helper: phase=fixture\npackaged-helper: step=create-directory\npackaged-helper: error=io-not-found\n",
                 };
               }
-              if (failGeneration) {
-                return { status: 1, stdout: "", stderr: "packaged-helper: phase=helper\nprivate child diagnostic\n" };
+              if (category) {
+                if (helperError !== undefined || helperOutput !== undefined) {
+                  writeFileSync(join(scratch, "packaged-helper-helper.stderr"), helperError ?? "");
+                  writeFileSync(join(scratch, "packaged-helper-helper.stdout"), helperOutput ?? "");
+                }
+                return {
+                  status: 1,
+                  stdout: "",
+                  stderr: `packaged-helper: phase=helper\n${fixtureError ?? "private fixture diagnostic"}\n`,
+                };
               }
               return ok();
             }
             assert.fail("unexpected subprocess in packaged helper runner");
           },
         });
-      if (failGeneration) assert.throws(invoke, /generate failed \(exit=1, phase=helper\)/);
+      if (category) assert.throws(invoke, { message: `generate failed (exit=1, phase=helper, category=${category})` });
       else assert.doesNotThrow(invoke);
       assert.equal(generated, true);
-      assert.equal(existsSync(scratch), failGeneration);
-      if (failGeneration) assert.ok(existsSync(join(scratch, "generate.stderr")));
+      assert.equal(existsSync(scratch), Boolean(category));
+      if (category) assert.ok(existsSync(join(scratch, "generate.stderr")));
     } finally {
       const owned = relative(resolve(tmpdir()), root);
       assert.ok(owned.startsWith("scoplen-package-runner-test-") && !isAbsolute(owned));
