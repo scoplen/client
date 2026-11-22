@@ -15,6 +15,12 @@ const source = readFileSync(new URL("./check-packaged-cli.mjs", import.meta.url)
 const cases = [
   { name: "cleans successful output" },
   {
+    name: "reports native keychain interaction separately from a missing key or helper timeout",
+    helperError:
+      "private system detail\nThe system keychain requires user interaction. Unlock it or authorize this helper in an interactive session.\n",
+    category: "keychain-interaction-required",
+  },
+  {
     name: "identifies an expired helper subprocess deadline",
     fixtureError: "Error: Elapsed(())",
     category: "helper-timeout",

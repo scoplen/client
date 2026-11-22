@@ -267,6 +267,14 @@ fn execute(
         ));
     }
     let directory = data_directory()?;
+    #[cfg(target_os = "macos")]
+    let _keychain_prompts = if terminal {
+        None
+    } else {
+        scoplen_client_platform::keystore::suppress_keychain_prompts().map_err(|_| {
+            Failure::operation("Could not configure noninteractive keychain access.")
+        })?
+    };
     let catalog_passphrase = passphrase(options.catalog_passphrase.as_deref())?;
     if options.list {
         let profiles = OpenSshExportProfile::list(

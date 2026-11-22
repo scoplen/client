@@ -10,7 +10,8 @@ All notable changes to the Scoplen desktop client are recorded here.
   exclusion and friendly alias before explicit publication. Reuse Settings' stable Include
   and atomic generation without changing the desktop selection, migrating data, starting
   synchronization, or writing the user's OpenSSH config. Keep the desktop as Cargo's
-  default binary and carry the helper alongside it in application bundles.
+  default binary and carry the helper alongside it in application bundles. On macOS,
+  unattended commands report when the existing Keychain item requires user interaction.
 
 - Start Login-selected Remote TCP tunnels on the existing Local or Personal terminal's
   authenticated SSH transport, alongside shell, Files, Local/Dynamic tunnels and the

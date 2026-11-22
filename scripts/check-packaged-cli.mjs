@@ -13,8 +13,14 @@ function generationFailure(fixtureStderr) {
   if (/^Error: Elapsed\(\(\)\)\r?$/m.test(fixtureStderr)) return "helper-timeout";
   // publish_generation retains these two streams locally once the packaged spl process exits.
   try {
-    const stderr = readFileSync(join(scratch, "packaged-helper-helper.stderr"), "utf8").trim();
-    switch (stderr) {
+    // The CLI writes its fixed refusal last; preceding platform diagnostics stay private.
+    const lastLine = readFileSync(join(scratch, "packaged-helper-helper.stderr"), "utf8")
+      .trimEnd()
+      .split(/\r?\n/)
+      .at(-1);
+    switch (lastLine) {
+      case "The system keychain requires user interaction. Unlock it or authorize this helper in an interactive session.":
+        return "keychain-interaction-required";
       case "The existing local key is unavailable. Unlock this store in the desktop client first.":
         return "key-unavailable";
       case "The local passphrase is not correct. Check the selected passphrase file.":

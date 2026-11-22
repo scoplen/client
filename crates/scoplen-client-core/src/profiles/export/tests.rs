@@ -11,6 +11,48 @@ fn factory(slot: &MemoryKeystore) -> KeyStoreFactory {
     Arc::new(move |_| Some(Box::new(slot.clone())))
 }
 
+#[test]
+fn existing_export_refuses_a_keychain_prompt_without_replacing_the_slot() {
+    use scoplen_client_platform::keystore::{Keystore, KeystoreError};
+    use zeroize::Zeroizing;
+
+    struct PromptRequired;
+    impl Keystore for PromptRequired {
+        fn name(&self) -> &'static str {
+            "test keystore"
+        }
+        fn load(&self) -> Result<Option<Zeroizing<Vec<u8>>>, KeystoreError> {
+            Err(KeystoreError::InteractionRequired)
+        }
+        fn store(&self, _: &[u8]) -> Result<(), KeystoreError> {
+            panic!("export attempted to replace a protected key")
+        }
+        fn delete(&self) -> Result<(), KeystoreError> {
+            panic!("export attempted to delete a protected key")
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join(STORE_FILE);
+    std::fs::write(&path, b"existing store").unwrap();
+    let keys: KeyStoreFactory = Arc::new(|_| Some(Box::new(PromptRequired)));
+    assert!(matches!(
+        OpenSshExportProfile::with_keystores(
+            directory.path(),
+            None,
+            None,
+            Some("passphrase"),
+            &keys
+        ),
+        Err(OpenSshExportProfileError::InteractionRequired)
+    ));
+    assert!(matches!(
+        OpenSshExportProfile::list_with_keystores(directory.path(), None, &keys),
+        Err(OpenSshExportProfileError::InteractionRequired)
+    ));
+    assert_eq!(std::fs::read(path).unwrap(), b"existing store");
+}
+
 fn database(directory: &Path, slot: &MemoryKeystore) -> rusqlite::Connection {
     let conn = rusqlite::Connection::open(directory.join(STORE_FILE)).unwrap();
     let keys = slot.0.lock().unwrap();

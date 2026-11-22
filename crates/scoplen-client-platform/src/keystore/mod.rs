@@ -15,6 +15,8 @@ use zeroize::Zeroizing;
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::suppress_keychain_prompts;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows;
@@ -22,6 +24,9 @@ mod windows;
 /// A failure of the platform keystore.
 #[derive(Debug, thiserror::Error)]
 pub enum KeystoreError {
+    /// Access would require confirmation or unlocking in the user's OS session.
+    #[error("access to the protected secret requires user interaction")]
+    InteractionRequired,
     /// The keystore refused or failed the operation.
     #[error("the {keystore} could not {operation} the protected secret: {detail}")]
     Platform {
