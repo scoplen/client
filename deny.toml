@@ -21,6 +21,10 @@ ignore = [
     # Neither advisory reports a vulnerability; remove when age replaces the macros.
     { id = "RUSTSEC-2026-0374", reason = "unmaintained basic-toml is used only by age's translation proc-macro build configuration" },
     { id = "RUSTSEC-2026-0173", reason = "unmaintained proc-macro-error2 supplies only age's translation compile-time diagnostics" },
+    # Cedar 4.4.0 still resolves chrono transitively. RUSTSEC-2026-0543 is an
+    # unmaintained-crate notice with no safe upgrade; remove this exception when
+    # Cedar publishes a release that replaces chrono.
+    { id = "RUSTSEC-2026-0543", reason = "transitive chrono via cedar-policy 4.4.0; no safe upgrade is available, tracked for the next Cedar release" },
 ]
 
 [licenses]
