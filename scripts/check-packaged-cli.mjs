@@ -21,8 +21,16 @@ function generationFailure(fixtureStderr) {
     switch (lastLine) {
       case "The system keychain requires user interaction. Unlock it or authorize this helper in an interactive session.":
         return "keychain-interaction-required";
-      case "The existing local key is unavailable. Unlock this store in the desktop client first.":
-        return "key-unavailable";
+      case "The saved local key was not found. Check the selected desktop data directory.":
+        return "key-not-found";
+      case "The system keychain could not authorize this helper to read the saved local key.":
+        return "keychain-authorization-failed";
+      case "The system keystore could not read the saved local key. Check it in the desktop client.":
+        return "keystore-read-failed";
+      case "The saved local key has an invalid format. Check it in the desktop client.":
+        return "malformed-key";
+      case "The encrypted store could not be read with the saved key. Check it in the desktop client.":
+        return "store-key-rejected";
       case "The local passphrase is not correct. Check the selected passphrase file.":
         return "wrong-passphrase";
       case "The existing local data could not be read. Check it in the desktop client.":

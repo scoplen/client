@@ -27,6 +27,9 @@ pub enum KeystoreError {
     /// Access would require confirmation or unlocking in the user's OS session.
     #[error("access to the protected secret requires user interaction")]
     InteractionRequired,
+    /// The operating system refused to authorize the read.
+    #[error("the operating system could not authorize access to the protected secret")]
+    AuthorizationFailed,
     /// The keystore refused or failed the operation.
     #[error("the {keystore} could not {operation} the protected secret: {detail}")]
     Platform {

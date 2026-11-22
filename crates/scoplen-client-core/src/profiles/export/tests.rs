@@ -16,13 +16,13 @@ fn existing_export_refuses_a_keychain_prompt_without_replacing_the_slot() {
     use scoplen_client_platform::keystore::{Keystore, KeystoreError};
     use zeroize::Zeroizing;
 
-    struct PromptRequired;
-    impl Keystore for PromptRequired {
+    struct RefusedRead(fn() -> KeystoreError);
+    impl Keystore for RefusedRead {
         fn name(&self) -> &'static str {
             "test keystore"
         }
         fn load(&self) -> Result<Option<Zeroizing<Vec<u8>>>, KeystoreError> {
-            Err(KeystoreError::InteractionRequired)
+            Err(self.0())
         }
         fn store(&self, _: &[u8]) -> Result<(), KeystoreError> {
             panic!("export attempted to replace a protected key")
@@ -35,21 +35,43 @@ fn existing_export_refuses_a_keychain_prompt_without_replacing_the_slot() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join(STORE_FILE);
     std::fs::write(&path, b"existing store").unwrap();
-    let keys: KeyStoreFactory = Arc::new(|_| Some(Box::new(PromptRequired)));
-    assert!(matches!(
-        OpenSshExportProfile::with_keystores(
-            directory.path(),
-            None,
-            None,
-            Some("passphrase"),
-            &keys
+    let failures = [
+        (
+            RefusedRead(|| KeystoreError::InteractionRequired),
+            OpenSshExportProfileError::InteractionRequired,
         ),
-        Err(OpenSshExportProfileError::InteractionRequired)
-    ));
-    assert!(matches!(
-        OpenSshExportProfile::list_with_keystores(directory.path(), None, &keys),
-        Err(OpenSshExportProfileError::InteractionRequired)
-    ));
+        (
+            RefusedRead(|| KeystoreError::AuthorizationFailed),
+            OpenSshExportProfileError::KeyAuthorizationFailed,
+        ),
+        (
+            RefusedRead(|| KeystoreError::Platform {
+                keystore: "private keystore detail",
+                operation: "read",
+                detail: "private system error".into(),
+            }),
+            OpenSshExportProfileError::KeyReadFailed,
+        ),
+    ];
+    for (RefusedRead(failure), expected) in failures {
+        let keys: KeyStoreFactory = Arc::new(move |_| Some(Box::new(RefusedRead(failure))));
+        assert_eq!(
+            OpenSshExportProfile::with_keystores(
+                directory.path(),
+                None,
+                None,
+                Some("passphrase"),
+                &keys
+            )
+            .err(),
+            Some(expected)
+        );
+        assert_eq!(
+            OpenSshExportProfile::list_with_keystores(directory.path(), None, &keys),
+            Err(expected)
+        );
+        assert!(!expected.to_string().contains("private"));
+    }
     assert_eq!(std::fs::read(path).unwrap(), b"existing store");
 }
 
@@ -161,6 +183,32 @@ fn existing_local_key_is_required_without_creating_a_missing_slot() {
         Err(OpenSshExportProfileError::KeyUnavailable)
     ));
     assert!(slot.0.lock().unwrap().is_none());
+}
+
+#[test]
+fn export_distinguishes_malformed_key_material_from_an_unreadable_encrypted_store() {
+    let directory = tempfile::tempdir().unwrap();
+    let slot = MemoryKeystore::default();
+    let local = LocalData::start(directory.path(), Some(Box::new(slot.clone()))).unwrap();
+    let original = slot.0.lock().unwrap().clone().unwrap();
+    let mut other = original.clone();
+    other[1] ^= 1;
+    for (key, expected) in [
+        (vec![0], OpenSshExportProfileError::MalformedKey),
+        (other, OpenSshExportProfileError::StoreKeyRejected),
+    ] {
+        *slot.0.lock().unwrap() = Some(key.clone());
+        assert_eq!(
+            OpenSshExportProfile::list_with_keystores(directory.path(), None, &factory(&slot)),
+            Err(expected)
+        );
+        assert!(slot.0.lock().unwrap().as_ref() == Some(&key));
+    }
+    *slot.0.lock().unwrap() = Some(original);
+    assert!(
+        OpenSshExportProfile::list_with_keystores(directory.path(), None, &factory(&slot)).is_ok()
+    );
+    assert!(local.store().is_some());
 }
 
 #[test]

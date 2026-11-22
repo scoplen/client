@@ -21,6 +21,10 @@ const NAME: &str = "macOS Keychain";
 const ITEM_NOT_FOUND: i32 = -25300;
 /// `errSecInteractionNotAllowed`.
 const INTERACTION_NOT_ALLOWED: i32 = -25308;
+/// `errSecInteractionRequired`.
+const INTERACTION_REQUIRED: i32 = -25315;
+/// `errSecAuthFailed`.
+const AUTH_FAILED: i32 = -25293;
 /// `errSecMissingEntitlement`: the data-protection keychain needs a signed
 /// build with the keychain entitlement.
 const MISSING_ENTITLEMENT: i32 = -34018;
@@ -75,6 +79,14 @@ impl Keychain {
     fn platform(operation: &'static str, error: security_framework::base::Error) -> KeystoreError {
         KeystoreError::Platform { keystore: NAME, operation, detail: error.to_string() }
     }
+
+    fn read_error(error: security_framework::base::Error) -> KeystoreError {
+        match error.code() {
+            INTERACTION_NOT_ALLOWED | INTERACTION_REQUIRED => KeystoreError::InteractionRequired,
+            AUTH_FAILED => KeystoreError::AuthorizationFailed,
+            _ => Self::platform("read", error),
+        }
+    }
 }
 
 impl Keystore for Keychain {
@@ -87,10 +99,7 @@ impl Keystore for Keychain {
             match generic_password(options) {
                 Ok(secret) => return Ok(Some(Zeroizing::new(secret))),
                 Err(e) if e.code() == ITEM_NOT_FOUND || e.code() == MISSING_ENTITLEMENT => continue,
-                Err(e) if e.code() == INTERACTION_NOT_ALLOWED => {
-                    return Err(KeystoreError::InteractionRequired);
-                }
-                Err(e) => return Err(Self::platform("read", e)),
+                Err(e) => return Err(Self::read_error(e)),
             }
         }
         Ok(None)
@@ -130,5 +139,29 @@ impl Keystore for Keychain {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keychain_read_refusals_preserve_interaction_and_authorization_categories() {
+        use security_framework::base::Error;
+        for status in [INTERACTION_NOT_ALLOWED, INTERACTION_REQUIRED] {
+            assert!(matches!(
+                Keychain::read_error(Error::from_code(status)),
+                KeystoreError::InteractionRequired
+            ));
+        }
+        assert!(matches!(
+            Keychain::read_error(Error::from_code(AUTH_FAILED)),
+            KeystoreError::AuthorizationFailed
+        ));
+        assert!(matches!(
+            Keychain::read_error(Error::from_code(-50)),
+            KeystoreError::Platform { operation: "read", .. }
+        ));
     }
 }

@@ -22,11 +22,25 @@ pub enum OpenSshExportProfileError {
     /// The supplied local passphrase did not open the existing key.
     #[error("The local passphrase is not correct. Check the selected passphrase file.")]
     WrongPassphrase,
-    /// Existing local key material is missing or unavailable on this device.
-    #[error(
-        "The existing local key is unavailable. Unlock this store in the desktop client first."
-    )]
+    /// The existing slot or key file was not found in this namespace.
+    #[error("The saved local key was not found. Check the selected desktop data directory.")]
     KeyUnavailable,
+    /// The operating system refused to authorize the helper's key read.
+    #[error("The system keychain could not authorize this helper to read the saved local key.")]
+    KeyAuthorizationFailed,
+    /// The native keystore returned another failure when reading the slot.
+    #[error(
+        "The system keystore could not read the saved local key. Check it in the desktop client."
+    )]
+    KeyReadFailed,
+    /// The key slot or its passphrase envelope has an invalid encoding.
+    #[error("The saved local key has an invalid format. Check it in the desktop client.")]
+    MalformedKey,
+    /// The key was obtained, but SQLCipher could not read the store with it.
+    #[error(
+        "The encrypted store could not be read with the saved key. Check it in the desktop client."
+    )]
+    StoreKeyRejected,
     /// The existing native slot requires OS permission before it can be read.
     #[error(
         "The system keychain requires user interaction. Unlock it or authorize this helper in an interactive session."
@@ -203,12 +217,20 @@ fn existing_store(
 }
 
 fn key_error(error: LocalKeyError) -> OpenSshExportProfileError {
+    use scoplen_client_platform::keystore::KeystoreError;
+
     match error {
-        LocalKeyError::Keystore(
-            scoplen_client_platform::keystore::KeystoreError::InteractionRequired,
-        ) => OpenSshExportProfileError::InteractionRequired,
+        LocalKeyError::Keystore(KeystoreError::InteractionRequired) => {
+            OpenSshExportProfileError::InteractionRequired
+        }
+        LocalKeyError::Keystore(KeystoreError::AuthorizationFailed) => {
+            OpenSshExportProfileError::KeyAuthorizationFailed
+        }
+        LocalKeyError::Keystore(_) => OpenSshExportProfileError::KeyReadFailed,
+        LocalKeyError::KeyMissing(_) => OpenSshExportProfileError::KeyUnavailable,
+        LocalKeyError::Malformed => OpenSshExportProfileError::MalformedKey,
         LocalKeyError::WrongPassphrase => OpenSshExportProfileError::WrongPassphrase,
-        _ => OpenSshExportProfileError::KeyUnavailable,
+        _ => OpenSshExportProfileError::ReadFailed,
     }
 }
 
@@ -220,7 +242,7 @@ fn read_error(error: StoreError) -> OpenSshExportProfileError {
         StoreError::AccountContext | StoreError::InvalidIdentifier => {
             OpenSshExportProfileError::Verification
         }
-        StoreError::WrongKey => OpenSshExportProfileError::KeyUnavailable,
+        StoreError::WrongKey => OpenSshExportProfileError::StoreKeyRejected,
         _ => OpenSshExportProfileError::ReadFailed,
     }
 }

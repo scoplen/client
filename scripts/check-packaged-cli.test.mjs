@@ -26,9 +26,30 @@ const cases = [
     category: "helper-timeout",
   },
   {
-    name: "reports a content-free refusal when the helper cannot open its native key",
-    helperError: "The existing local key is unavailable. Unlock this store in the desktop client first.",
-    category: "key-unavailable",
+    name: "distinguishes a missing or invisible local key",
+    helperError: "The saved local key was not found. Check the selected desktop data directory.",
+    category: "key-not-found",
+  },
+  {
+    name: "distinguishes failed keychain authorization",
+    helperError: "The system keychain could not authorize this helper to read the saved local key.",
+    category: "keychain-authorization-failed",
+  },
+  {
+    name: "keeps other system keystore errors private",
+    helperError:
+      "private system detail\nThe system keystore could not read the saved local key. Check it in the desktop client.",
+    category: "keystore-read-failed",
+  },
+  {
+    name: "identifies malformed key material",
+    helperError: "The saved local key has an invalid format. Check it in the desktop client.",
+    category: "malformed-key",
+  },
+  {
+    name: "identifies an encrypted database that cannot be read with its saved key",
+    helperError: "The encrypted store could not be read with the saved key. Check it in the desktop client.",
+    category: "store-key-rejected",
   },
   {
     name: "reports an unknown helper refusal without echoing it",
