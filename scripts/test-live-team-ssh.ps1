@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
-param([Parameter(Mandatory)][string]$Deployment)
+param(
+    [Parameter(Mandatory)][string]$Deployment,
+    [ValidateSet('Team', 'PersonalGeneratedKey', 'PersonalPassword')]
+    [string]$Scenario = 'Team'
+)
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -11,7 +15,13 @@ $container = 'scoplen-team-ssh-' + [guid]::NewGuid().ToString('N')
 $owner = [guid]::NewGuid().ToString()
 $previousDeployment = $env:SCOPLEN_LIVE_ACCOUNT_DEPLOYMENT
 $previousSshFixture = $env:SCOPLEN_LIVE_TEAM_SSH_FIXTURE
+$previousPasswordFile = $env:SCOPLEN_LIVE_PERSONAL_SSH_PASSWORD_FILE
 $successful = $false
+$test = switch ($Scenario) {
+    'Team' { 'team_ssh::live_team_ssh_and_sftp' }
+    'PersonalGeneratedKey' { 'personal_inventory_ssh::live_password_device_generated_key_sync_ssh_and_sftp' }
+    'PersonalPassword' { 'personal_inventory_ssh::live_password_device_password_sync_ssh_and_sftp' }
+}
 
 function Check-LastExit([string]$operation) {
     if ($LASTEXITCODE -ne 0) { throw "$operation failed (exit $LASTEXITCODE)" }
@@ -19,9 +29,21 @@ function Check-LastExit([string]$operation) {
 
 try {
     New-Item -ItemType Directory -Path $scratch | Out-Null
+    if (-not $IsWindows) {
+        [IO.File]::SetUnixFileMode($scratch, [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute)
+    }
     Set-Content -LiteralPath (Join-Path $scratch 'owner') -Value $owner -NoNewline
+    $env:SCOPLEN_LIVE_PERSONAL_SSH_PASSWORD_FILE = $null
+    $authentication = @('-e', 'PASSWORD_ACCESS=false')
+    if ($Scenario -eq 'PersonalPassword') {
+        $password = 'disposable-personal-ssh-' + [guid]::NewGuid().ToString('N')
+        $passwordFile = Join-Path $scratch 'password'
+        Set-Content -LiteralPath $passwordFile -Value $password -NoNewline -Encoding utf8NoBOM
+        $authentication = @('-e', 'PASSWORD_ACCESS=true', '-e', "USER_PASSWORD=$password")
+        $env:SCOPLEN_LIVE_PERSONAL_SSH_PASSWORD_FILE = $passwordFile
+    }
     & docker run --rm -d --name $container --label "com.scoplen.fixture=$owner" `
-        -p '127.0.0.1::2222' -e 'USER_NAME=smoke' -e 'PASSWORD_ACCESS=false' `
+        -p '127.0.0.1::2222' -e 'USER_NAME=smoke' @authentication `
         'linuxserver/openssh-server@sha256:46f115de7c251558297e7e87566fc3fc08544b63e55502b5cf294454db5d29d1' | Out-Null
     Check-LastExit 'start the owned OpenSSH fixture'
     $binding = (& docker port $container '2222/tcp') -join "`n"
@@ -53,20 +75,24 @@ try {
     $env:SCOPLEN_LIVE_TEAM_SSH_FIXTURE = $descriptor
     $log = Join-Path $scratch 'acceptance.log'
     & cargo test --locked -p scoplen-client-core --features live-server-integration --lib `
-        'personal_server::live_server::password_entry::team_ssh::live_team_ssh_and_sftp' `
-        -- --exact --nocapture *> $log
+        "personal_server::live_server::password_entry::$test" `
+        -- --exact --test-threads=1 *> $log
     if ($LASTEXITCODE -ne 0) {
-        Get-Content -LiteralPath $log -Tail 45
-        throw "Real team SSH acceptance failed; private evidence retained in $scratch"
+        throw "Real $Scenario SSH acceptance failed; private evidence retained in $scratch"
     }
     if (-not (Select-String -LiteralPath $log -Pattern 'test result: ok\. 1 passed; 0 failed;' -Quiet)) {
-        throw 'The real team SSH acceptance did not execute exactly one test'
+        throw "The real $Scenario SSH acceptance did not execute exactly one test; private evidence retained in $scratch"
     }
     $successful = $true
-    Write-Output 'Real team SSH terminal, binary SFTP roundtrip and access withdrawal passed.'
+    if ($Scenario -eq 'Team') {
+        Write-Output 'Real team SSH terminal, binary SFTP roundtrip and access withdrawal passed.'
+    } else {
+        Write-Output "Real $Scenario SSH terminal, binary SFTP and offline reopen passed."
+    }
 } finally {
     $env:SCOPLEN_LIVE_ACCOUNT_DEPLOYMENT = $previousDeployment
     $env:SCOPLEN_LIVE_TEAM_SSH_FIXTURE = $previousSshFixture
+    $env:SCOPLEN_LIVE_PERSONAL_SSH_PASSWORD_FILE = $previousPasswordFile
     $label = (& docker inspect --format '{{index .Config.Labels "com.scoplen.fixture"}}' $container 2>$null) -join ''
     if ($LASTEXITCODE -eq 0 -and $label -eq $owner) {
         if (-not $successful) { & docker logs $container *> (Join-Path $scratch 'openssh.log') }

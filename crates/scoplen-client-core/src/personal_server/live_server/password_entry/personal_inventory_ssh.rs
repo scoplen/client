@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Password-admitted Devices use a reviewed, synchronized generated key through real SSH/SFTP.
+//! Password-admitted Devices use reviewed, synchronized credentials through real SSH/SFTP.
 
 use crate::{
     connection::SessionTarget,
-    inventory::{Inventory, NewHost, SignIn},
+    inventory::{CredentialLabelKind, Inventory, NewHost, SignIn},
     personal_inventory::PersonalInventoryCategory,
     repository::{Repository, TrustRecord},
 };
@@ -40,12 +40,36 @@ pkill -HUP -o sshd
     ssh.docker(&["exec", &ssh.container, "sh", "-c", setup, "sh", public_key]).await;
 }
 
-async fn roundtrip(deployment: PasswordDeployment, ssh: SshFixture, directory: &Path) {
+async fn require_password(ssh: &SshFixture) {
+    ssh.verify().await;
+    let setup = r#"set -eu
+test -f /config/sshd/sshd_config
+sed -i '/^[[:space:]]*TrustedUserCAKeys[[:space:]]/d; /^[[:space:]]*AuthorizedPrincipalsFile[[:space:]]/d; /^[[:space:]]*AuthorizedKeysFile[[:space:]]/d; /^[[:space:]]*PubkeyAuthentication[[:space:]]/d; /^[[:space:]]*PasswordAuthentication[[:space:]]/d; /^[[:space:]]*KbdInteractiveAuthentication[[:space:]]/d; /^[[:space:]]*AuthenticationMethods[[:space:]]/d' /config/sshd/sshd_config
+printf '\nPubkeyAuthentication no\nAuthorizedKeysFile none\nPasswordAuthentication yes\nKbdInteractiveAuthentication no\nAuthenticationMethods password\n' >> /config/sshd/sshd_config
+/usr/sbin/sshd.pam -t -f /config/sshd/sshd_config
+effective=$(/usr/sbin/sshd.pam -T -f /config/sshd/sshd_config)
+printf '%s\n' "$effective" | grep -Fx 'pubkeyauthentication no'
+printf '%s\n' "$effective" | grep -Fx 'trustedusercakeys none'
+printf '%s\n' "$effective" | grep -Fx 'passwordauthentication yes'
+printf '%s\n' "$effective" | grep -Fx 'kbdinteractiveauthentication no'
+printf '%s\n' "$effective" | grep -Fx 'authenticationmethods password'
+pkill -HUP -o sshd
+"#;
+    ssh.docker(&["exec", &ssh.container, "sh", "-c", setup]).await;
+}
+
+async fn roundtrip(
+    deployment: PasswordDeployment,
+    ssh: SshFixture,
+    directory: &Path,
+    authentication: SignIn,
+) {
+    let generated_key = matches!(&authentication, SignIn::GenerateKey);
     let ca = bounded_file(&deployment.ca_certificate, 65_536);
     let first = Device::new(&directory.join("first"));
     let first_manager = manager(&ca);
     let suffix = uuid::Uuid::now_v7();
-    let username = format!("personal-key-{}", suffix.simple());
+    let username = format!("personal-ssh-{}", suffix.simple());
     let password = SecretVec::new(format!("Disposable Personal SSH {suffix}").into_bytes());
     let first_lease = register(
         &first,
@@ -60,19 +84,28 @@ async fn roundtrip(deployment: PasswordDeployment, ssh: SshFixture, directory: &
     let first_store = first.store(&first_lease);
     let details = Inventory::new(first_store.clone())
         .add_host(NewHost {
-            name: Some("Synchronized generated-key SSH".into()),
+            name: Some("Synchronized Personal SSH".into()),
             address: "127.0.0.1".into(),
             port: Some(ssh.port),
             username: "smoke".into(),
-            sign_in: SignIn::GenerateKey,
+            sign_in: authentication,
         })
-        .expect("generate and save the ordinary Host, Login and shared software Credential");
+        .expect("save the ordinary Host, Login and shared Credential");
     let host: uuid::Uuid = details.summary.id.parse().unwrap();
     let profile = details.logins[0].id.clone();
     let credential = details.logins[0].credential.as_ref().unwrap();
+    assert_eq!(
+        credential.kind,
+        if generated_key { CredentialLabelKind::Key } else { CredentialLabelKind::Password }
+    );
     let credential_id: uuid::Uuid = credential.id.parse().unwrap();
-    let public_key = credential.public_key.as_deref().expect("generated public key projection");
-    install_public_key(&ssh, public_key).await;
+    let public_key = credential.public_key.as_deref();
+    if generated_key {
+        install_public_key(&ssh, public_key.expect("generated public key projection")).await;
+    } else {
+        assert!(public_key.is_none());
+        require_password(&ssh).await;
+    }
     let target = SessionTarget::Personal { profile_id: profile };
     terminal_and_files_with_trust(&first_manager, first_store.clone(), &target, directory, 1).await;
     let trust = Repository::<TrustRecord>::new(&first_store)
@@ -97,7 +130,10 @@ async fn roundtrip(deployment: PasswordDeployment, ssh: SshFixture, directory: &
     assert_eq!(preview.objects.len(), 4);
     let secret = preview.objects.iter().find(|object| object.id == credential.id).unwrap();
     assert_eq!(secret.category, PersonalInventoryCategory::Credential);
-    assert!(secret.shared_secret, "upload consent must disclose the generated private key");
+    assert!(
+        secret.shared_secret,
+        "upload consent must disclose the shared password or private key"
+    );
     assert_eq!(preview.objects.iter().filter(|object| object.shared_secret).count(), 1);
     let result = settings
         .synchronize(&first_manager, first_store.clone(), preview.token)
@@ -143,7 +179,7 @@ async fn roundtrip(deployment: PasswordDeployment, ssh: SshFixture, directory: &
             Inventory::new(second_store.clone()).host(details.summary.id.clone()).unwrap().unwrap();
         assert_eq!(
             downloaded.logins[0].credential.as_ref().unwrap().public_key.as_deref(),
-            Some(public_key)
+            public_key
         );
         terminal_and_files_with_trust(&second_manager, second_store.clone(), &target, directory, 0)
             .await;
@@ -167,8 +203,7 @@ async fn roundtrip(deployment: PasswordDeployment, ssh: SshFixture, directory: &
     terminal_and_files_with_trust(&offline, reopened_store, &target, directory, 0).await;
 }
 
-#[tokio::test]
-async fn live_password_device_generated_key_sync_ssh_and_sftp() {
+async fn run(authentication: SignIn) {
     let artifact = std::env::var_os("SCOPLEN_LIVE_ACCOUNT_DEPLOYMENT")
         .expect("provide the private disposable HTTPS descriptor");
     let deployment: PasswordDeployment =
@@ -186,6 +221,23 @@ async fn live_password_device_generated_key_sync_ssh_and_sftp() {
     let ssh: SshFixture =
         serde_json::from_slice(&bounded_file(Path::new(&artifact), 8192)).unwrap();
     let directory = OwnedDirectory::new();
-    roundtrip(deployment, ssh, directory.path()).await;
+    roundtrip(deployment, ssh, directory.path(), authentication).await;
     directory.close();
+}
+
+#[tokio::test]
+async fn live_password_device_generated_key_sync_ssh_and_sftp() {
+    run(SignIn::GenerateKey).await;
+}
+
+#[tokio::test]
+async fn live_password_device_password_sync_ssh_and_sftp() {
+    let path = std::env::var_os("SCOPLEN_LIVE_PERSONAL_SSH_PASSWORD_FILE")
+        .expect("provide the private owned OpenSSH password file");
+    let path = Path::new(&path);
+    assert!(path.is_absolute());
+    let password = String::from_utf8(bounded_file(path, 1024))
+        .unwrap_or_else(|_| panic!("the owned SSH password must be UTF-8"));
+    assert!(!password.is_empty() && !password.contains(['\r', '\n', '\0']));
+    run(SignIn::Password { password }).await;
 }
