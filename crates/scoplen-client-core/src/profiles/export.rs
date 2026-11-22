@@ -27,6 +27,11 @@ pub enum OpenSshExportProfileError {
         "The existing local key is unavailable. Unlock this store in the desktop client first."
     )]
     KeyUnavailable,
+    /// The existing native slot requires OS permission before it can be read.
+    #[error(
+        "The system keychain requires user interaction. Unlock it or authorize this helper in an interactive session."
+    )]
+    InteractionRequired,
     /// Only a ready installed Account profile may be selected.
     #[error("This ready account profile was not found. Use --list-profiles to choose one.")]
     ProfileUnavailable,
@@ -199,6 +204,9 @@ fn existing_store(
 
 fn key_error(error: LocalKeyError) -> OpenSshExportProfileError {
     match error {
+        LocalKeyError::Keystore(
+            scoplen_client_platform::keystore::KeystoreError::InteractionRequired,
+        ) => OpenSshExportProfileError::InteractionRequired,
         LocalKeyError::WrongPassphrase => OpenSshExportProfileError::WrongPassphrase,
         _ => OpenSshExportProfileError::KeyUnavailable,
     }

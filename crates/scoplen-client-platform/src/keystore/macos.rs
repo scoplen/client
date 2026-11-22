@@ -6,6 +6,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 use security_framework::access_control::{ProtectionMode, SecAccessControl};
+use security_framework::os::macos::keychain::SecKeychain;
 use security_framework::passwords::{
     PasswordOptions, delete_generic_password_options, generic_password,
     set_generic_password_options,
@@ -18,9 +19,25 @@ const SERVICE: &str = "com.scoplen.client";
 const NAME: &str = "macOS Keychain";
 /// `errSecItemNotFound`.
 const ITEM_NOT_FOUND: i32 = -25300;
+/// `errSecInteractionNotAllowed`.
+const INTERACTION_NOT_ALLOWED: i32 = -25308;
 /// `errSecMissingEntitlement`: the data-protection keychain needs a signed
 /// build with the keychain entitlement.
 const MISSING_ENTITLEMENT: i32 = -34018;
+
+/// Suppress Keychain dialogs for the lifetime of a noninteractive console command.
+/// This policy is process-wide and is intended only for the standalone helper.
+///
+/// # Errors
+/// Returns an error if the system cannot read or set the prompt policy.
+pub fn suppress_keychain_prompts() -> Result<Option<impl Drop>, KeystoreError> {
+    let policy_error = |error| Keychain::platform("set the interaction policy for", error);
+    if SecKeychain::user_interaction_allowed().map_err(policy_error)? {
+        Ok(Some(SecKeychain::disable_user_interaction().map_err(policy_error)?))
+    } else {
+        Ok(None)
+    }
+}
 
 /// A generic-password item, one per store location.
 pub(super) struct Keychain {
@@ -70,6 +87,9 @@ impl Keystore for Keychain {
             match generic_password(options) {
                 Ok(secret) => return Ok(Some(Zeroizing::new(secret))),
                 Err(e) if e.code() == ITEM_NOT_FOUND || e.code() == MISSING_ENTITLEMENT => continue,
+                Err(e) if e.code() == INTERACTION_NOT_ALLOWED => {
+                    return Err(KeystoreError::InteractionRequired);
+                }
                 Err(e) => return Err(Self::platform("read", e)),
             }
         }

@@ -134,6 +134,9 @@ preserving the original native-keystore namespace. It creates the data directory
 its noncanonical `data/.` spelling to the native fixture. Failures report an exit/timeout category,
 the last fixed verification phase and setup step, and a bounded failure category. Captured
 process output remains in the local fixture; the CI summary uses only fixed markers.
+When standard input or output is redirected on macOS, the helper suppresses Keychain dialogs.
+If the system requires interaction to read the existing key, the command exits with status 1.
+Unlock the keychain or authorize the helper in an interactive session before automation.
 Runtime and package acceptance, the separate `ssh-proxy` command, and the complete C10
 migration gate remain tracked in the roadmap.
 
