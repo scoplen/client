@@ -158,6 +158,8 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - name: Test packaged helper runner setup
+        run: node --test scripts/check-packaged-cli.test.mjs
       - run: pnpm license-check
 
   app:
