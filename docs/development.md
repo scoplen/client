@@ -181,13 +181,32 @@ Independent teams and Personal key state must remain intact.
 cargo test -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::team_membership::live_named_team_membership_lifecycle -- --exact --test-threads=1
 ```
 
-### Personal generated-key synchronization and real SSH
+### Personal credential synchronization and real SSH
 
 Use the three-field disposable HTTPS descriptor above and an owned OpenSSH descriptor in the
 same format as the browser-team check below. Its ownership label and exact loopback port must
-match. This test replaces only that owned sshd's authentication configuration with one generated
-public key; do not point it at a user-managed SSH server or run it concurrently with another
-consumer of that fixture. Password, keyboard-interactive and user-CA authentication are disabled.
+match. These tests replace only that owned sshd's authentication configuration; do not point
+them at a user-managed SSH server or run them concurrently with another consumer of that fixture.
+The generated-key case permits only its generated public key and disables password,
+keyboard-interactive and user-CA authentication. The password case requires password
+authentication, disables public-key and keyboard-interactive authentication, and has no user CA.
+
+The existing runner creates a separate owned fixture for either case. Use a fresh disposable
+HTTPS deployment for each invocation, and run each case separately on SQLite and PostgreSQL:
+
+```powershell
+pwsh -NoProfile -File scripts/test-live-team-ssh.ps1 -Deployment '<absolute fresh deployment descriptor>' -Scenario PersonalGeneratedKey
+pwsh -NoProfile -File scripts/test-live-team-ssh.ps1 -Deployment '<absolute other fresh deployment descriptor>' -Scenario PersonalPassword
+```
+
+`PersonalPassword` uses the existing disposable OpenSSH image's password setup, creates a
+private UTF-8 password file without a final newline, and passes only its path to the native
+consumer in `SCOPLEN_LIVE_PERSONAL_SSH_PASSWORD_FILE`. The password remains outside Git and
+console output. The runner restores the previous environment, stops its owned container on
+success or failure, removes its private fixture on success, and retains diagnostic files on
+failure without printing their contents. Omitting `-Scenario` retains the Team check below.
+
+For an independently provisioned owned fixture, the generated-key entry point remains:
 
 ```powershell
 $env:SCOPLEN_LIVE_ACCOUNT_DEPLOYMENT = '<absolute disposable HTTPS descriptor path>'
@@ -195,19 +214,39 @@ $env:SCOPLEN_LIVE_TEAM_SSH_FIXTURE = '<absolute owned OpenSSH descriptor path>'
 cargo test --locked -p scoplen-client-core --lib --features live-server-integration personal_server::live_server::password_entry::personal_inventory_ssh::live_password_device_generated_key_sync_ssh_and_sftp -- --exact --test-threads=1
 ```
 
-The first Device registers through public APIs and uses ordinary Add Host to generate and save
-an Ed25519 Credential. Only its returned public key is installed in the owned sshd. A real first
-connection confirms the ordinary host key. Explicit review then selects exactly that Host,
-Login, Credential and trust record, discloses the shared private-key content and grants upload
+The password entry point is
+`personal_server::live_server::password_entry::personal_inventory_ssh::live_password_device_password_sync_ssh_and_sftp`;
+it also requires `SCOPLEN_LIVE_PERSONAL_SSH_PASSWORD_FILE` to name the absolute private file
+containing the owned sshd's password. It does not use that SSH password for Account sign-in.
+
+In both cases the first Device registers through public APIs and uses ordinary Add Host to
+save the shared password Credential or generate an Ed25519 Credential. Only the generated
+key's returned public identity is installed in sshd. A real first connection confirms the
+ordinary host key. Explicit review then selects exactly that Host, Login, Credential and
+trust record, discloses the shared password or private-key content and grants upload
 consent. The first Device closes before the second independently signs in with its password.
 The production background owner downloads and acknowledges the same encrypted objects without
-a foreground Sync now or Verify keys action. The second Device uses the synchronized key and
+a foreground Sync now or Verify keys action. The second Device uses the synchronized Credential and
 verified same-Account trust for a real shell, resize and 4,096-byte binary SFTP upload/download.
 Account close/reopen repeats SSH and SFTP from retained keys and objects without control-plane
 requests or another trust prompt. Each uploaded file has a unique name and is removed after its
 roundtrip. Successful owned client stores are removed; failures retain private evidence.
 Run separately on SQLite and PostgreSQL. This is public-core acceptance with test-passphrase
 store protection; it does not establish native GUI, picker or platform-keystore interaction.
+The ordinary CI test command does not enable `live-server-integration`, and its local OpenSSH
+interop jobs do not run these HTTPS consumers. Compiling them through all-feature Clippy is
+separate from executing them against each deployment backend.
+
+The runner's parameter dispatch, private password handoff, environment restoration, owned
+cleanup and failure diagnostics can be checked without Cargo compilation or Docker:
+
+```powershell
+node --test scripts/test-live-team-ssh.test.mjs
+```
+
+This executes the actual PowerShell runner with stub Docker/Cargo consumers and a local SSH
+banner peer. It verifies runner behavior only; it is not HTTPS, SSH authentication or SFTP
+acceptance evidence.
 
 ### Team inventory and permissions
 
