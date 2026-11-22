@@ -1,13 +1,41 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 assert(["darwin", "win32"].includes(process.platform), "packaged helper checks require a supported desktop platform");
 const scratch = mkdtempSync(join(tmpdir(), "scoplen-cli-package-"));
 let passed = false;
+
+function generationFailure(fixtureStderr) {
+  if (/^Error: Elapsed\(\(\)\)\r?$/m.test(fixtureStderr)) return "helper-timeout";
+  // publish_generation retains these two streams locally once the packaged spl process exits.
+  try {
+    const stderr = readFileSync(join(scratch, "packaged-helper-helper.stderr"), "utf8").trim();
+    switch (stderr) {
+      case "The existing local key is unavailable. Unlock this store in the desktop client first.":
+        return "key-unavailable";
+      case "The local passphrase is not correct. Check the selected passphrase file.":
+        return "wrong-passphrase";
+      case "The existing local data could not be read. Check it in the desktop client.":
+        return "store-read-failed";
+      case "the generated OpenSSH selection is invalid":
+        return "invalid-selection";
+      case "the generated OpenSSH configuration could not be published":
+        return "publication-failed";
+    }
+    const stdout = readFileSync(join(scratch, "packaged-helper-helper.stdout"), "utf8");
+    if (/^Published \d+ compatible Logins in \d+ files\.\r?$/m.test(stdout)) return "published-output-check";
+    if (fixtureStderr.includes('Error: "actual generated-Include helper failed; private process evidence required"')) {
+      return "helper-refused";
+    }
+    return "helper-result-unconfirmed";
+  } catch {
+    return "helper-result-unavailable";
+  }
+}
 
 function run(executable, args, label, options = {}) {
   const result = spawnSync(executable, args, {
@@ -42,6 +70,9 @@ function run(executable, args, label, options = {}) {
       category = undefined;
     }
     if (categoryMarker) category = categoryMarker[1];
+  }
+  if (label === "generate" && phase === "helper" && result.status !== 0) {
+    category = generationFailure(result.stderr ?? "");
   }
   const failure = result.error
     ? result.error.code === "ETIMEDOUT"
