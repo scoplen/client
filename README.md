@@ -142,7 +142,13 @@ lookup. After the packaged process exits unsuccessfully, the original fixture wr
 tries the same read-only export opening with prompts disabled and reports a fixed outcome.
 When standard input or output is redirected on macOS, the helper suppresses Keychain dialogs.
 If the system requires interaction to read the existing key, the command exits with status 1.
-Unlock the keychain or authorize the helper in an interactive session before automation.
+For a login Keychain refusal, open Terminal in your macOS login session and run the
+installed bundle's `Contents/MacOS/spl config generate --profile local --dry-run`.
+Keep input and output attached to the terminal. If macOS asks for permission, verify
+the requesting helper and authorize that item. Then repeat the same dry run with
+redirected output to check whether unattended access is available. A passphrase-protected
+Local store also requires its usual `--passphrase-file`.
+The package, first-screen and offline CI checks each report their own outcome.
 Runtime and package acceptance, the separate `ssh-proxy` command, and the complete C10
 migration gate remain tracked in the roadmap.
 
