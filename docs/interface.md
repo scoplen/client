@@ -530,6 +530,9 @@ no application, Grant, certificate or connection.
 
 **My requests** and **Approvals** use real current authorized pages and refresh every 60 seconds
 while that view remains open. Selecting an item GETs its complete Resource before review.
+Only a network, pre-request connection or deferred-refresh failure preserves the last page for
+an explicit retry. Other read failures clear the page; every failed read clears the review and
+connection choices, so retained rows never supply an old decision or connection intent.
 Approve, Deny and Cancel retain that original Resource and strong ETag inside Rust. A decision
 cannot partially approve, edit its input, or approve the requester's own application. Cancellation
 uses the original requester identity without requiring a synchronized Host projection. Persisted

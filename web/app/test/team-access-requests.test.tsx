@@ -238,28 +238,52 @@ it("requires an explicit successful current refresh before archiving an expired 
   expect(commands.submitTeamAccessRequest).not.toHaveBeenCalled();
 });
 
-it("keeps the confirmed page when an explicitly requested next page fails and can be retried", async () => {
-  const second = { ...resource, id: "request-2" };
-  commands.teamAccessRequestPage
-    .mockResolvedValueOnce(ok({ source, view: "mine", items: [resource], nextCursor: "request" }))
-    .mockResolvedValueOnce({ status: "error", error: "network" })
-    .mockResolvedValueOnce(ok({ source, view: "mine", items: [second], nextCursor: null }));
-  fixture();
-  await loaded();
-  expect(screen.getByText(resource.id)).toBeTruthy();
+it.each(["network", "connectionBeforeRequest", "refreshDeferred"])(
+  "keeps the confirmed page after %s and retries the explicitly requested next page",
+  async (error) => {
+    const second = { ...resource, id: "request-2" };
+    commands.teamAccessRequestPage
+      .mockResolvedValueOnce(ok({ source, view: "mine", items: [resource], nextCursor: "request" }))
+      .mockResolvedValueOnce({ status: "error", error })
+      .mockResolvedValueOnce(ok({ source, view: "mine", items: [second], nextCursor: null }));
+    fixture();
+    await loaded();
+    expect(screen.getByText(resource.id)).toBeTruthy();
 
-  await userEvent.click(screen.getByRole("button", { name: "Load more teams" }));
+    await userEvent.click(screen.getByRole("button", { name: "Load more teams" }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText(resource.id)).toBeTruthy();
+    expect(screen.queryByText(second.id)).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Load more teams" }));
+    expect(await screen.findByText(second.id)).toBeTruthy();
+    expect(commands.teamAccessRequestPage.mock.calls).toEqual([
+      ["team", "mine", null],
+      ["team", "mine", "request"],
+      ["team", "mine", "request"],
+    ]);
+  },
+);
+
+it.each([
+  "authentication",
+  "authenticationRequired",
+  "permissionDenied",
+  "teamNotFound",
+  "notConfigured",
+  "invalidResponse",
+])("clears the page, review and connection choices after %s", async (error) => {
+  await showRequest(approved);
+  await screen.findByRole("button", { name: "Connect" });
+  commands.teamAccessRequestPage.mockResolvedValueOnce({ status: "error", error });
+
+  await userEvent.click(screen.getByRole("button", { name: "Refresh and review" }));
   expect(await screen.findByRole("alert")).toBeTruthy();
-  expect(screen.getByText(resource.id)).toBeTruthy();
-  expect(screen.queryByText(second.id)).toBeNull();
-
-  await userEvent.click(screen.getByRole("button", { name: "Load more teams" }));
-  expect(await screen.findByText(second.id)).toBeTruthy();
-  expect(commands.teamAccessRequestPage.mock.calls).toEqual([
-    ["team", "mine", null],
-    ["team", "mine", "request"],
-    ["team", "mine", "request"],
-  ]);
+  expect(screen.queryByRole("list", { name: "My requests" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Request details" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Login for this host and username" })).toBeNull();
+  expect(commands.submitTeamAccessRequest).not.toHaveBeenCalled();
 });
 
 it.each(["approve", "deny", "cancel"] as const)(
