@@ -190,14 +190,16 @@ jobs:
         run: npm install --global pnpm@11.5.1
       - run: pnpm install --frozen-lockfile
       - name: Build
+        id: bundle
         run: ${{ matrix.build }}
       - name: Verify the packaged console helper independently
         run: node scripts/check-packaged-cli.mjs
       - name: Launch until the first screen renders
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
         shell: bash
         env:
           SPL_SMOKE_TEST: "1"
         run: ${{ matrix.binary }}
       - name: No network connection while sync is disabled
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' && runner.os == 'macOS' }}
         run: scripts/check-offline.sh target/release/bundle/macos/Scoplen.app
