@@ -29,6 +29,7 @@ pub mod snippets;
 pub mod ssh;
 pub mod team_access_requests;
 pub mod team_authoring;
+pub mod team_grants;
 pub mod team_inventory_import;
 pub mod team_ssh;
 pub mod teams;
@@ -229,6 +230,8 @@ pub fn ipc() -> Builder<tauri::Wry> {
             team_access_requests::submit_team_access_request,
             team_access_requests::discard_team_access_request,
             team_access_requests::team_access_request_logins,
+            team_grants::team_grants_page,
+            team_grants::withdraw_team_grant,
             team_ssh::team_ssh_operations,
             team_ssh::team_user_ca,
             team_ssh::prepare_team_user_ca,

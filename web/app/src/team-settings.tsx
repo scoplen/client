@@ -9,6 +9,7 @@ import { TeamAssets } from "./team-assets";
 import { TeamAuthoring } from "./team-authoring";
 import { TeamSshSetup } from "./team-ssh-setup";
 import { TeamAccessRequests } from "./team-access-requests";
+import { TeamGrants } from "./team-grants";
 
 export function TeamSettings({
   authenticated,
@@ -42,7 +43,9 @@ export function TeamSettings({
   const accessOpener = useRef<HTMLButtonElement | null>(null);
   const [sshSetup, setSshSetup] = useState<TeamSummary | null>(null);
   const [requests, setRequests] = useState<TeamSummary | null>(null);
+  const [grants, setGrants] = useState<TeamSummary | null>(null);
   const requestsOpener = useRef<HTMLButtonElement | null>(null);
+  const grantsOpener = useRef<HTMLButtonElement | null>(null);
   const sshOpener = useRef<HTMLButtonElement | null>(null);
   const assetsOpener = useRef<HTMLButtonElement | null>(null);
   const editRevision = useRef(0);
@@ -388,6 +391,17 @@ export function TeamSettings({
                 >
                   {t("teams.requests.open")}
                 </Button>
+                <Button
+                  className="mt-3 ml-2"
+                  variant="secondary"
+                  disabled={locked || !authenticated}
+                  onClick={(event) => {
+                    grantsOpener.current = event.currentTarget;
+                    setGrants(team);
+                  }}
+                >
+                  {t("teams.grants.open")}
+                </Button>
               </li>
             ))}
           </ul>
@@ -434,6 +448,16 @@ export function TeamSettings({
           onClose={() => {
             setRequests(null);
             requestsOpener.current?.focus();
+          }}
+        />
+      ) : null}
+      {grants && authenticated && !disabled ? (
+        <TeamGrants
+          organizationId={grants.id}
+          name={grants.name}
+          onClose={() => {
+            setGrants(null);
+            grantsOpener.current?.focus();
           }}
         />
       ) : null}
