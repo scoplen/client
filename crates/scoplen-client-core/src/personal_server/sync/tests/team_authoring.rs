@@ -147,7 +147,9 @@ impl AuthoringPeer {
             }
             let mut reply = resource_reply(serde_json::to_vec(&response).unwrap());
             reply.status = 201;
-            reply.stall = matches!(fault, Fault::Lost);
+            if matches!(fault, Fault::Lost) {
+                reply.delivery = Delivery::Lost;
+            }
             return Ok(reply);
         }
         if *method == http::Method::GET && id.is_none() {

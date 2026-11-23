@@ -163,7 +163,7 @@ impl RefreshPeer {
                     Mode::Reply(reply) => Ok(reply),
                     Mode::Lost => {
                         let mut reply = self.tokens(expected, origin, Mode::Success);
-                        reply.stall = true;
+                        reply.delivery = Delivery::Lost;
                         Ok(reply)
                     }
                     mode => Ok(self.tokens(expected, origin, mode)),

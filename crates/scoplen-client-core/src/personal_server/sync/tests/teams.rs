@@ -108,7 +108,9 @@ impl TeamPeer {
             let resource = self.resources.get(&id).unwrap();
             let mut reply = resource_reply(resource);
             reply.status = 201;
-            reply.stall = matches!(mode, Mode::LostAfterCommit);
+            if matches!(mode, Mode::LostAfterCommit) {
+                reply.delivery = Delivery::Lost;
+            }
             if matches!(mode, Mode::BadMetadata) {
                 reply.headers.retain(|(name, _)| *name != "x-request-id");
             }
@@ -170,7 +172,9 @@ impl TeamPeer {
                 return Ok(problem("organization.commit_outcome_unknown", true, false, 503));
             }
             let mut reply = resource_reply(resource);
-            reply.stall = matches!(mode, Mode::LostAfterCommit);
+            if matches!(mode, Mode::LostAfterCommit) {
+                reply.delivery = Delivery::Lost;
+            }
             if matches!(mode, Mode::BadMetadata) {
                 reply.headers.retain(|(name, _)| *name != "x-request-id");
             }
@@ -673,7 +677,20 @@ async fn name_update_conflict_and_unknown_never_replay_or_substitute_a_new_etag(
         Err(TeamFailure::SettingsConflict.into())
     );
     assert_eq!(peer.state.lock().unwrap().teams.as_ref().unwrap().updates.len(), 1);
-    let current = manager.team_settings(store.clone(), &id).await.unwrap();
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    peer.state.lock().unwrap().pause =
+        Some((format!("/api/v1/orgs/{id}"), reached.clone(), resume.clone()));
+    let read = manager.team_settings(store.clone(), &id);
+    tokio::pin!(read);
+    tokio::select! {
+        _ = &mut read => panic!("settings read completed before the peer released its response"),
+        _ = reached.notified() => {}
+    }
+    assert!(tokio::time::timeout(Duration::from_secs(1), &mut read).await.is_err());
+    assert_eq!(peer.state.lock().unwrap().teams.as_ref().unwrap().updates.len(), 1);
+    resume.notify_one();
+    let current = read.await.unwrap();
     let saved = manager
         .update_team_name(store.clone(), &id, &current.etag, "Platform".into())
         .await

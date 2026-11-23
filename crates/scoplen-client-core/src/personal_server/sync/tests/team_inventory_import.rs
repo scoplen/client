@@ -144,7 +144,9 @@ impl ImportPeer {
             result.to_json().unwrap()
         });
         reply.status = 201;
-        reply.stall = matches!(fault, Fault::Lost);
+        if matches!(fault, Fault::Lost) {
+            reply.delivery = Delivery::Lost;
+        }
         if matches!(fault, Fault::Cache) {
             reply.headers.clear();
         }
@@ -165,7 +167,7 @@ fn json(body: Vec<u8>) -> Reply {
             ("x-request-id", "import-fixture".into()),
         ],
         body,
-        stall: false,
+        delivery: Delivery::Send,
     }
 }
 fn install(peer: &Peer, store: &Arc<Store>, faults: Vec<Fault>) {
