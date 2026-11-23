@@ -11,6 +11,7 @@ import type {
   TeamOperationView,
   TeamPageView,
   TeamSettingsView,
+  TeamSummary,
 } from "./ipc/bindings";
 
 const roleNames = ["owner", "administrator", "security_auditor", "approver", "member"] as const;
@@ -144,12 +145,14 @@ export function TeamMembership({
   onBusyChange,
   onClose,
   onMembershipChanged,
+  onOpenAssets,
 }: {
   initialTeamId: string | null;
   disabled: boolean;
   onBusyChange: (busy: boolean) => void;
   onClose: () => void;
   onMembershipChanged: (page?: TeamPageView) => void;
+  onOpenAssets: (team: TeamSummary, opener: HTMLButtonElement) => void;
 }) {
   const commands = useProfileCommands();
   const { t } = useI18n();
@@ -303,6 +306,8 @@ export function TeamMembership({
     if (current?.phase === "confirmed") {
       setNotice(true);
       if (current.kind === "acceptance") {
+        setLink("");
+        setPreview(null);
         const page = handle(await commands.teamsPage(null));
         if (mounted.current) onMembershipChanged(page ?? undefined);
       } else if (current.kind === "dissolution") {
@@ -334,6 +339,17 @@ export function TeamMembership({
       })();
       const operation = handle(await request);
       if (operation) await submit(operation);
+    });
+  };
+  const openAcceptedAssets = (organizationId: string, opener: HTMLButtonElement) => {
+    run(async () => {
+      const current = handle(await commands.teamSettings(organizationId));
+      if (!current) return;
+      if (current.team.id !== organizationId) {
+        setFailed("invalidTeamResponse");
+        return;
+      }
+      onOpenAssets(current.team, opener);
     });
   };
   const review = async (operation: TeamOperationView) => {
@@ -595,7 +611,11 @@ export function TeamMembership({
             </p>
           ) : null}
           <p role="status" className="mt-2 text-sm text-muted-foreground">
-            {t(`teams.membership.phase.${operation.phase}`)}
+            {t(
+              operation.kind === "acceptance" && operation.phase === "confirmed"
+                ? "teams.membership.status.accepted"
+                : `teams.membership.phase.${operation.phase}`,
+            )}
           </p>
           {operation.kind === "invitation" && operation.phase === "confirmed" ? (
             <>
@@ -622,6 +642,14 @@ export function TeamMembership({
             </>
           ) : null}
           <div className="mt-3 flex flex-wrap gap-2">
+            {operation.kind === "acceptance" && operation.phase === "confirmed" ? (
+              <Button
+                disabled={locked}
+                onClick={(event) => openAcceptedAssets(operation.organizationId, event.currentTarget)}
+              >
+                {t("teams.assets.open")}
+              </Button>
+            ) : null}
             {operation.phase === "prepared" || operation.phase === "unknown" ? (
               <Button disabled={locked} onClick={() => run(() => submit(operation))}>
                 {t(operation.phase === "unknown" ? "teams.membership.retry" : "teams.membership.submit")}

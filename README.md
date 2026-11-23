@@ -771,8 +771,9 @@ invitations, and update, suspend or remove members through Invitations and membe
 can leave; Owners can explicitly dissolve a team after reviewing its current version.
 Invitation, acceptance and dissolution retain their original protected request and operation
 key before dispatch. Explicit confirmation uses that same request within its 24-hour window;
-dissolution also keeps its original validator. A historical receipt does not establish current
-team access. Expired uncertainty can be archived only after an explicit current-status review.
+dissolution also keeps its original validator. After confirmed acceptance, View assets opens
+the joined team's inventory after checking current membership. Expired uncertainty can be
+archived only after an explicit current-status review.
 The separate invitation password stays in the encrypted Account-local operation. Reveal fills
 only an explicit transient uncontrolled field; Copy password writes directly from Rust to the
 native clipboard. No WebView clipboard permission is granted. Dismissing the confirmed operation

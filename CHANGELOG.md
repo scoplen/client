@@ -4,6 +4,8 @@ All notable changes to the Scoplen desktop client are recorded here.
 
 ## Unreleased
 
+- Open the joined team's current assets directly after accepting an invitation.
+
 - Generate standard OpenSSH configuration with the `spl config generate` console helper.
   Explicitly list or select an existing device-local Local or ready Personal profile,
   supply local passphrases through exact UTF-8 files, and review every compatible Login,

@@ -86,6 +86,7 @@ function fixture(teamId: string | null = null) {
   const close = vi.fn();
   const changed = vi.fn();
   const busy = vi.fn();
+  const openAssets = vi.fn();
   return {
     ...render(
       <I18nProvider locale="en">
@@ -95,12 +96,14 @@ function fixture(teamId: string | null = null) {
           onClose={close}
           onMembershipChanged={changed}
           onBusyChange={busy}
+          onOpenAssets={openAssets}
         />
       </I18nProvider>,
     ),
     close,
     changed,
     busy,
+    openAssets,
   };
 }
 async function ready() {
@@ -161,6 +164,24 @@ it("clears the uncontrolled separate password immediately on acceptance submissi
   expect(changed).toHaveBeenCalledTimes(1);
   expect(commands.submitTeamOperation).toHaveBeenCalledExactlyOnceWith("acceptance", operation.operationId);
   expect(commands.teamsPage).toHaveBeenCalledExactlyOnceWith(null);
+});
+
+it("uses current membership instead of a retained acceptance to open assets", async () => {
+  const confirmed = { ...operation, kind: "acceptance", phase: "confirmed" };
+  commands.pendingTeamOperations.mockResolvedValue(ok([confirmed]));
+  commands.teamSettings.mockResolvedValueOnce({ status: "error", error: "teamNotFound" });
+  commands.teamSettings.mockResolvedValueOnce(ok({ ...team, team: { ...team.team, id: invitation } }));
+  const { openAssets } = fixture();
+  const action = await screen.findByRole("button", { name: "View assets" });
+  expect(commands.teamSettings).not.toHaveBeenCalled();
+  await userEvent.click(action);
+  await screen.findByRole("alert");
+  expect(openAssets).not.toHaveBeenCalled();
+  await userEvent.click(action);
+  await screen.findByRole("alert");
+  expect(commands.teamSettings.mock.calls).toEqual([[org], [org]]);
+  expect(openAssets).not.toHaveBeenCalled();
+  expect(commands.submitTeamOperation).not.toHaveBeenCalled();
 });
 
 it("shows a password only in its explicit field, clears it on hide, and copies through Rust", async () => {
