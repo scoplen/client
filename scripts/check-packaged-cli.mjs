@@ -23,10 +23,6 @@ function generationFailure(fixtureStderr) {
         return "keychain-interaction-required";
       case "The saved local key was not found. Check the selected desktop data directory.":
         return "key-not-found";
-      case "The data protection Keychain could not authorize this helper to read the saved local key.":
-        return "protected-keychain-authorization-failed";
-      case "The login Keychain could not authorize this helper to read the saved local key.":
-        return "login-keychain-authorization-failed";
       case "The system keystore could not read the saved local key. Check it in the desktop client.":
         return "keystore-read-failed";
       case "The saved local key has an invalid format. Check it in the desktop client.":
@@ -41,6 +37,14 @@ function generationFailure(fixtureStderr) {
         return "invalid-selection";
       case "the generated OpenSSH configuration could not be published":
         return "publication-failed";
+    }
+    if (
+      lastLine?.startsWith("The data protection Keychain could not authorize this helper to read the saved local key. ")
+    ) {
+      return "protected-keychain-authorization-failed";
+    }
+    if (lastLine?.startsWith("The login Keychain could not authorize this helper to read the saved local key. ")) {
+      return "login-keychain-authorization-failed";
     }
     const stdout = readFileSync(join(scratch, "packaged-helper-helper.stdout"), "utf8");
     if (/^Published \d+ compatible Logins in \d+ files\.\r?$/m.test(stdout)) return "published-output-check";
