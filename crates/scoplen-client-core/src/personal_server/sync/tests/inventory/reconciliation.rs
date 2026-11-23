@@ -192,7 +192,7 @@ async fn a_later_invalid_or_moving_snapshot_never_changes_inventory_copies_or_pr
                 Reply::cbor(vec![])
             }
             5 => problem_reply(&problem(403, "auth.authentication_required", false)),
-            _ => Reply { stall: true, ..Reply::cbor(vec![]) },
+            _ => Reply { delivery: Delivery::Lost, ..Reply::cbor(vec![]) },
         };
         if mode != 4 {
             inventory.snapshot_replies.insert(2, reply);

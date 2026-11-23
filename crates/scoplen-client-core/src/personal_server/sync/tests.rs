@@ -22,17 +22,30 @@ use super::*;
 use crate::personal_server::{PersonalServerPhase, transport::Transport};
 
 #[derive(Clone)]
+enum Delivery {
+    Send,
+    Lost,
+    Stall,
+}
+
+#[derive(Clone)]
 struct Reply {
     status: u16,
     content_type: &'static str,
     headers: Vec<(&'static str, String)>,
     body: Vec<u8>,
-    stall: bool,
+    delivery: Delivery,
 }
 
 impl Reply {
     fn cbor(body: Vec<u8>) -> Self {
-        Self { status: 200, content_type: "application/cbor", headers: vec![], body, stall: false }
+        Self {
+            status: 200,
+            content_type: "application/cbor",
+            headers: vec![],
+            body,
+            delivery: Delivery::Send,
+        }
     }
 }
 
@@ -140,8 +153,7 @@ impl Peer {
     }
 
     fn manager(&self) -> PersonalServer {
-        let mut transport =
-            Transport::fixture(self.certificate.clone(), Duration::from_millis(700));
+        let mut transport = Transport::fixture(self.certificate.clone(), Duration::from_secs(15));
         let mut roots = rustls::RootCertStore::empty();
         roots.add(self.certificate_der.clone()).unwrap();
         let mut tls =
@@ -425,8 +437,16 @@ async fn answer(
         reached.notify_one();
         resume.notified().await;
     }
-    if reply.stall {
-        tokio::time::sleep(Duration::from_secs(3)).await;
+    match reply.delivery {
+        Delivery::Send => {}
+        Delivery::Lost => {
+            respond.send_reset(h2::Reason::CANCEL);
+            return Ok(());
+        }
+        Delivery::Stall => {
+            let _ = std::future::poll_fn(|cx| respond.poll_reset(cx)).await;
+            return Ok(());
+        }
     }
     let mut response = http::Response::builder().status(reply.status);
     if !reply.content_type.is_empty() {
@@ -743,11 +763,27 @@ async fn malformed_cached_redirected_overbudget_and_stalled_responses_are_bounde
             3 => reply.body = vec![0xff],
             4 => reply.headers.push(("content-length", (BODY_LIMIT + 1).to_string())),
             5 => reply.body = vec![0; BODY_LIMIT + 1],
-            6 => reply.stall = true,
+            6 => reply.delivery = Delivery::Stall,
             _ => reply.status = 401,
         }
         peer.reply("/sync/v1/session", reply);
-        assert!(manager.bootstrap_sync(store.clone()).await.is_err(), "field {field}");
+        let start = peer.state.lock().unwrap().paths.len();
+        let result =
+            tokio::time::timeout(Duration::from_secs(30), manager.bootstrap_sync(store.clone()))
+                .await
+                .expect("sync request exceeded its transport deadline");
+        if field == 6 {
+            assert!(matches!(
+                result,
+                Err(PersonalSyncError::Personal(PersonalServerError::Network))
+            ));
+            assert_eq!(
+                peer.state.lock().unwrap().paths[start..].last().unwrap(),
+                "/sync/v1/session"
+            );
+        } else {
+            assert!(result.is_err(), "field {field}");
+        }
         assert_eq!(
             manager.load_sync_bootstrap(&store).unwrap().unwrap().session(),
             original.session()

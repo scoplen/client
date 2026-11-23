@@ -195,7 +195,7 @@ impl TeamLifecyclePeer {
         Ok(match answer {
             Ok(reply) => reply,
             Err(OrganizationReferenceError::ResponseLost) => {
-                Reply { stall: true, ..json(Vec::new()) }
+                Reply { delivery: Delivery::Lost, ..json(Vec::new()) }
             }
             Err(error) => {
                 let problem = error.problem("fixture-team").unwrap().unwrap();

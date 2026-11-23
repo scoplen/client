@@ -227,7 +227,7 @@ impl InventoryPeer {
                     if std::mem::take(&mut self.uncertain_once) {
                         problem_reply(&problem(503, "sync.storage_unavailable", true))
                     } else if std::mem::take(&mut self.lost_once) {
-                        Reply { stall: true, ..Reply::cbor(vec![]) }
+                        Reply { delivery: Delivery::Lost, ..Reply::cbor(vec![]) }
                     } else if std::mem::take(&mut self.invalid_assignment_once) {
                         Reply::cbor(vec![0xff])
                     } else {

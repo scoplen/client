@@ -45,7 +45,7 @@ fn json(body: Vec<u8>) -> Reply {
             ("x-request-id", "fixture-request".into()),
         ],
         body,
-        stall: false,
+        delivery: Delivery::Send,
     }
 }
 
@@ -1030,7 +1030,7 @@ async fn current_view_permission_denial_withdraws_the_cached_certificate() {
             content_type: "application/problem+cbor",
             body: denial.to_cbor().unwrap(),
             headers: vec![],
-            stall: false,
+            delivery: Delivery::Send,
         },
     );
     assert!(manager.refresh_team_assets(store.clone(), &source.organization_id).await.is_err());

@@ -248,7 +248,7 @@ fn json(body: Vec<u8>) -> Reply {
             ("x-request-id", "request-fixture".into()),
         ],
         body,
-        stall: false,
+        delivery: Delivery::Send,
     }
 }
 fn resource_reply(resource: &AccessRequestResource) -> Reply {
