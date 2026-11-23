@@ -12,7 +12,7 @@ afterEach(() => {
   clearMocks();
 });
 
-it.each(["preview", "acceptance", "reveal"] as const)(
+it.each(["preview", "acceptance", "reveal", "assets"] as const)(
   "drops a late %s when the actual Account generation changes",
   async (phase) => {
     const organization = "0199a653-8392-7355-8b91-70ab85182e30";
@@ -41,6 +41,7 @@ it.each(["preview", "acceptance", "reveal"] as const)(
     };
     const snapshot = { generation: "1", selected: null, accounts: [], retainedProfile: false };
     const calls: string[] = [];
+    const openAssets = vi.fn();
     let finish!: (value: unknown) => void;
     const late = new Promise((resolve) => {
       finish = resolve;
@@ -49,10 +50,15 @@ it.each(["preview", "acceptance", "reveal"] as const)(
       (command) => {
         calls.push(command);
         if (command === "account_profiles_snapshot") return snapshot;
-        if (command === "pending_team_operations") return phase === "reveal" ? [operation] : [];
+        if (command === "pending_team_operations") {
+          if (phase === "reveal") return [operation];
+          if (phase === "assets") return [{ ...operation, kind: "acceptance" }];
+          return [];
+        }
         if (command === "preview_team_invitation") return phase === "preview" ? late : preview;
         if (command === "prepare_team_acceptance") return late;
         if (command === "reveal_team_invitation_password") return late;
+        if (command === "team_settings") return late;
         return null;
       },
       { shouldMockEvents: true },
@@ -66,6 +72,7 @@ it.each(["preview", "acceptance", "reveal"] as const)(
             onClose={() => {}}
             onBusyChange={() => {}}
             onMembershipChanged={() => {}}
+            onOpenAssets={openAssets}
           />
         </AccountProfilesBoundary>
       </I18nProvider>,
@@ -77,6 +84,9 @@ it.each(["preview", "acceptance", "reveal"] as const)(
     if (phase === "reveal") {
       oldField = screen.getByLabelText("Separate invitation password") as HTMLInputElement;
       await userEvent.click(screen.getByRole("button", { name: "Reveal password" }));
+    } else if (phase === "assets") {
+      await userEvent.click(screen.getByRole("button", { name: "View assets" }));
+      expect(calls).toContain("team_settings");
     } else {
       await userEvent.type(screen.getByRole("textbox", { name: "Public invitation link" }), link);
       await userEvent.click(screen.getByRole("button", { name: "Review invitation" }));
@@ -96,11 +106,14 @@ it.each(["preview", "acceptance", "reveal"] as const)(
           ? "01234567"
           : phase === "preview"
             ? preview
-            : { ...operation, kind: "acceptance", phase: "prepared" },
+            : phase === "assets"
+              ? { team: { id: organization, name: "Operations", roles: ["member"] } }
+              : { ...operation, kind: "acceptance", phase: "prepared" },
       ),
     );
     if (oldField) expect(oldField.value).toBe("");
     expect(calls).not.toContain("submit_team_operation");
+    expect(openAssets).not.toHaveBeenCalled();
     expect(screen.queryByText("Operations")).toBeNull();
   },
 );

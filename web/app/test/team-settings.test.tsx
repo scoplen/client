@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "../src/i18n";
-import type { TeamCreationView, TeamPageView, TeamSummary } from "../src/ipc/bindings";
+import type { SessionTarget, TeamCreationView, TeamPageView, TeamSummary } from "../src/ipc/bindings";
 import { TeamSettings } from "../src/team-settings";
 import { violations } from "../../ui/test/axe";
 
@@ -16,6 +16,12 @@ const commands = vi.hoisted(() => ({
   discardTeamCreation: vi.fn(),
   pendingTeamAccessRequest: vi.fn(),
   teamAccessRequestPage: vi.fn(),
+  pendingTeamOperations: vi.fn(),
+  previewTeamInvitation: vi.fn(),
+  prepareTeamAcceptance: vi.fn(),
+  submitTeamOperation: vi.fn(),
+  refreshTeamAssets: vi.fn(),
+  teamAssets: vi.fn(),
 }));
 vi.mock("../src/account-profiles", () => ({ useProfileCommands: () => commands }));
 
@@ -50,11 +56,11 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
-function fixture(authenticated = true, locale: "en" | "zh-Hans" = "en") {
+function fixture(authenticated = true, locale: "en" | "zh-Hans" = "en", onConnect?: (target: SessionTarget) => void) {
   const busy = vi.fn();
   const rendered = render(
     <I18nProvider locale={locale}>
-      <TeamSettings authenticated={authenticated} disabled={false} onBusyChange={busy} />
+      <TeamSettings authenticated={authenticated} disabled={false} onBusyChange={busy} onConnect={onConnect} />
     </I18nProvider>,
   );
   return { ...rendered, busy };
@@ -80,6 +86,90 @@ it("opens the selected team's request surface only from its settings action and 
   await userEvent.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await waitFor(() => expect(document.activeElement).toBe(opener));
+});
+
+it("joins a team outside the first discovery page and connects from its current assets", async () => {
+  const joined = { id: "0199a653-8392-7355-8b91-70ab85182e3c", name: "New team", roles: ["member"] };
+  const invitationId = "0199a653-8392-7355-8b91-70ab85182e3d";
+  const link = `https://sync.example/join-team#organization=${joined.id}&invitation=${invitationId}`;
+  const acceptance = {
+    operationId: "0199a653-8392-7355-8b91-70ab85182e3e",
+    kind: "acceptance",
+    organizationId: joined.id,
+    invitationId,
+    recipientUsername: null,
+    roles: [],
+    phase: "prepared",
+    retryUntil: null,
+    link: null,
+  };
+  const confirmedAcceptance = { ...acceptance, phase: "confirmed" };
+  const source = {
+    origin: "https://sync.example",
+    organizationId: joined.id,
+    accountId: "0199a653-8392-7355-8b91-70ab85182e3f",
+    deviceId: "0199a653-8392-7355-8b91-70ab85182e40",
+  };
+  const login = { id: "0199a653-8392-7355-8b91-70ab85182e41", kind: "AccessProfile", name: "deploy", address: null };
+  commands.pendingTeamOperations.mockResolvedValueOnce({ status: "ok", data: [] });
+  commands.pendingTeamOperations.mockResolvedValue({ status: "ok", data: [confirmedAcceptance] });
+  commands.previewTeamInvitation.mockResolvedValue({
+    status: "ok",
+    data: {
+      id: invitationId,
+      etag: '"invitation"',
+      organizationId: joined.id,
+      organizationName: joined.name,
+      recipientUsername: "teammate",
+      roles: ["member"],
+      status: "pending",
+      expiresAt: "2026-11-02T00:00:00Z",
+    },
+  });
+  commands.prepareTeamAcceptance.mockResolvedValue({ status: "ok", data: acceptance });
+  commands.submitTeamOperation.mockResolvedValue({ status: "ok", data: confirmedAcceptance });
+  commands.teamsPage.mockResolvedValue({ status: "ok", data: { teams: [team], nextCursor: "next" } });
+  commands.teamSettings.mockResolvedValue({ status: "ok", data: { team: joined } });
+  commands.refreshTeamAssets.mockResolvedValue({
+    status: "ok",
+    data: {
+      ...source,
+      vaultId: "0199a653-8392-7355-8b91-70ab85182e42",
+      revision: "1",
+      phase: "ready",
+      acknowledged: true,
+      assets: [login],
+    },
+  });
+  const connect = vi.fn();
+  fixture(true, "en", connect);
+  await ready();
+  await userEvent.click(screen.getByRole("button", { name: "Join team" }));
+  const join = within(screen.getByRole("region", { name: "Join team" }));
+  await userEvent.type(join.getByRole("textbox", { name: "Public invitation link" }), link);
+  await userEvent.click(join.getByRole("button", { name: "Review invitation" }));
+  await userEvent.type(await join.findByLabelText("Separate invitation password"), "01234567");
+  expect(join.queryByRole("button", { name: "View assets" })).toBeNull();
+  await userEvent.click(join.getByRole("button", { name: "Accept invitation" }));
+  const opener = await join.findByRole("button", { name: "View assets" });
+  expect(join.queryByLabelText("Separate invitation password")).toBeNull();
+  expect(join.getByText("Accepted")).toBeTruthy();
+  expect(commands.submitTeamOperation).toHaveBeenCalledExactlyOnceWith("acceptance", acceptance.operationId);
+  expect(commands.teamsPage).toHaveBeenCalledExactlyOnceWith(null);
+  expect(commands.teamSettings).not.toHaveBeenCalled();
+  expect(commands.refreshTeamAssets).not.toHaveBeenCalled();
+  opener.focus();
+  await userEvent.keyboard("{Enter}");
+  const assets = within(await screen.findByRole("dialog", { name: "Assets · New team" }));
+  expect(commands.teamSettings).toHaveBeenNthCalledWith(1, joined.id);
+  expect(commands.refreshTeamAssets).toHaveBeenNthCalledWith(1, joined.id);
+  expect(await assets.findByText(login.name)).toBeTruthy();
+  expect(connect).not.toHaveBeenCalled();
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(document.activeElement).toBe(opener));
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(await screen.findByRole("button", { name: "Connect" }));
+  expect(connect).toHaveBeenCalledExactlyOnceWith({ kind: "organization", source, profileId: login.id });
 });
 
 it("only reads local pending state until membership discovery is explicitly requested by keyboard", async () => {

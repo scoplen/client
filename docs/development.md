@@ -607,6 +607,8 @@ password fields, native copy intents, destructive confirmation and actual Accoun
 replacement. The native invitation password and link copy commands use the platform text clipboard;
 only an explicit reveal returns a password to its transient control. Clipboard errors contain no
 platform diagnostics. Regenerate bindings after changing the lifecycle commands.
+The Team Settings regression follows acceptance through a fresh membership read, the existing
+assets refresh and an explicit Login connection intent for the same Organization.
 
 ## Password registration preparation and HTTPS
 

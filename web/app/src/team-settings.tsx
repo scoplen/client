@@ -256,6 +256,10 @@ export function TeamSettings({
               ? "teams.error.pending"
               : "teams.error.generic";
   const locked = busy || disabled || loading;
+  const openAssets = (team: TeamSummary, opener: HTMLButtonElement) => {
+    assetsOpener.current = opener;
+    setAssets(team);
+  };
   const role = (value: string) => {
     switch (value) {
       case "owner":
@@ -329,10 +333,7 @@ export function TeamSettings({
                   className="mt-3 mr-2"
                   variant="secondary"
                   disabled={locked || !authenticated}
-                  onClick={(event) => {
-                    assetsOpener.current = event.currentTarget;
-                    setAssets(team);
-                  }}
+                  onClick={(event) => openAssets(team, event.currentTarget)}
                 >
                   {t("teams.assets.open")}
                 </Button>
@@ -582,6 +583,7 @@ export function TeamSettings({
             (opener?.isConnected ? opener : joinButton.current)?.focus();
           }}
           onMembershipChanged={(current) => setPage(current ?? null)}
+          onOpenAssets={openAssets}
         />
       ) : null}
     </section>
