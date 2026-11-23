@@ -145,9 +145,17 @@ If the system requires interaction to read the existing key, the command exits w
 For a login Keychain refusal, open Terminal in your macOS login session and run the
 installed bundle's `Contents/MacOS/spl config generate --profile local --dry-run`.
 Keep input and output attached to the terminal. If macOS asks for permission, verify
-the requesting helper and authorize that item. Then repeat the same dry run with
+the requesting helper and item. Choose Allow Once for this review or Always Allow to
+permit future reads by that helper. Then repeat the same dry run with
 redirected output to check whether unattended access is available. A passphrase-protected
 Local store also requires its usual `--passphrase-file`.
+If the data protection Keychain refuses access, use the `spl` inside the same installed
+Scoplen app. The distributor can check whether the signed desktop executable and helper
+both belong to the existing item's Keychain access group. You can also generate the
+Include in the same app under Settings > Data.
+[Apple's guide to Keychain prompts](https://support.apple.com/en-gb/guide/mac-help/kychn002/26/mac/26)
+and [Keychain access groups](https://developer.apple.com/documentation/security/sharing-access-to-keychain-items-among-a-collection-of-apps)
+describe these permissions.
 The package, first-screen and offline CI checks each report their own outcome.
 Runtime and package acceptance, the separate `ssh-proxy` command, and the complete C10
 migration gate remain tracked in the roadmap.

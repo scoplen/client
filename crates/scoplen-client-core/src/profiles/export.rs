@@ -27,7 +27,7 @@ pub enum OpenSshExportProfileError {
     #[error("The saved local key was not found. Check the selected desktop data directory.")]
     KeyUnavailable,
     /// The operating system refused to authorize the helper's key read.
-    #[error("The {0} could not authorize this helper to read the saved local key.")]
+    #[error("The {0} could not authorize this helper to read the saved local key. {action}", action = keychain_action(*.0))]
     KeyAuthorizationFailed(MacKeychain),
     /// The native keystore returned another failure when reading the slot.
     #[error(
@@ -61,6 +61,17 @@ pub enum OpenSshExportProfileError {
     /// An existing encrypted file or catalog could not be read.
     #[error("The existing local data could not be read. Check it in the desktop client.")]
     ReadFailed,
+}
+
+fn keychain_action(keychain: MacKeychain) -> &'static str {
+    match keychain {
+        MacKeychain::Login => {
+            "Run the installed app's Contents/MacOS/spl with --dry-run for this profile, keeping input and output connected to Terminal. If macOS prompts, verify the helper and item before allowing access."
+        }
+        MacKeychain::DataProtection => {
+            "Use the spl inside the same installed Scoplen app. If access is still denied, generate the config in Settings > Data and ask the distributor to check both executables' Keychain entitlements."
+        }
+    }
 }
 
 /// A bounded export opening of one explicit namespace, independent of desktop selection.

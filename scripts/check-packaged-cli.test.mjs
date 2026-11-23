@@ -32,14 +32,16 @@ const cases = [
   },
   {
     name: "identifies a data protection Keychain refusal after a successful writer reopen",
-    helperError: "The data protection Keychain could not authorize this helper to read the saved local key.",
+    helperError:
+      "The data protection Keychain could not authorize this helper to read the saved local key. Use the spl inside the same installed Scoplen app. If access is still denied, generate the config in Settings > Data and ask the distributor to check both executables' Keychain entitlements.",
     category: "protected-keychain-authorization-failed",
     fixtureError: "packaged-helper: writer=reopened",
     writer: "reopened",
   },
   {
     name: "identifies a login Keychain refusal without echoing unknown writer output",
-    helperError: "The login Keychain could not authorize this helper to read the saved local key.",
+    helperError:
+      "The login Keychain could not authorize this helper to read the saved local key. Run the installed app's Contents/MacOS/spl with --dry-run for this profile, keeping input and output connected to Terminal. If macOS prompts, verify the helper and item before allowing access.",
     category: "login-keychain-authorization-failed",
     fixtureError: "packaged-helper: writer=private detail",
   },

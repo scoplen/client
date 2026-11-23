@@ -39,14 +39,17 @@ fn existing_export_refuses_a_keychain_prompt_without_replacing_the_slot() {
         (
             RefusedRead(|| KeystoreError::InteractionRequired),
             OpenSshExportProfileError::InteractionRequired,
+            "interactive session",
         ),
         (
             RefusedRead(|| KeystoreError::AuthorizationFailed(MacKeychain::DataProtection)),
             OpenSshExportProfileError::KeyAuthorizationFailed(MacKeychain::DataProtection),
+            "both executables' Keychain entitlements",
         ),
         (
             RefusedRead(|| KeystoreError::AuthorizationFailed(MacKeychain::Login)),
             OpenSshExportProfileError::KeyAuthorizationFailed(MacKeychain::Login),
+            "verify the helper and item",
         ),
         (
             RefusedRead(|| KeystoreError::Platform {
@@ -55,9 +58,10 @@ fn existing_export_refuses_a_keychain_prompt_without_replacing_the_slot() {
                 detail: "private system error".into(),
             }),
             OpenSshExportProfileError::KeyReadFailed,
+            "desktop client",
         ),
     ];
-    for (RefusedRead(failure), expected) in failures {
+    for (RefusedRead(failure), expected, action) in failures {
         let keys: KeyStoreFactory = Arc::new(move |_| Some(Box::new(RefusedRead(failure))));
         assert_eq!(
             OpenSshExportProfile::with_keystores(
@@ -74,7 +78,9 @@ fn existing_export_refuses_a_keychain_prompt_without_replacing_the_slot() {
             OpenSshExportProfile::list_with_keystores(directory.path(), None, &keys),
             Err(expected)
         );
-        assert!(!expected.to_string().contains("private"));
+        let message = expected.to_string();
+        assert!(message.contains(action));
+        assert!(!message.contains("private"));
     }
     assert_eq!(std::fs::read(path).unwrap(), b"existing store");
 }
