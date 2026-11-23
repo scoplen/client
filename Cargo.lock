@@ -3885,7 +3885,7 @@ dependencies = [
 [[package]]
 name = "pageant"
 version = "0.2.2"
-source = "git+https://github.com/scoplen/proto.git?rev=326b2d2d7f097c9707e29acd69bbc22fec3cd87d#326b2d2d7f097c9707e29acd69bbc22fec3cd87d"
+source = "git+https://github.com/scoplen/proto.git?rev=fb8d241299b8e41c5c9277789d8625d194542d2e#fb8d241299b8e41c5c9277789d8625d194542d2e"
 dependencies = [
  "base16ct",
  "byteorder",
@@ -5210,7 +5210,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scoplen-api"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=326b2d2d7f097c9707e29acd69bbc22fec3cd87d#326b2d2d7f097c9707e29acd69bbc22fec3cd87d"
+source = "git+https://github.com/scoplen/proto.git?rev=fb8d241299b8e41c5c9277789d8625d194542d2e#fb8d241299b8e41c5c9277789d8625d194542d2e"
 dependencies = [
  "base64 0.22.1",
  "cedar-policy",
@@ -5312,7 +5312,7 @@ dependencies = [
 [[package]]
 name = "scoplen-crypto"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=326b2d2d7f097c9707e29acd69bbc22fec3cd87d#326b2d2d7f097c9707e29acd69bbc22fec3cd87d"
+source = "git+https://github.com/scoplen/proto.git?rev=fb8d241299b8e41c5c9277789d8625d194542d2e#fb8d241299b8e41c5c9277789d8625d194542d2e"
 dependencies = [
  "age",
  "argon2 0.5.3",
@@ -5339,7 +5339,7 @@ dependencies = [
 [[package]]
 name = "scoplen-model"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=326b2d2d7f097c9707e29acd69bbc22fec3cd87d#326b2d2d7f097c9707e29acd69bbc22fec3cd87d"
+source = "git+https://github.com/scoplen/proto.git?rev=fb8d241299b8e41c5c9277789d8625d194542d2e#fb8d241299b8e41c5c9277789d8625d194542d2e"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -5357,7 +5357,7 @@ version = "0.1.0"
 [[package]]
 name = "scoplen-ssh"
 version = "0.1.0"
-source = "git+https://github.com/scoplen/proto.git?rev=326b2d2d7f097c9707e29acd69bbc22fec3cd87d#326b2d2d7f097c9707e29acd69bbc22fec3cd87d"
+source = "git+https://github.com/scoplen/proto.git?rev=fb8d241299b8e41c5c9277789d8625d194542d2e#fb8d241299b8e41c5c9277789d8625d194542d2e"
 dependencies = [
  "pageant",
  "russh",
@@ -6002,7 +6002,7 @@ dependencies = [
 [[package]]
 name = "ssh-key"
 version = "0.7.0-rc.11"
-source = "git+https://github.com/scoplen/proto.git?rev=326b2d2d7f097c9707e29acd69bbc22fec3cd87d#326b2d2d7f097c9707e29acd69bbc22fec3cd87d"
+source = "git+https://github.com/scoplen/proto.git?rev=fb8d241299b8e41c5c9277789d8625d194542d2e#fb8d241299b8e41c5c9277789d8625d194542d2e"
 dependencies = [
  "argon2 0.6.0",
  "bcrypt-pbkdf",
